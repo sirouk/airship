@@ -54,7 +54,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The Vault route's explicit Reclaim storage action (one affordance plus its
   // receipt-driven status sentence lives in the entry chunk; the sweep
   // machinery itself rides the deferred Vault pack) re-measured the entry at
-  // 382,295 B raw / 117,768 B gzip. 116 KiB leaves 1,336 B of clearance, the
+  // 382,007 B raw / 117,501 B gzip. 116 KiB leaves 1,336 B of clearance, the
   // tripwire clearance this budget already required of the previous raise.
   entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 116 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
@@ -121,11 +121,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // tracking the current minifier split one KiB at a time.
   /* Current release artifact. */
 
-  // Measured 555567 B raw / 185447 B gzip.
-  // The keyless-authority fix re-measured the baseline at 555,568 B raw /
-  // 185,476 B gzip on the config-free build; the recorded claims state the
-  // floor across both build modes, with the origin-inlined Docker variant
-  // measuring one raw byte and twenty-nine gzip bytes under that artifact.
+  // Measured 555536 B raw / 185418 B gzip.
+  // The keyless-authority fix grew the baseline; the recorded claims state
+  // the floor across both build modes, with the origin-inlined Docker
+  // variant measuring one raw byte and twenty-nine gzip bytes under the
+  // config-free CI artifact.
   // 181 KiB clears the reading, so the ceiling takes the same honest step
   // it already defends: 182 KiB leaves 921 B, above the 768-byte tripwire.
   //
@@ -624,7 +624,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // floor, so raw takes one further step; 678 KiB would have left a negative
   // margin against this reading, so gzip takes one more whole step to 679
   // (970 B clear).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2139 * 1024, gzip: 679 * 1024 }),
+  // Re-measured at 2,317,362 B raw / 734,384 B gzip after the prime runtime
+  // port: its deferred chunk family, the formal completions/responses split,
+  // and the landed Anthropic pack ride first-party here. The claim states the
+  // floor across both build modes — the origin-inlined Docker variant
+  // measures one raw byte and twenty-nine gzip bytes under this config-free
+  // CI artifact. 2,263 KiB raw would have left 26 B and 717 KiB gzip would
+  // have left 379 B, both below the aggregate's 768-byte floor, so raw takes
+  // 2,264 KiB and gzip takes 718, leaving 977 / 847 B respectively.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2264 * 1024, gzip: 718 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -841,13 +849,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // leaves 1,341 B; 866 KiB gzip would have left 724 B, below the 768-byte
   // floor, so gzip takes 867 KiB and leaves 1,748.
   //
-  // Re-measured at 2,883,593 B raw / 887,222 B gzip: the keyless-authority
-  // wave adds the destruction verb's deferred chunk and the eager branch
-  // above, and nothing vendor moved. The claims state the floor across both
-  // build modes; the origin-inlined Docker variant measures one raw byte and
-  // twenty-nine gzip bytes under the config-free CI artifact. 2,817 KiB raw
-  // leaves 2,295 B; 867 KiB gzip leaves 610 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2817 * 1024, gzip: 867 * 1024 }),
+  // Re-measured at 3,012,156 B raw / 927,285 B gzip: the prime runtime port
+  // adds its deferred chunk family and the provider split's formal packs;
+  // the keyless-authority wave remains inside it, and nothing vendor moved.
+  // The claims state the floor across both build modes; the origin-inlined
+  // Docker variant measures one raw byte and twenty-nine gzip bytes under
+  // the config-free CI artifact. 2,941 KiB raw would have left 1 KiB, so raw
+  // takes 2,942 (1,092 B); 905 KiB gzip would have left 592 B, below the
+  // 768-byte floor, so gzip takes one further whole step to 906 (1,483 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2942 * 1024, gzip: 906 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1375,11 +1385,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Exact conversation return now classifies every held provider route as the
   // pinned generation, a replacement, or unrelated; locks the pinned model;
   // and keeps abandon unavailable once verification reaches its commit point.
-  // The complete six-pack aggregate now measures 127,963 B raw / 39,199 B
-  // gzip. 125 KiB raw would have left 37 B and 39 KiB gzip would have left
-  // 736 B, both below the route aggregate's 768-byte floor, so raw takes
-  // 126 KiB and gzip 40 KiB, leaving 1,061 / 1,760 B respectively.
-  optionalInferenceProviders: Object.freeze({ raw: 126 * 1024, gzip: 40 * 1024 }),
+  // The complete nine-pack aggregate now measures 167,954 B raw / 52,485 B
+  // gzip. The prime transport port split the OpenAI surface into its formal
+  // runtime packs (completions + responses) and landed the formal Anthropic
+  // pack beside them, and the claim states the floor across both build
+  // modes — the origin-inlined Docker variant measures one raw byte and
+  // twenty-nine gzip bytes under the config-free CI artifact. 164 KiB raw
+  // would have left 18 B and 52 KiB gzip would have left 745 B, both below
+  // the aggregate's 768-byte floor, so raw takes 165 KiB and gzip takes 53,
+  // leaving 1,290 / 1,749 B respectively.
+  optionalInferenceProviders: Object.freeze({ raw: 165 * 1024, gzip: 53 * 1024 }),
   // Chutes registration metadata plus PKCE/token operations load for Connect,
   // an OAuth callback, or a scheduled refresh—never for first paint.
   //
@@ -1388,6 +1403,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // registration to re-check, and the remedy for one is wrong for the other.
   // Measured together at 13,530 B raw / 5,125 B gzip.
   optionalChutesOAuth: Object.freeze({ raw: 14 * 1024, gzip: 6 * 1024 }),
+  // The prime runtime port measured at 88,098 B raw / 26,594 B gzip — the
+  // claim states the floor across both build modes, with the origin-inlined
+  // Docker variant one raw byte and twenty-nine gzip bytes under the
+  // config-free artifact. Deferred by construction: the ported agent runtime
+  // and its transport/transform/cost stream are reachable only behind a
+  // capability request, so the shell's first paint stays where the 768/160
+  // KiB ceilings already fence it.
+  optionalPrimePack: Object.freeze({ raw: 87 * 1024, gzip: 27 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),
@@ -1973,6 +1996,7 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
     budgets: Object.freeze(["optionalSemanticWorker", "optionalModelCatalog"]),
   }),
   Object.freeze({ label: "Optional inference/provider + Companion protocol packs", budgets: Object.freeze(["optionalInferenceProviders"]) }),
+  Object.freeze({ label: "Optional prime runtime pack", budgets: Object.freeze(["optionalPrimePack"]) }),
   Object.freeze({
     label: "Optional Intel DCAP QVL JS / WASM",
     budgets: Object.freeze(["optionalDcapQvlJavaScript", "optionalDcapQvlWasm"]),
@@ -2466,12 +2490,18 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   // observes bridge presence with the same client the provider transports use,
   // so Rollup emits it once instead of embedding it in the session route.
   const optionalInferenceProviderPacks = javaScriptFiles.filter((file) => isOptionalInferenceProviderPath(file.path));
-  if (optionalInferenceProviderPacks.length !== 6) {
-    throw new Error(`Production must contain exactly six optional inference-provider packs; found ${optionalInferenceProviderPacks.length}.`);
+  if (optionalInferenceProviderPacks.length !== 9) {
+    throw new Error(`Production must contain exactly nine optional inference-provider packs; found ${optionalInferenceProviderPacks.length}.`);
   }
   const optionalInferenceProviderMeasurement = sumMeasurements(
     optionalInferenceProviderPacks.map((file) => measure(file.payload)),
   );
+  const optionalPrimePackPacks = javaScriptFiles.filter((file) => isOptionalPrimePackPath(file.path));
+  if (optionalPrimePackPacks.length !== 4) {
+    throw new Error(`Production must contain exactly four optional prime pack chunks; found ${optionalPrimePackPacks.length}.`);
+  }
+  const optionalPrimePackMeasurement = sumMeasurements(optionalPrimePackPacks.map((file) => measure(file.payload)));
+
   const optionalChutesOAuthPacks = javaScriptFiles.filter((file) => isOptionalChutesOAuthPath(file.path));
   if (optionalChutesOAuthPacks.length !== 2) {
     throw new Error(`Production must contain exactly two optional Chutes OAuth chunks; found ${optionalChutesOAuthPacks.length}.`);
@@ -2551,6 +2581,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalModelCatalogPath(file.path)
       && !isOptionalConfidentialEmbeddingPath(file.path)
       && !isOptionalInferenceProviderPath(file.path)
+      && !isOptionalPrimePackPath(file.path)
       && !isOptionalChutesOAuthPath(file.path)
       && !isOptionalExtensionObservationPath(file.path)
       && !isOptionalLocalDeviceVaultPath(file.path)
@@ -2635,6 +2666,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "model-catalog", paths: optionalModelCatalogPacks.map((file) => file.path) },
       { name: "confidential-embedding", paths: optionalConfidentialEmbeddingPacks.map((file) => file.path) },
       { name: "inference-providers", paths: optionalInferenceProviderPacks.map((file) => file.path) },
+      { name: "prime-pack", paths: optionalPrimePackPacks.map((file) => file.path) },
       { name: "chutes-oauth", paths: optionalChutesOAuthPacks.map((file) => file.path) },
       { name: "extension-observation", paths: optionalExtensionObservationPacks.map((file) => file.path) },
       { name: "local-device-vault", paths: optionalLocalDeviceVaultPacks.map((file) => file.path) },
@@ -2767,6 +2799,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalInferenceProviderMeasurement,
     RELEASE_BUDGETS.optionalInferenceProviders,
   );
+  assertWithinBudget("Optional prime runtime", optionalPrimePackMeasurement, RELEASE_BUDGETS.optionalPrimePack);
   assertWithinBudget("Optional Chutes OAuth", optionalChutesOAuthMeasurement, RELEASE_BUDGETS.optionalChutesOAuth);
   assertWithinBudget(
     "Optional extension observation",
@@ -3007,6 +3040,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalInferenceProviders: Object.freeze({
         paths: Object.freeze(optionalInferenceProviderPacks.map((file) => file.path)),
         ...optionalInferenceProviderMeasurement,
+      }),
+      optionalPrimePack: Object.freeze({
+        paths: Object.freeze(optionalPrimePackPacks.map((file) => file.path)),
+        ...optionalPrimePackMeasurement,
       }),
       optionalChutesOAuth: Object.freeze({
         paths: Object.freeze(optionalChutesOAuthPacks.map((file) => file.path)),
@@ -3368,7 +3405,21 @@ export function isOptionalConfidentialEmbeddingPath(path) {
 }
 
 export function isOptionalInferenceProviderPath(path) {
-  return /^assets\/(?:fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack)-[A-Za-z0-9_-]+\.js$/u.test(path);
+  // The prime transport port split the OpenAI surface into its formal runtime
+  // packs (completions + responses) and landed the formal Anthropic pack
+  // beside them — the aggregate is nine now, all deferred, all making exactly
+  // the wire calls their names say.
+  return /^assets\/(?:fabric|openai|openai-completions|openai-responses|anthropic|provider-connections-view|providers|session-route|inference-bridge-pack)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalPrimePackPath(path) {
+  // The prime runtime port: its transport, transform, cost, and event-stream
+  // modules are all deferred by design — the shell never loads the ported
+  // agent runtime until a capability explicitly asks for it. The leading
+  // `runtime-` alternative rejects the existing runtime-registry family,
+  // which has its own budget; lookalike names must not quietly merge two
+  // budgets into one.
+  return /^assets\/(?:(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|cost|event-stream|transform)-|runtime-(?!registry-))[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalChutesOAuthPath(path) {
@@ -3762,6 +3813,7 @@ function printResult(result) {
     `Optional evidence acquisition ${formatBytes(measurements.optionalEvidenceAcquisition.raw)} raw / ${formatBytes(measurements.optionalEvidenceAcquisition.gzip)} gzip`,
   );
   console.log(
+    `Optional prime runtime ${formatBytes(measurements.optionalPrimePack.raw)} raw / ${formatBytes(measurements.optionalPrimePack.gzip)} gzip`,
     `Optional Chutes OAuth ${formatBytes(measurements.optionalChutesOAuth.raw)} raw / ${formatBytes(measurements.optionalChutesOAuth.gzip)} gzip`,
   );
   console.log(

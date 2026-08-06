@@ -616,9 +616,11 @@ describe("PrimeAgentSession", () => {
     ]);
     const session = makeSession(fixture);
     const first = session.prompt("one");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const activeTurnId = session.getActiveTurnId();
+    // Two setTimeout(0) ticks used to stand in for "the turn is running": on a
+    // quiet host bootstrap + the session read take one macro tick, on a loaded
+    // one they take four, and the refusal check then races. This test is about
+    // serialization, not scheduling, so it waits for the state it needs.
+    const activeTurnId = await waitForActiveTurnId(session);
     expect(activeTurnId).toBeDefined();
     await expect(session.prompt("two")).rejects.toThrow(/steer\/follow-up as next turn/i);
     await expect(session.prompt("also cannot")).rejects.toThrow(activeTurnId!);
@@ -704,3 +706,19 @@ describe("PrimeAgentSession", () => {
     expect(totals.output).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Yielded macroticks until the queued turn's id is announced, or a clear
+ * failure if nothing starts under the current event-loop budget. Ticks are
+ * drained one at a time because `prompt()` settles through queue → bootstrap
+ * → session read → turn.open before `getActiveTurnId` answers — that chain is
+ * several await points, so a fixed two-tick wait is a race on loaded hosts.
+ */
+async function waitForActiveTurnId(session: PrimeAgentSession): Promise<string | undefined> {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const turnId = session.getActiveTurnId();
+    if (turnId) return turnId;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("The queued prompt never became an active turn inside 25 drained macroticks.");
+}

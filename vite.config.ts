@@ -1,6 +1,8 @@
 import preact from "@preact/preset-vite";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
+// The test block below is vitest config, not vite config; vitest extends the
+// vite type so both live in this object.
+import { defineConfig } from "vitest/config";
 import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
 import { airshipSemanticPackAssets, readVerifiedSemanticPack } from "./scripts/semantic-pack-assets";
