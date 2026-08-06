@@ -81,6 +81,13 @@ const SEMANTIC_PACK_AVAILABLE = VERIFIED_SEMANTIC_PACK !== null;
 
 export default defineConfig({
   base: PUBLIC_BASE_PATH,
+  test: {
+    // Suites outgrew the stock 5 s default on shared worker hosts; full-tree
+    // runs of some long-but-alway-passing tests time out under contention in
+    // shared machines. 30 s is the point where environments state their own
+    // budgets honestly instead of aborting mid-exchange.
+    testTimeout: 30_000,
+  },
   define: {
     "import.meta.env.VITE_AIRSHIP_SEMANTIC_PACK_AVAILABLE": JSON.stringify(SEMANTIC_PACK_AVAILABLE ? "true" : "false"),
   },
