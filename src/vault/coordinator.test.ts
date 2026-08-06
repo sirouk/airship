@@ -216,6 +216,67 @@ describe("VaultCoordinator", () => {
     expect(second.evidence.cleanup.warning).toContain("remove the listed keys out-of-band");
   });
 
+it("refuses a reclamation sweep before a verified runtime exists", async () => {
+    const coordinator = new VaultCoordinator();
+    await expect(coordinator.runReclamationSweep()).rejects.toThrow("requires a verified Vault runtime");
+  });
+
+  it("records workspace supersessions into the durable queue and sweeps them with fresh-root verification", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const coordinator = new VaultCoordinator();
+    coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_123",
+        workspaceName: "Airship Workspace",
+        rootFolderId: "drive_root_123",
+        segmentsFolderId: "drive_segments_123",
+        namespaceId: "opaque-drive-namespace",
+      },
+      store,
+      workspaceKey: key,
+      accountLabel: "operator@example.test",
+      // The run's own clock stamps supersessions two hours behind wall time:
+      // the real-time sweep then sees them as fresh for the 7-day default
+      // ("young") but aged for a one-hour window, exercising both branches in
+      // one pass without sleep.
+      now: () => new Date(Date.now() - 2 * 3_600_000),
+    });
+    const ready = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "sweepwire001" });
+    expect(ready.phase).toBe("ready");
+
+    const runtime = coordinator.readyRuntime();
+    await runtime.workspace.write("/workspace/alpha.txt", "first");
+    const filesBefore = () => store.list("state/workspace/v1/files/");
+    expect((await filesBefore()).length).toBe(1);
+    await runtime.workspace.write("/workspace/alpha.txt", "second");
+    expect((await filesBefore()).length).toBe(2);
+
+    // Immediately after the edit the supersession is recorded but too young:
+    // the sweep sees it, names it, and leaves every byte in place.
+    const young = await coordinator.runReclamationSweep();
+    expect(young.queue).toMatchObject({
+      queued: 1, aged: 0, deferredYoung: 1, requested: 0, reclaimed: 0, retained: 0,
+      confirmationCommitted: "not-needed", queueReadable: true,
+    });
+    // A memory authority has no provider-side folder enumeration to offer.
+    expect(young.untracked).toEqual({ status: "unavailable" });
+    expect((await filesBefore()).length).toBe(2);
+
+    // The same run after the safety window: aged, re-verified against the
+    // fresh manifest, reclaimed with provider confirmation, and settled out of
+    // the queue — with the live revision and the queue object itself untouched.
+    const aged = await coordinator.runReclamationSweep({ safetyAgeMs: 3_600_000 });
+    expect(aged.queue).toMatchObject({
+      queued: 1, aged: 1, requested: 1, reclaimed: 1, retained: 0,
+      confirmationCommitted: "committed",
+    });
+    expect((await filesBefore()).length).toBe(1);
+    expect((await runtime.workspace.read("/workspace/alpha.txt"))?.content).toBe("second");
+    const again = await coordinator.runReclamationSweep({ safetyAgeMs: 3_600_000 });
+    expect(again.queue).toMatchObject({ queued: 0, requested: 0, confirmationCommitted: "not-needed" });
+  });
+
   it("fails a same-authority re-probe closed without invalidating the adopted runtime", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const store = new MemoryObjectStore();

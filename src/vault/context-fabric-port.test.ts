@@ -7,6 +7,7 @@ import { MemoryWorkspace } from "../workspace/memory";
 import { isWorkspaceControlPlanePath } from "../workspace/contracts";
 import { EncryptedObjectWorkspace } from "./encrypted-workspace";
 import { CONTEXT_ROUTING_MIRROR_PATH, VaultContextFabricPort } from "./context-fabric-port";
+import { VaultReclamationQueue } from "./reclamation-queue";
 
 describe("VaultContextFabricPort", () => {
   it("publishes one stable generation and range-reads only routed encrypted experts", async () => {
@@ -97,6 +98,58 @@ describe("VaultContextFabricPort", () => {
     });
     expect(put).toHaveBeenCalledTimes(0);
     expect(writesAfterFirstInstall).toBeGreaterThan(0);
+  });
+
+it("records replaced generation segments into the supersession queue, sparing content-identical survivors", async () => {
+    const source = new MemoryWorkspace();
+    await source.write("docs/alpha.md", "alpha version one");
+    await source.write("docs/beta.md", "beta stays identical across generations");
+    const runtime = new ClientContextRuntime(source, { dimensions: 64, debounceMs: 0 });
+    await runtime.refreshNow();
+    const firstPublication = runtime.exportActiveGeneration();
+
+    const store = new MemoryObjectStore();
+    const { key } = await WorkspaceRootKey.generate();
+    const queue = new VaultReclamationQueue(store, key);
+    const encryptedWorkspace = new EncryptedObjectWorkspace(store, key);
+    const port = new VaultContextFabricPort(store, key, encryptedWorkspace, queue);
+
+    await port.install({
+      workspaceId: "vault+test://workspace-one",
+      publication: firstPublication,
+      publicationPolicy: "explicit-user-approved",
+    });
+    const firstReferences = new Set((await port.referencedSegmentKeys())!);
+    expect(firstReferences.size).toBeGreaterThan(0);
+    // Nothing is superseded by a first install.
+    expect(await queue.readEntries()).toEqual([]);
+
+    // A real edit changes the indexed content; beta is untouched so any key
+    // derived solely from its bytes must survive both mirrors un-queued.
+    await source.write("docs/alpha.md", "alpha version two — an honest supersedure");
+    await runtime.refreshNow();
+    const secondPublication = runtime.exportActiveGeneration();
+    await port.install({
+      workspaceId: "vault+test://workspace-one",
+      publication: secondPublication,
+      publicationPolicy: "explicit-user-approved",
+    });
+
+    const secondReferences = new Set((await port.referencedSegmentKeys())!);
+    expect(secondReferences.size).toBeGreaterThan(0);
+    const queued = (await queue.readEntries()).filter((entry) => entry.kind === "context-segment").map((entry) => entry.cloudKey);
+    expect(queued.length).toBeGreaterThan(0);
+    // Every queued key died with the first generation: referenced then, not now.
+    for (const cloudKey of queued) {
+      expect(firstReferences.has(cloudKey)).toBe(true);
+      expect(secondReferences.has(cloudKey)).toBe(false);
+    }
+    // And the intersection the new mirror still names was never offered up.
+    const shared = [...firstReferences].filter((cloudKey) => secondReferences.has(cloudKey));
+    for (const cloudKey of shared) expect(queued).not.toContain(cloudKey);
+    // The mirror file itself is not this recorder's entry: the workspace's own
+    // supersession recorder owns file revisions.
+    expect((await queue.readEntries()).every((entry) => entry.kind === "context-segment")).toBe(true);
   });
 
   it("refuses to promote a mirror from a different workspace snapshot", async () => {

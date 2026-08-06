@@ -41,12 +41,12 @@ ceilings are both blocking.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 115 KiB |
+| HTML-referenced entry JavaScript | 384 KiB | 116 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 181 KiB |
-| Deferred advanced capability bundle | 430 KiB | 128 KiB |
-| First-party and other non-vendor JS/workers | 2,118 KiB | 674 KiB |
+| Deferred advanced capability bundle | 443 KiB | 131 KiB |
+| First-party and other non-vendor JS/workers | 2,134 KiB | 678 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 2,798 KiB | 862 KiB |
+| Absolute installed JavaScript/worker backstop | 2,813 KiB | 867 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 60 KiB | 10 / 14 / 4 / 18 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -55,7 +55,7 @@ ceilings are both blocking.
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
 | Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
 | Optional Workspace / Source Control / browser Git | 86 / 48 / 276 KiB | 28 / 14 / 83 KiB |
-| Optional Sessions / Memory / Memory support / Proof | 64 / 61 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
+| Optional Sessions / Memory / Memory support / Proof | 65 / 61 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
 | Optional Skills route / skill editor | 7 / 4 KiB | 3 / 2 KiB |
 | Optional Terminal | 423 KiB | 112 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |

@@ -3,6 +3,8 @@ import { randomUuid } from "../core/id";
 import type { EncryptedObjectJournalBackend } from "../storage/encrypted-object-journal";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore } from "../storage/object-store";
+import type { VaultReclamationSweepReceipt } from "./reclamation";
+import type { VaultReclamationQueue } from "./reclamation-queue";
 import type { CiphertextCacheCapability } from "../storage/client-ciphertext-cache";
 import type { EncryptedProfileCatalogStore } from "../profiles/persistence";
 import type { VaultContextFabricPort } from "./context-fabric-port";
@@ -198,6 +200,8 @@ type VaultRuntimeModules = Readonly<{
   VaultContextFabricPort: typeof import("./context-fabric-port").VaultContextFabricPort;
   createClientCiphertextCache: typeof import("../storage/client-ciphertext-cache").createClientCiphertextCache;
   CiphertextCachingObjectStore: typeof import("../storage/caching-object-store").CiphertextCachingObjectStore;
+  VaultReclamationQueue: typeof import("./reclamation-queue").VaultReclamationQueue;
+  runVaultReclamationSweep: typeof import("./reclamation").runVaultReclamationSweep;
 }>;
 
 /**
@@ -218,6 +222,7 @@ export class VaultCoordinator {
   private directReauthorize?: () => Promise<void>;
   private directReset?: () => void;
   private runtime?: ReadyVaultRuntime;
+  private reclamationQueue?: VaultReclamationQueue;
   private acceleratedStore?: import("../storage/caching-object-store").CiphertextCachingObjectStore;
   private fetchImplementation?: typeof fetch;
   private abortController?: AbortController;
@@ -280,6 +285,43 @@ export class VaultCoordinator {
     return Object.freeze({ objectCount: keys.length });
   }
 
+  /**
+   * Run the bounded reclamation job: the aged supersession queue this
+   * runtime's workspace and context fabric record into, and the provider-side
+   * untracked-object enumeration when the authority supports it.
+   *
+   * Everything the job removes was made unreachable by a committed CAS, aged
+   * past a safety window for readers still holding the older root, and
+   * re-verified against the fresh root in the same run. The receipt reports
+   * provider-confirmed removals only; offered-but-unconfirmed objects stay
+   * queued and are named as retained, never swept under "reclaimed".
+   */
+  async runReclamationSweep(options: Readonly<{ safetyAgeMs?: number; signal?: AbortSignal }> = {}): Promise<VaultReclamationSweepReceipt> {
+    const runtime = this.runtime;
+    const queue = this.reclamationQueue;
+    if (this.current.phase !== "ready" || !runtime || !queue) {
+      throw new Error("Vault reclamation requires a verified Vault runtime; connect the Vault and complete its probe first.");
+    }
+    // Sweep code rides the same deferred pack as the rest of the Vault
+    // runtime; a ready phase has it cached already.
+    const modules = await loadVaultRuntimeModules();
+    return modules.runVaultReclamationSweep({
+      store: runtime.store,
+      // The direct authority may offer verbs the caching facade does not
+      // forward (untracked enumeration); untracked bodies were never read by
+      // key, so bypassing the facade for them is cache-coherent.
+      authorityStore: this.directStore ?? this.store,
+      workspace: runtime.workspace,
+      queue,
+      resolveReferences: async (kind) =>
+        kind === "context-segment" ? runtime.contextFabric.referencedSegmentKeys() : undefined,
+      now: () => new Date(),
+      safetyAgeMs: options.safetyAgeMs,
+      runId: randomNonce(),
+      signal: options.signal,
+    });
+  }
+
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -293,6 +335,7 @@ export class VaultCoordinator {
     this.resetProvider();
     this.resetAcceleration();
     this.runtime = undefined;
+    this.reclamationQueue = undefined;
     this.config = config;
     this.requirements = vaultProviderRequirements(config);
     this.provider = request.credentialProvider;
@@ -325,6 +368,7 @@ export class VaultCoordinator {
     this.resetProvider();
     this.resetAcceleration();
     this.runtime = undefined;
+    this.reclamationQueue = undefined;
     this.config = nextConfig;
     this.requirements = nextRequirements;
     this.provider = undefined;
@@ -348,6 +392,7 @@ export class VaultCoordinator {
     this.workspaceKey = key;
     this.resetAcceleration();
     this.runtime = undefined;
+    this.reclamationQueue = undefined;
     return this.transition({
       phase: "configured",
       ...this.configuredFields(),
@@ -361,6 +406,7 @@ export class VaultCoordinator {
     this.workspaceKey = undefined;
     this.resetAcceleration();
     this.runtime = undefined;
+    this.reclamationQueue = undefined;
     return this.transition({
       phase: "configured",
       ...this.configuredFields(),
@@ -383,6 +429,7 @@ export class VaultCoordinator {
     this.resetProvider();
     this.resetAcceleration();
     this.runtime = undefined;
+    this.reclamationQueue = undefined;
     this.store = undefined;
     this.directStore = undefined;
     this.directReauthorize = undefined;
@@ -540,15 +587,28 @@ export class VaultCoordinator {
         }
         const acceleratedStore = new modules.CiphertextCachingObjectStore(store, cache);
         this.acceleratedStore = acceleratedStore;
+        // One queue serves the whole runtime: the workspace records superseded
+        // file revisions and the context fabric records replaced generation
+        // segments into the same encrypted, CAS-guarded object, which the
+        // bounded reclamation sweep later ages, re-verifies, and receipts.
+        const reclamationQueue = new modules.VaultReclamationQueue(acceleratedStore, key, () => this.now().toISOString());
+        this.reclamationQueue = reclamationQueue;
         const journal = new modules.EncryptedObjectJournalBackend(acceleratedStore, key, "state/journal/v1");
-        const workspace = new modules.EncryptedObjectWorkspace(acceleratedStore, key, "state/workspace/v1");
+        const workspace = new modules.EncryptedObjectWorkspace(
+          acceleratedStore,
+          key,
+          "state/workspace/v1",
+          undefined,
+          undefined,
+          reclamationQueue,
+        );
         this.runtime = Object.freeze({
           store: acceleratedStore,
           acceleration: acceleratedStore.acceleration,
           journal,
           workspace,
           profiles: new modules.EncryptedProfileCatalogStore(acceleratedStore, key, "state/profiles/v1"),
-          contextFabric: new modules.VaultContextFabricPort(acceleratedStore, key, workspace),
+          contextFabric: new modules.VaultContextFabricPort(acceleratedStore, key, workspace, reclamationQueue),
         });
       }
       return this.transition({
@@ -563,6 +623,7 @@ export class VaultCoordinator {
         if (!retainedRuntime) {
           this.resetAcceleration();
           this.runtime = undefined;
+          this.reclamationQueue = undefined;
         }
         this.transition({
           phase: "configured",
@@ -574,6 +635,7 @@ export class VaultCoordinator {
       if (!retainedRuntime) {
         this.resetAcceleration();
         this.runtime = undefined;
+        this.reclamationQueue = undefined;
       }
       const diagnostic = redactVaultError(error, this.now().toISOString());
       return this.transition({
@@ -866,6 +928,8 @@ function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
     VaultContextFabricPort: capabilities.VaultContextFabricPort,
     createClientCiphertextCache: capabilities.createClientCiphertextCache,
     CiphertextCachingObjectStore: capabilities.CiphertextCachingObjectStore,
+    VaultReclamationQueue: capabilities.VaultReclamationQueue,
+    runVaultReclamationSweep: capabilities.runVaultReclamationSweep,
     }));
   return runtimeModulesPromise;
 }

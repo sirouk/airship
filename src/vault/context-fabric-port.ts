@@ -10,6 +10,18 @@ import { CONTEXT_ROUTING_MIRROR_PATH, WorkspaceConflictError, type ClientEncrypt
 export { CONTEXT_ROUTING_MIRROR_PATH } from "../workspace/contracts";
 const MAX_MIRROR_BYTES = 4 * 1024 * 1024;
 
+/**
+ * What a generation replacement knows about the segments it orphaned: their
+ * cloud keys and that a context mirror CAS made them unreachable. The mirror
+ * file's own supersession is recorded by the workspace write itself; this
+ * covers the encrypted segment objects the old mirror named. Best-effort like
+ * every reclamation record: the sweep re-verifies against the fresh mirror
+ * before any provider removal is requested.
+ */
+export interface ContextSegmentSupersessionRecorder {
+  record(candidates: readonly Readonly<{ kind: "context-segment"; cloudKey: string }>[]): Promise<boolean>;
+}
+
 export type VaultContextFabricBinding = Readonly<{
   driver: ContextFabricDriver;
   turnProvider: VaultTurnContextProvider;
@@ -49,6 +61,7 @@ export class VaultContextFabricPort {
     private readonly store: ObjectStore,
     private readonly key: WorkspaceRootKey,
     private readonly workspace: ClientEncryptedWorkspacePort,
+    private readonly reclamation?: ContextSegmentSupersessionRecorder,
   ) {}
 
   /**
@@ -70,7 +83,29 @@ export class VaultContextFabricPort {
     if ((workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary !== "airship-client-envelope-v1") {
       throw new Error("The encrypted context fabric requires a client-encrypted workspace.");
     }
-    return new VaultContextFabricPort(this.store, this.key, workspace as ClientEncryptedWorkspacePort);
+    return new VaultContextFabricPort(this.store, this.key, workspace as ClientEncryptedWorkspacePort, this.reclamation);
+  }
+
+  /**
+   * The referenced segment keys of the freshest committed mirror, for the
+   * reclamation sweep's re-verification. `undefined` means the mirror could
+   * not be read or validated, which the sweep treats as "unverifiable" and
+   * never as "unreferenced".
+   */
+  async referencedSegmentKeys(): Promise<ReadonlySet<string> | undefined> {
+    let current: Awaited<ReturnType<ClientEncryptedWorkspacePort["read"]>>;
+    try {
+      current = await this.workspace.read(CONTEXT_ROUTING_MIRROR_PATH);
+    } catch {
+      return undefined;
+    }
+    if (!current) return undefined;
+    try {
+      const mirror = parseMirror(current.content);
+      return new Set(Object.values(mirror.objects).map((object) => object.cloudKey));
+    } catch {
+      return undefined;
+    }
   }
 
   async install(args: Readonly<{
@@ -85,12 +120,14 @@ export class VaultContextFabricPort {
       throw new Error("Encrypted context publication requires an explicit user-approved policy decision.");
     }
     const current = await this.workspace.read(CONTEXT_ROUTING_MIRROR_PATH);
+    let previousMirror: ContextRoutingMirror | undefined;
     if (current) {
       try {
         const mirror = parseMirror(current.content);
         if (matchesPublication(mirror, args.workspaceId, args.publication)) {
           return this.binding(mirror, args.publication);
         }
+        previousMirror = mirror;
       } catch {
         // An explicit publication may repair a malformed authenticated mirror.
         // Read-only adoption still reports it as invalid and never writes.
@@ -127,14 +164,34 @@ export class VaultContextFabricPort {
         expectedRevision: current?.revision ?? null,
       });
     } catch (error) {
+      // The mirror never advanced, so the segments minted above reference no
+      // committed pointer. Queue them, then report as before.
+      await this.recordSupersededSegments(segmentKeys(mirror));
       if (!(error instanceof WorkspaceConflictError)) throw error;
       const winner = await this.workspace.read(CONTEXT_ROUTING_MIRROR_PATH);
       if (!winner) throw error;
       const winnerMirror = parseMirror(winner.content);
       if (!matchesPublication(winnerMirror, args.workspaceId, args.publication)) throw error;
+      // The winning mirror references this exact publication. The keys queued
+      // above are still named by it, so the sweep's fresh-root pass will
+      // reconcile those entries straight back out of the queue.
       return this.binding(winnerMirror, args.publication);
     }
+    // Only segments the previous mirror named *and* the new one does not are
+    // unreachable as of that committed write; unchanged segments keep the same
+    // content-derived keys and stay referenced across generations.
+    if (previousMirror) {
+      const retained = new Set(segmentKeys(mirror));
+      await this.recordSupersededSegments(
+        segmentKeys(previousMirror).filter((cloudKey) => !retained.has(cloudKey)),
+      );
+    }
     return this.binding(mirror, args.publication);
+  }
+
+  private async recordSupersededSegments(cloudKeys: readonly string[]): Promise<void> {
+    if (!this.reclamation || !cloudKeys.length) return;
+    await this.reclamation.record(cloudKeys.map((cloudKey) => ({ kind: "context-segment" as const, cloudKey })));
   }
 
   /**
@@ -239,6 +296,10 @@ function mirrorProvenance(mirror: ContextRoutingMirror): VaultContextFabricProve
     embeddingProvider: mirror.embeddingProvider,
     dimensions: mirror.dimensions,
   });
+}
+
+function segmentKeys(mirror: ContextRoutingMirror): string[] {
+  return Object.values(mirror.objects).map((object) => object.cloudKey);
 }
 
 function parseMirror(content: string): ContextRoutingMirror {

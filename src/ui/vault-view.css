@@ -158,6 +158,52 @@
 .vault-danger__action:hover:not(:disabled) { background: color-mix(in srgb, var(--v-failed) 10%, transparent); }
 .vault-danger__action:disabled { border-color: var(--line); color: var(--ink-faint); cursor: default; }
 
+/* Maintenance is not danger: the reclaim block shares the danger zone's
+   silhouette but keeps the neutral line treatment, because what it does —
+   aging, re-checking, then asking the provider about objects nothing
+   references — must scan as routine upkeep, not as a red decision. */
+.vault-reclaim {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--v-info);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-info) 3%, var(--surface-soft));
+}
+
+.vault-reclaim__copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vault-reclaim__copy strong { font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+
+.vault-reclaim__copy span {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
+.vault-reclaim__action {
+  flex: none;
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--v-info) 45%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font-weight: var(--fw-strong);
+}
+
+.vault-reclaim__action:hover:not(:disabled) { background: color-mix(in srgb, var(--v-info) 10%, transparent); }
+.vault-reclaim__action:disabled { border-color: var(--line); color: var(--ink-faint); cursor: default; }
+
 @media (max-width: 640px) {
   .vault-danger { flex-direction: column; align-items: stretch; }
   .vault-danger__action { width: 100%; }
