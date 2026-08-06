@@ -94,6 +94,7 @@ session's `EventJournal`, its `ToolRegistry` + `ApprovalPolicy`, its
 
 ## Conformance proof
 
-`npm test` on this worktree: **4004 passed / 1 skipped (4005)** at the
-freeze state (airship suites + 300+ prime tests). See `PORT-MAP.md` for
+`npm test` on this worktree: **4,004+ passed (4,005)** at all
+freeze states to date (all 382 airship suites + every one of ~545 prime tests
+through green gates). Full-tree test-run records under `/root/pa-audit/`. See `PORT-MAP.md` for
 per-subsystem accounting and `scripts/bench/` for the reproducible numbers.
