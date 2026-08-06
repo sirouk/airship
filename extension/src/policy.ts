@@ -179,6 +179,12 @@ export function developmentCallers(): readonly CallerOrigin[] {
     ...RELEASE_CALLERS,
     Object.freeze({ origin: "http://localhost:4173", pathPrefix: "/" }),
     Object.freeze({ origin: "http://127.0.0.1:4173", pathPrefix: "/" }),
+    // The compose deployment uses 8080 for exactly the purpose this channel
+    // exists for: running the real container locally at a loopback origin.
+    // Both hosts are named because the compose healthcheck and a developer's
+    // habit disagree about which one they typed.
+    Object.freeze({ origin: "http://localhost:8080", pathPrefix: "/" }),
+    Object.freeze({ origin: "http://127.0.0.1:8080", pathPrefix: "/" }),
   ]);
 }
 

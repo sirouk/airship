@@ -165,6 +165,11 @@ describe("caller allowlist", () => {
     expect(callerMatchPatterns(callerAllowlist("release"))).toEqual(["https://sirouk.github.io/airship/*"]);
     expect(callerAllowlist("development")).toEqual(developmentCallers());
     expect(callerMatchPatterns(callerAllowlist("development"))).toContain("http://localhost:4173/*");
+    // The compose deployment's documented local port is what a developer
+    // actually reaches when the Docker image runs on their machine — the
+    // bridge must not leave that whole class of local work unpaired.
+    expect(callerMatchPatterns(callerAllowlist("development"))).toContain("http://localhost:8080/*");
+    expect(callerMatchPatterns(callerAllowlist("development"))).toContain("http://127.0.0.1:8080/*");
   });
 
   it("accepts the Airship page and refuses every foreign caller", () => {

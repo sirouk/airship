@@ -17,6 +17,9 @@ describe("popup build diagnostics", () => {
         "https://sirouk.github.io/airship/",
         "http://localhost:4173/",
         "http://127.0.0.1:4173/",
+        // The compose deployment's document says: run it locally on 8080.
+        "http://localhost:8080/",
+        "http://127.0.0.1:8080/",
       ],
       connectionUrl: "http://localhost:4173/#connection",
     });
