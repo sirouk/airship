@@ -34,7 +34,7 @@ import {
 import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import { finalizeProviderReceipt } from "../receipts/types";
-import type { CanonicalMessage, InferenceTransport, JsonValue, SecurityPosture, SessionManifest, ToolDefinition } from "../core/contracts";
+import type { CanonicalMessage, InferenceTransport, JsonValue, SecurityPosture, SessionManifest, ToolContext, ToolDefinition } from "../core/contracts";
 import type { LiveEnvironmentEntry } from "../core/live-environment";
 import type { InferenceDirectoryPromptDefinition } from "../core/operating-charter";
 import { EventJournal, type DurableEvent, type SessionRecord } from "../core/journal";
@@ -200,7 +200,6 @@ import {
   PwaUpdateBanner,
   SHORTCUT_SHEET_CHORD,
   TrustPostureSheet,
-  TrustHubTabs,
   ViewErrorBoundary,
   applyPreferenceOverrides,
   approvalModeLabel,
@@ -481,6 +480,7 @@ type RecentConversation = Readonly<{
   preview: string;
   updatedAt: string;
   favorite: boolean;
+  durableEventCount: number;
   /** Branches of this row's lineage the shortcut collapsed behind it. */
   hiddenBranchCount: number;
   open(): void;
@@ -1362,6 +1362,7 @@ async function recentConversationFor(
     preview,
     updatedAt: item.updatedAt,
     favorite,
+    durableEventCount: item.headSequence,
     hiddenBranchCount,
     open: () => open(item.id),
     toggleFavorite: () => setFavorite(item.id, !favorite),
@@ -1496,6 +1497,10 @@ export function App() {
     ...recentPaletteSessions.filter((session) => session.id === sessionId),
   ]), [recentPaletteSessions, sessionId]);
   const [recentProfileConversations, setRecentProfileConversations] = useState<readonly RecentConversation[]>([]);
+  const recentDurableEventCount = recentProfileConversations.reduce(
+    (total, conversation) => total + conversation.durableEventCount,
+    0,
+  );
   // A bump, not a boolean: the palette's "Rename conversation" verb has to be
   // able to ask twice in a row, and the editor that answers it lives in the
   // session bar. See `paletteActions`.
@@ -1572,6 +1577,9 @@ export function App() {
     turnNarration.narrate(utterance);
   }
   const [eventCount, setEventCount] = useState(0);
+  const railDurableEventCount = recentProfileConversations.length > 0
+    ? recentDurableEventCount
+    : eventCount;
   const [connection, setConnection] = useState<ChutesConnection>(DISCONNECTED_CHUTES_CONNECTION);
   const [availableModels, setAvailableModels] = useState<readonly AirshipModel[]>([]);
   const [modelSwitching, setModelSwitching] = useState(false);
@@ -1751,17 +1759,30 @@ export function App() {
   const proofSelectionOperation = useRef(0);
   const inferenceRouteChanging = useRef(false);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
+  /**
+   * A conversation can be opened while its predecessor is still answering.
+   * Keep the answering session's policy authority separate from the session
+   * currently on screen: replacing the shared delegate on navigation would
+   * make the old turn's next tool call run under the new conversation's mode.
+  */
+  const activeTurnSessionId = useRef<string>();
+  const sessionResumeDuringTurn = useRef<string>();
+  const [liveApprovalMode, setLiveApprovalMode] = useState<Readonly<{
+    sessionId: string;
+    mode: ApprovalMode;
+  }>>();
   const transcriptStreams = useMemo(() => new TranscriptStreamStore(), []);
   /** A conversation pin wins over global preferences; historical sessions stay semantically intact. */
-  const activeApprovalMode = activeSessionRecord?.manifest.profile?.version === 2
+  const pinnedApprovalMode = activeSessionRecord?.manifest.profile?.version === 2
     ? activeSessionRecord.manifest.profile.approvalMode
     : preferences.approvalMode;
-  const approvalModePolicy = useMemo(() => createApprovalModePolicy({
-    mode: activeApprovalMode,
-    broker: approvalBroker,
-    safetyReview: async (tool, argumentsValue, context) => {
+  const activeApprovalMode = liveApprovalMode && liveApprovalMode.sessionId === activeSessionRecord?.id
+    ? liveApprovalMode.mode
+    : pinnedApprovalMode;
+  const approvalModePolicies = useMemo(() => {
+    const safetyReview = async (tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext) => {
       const active = runtime.current;
-      if (!active) return { verdict: "indeterminate", reason: "No active inference runtime is available." };
+      if (!active) return { verdict: "indeterminate" as const, reason: "No active inference runtime is available." };
       // The model reviewer only runs when a governed tool action actually needs
       // adjudicating, so it is fetched then rather than carried through first
       // paint by every visitor who never triggers one.
@@ -1804,10 +1825,24 @@ export function App() {
         }
       }
       return review;
-    },
-  }), [approvalBroker, activeApprovalMode]);
+    };
+    return Object.freeze({
+      "ask-first": createApprovalModePolicy({ mode: "ask-first", broker: approvalBroker, safetyReview }),
+      "auto-approve": createApprovalModePolicy({ mode: "auto-approve", broker: approvalBroker, safetyReview }),
+      "full-access": createApprovalModePolicy({ mode: "full-access", broker: approvalBroker, safetyReview }),
+    });
+  }, [approvalBroker]);
+  const approvalModePolicy = approvalModePolicies[activeApprovalMode];
   const approvalPolicyController = useMemo(() => new SwitchableApprovalPolicy(approvalModePolicy), []);
-  approvalPolicyController.replace(approvalModePolicy);
+  /*
+   * A live turn keeps its delegate while another conversation is being
+   * inspected. Once the turn is the visible session again (or has settled),
+   * the current conversation policy is the one the shared controller adopts.
+   */
+  if (
+    !activeTurnSessionId.current
+    || activeTurnSessionId.current === sessionId
+  ) approvalPolicyController.replace(approvalModePolicy);
   const approvalPolicy = approvalPolicyController;
   /*
    * The policy a local slash command is reviewed under. Same `SwitchableApprovalPolicy`
@@ -1826,7 +1861,10 @@ export function App() {
     [approvalBroker, activeApprovalMode],
   );
   const humanIntentPolicyController = useMemo(() => new SwitchableApprovalPolicy(humanIntentModePolicy), []);
-  humanIntentPolicyController.replace(humanIntentModePolicy);
+  if (
+    !activeTurnSessionId.current
+    || activeTurnSessionId.current === sessionId
+  ) humanIntentPolicyController.replace(humanIntentModePolicy);
   const localCommandPolicy = humanIntentPolicyController;
   const previousApprovalMode = useRef(activeApprovalMode);
   const vault = useMemo(() => new VaultCoordinator(), []);
@@ -2658,6 +2696,32 @@ export function App() {
     && activeExternalResolution?.state === "ready"
       ? pinnedExternalRoute
       : undefined;
+  /**
+   * A provider can have a complete, reachable catalog before a person has
+   * chosen which model should own a conversation. Keep that catalog visible in
+   * Chat instead of falling back to the demo chip; selecting one model is the
+   * only path that performs the protected invocation check.
+   */
+  const standbyExternalConnections = useMemo(
+    () => activeExternalConnection || activeChutesConnection || activeInferenceBinding
+      ? Object.freeze([] as readonly BrowserInferenceConnection[])
+      : Object.freeze((inferenceFabric.current?.list() ?? []).filter((entry) => entry.provider.id !== "chutes")),
+    [activeChutesConnection, activeExternalConnection, activeInferenceBinding, providerFabricRevision],
+  );
+  const standbyExternalModels = useMemo(
+    () => Object.freeze(standbyExternalConnections.flatMap((entry) => entry.models.map((model) => ({
+      id: externalModelSelectionId(entry.connection.id, model.id),
+      label: standbyExternalConnections.length > 1
+        ? `${entry.provider.label} · ${model.label}`
+        : model.label,
+      detail: externalModelCapabilityDetail(model),
+      disabled: !chatModelCapable(model),
+    })))),
+    [standbyExternalConnections],
+  );
+  const standbyExternalProviderLabel = standbyExternalConnections.length === 1
+    ? standbyExternalConnections[0]?.provider.label
+    : standbyExternalConnections.length > 1 ? "Connected models" : undefined;
   const inferenceConnected = Boolean(activeChutesConnection || activeExternalConnection);
   const activeChutesModel = chutesConnected
     ? availableModels.find((model) => model.id === connection.model)
@@ -2923,8 +2987,9 @@ export function App() {
    * Both loaders below bake an `open` callback into every row they return, and
    * both effects are keyed on `settledSessionRevision` — the trailing edge of a
    * turn's event burst, which by construction settles while that turn is still
-   * running. The rows now call the live opener below, and a request made during
-   * a turn is held for its safe journal boundary rather than being rejected.
+   * running. The rows now call the live opener below. Same-model requests open
+   * immediately; incompatible continuations remain held for their safe journal
+   * boundary rather than being rejected.
    *
    * The indirection keeps the row current; the pending-resume boundary keeps a
    * live turn's transcript projection and journal authority intact.
@@ -4584,8 +4649,8 @@ export function App() {
       setRuntimeStatus(error instanceof Error
         ? describeSessionPresentationFault(error)
         : "The recent session could not be opened.");
-      /* A live turn queues a requested resume at its safe journal boundary;
-         only faults that survive that boundary belong on the library route. */
+      /* A live turn only queues an incompatible continuation at its safe
+         journal boundary; same-model history has already opened in place. */
       if (!busy) {
         // Keep the conversation the person chose in view.  A model/provider
         // mismatch is expected to refuse in-place replay, but sending the
@@ -4646,6 +4711,50 @@ export function App() {
   function adoptLibraryRename(renamed: SessionRecord): void {
     setActiveSessionRecord((current) => current?.id === renamed.id ? renamed : current);
     setSessionRevision((value) => value + 1);
+  }
+
+  /**
+   * Retire every live projection of a deleted conversation. The journal row is
+   * removed by SessionsView; this callback keeps the shell's rail/palette in
+   * step and only erases separately stored endpoint evidence when the person
+   * explicitly asked for that second, destructive scope.
+   */
+  async function adoptLibraryDelete(deletedSessionId: string, removeEvidence: boolean): Promise<void> {
+    let cleanupFailure: unknown;
+    if (removeEvidence) {
+      try {
+        const { removeConversationProofEvidence } = await loadDeferredCapabilities();
+        await removeConversationProofEvidence(deletedSessionId, {
+          evidenceAcquisitionQueue: evidenceAcquisitionQueue.current,
+          endpointEvidenceAuthority: endpointEvidenceAuthority.current,
+        });
+        setAncillaryReceipts((current) => current.filter((receipt) => receipt.sessionId !== deletedSessionId));
+        setAttestationPresentation((current) => current?.sessionId === deletedSessionId ? undefined : current);
+      } catch (error) {
+        cleanupFailure = error;
+      }
+    }
+
+    if (activeSessionIdentity.current === deletedSessionId) {
+      activeSessionIdentity.current = undefined;
+      activeSessionByProfile.current.delete(profileAuthorityId.current);
+      setSessionId(undefined);
+      setActiveSessionRecord(undefined);
+      setMessages([{ ...welcomeMessage, id: randomUuid(), content: "The conversation was deleted. Start a new conversation when you are ready." }]);
+      setEventCount(0);
+      setLastReceipt(undefined);
+      setAncillaryReceipts((current) => removeEvidence
+        ? current.filter((receipt) => receipt.sessionId !== deletedSessionId)
+        : current);
+      setSessionLifecycle(READY_SESSION_LIFECYCLE);
+      setTranscriptBoundary(undefined);
+      setProofSelection(undefined);
+    }
+    setSessionRevision((value) => value + 1);
+    setProofSelection((current) => current?.sessionId === deletedSessionId ? undefined : current);
+    if (cleanupFailure) {
+      throw new Error(`The conversation was deleted, but its endpoint evidence was kept because cleanup failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)}`);
+    }
   }
 
   function openReceiptAttestation(receipt: ConversationReceipt): void {
@@ -4836,8 +4945,7 @@ export function App() {
         id: "airship-workspace",
         name: "Airship Workspace",
         worktreePath: "/workspace",
-        files: { "README.md": "# Private workspace\n\nInitial browser repository snapshot." },
-        workingFiles: {
+        files: {
           "README.md": readme,
           "docs/architecture.md": architecture,
           "notes/retrieval.md": retrieval,
@@ -6398,10 +6506,9 @@ export function App() {
     const turnProfileRevision = admissionProfile.revision;
     const turnAuthorityStillCurrent = () => (
       runtime.current === turnRuntime
-      && activeSessionIdentity.current === turnSessionId
       && profileAuthorityId.current === turnProfileId
       && activeProfileRef.current?.revision === turnProfileRevision
-      && !sessionNavigationChanging.current
+      && (!sessionNavigationChanging.current || sessionResumeDuringTurn.current === turnSessionId)
     );
     const externalPreflight = turnRuntime.inferenceBinding
       && turnRuntime.inferenceBinding.providerId !== "chutes"
@@ -6444,6 +6551,7 @@ export function App() {
     // concurrent turns to one immutable session head.
     const controller = new AbortController();
     activeTurn.current = controller;
+    activeTurnSessionId.current = turnSessionId;
     activePrompt.current = content;
     setBusy(true);
     // The channel is claimed here, at the moment the turn is admitted and the
@@ -6456,6 +6564,7 @@ export function App() {
     const releasePreflight = () => {
       if (activeTurn.current !== controller) return;
       activeTurn.current = undefined;
+      if (activeTurnSessionId.current === turnSessionId) activeTurnSessionId.current = undefined;
       if (activePrompt.current === content) activePrompt.current = undefined;
       setBusy(false);
     };
@@ -6832,6 +6941,7 @@ export function App() {
       const releasesComposer = activeTurn.current === controller;
       if (releasesComposer) {
         activeTurn.current = undefined;
+        if (activeTurnSessionId.current === turnSessionId) activeTurnSessionId.current = undefined;
         if (activePrompt.current === content) activePrompt.current = undefined;
       }
       releaseComposerAndReloadSession({
@@ -6858,7 +6968,7 @@ export function App() {
     if (activePrompt.current) setInput((current) => current.trim() ? current : activePrompt.current ?? current);
     // Latch before the abort: the abort's teardown is what frees `busy`, and
     // the queue effect runs on that same commit.
-    const stoppedSessionId = activeSessionIdentity.current ?? sessionId;
+    const stoppedSessionId = activeTurnSessionId.current ?? activeSessionIdentity.current ?? sessionId;
     if (stoppedSessionId) setQueuePausedForSession(stoppedSessionId, true);
     activeTurn.current?.abort(new DOMException("Stopped by user", "AbortError"));
   }
@@ -9579,6 +9689,25 @@ export function App() {
     });
   }
 
+  /**
+   * Select one row from a connected, not-yet-pinned catalog in Chat. The
+   * selection key carries the connection identity so two providers advertising
+   * the same model id cannot activate the wrong transport.
+   */
+  async function selectStandbyExternalModel(selectionId: string): Promise<void> {
+    const fabric = inferenceFabric.current;
+    if (!fabric) throw new Error("The inference connection directory is still starting.");
+    const selected = fabric.list()
+      .flatMap((entry) => entry.models.map((model) => ({ entry, model })))
+      .find(({ entry, model }) => externalModelSelectionId(entry.connection.id, model.id) === selectionId);
+    if (!selected) throw new Error("The selected model is no longer in the connected catalog. Refresh the Connection page and choose it again.");
+    if (!chatModelCapable(selected.model)) {
+      throw new Error(`${selected.model.label} is not advertised as a text-generation model, so it cannot answer Chat prompts.`);
+    }
+    const route = await fabric.activate(selected.entry.connection.id, selected.model.id);
+    await activateExternalInference(route);
+  }
+
   async function disconnectExternalInference(connectionId: string): Promise<void> {
     if (inferenceRouteChanging.current) {
       throw new Error("Wait for the current inference route change before disconnecting this provider.");
@@ -9625,11 +9754,9 @@ export function App() {
     );
     try {
       const results: LocalProviderProbeResult[] = [];
-      const activationCandidates: BrowserInferenceConnection[] = [];
       for (const server of LOCAL_MODEL_SERVERS) {
         const held = fabric.list().find((entry) => entry.provider.id === server.kind);
         if (held) {
-          activationCandidates.push(held);
           results.push(Object.freeze({
             id: server.kind,
             label: server.label,
@@ -9640,7 +9767,6 @@ export function App() {
         }
         try {
           const connected = await fabric.connectLocal({ kind: server.kind, signal: controller.signal });
-          activationCandidates.push(connected);
           results.push(Object.freeze({
             id: server.kind,
             label: server.label,
@@ -9659,15 +9785,11 @@ export function App() {
           }));
         }
       }
-      if (!activeExternalRouteRef.current && !activeChutesConnection && activationCandidates.length === 1) {
-        const candidate = activationCandidates[0];
-        const model = candidate.models[0];
-        if (model) {
-          setRuntimeStatus(`Activating ${candidate.provider.label}/${model.label}`);
-          const route = await fabric.activate(candidate.connection.id, model.id, controller.signal);
-          await activateExternalInference(route, controller.signal);
-        }
-      }
+      // Catalog discovery is intentionally the end of this check. It must not
+      // issue a protected invocation merely because one provider happened to
+      // advertise one model; that request can load a large local model and is
+      // only justified after the person chooses a specific model in Chat or
+      // the connected-provider card.
       return Object.freeze(results);
     } finally {
       clearTimeout(deadline);
@@ -9711,9 +9833,28 @@ export function App() {
 
   async function changeActiveApprovalMode(nextMode: ApprovalMode): Promise<void> {
     if (nextMode === activeApprovalMode) return;
+    if (busy) {
+      const visibleSessionId = activeSessionRecord?.id ?? sessionId;
+      if (!visibleSessionId) {
+        setComposerNotice("The active conversation is not ready to change its approval policy.");
+        return;
+      }
+      /*
+       * A running turn already owns a stable SwitchableApprovalPolicy. The
+       * live mode is a page-memory decision for this conversation, so the
+      * current turn adopts it on the next review without minting a new
+      * session or rewriting the pinned manifest/audit chain.
+      */
+      setLiveApprovalMode(Object.freeze({ sessionId: visibleSessionId, mode: nextMode }));
+      if (activeTurnSessionId.current === visibleSessionId) {
+        approvalPolicyController.replace(approvalModePolicies[nextMode]);
+      }
+      setComposerNotice(`Approval policy changed to ${approvalModeLabel(nextMode)} for this conversation's active turn. The pinned conversation and audit remain unchanged.`);
+      setRuntimeStatus(`${approvalModeLabel(nextMode)} active for the current turn`);
+      return;
+    }
     if (
-      busy
-      || !runtime.current
+      !runtime.current
       || !catalog
       || !activeSessionRecord
       || inferenceRouteChanging.current
@@ -10190,6 +10331,10 @@ export function App() {
       throw new Error("Wait for the current session or inference route transition before resuming.");
     }
     if (!sessionLibrary || !sessionRuntime || !catalog) throw new Error("The session runtime is not ready.");
+    const preservedTurnSessionId = busy && detail.compatibility?.action === "resume"
+      ? activeTurnSessionId.current
+      : undefined;
+    if (preservedTurnSessionId) sessionResumeDuringTurn.current = preservedTurnSessionId;
     sessionNavigationChanging.current = true;
     try {
       const fresh = await sessionLibrary.inspect(detail.session.id, sessionRuntime);
@@ -10236,16 +10381,18 @@ export function App() {
       if (resumedProfileId) publishProfileId(resumedProfileId);
       navigate("chat");
     } finally {
+      if (sessionResumeDuringTurn.current === preservedTurnSessionId) sessionResumeDuringTurn.current = undefined;
       sessionNavigationChanging.current = false;
       setProfileCockpitTransition(undefined);
     }
   }
 
   /**
-   * A turn owns its live transcript projection until it settles. A history
-   * click during that window is still a valid request, so hold the exact
-   * inspected target and perform the same audited activation at the first safe
-   * boundary instead of refusing it or routing the person to the library.
+   * Same-model history is safe to activate while a turn runs: its durable
+   * writes are addressed by the turn's own session id and its live projection
+   * is already fenced by the active-session identity. Only a model-mismatch
+   * continuation (or an address that still needs re-inspection) waits for the
+   * turn's safe boundary.
    */
   function queueSessionAction(run: () => Promise<void>): Promise<void> {
     if (!busy) return run();
@@ -10253,11 +10400,14 @@ export function App() {
     const promise = new Promise<void>((resolve, reject) => {
       pendingSessionResume.current = Object.freeze({ run, resolve, reject });
     });
-    setRuntimeStatus("Opening conversation after this turn");
+    setRuntimeStatus("Opening after turn");
     return promise;
   }
 
   function resumeLibrarySession(detail: SessionLibraryDetail): Promise<void> {
+    if (busy && detail.compatibility?.action === "resume") {
+      return resumeLibrarySessionNow(detail);
+    }
     return queueSessionAction(() => resumeLibrarySessionNow(detail));
   }
 
@@ -10605,7 +10755,7 @@ export function App() {
             value={profileId}
             disabled={busy}
             options={managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))}
-            leading={(option) => <span class="profile-monogram" aria-hidden="true">{profileMonogram(option.label)}</span>}
+            leading={(option) => <span class="profile-monogram" style={profileBadgeStyle(profileThemeFor(catalog, option.value))} aria-hidden="true">{profileMonogram(option.label)}</span>}
             onChange={(nextId) => void requestProfileChange(nextId)}
           />
           <span class="runtime-line" title={runtimeStatus}><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></span>
@@ -10635,7 +10785,7 @@ export function App() {
         navRef={primaryNav}
         inert={platformOverlayOpen}
         busy={busy}
-        activity={{ activeTurns: busy ? 1 : 0, events: eventCount }}
+        activity={[+busy, `${busy ? "1 active" : "Ready"} · ${railDurableEventCount} events`]}
         unreadTurnCount={unreadTurnCount}
         hasReceipt={Boolean(lastReceipt)}
         conversations={recentProfileConversations}
@@ -10645,6 +10795,7 @@ export function App() {
         profiles={managedProfiles(catalog)}
         profileId={profileId}
         monogram={profileMonogram}
+        profileBadgeStyle={(id) => profileBadgeStyle(profileThemeFor(catalog, id))}
         onNavigate={(next) => navigatePrimary(next)}
         onManageProfiles={() => { openProfileManager(profileId); }}
         onNewConversation={() => void createConversation()}
@@ -10659,13 +10810,10 @@ export function App() {
         tabIndex={-1}
         class={view === "chat"
           ? lastReceipt && claimRailOpen ? "main chat-layout" : "main chat-layout no-inspector"
-          : ["proof", "vault", "access", "billing"].includes(view)
-            ? "main route-layout trust-route-layout"
-            : "main route-layout"}
+          : "main route-layout"}
         inert={platformOverlayOpen}
         aria-hidden={platformOverlayOpen || undefined}
       >
-        {["proof", "vault", "access", "billing"].includes(view) ? <TrustHubTabs view={view} onNavigate={navigatePrimary} /> : null}
         {view === "chat" ? (
           <>
             <section class="chat-stage" aria-label="Agent session" data-scrolled={stageScrolled ? "true" : undefined}>
@@ -10673,6 +10821,7 @@ export function App() {
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}
                 monogram={profileMonogram(activeProfile.name)}
+                profileBadgeStyle={profileBadgeStyle(activeTheme)}
                 statusFacts={sessionStatusFacts}
                 durabilityLabel={durabilityLabel(sessionDurability.state)}
                 journal={{
@@ -10695,7 +10844,7 @@ export function App() {
                 formatTime={formatConversationTime}
                 onOpenAllConversations={() => navigate("sessions")}
                 renameRequest={renameRequest}
-                model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" ? (
+                model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" || standbyExternalModels.length > 0 ? (
                   <ModelControl
                     active={activeChutesConnection ? {
                       providerLabel: "Chutes",
@@ -10714,23 +10863,26 @@ export function App() {
                       modelId: activeInferenceBinding.modelId,
                       boundaryLabel: "Disconnected · read-only pin",
                     } : undefined}
+                    providerLabel={activeExternalConnection?.pin.provider.label ?? standbyExternalProviderLabel}
                     models={activeChutesConnection
                       ? sortModels(availableModels, "popularity").map((model) => ({
                           id: model.id,
                           label: compactModelLabel(model.id),
                         }))
-                      : activeExternalConnection?.models.map((model) => ({
-                          id: model.id,
-                          label: model.label,
-                          // The shared word, not a second spelling of it. An
-                          // external provider has no `AirshipModel` and so no
-                          // access to `capabilityLabels`, but it may not invent
-                          // its own noun for the same declared capability.
-                          detail: externalModelCapabilityDetail(model),
-                        })) ?? []}
+                      : activeExternalConnection
+                        ? activeExternalConnection.models.map((model) => ({
+                            id: model.id,
+                            label: model.label,
+                            detail: externalModelCapabilityDetail(model),
+                          }))
+                        : standbyExternalModels}
                     busy={busy}
                     switching={modelSwitching}
-                    onSelect={activeChutesConnection ? switchChutesModel : switchExternalModel}
+                    onSelect={activeChutesConnection
+                      ? switchChutesModel
+                      : activeExternalConnection
+                        ? switchExternalModel
+                        : selectStandbyExternalModel}
                     onOpenConnection={() => navigate("access")}
                     picker={activeChutesConnection && ModelPickerControl ? (control) => (
                       <ModelPickerControl
@@ -11159,13 +11311,13 @@ export function App() {
                           status line that appears when the refusal does.
                         */}
                         <MenuSelect
-                          // Not "Conversation approval policy": choosing here
-                          // revises the active profile, so the profile's later
-                          // conversations start in the chosen mode as well.
-                          ariaLabel="Conversation approval policy · applies to this conversation and future ones in this profile"
+                          // While a turn is running this swaps the live
+                          // SwitchableApprovalPolicy in place. When idle it
+                          // keeps the existing immutable-profile flow.
+                          ariaLabel="Conversation approval policy · live during a turn, then starts a pinned conversation when idle"
                           className={`composer-approval-select policy-${activeApprovalMode}`}
                           value={activeApprovalMode}
-                          disabled={busy || modelSwitching || vaultProviderSwitching || localDeviceBusy}
+                          disabled={modelSwitching || vaultProviderSwitching || localDeviceBusy}
                           options={[
                             { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
                             { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
@@ -11273,6 +11425,7 @@ export function App() {
             onResume={resumeLibrarySession}
             onForked={activateForkedSession}
             onRenamed={adoptLibraryRename}
+            onDeleted={adoptLibraryDelete}
             onOpenProof={openSessionProof}
             durability={sessionDurability}
             quarantine={quarantinedSession}
@@ -11442,7 +11595,7 @@ export function App() {
           />
         ) : skillsViewError ? <RouteFailure title="Skills" message={skillsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Skills" /> : null}
         {view === "vault" ? (
-          <div class="work-view">
+          <div class="work-view vault-route">
             {VaultScreen ? <VaultScreen
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
@@ -12494,7 +12647,6 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
         name: "Airship Workspace",
         worktreePath: "/workspace",
         files,
-        workingFiles: files,
       }]);
     },
   ));
@@ -12806,7 +12958,30 @@ function externalModelCapabilityDetail(model: InferenceModelDescriptor): string 
   const labels: string[] = [];
   if (providerModelCapability(model, "image-input") === "supported") labels.push(MODEL_CAPABILITY_WORDS.vision);
   if (providerModelCapability(model, "tool-calling") === "supported") labels.push(MODEL_CAPABILITY_WORDS.tools);
+  if (providerModelCapability(model, "embeddings") === "supported") labels.push("Embeddings");
+  if (providerModelCapability(model, "text-input") === "unknown" || providerModelCapability(model, "text-output") === "unknown") {
+    labels.push("Chat capability unconfirmed");
+  }
   return labels.length ? labels.join(" · ") : undefined;
+}
+
+function externalModelSelectionId(connectionId: string, modelId: string): string {
+  return `${connectionId}\u0000${modelId}`;
+}
+
+function chatModelCapable(model: Pick<InferenceModelDescriptor, "capabilities">): boolean {
+  // Unknown is not a name-based guess. It is the honest state for a local
+  // directory that advertises an id but omits capability fields (common for
+  // Ollama /api/tags). Only explicit non-text evidence is disabled; the one
+  // selected model may then be checked by its protected invocation.
+  const textInput = model.capabilities["text-input"]?.state;
+  const textOutput = model.capabilities["text-output"]?.state;
+  const embeddingOnly = model.capabilities.embeddings?.state === "supported"
+    && textInput !== "supported"
+    && textOutput !== "supported";
+  return !embeddingOnly
+    && textInput !== "unsupported"
+    && textOutput !== "unsupported";
 }
 
 function conversationTitleFromPrompt(prompt: string): string {
@@ -12969,6 +13144,29 @@ function profileMonogram(label: string): string {
   const words = label.match(/[\p{L}\p{N}]+/gu) ?? [];
   if (words.length >= 2) return `${words[0]![0] ?? ""}${words[1]![0] ?? ""}`.toUpperCase();
   return (words[0] ?? "A").slice(0, 2).toUpperCase();
+}
+
+/** Resolve the exact theme revision a profile selected, when it is available. */
+function profileThemeFor(catalog: ProfileCatalog, profileId: string): ThemeManifest | undefined {
+  const profile = catalog.profiles.find((candidate) => candidate.profileId === profileId);
+  return profile
+    ? catalog.themes.find((theme) => theme.themeId === profile.theme.themeId && theme.digest === profile.theme.digest)
+    : undefined;
+}
+
+/**
+ * Keep profile marks recognisable across the picker while using only semantic
+ * theme roles. The muted mix is applied in CSS so the initials remain legible
+ * in both light and dark themes.
+ */
+function profileBadgeStyle(theme?: ThemeManifest): Readonly<Record<string, string>> | undefined {
+  if (!theme) return undefined;
+  return Object.freeze({
+    "--profile-accent": theme.colors.accent,
+    "--profile-accent-bright": theme.colors.accentBright,
+    "--profile-ground": theme.colors.ground,
+    "--profile-surface": theme.colors.surface,
+  });
 }
 
 function BootScreen({ status, failure, onReload }: Readonly<{
@@ -13571,7 +13769,6 @@ function MessageCard({
       {...(message.receipt?.turnId ? { "data-turn-id": message.receipt.turnId } : {})}
       data-transcript-card
     >
-      <div class="message-rail" aria-hidden="true"><span>{message.role === "user" ? "You" : "A"}</span></div>
       <div class="message-body">
         <div class="message-label">
           <strong>{message.role === "user" ? "You" : "Airship"}</strong>
@@ -13920,7 +14117,7 @@ function ProfileManagerView({
           <div class="profile-card-list">
             {profiles.map((profile) => (
               <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
-                <span class="profile-monogram">{profileMonogram(profile.name)}</span>
+                <span class="profile-monogram" style={profileBadgeStyle(profileThemeFor(catalog, profile.profileId))}>{profileMonogram(profile.name)}</span>
                 <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
                     the revision strip beside it. It used to be typed out here with a
                     comment claiming `profiles-governance` was not in the startup

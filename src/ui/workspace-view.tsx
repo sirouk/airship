@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 // The Explorer's own B/KiB/MiB copy stopped at MiB, so a 2 GB imported file
 // read "1907.3 MiB" here while #vault printed "1.9 GiB" for the same bytes.
 // One vocabulary, one rounding rule, one module — nothing left here to drift.
@@ -519,10 +519,11 @@ function ProfileScopedWorkspaceView({
   const hoverTimer = useRef<number>();
   const hoverDirectory = useRef("");
   const treeViewport = useRef<HTMLDivElement>(null);
-  const gutter = useRef<HTMLPreElement>(null);
+  const gutter = useRef<HTMLDivElement>(null);
   // The painted twin behind the textarea, and the textarea itself. Both are
   // scroll-synced from the one real control; see `syncCodeScroll`.
   const highlightLayer = useRef<HTMLPreElement>(null);
+  const wrapMeasure = useRef<HTMLPreElement>(null);
   const editorArea = useRef<HTMLTextAreaElement>(null);
   const shell = useRef<HTMLDivElement>(null);
   const dialogBox = useRef<HTMLDivElement>(null);
@@ -535,6 +536,7 @@ function ProfileScopedWorkspaceView({
   const diffsRef = useRef(diffs);
   const railRef = useRef(rail);
   const wrapRef = useRef(wrap);
+  const [wrappedGutter, setWrappedGutter] = useState<readonly [number[], number]>();
   const repositoryIdRef = useRef(repositoryId);
   const persistedWorktreeId = workspacePersistedWorktreeId(
     restoredTabs.worktreeId,
@@ -861,6 +863,18 @@ function ProfileScopedWorkspaceView({
       highlightLayer.current.scrollLeft = source.scrollLeft;
     }
   }
+  useLayoutEffect(() => {
+    const measure = wrapMeasure.current;
+    if (!wrap || !measure || !gutterLines) return;
+    const update = () => {
+      setWrappedGutter(measureWrappedGutter(measure, buffer!.draft));
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(measure);
+    return () => observer.disconnect();
+  }, [wrap, gutterLines, buffer?.draft]);
   // Activating another document, or toggling wrap, moves the textarea's own
   // scroll offset without emitting a scroll event. Re-register after the paint
   // that changed it rather than leaving the layer at the previous file's offset.
@@ -2190,11 +2204,16 @@ function ProfileScopedWorkspaceView({
               {/* The gutter is presentational and scroll-synced from the
                   textarea, so the editable surface remains one real control. */}
               <div class="code-editor-frame" data-code-theme={codeTheme.codeThemeId} style={codeThemeCssVariables(codeTheme)}>
-                {/* Numbers down the side of a soft-wrapped buffer count visual
-                    rows, not file lines, so wrapping retires the gutter rather
-                    than mislabelling it — and the file strip says so. */}
-                {gutterLines && !wrap ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
+                {gutterLines ? <div
+                  class="code-gutter"
+                  ref={gutter}
+                  aria-hidden="true"
+                  data-wrap={wrap ? "on" : "off"}
+                >{wrap ? wrappedGutter ? <div class="code-gutter__lines" style={{ height: wrappedGutter[1] }}>
+                  {wrappedGutter[0].map((top, index) => <span class="code-gutter__line" style={{ top }}>{index + 1}</span>)}
+                </div> : null : gutterLines}</div> : null}
                 <div class="code-surface">
+                  {wrap ? <pre class="code-wrap-measure" data-wrap="on" aria-hidden="true" ref={wrapMeasure}>{buffer.draft.endsWith("\n") ? `${buffer.draft} ` : buffer.draft || " "}</pre> : null}
                   <CodeHighlightLayer text={buffer.draft} path={buffer.path} wrap={wrap} layer={highlightLayer} />
                   <textarea
                     class="code-editor"
@@ -2241,9 +2260,8 @@ function ProfileScopedWorkspaceView({
                   `.code-editor` was `white-space: pre` at every width, so on a
                   390px pane a markdown paragraph was reachable only by
                   horizontal scrolling one line at a time. Wrap is a real
-                  control now, defaulted by width and persisted with the tabs,
-                  and this sentence states what the editing surface is rather
-                  than letting the line numbers vanish silently below 760px.
+                  control now, enabled by default and persisted with the tabs;
+                  line numbers stay attached to logical lines when text wraps.
                 */}
                 <span>{editorSurfaceNote({ wrap, binary: buffer.binary, gutter: Boolean(gutterLines) })}</span>
               </span>
@@ -2298,7 +2316,7 @@ function ProfileScopedWorkspaceView({
                 class="editor-strip__wrap"
                 type="button"
                 aria-pressed={wrap}
-                title="Soft-wrap long lines. Wrapping hides the line-number gutter, because the numbers would count wrapped rows rather than file lines."
+                title="Soft-wrap long lines while keeping file line numbers aligned"
                 onClick={() => setWrap((current) => !current)}
               >Wrap</button>
               <span class="editor-strip__save">
@@ -3541,6 +3559,21 @@ export function workspaceGutterLines(draft: string, limit = WORKSPACE_GUTTER_LIN
   let text = "1";
   for (let line = 2; line <= lines; line += 1) text += `\n${String(line)}`;
   return text;
+}
+
+function measureWrappedGutter(element: HTMLPreElement, draft: string): readonly [number[], number] {
+  const node = element.firstChild!;
+  const box = element.getBoundingClientRect();
+  const range = document.createRange();
+  const tops: number[] = [];
+  let start = 0;
+  for (const line of draft.split("\n")) {
+    range.setStart(node, start);
+    range.collapse(true);
+    tops.push(range.getBoundingClientRect().top - box.top);
+    start += line.length + 1;
+  }
+  return [tops, element.scrollHeight];
 }
 
 export function boundedWorkspaceContent(content: string, byteLimit: number, knownTotalBytes?: number) { if (!Number.isInteger(byteLimit) || byteLimit < 1) throw new Error("Workspace byte limit must be a positive integer."); const bytes = new TextEncoder().encode(content); const totalBytes = Math.max(bytes.byteLength, knownTotalBytes ?? 0); if (bytes.byteLength <= byteLimit) return Object.freeze({ content, shownBytes: bytes.byteLength, totalBytes, truncated: totalBytes > bytes.byteLength }); const bounded = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, byteLimit)); return Object.freeze({ content: bounded, shownBytes: new TextEncoder().encode(bounded).byteLength, totalBytes, truncated: true }); }

@@ -2,8 +2,9 @@
 
 ## Outcome
 
-Google Drive is Airship's preferred zero-backend durable storage provider. S3
-remains an advanced `ObjectStore` adapter. Both feed the same encrypted journal,
+Google Drive is Airship's available zero-backend durable storage provider. S3
+remains an advanced `ObjectStore` adapter; a new tab starts in explicit
+Ephemeral page memory until a durable provider is chosen. Both feed the same encrypted journal,
 workspace, retrieval publisher, and index-shard composition; agent code does not
 branch on the provider.
 
@@ -222,10 +223,10 @@ provider must move with the client ID rather than assume Drive:
   before it is ever sent as `client_id`.
 - `.github/workflows/pages.yml` forwards `vars.VITE_GOOGLE_CLIENT_ID` and sets
   `VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER` to `google-drive` only when that
-  repository variable is non-empty, and to `local-device` otherwise. **This
+  repository variable is non-empty, and to `ephemeral` otherwise. **This
   repository ships unconfigured unless a maintainer sets that variable**, so the
-  published GitHub Pages artifact currently defaults to the Local Device vault,
-  which needs no configuration and is fully offline.
+  published GitHub Pages artifact starts in explicit Ephemeral page memory;
+  Local Device is available as the first durable choice on the Vault page.
 - A browser that already visited a previous build may have
   `vaultBackend="google-drive"` persisted in
   `airship.display-preferences.v1`. `loadPreferenceOverrides` revalidates that

@@ -18,6 +18,12 @@
   font-size: var(--fs-micro);
 }
 
+/* The desktop rail owns a fixed-height slot. Keep the aggregate activity
+   reading visible without making a seven-hundred-pixel window advertise six
+   pixels of phantom navigation overflow. The phone placement has its own
+   touch-sized box below and is unaffected by this rail-only compression. */
+.load-indicator[data-placement="rail"] { min-height: 22px; }
+
 /* A settled activity reading is stated in the same ink as everything else at
    rest. Only live work earns the accent, because a colour that is always on
    stops being a signal. */

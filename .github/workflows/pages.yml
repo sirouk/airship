@@ -145,10 +145,9 @@ jobs:
           # entire Drive connect branch from the bundle and no runtime toggle can
           # restore it, so the default provider below must move with it.
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
-          # Fail closed on an unconfigured deployment: default to the Local
-          # Device vault, which needs no configuration, rather than offering a
-          # Drive default this artifact cannot connect.
-          VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: ${{ vars.VITE_GOOGLE_CLIENT_ID != '' && 'google-drive' || 'local-device' }}
+          # Fail closed on an unconfigured deployment: start in explicit
+          # page-memory mode rather than silently creating durable storage.
+          VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: ${{ vars.VITE_GOOGLE_CLIENT_ID != '' && 'google-drive' || 'ephemeral' }}
         run: npm run build
 
       - name: Add static callback fallback

@@ -68,8 +68,8 @@ field carries. Neither is written down in this repository.
 Vector width is not a property of embeddings and is not declared: Airship takes
 one probe vector from the chosen deployment and counts it, then refuses any
 later vector of another width rather than reshaping it. At the time of writing
-exactly one public embedding chute exists — `Qwen/Qwen3-Embedding-8B-TEE`, 4096
-dimensions — and nothing in the code may assume either fact.
+one or more public embedding chutes may exist; no model id or vector width is
+assumed by this repository.
 
 Embedding requests use the same encrypted transport as chat: the batch is sealed
 to the serving instance's E2EE public key and posted to `POST /e2e/invoke` with

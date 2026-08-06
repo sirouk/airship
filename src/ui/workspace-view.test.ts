@@ -56,6 +56,19 @@ import {
 } from "./workspace-view";
 
 describe("profile-scoped workbench view state", () => {
+  it("defaults wrapping on and restores an explicit toggle across reads", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    expect(readWorkspaceTabState(storage, "shared-workspace", "profile-alpha", 1_440).wrap).toBe(true);
+    writeWorkspaceTabState(storage, "shared-workspace", "profile-alpha", {
+      tabs: [], activeId: "", rail: 31, wrap: false,
+    });
+    expect(readWorkspaceTabState(storage, "shared-workspace", "profile-alpha", 390).wrap).toBe(false);
+  });
+
   it("restores A after B without sharing tabs, preview, rail, or wrapping", () => {
     const values = new Map<string, string>();
     const storage = {
@@ -1231,9 +1244,9 @@ describe("Explorer density", () => {
     expect(coarse).toContain("opacity: 1;");
   });
 
-  it("gives the two rail tabs the product's own tab padding", () => {
-    // `--sp-1` plus the strip's own `--sp-1` gap put 12px between "Explorer"
-    // and "Source Control" — two controls reading as one sentence.
+  it("splits the activity row between Explorer and Source Control", () => {
+    // Equal flex tracks make the two destinations easy to scan and the gap
+    // gives them a quiet separation without inventing a second tab grammar.
     // Every rule the strip's tab button carries, joined: the button is named by
     // two of them — one for the padding, one for the `min-width: 0` that lets a
     // 240px rail truncate a label instead of hiding a whole tab.
@@ -1243,7 +1256,10 @@ describe("Explorer density", () => {
     // The step down in *size* keeps its documented reason: "Source Control"
     // plus its count has to fit a 15rem rail.
     expect(button).toContain("font-size: var(--fs-body);");
-    expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {\n  gap: 0;\n}");
+    expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {");
+    expect(styles).toContain("gap: var(--sp-2);");
+    expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__tab {");
+    expect(styles).toContain("flex: 1 1 0;");
     expect(source).toContain('{ id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> }');
   });
 

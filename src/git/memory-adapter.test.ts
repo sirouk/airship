@@ -145,7 +145,7 @@ describe("in-memory browser Git adapter", () => {
     })).rejects.toBeInstanceOf(GitCapabilityError);
   });
 
-  it("admits a pinned workspace snapshot additively as reviewable unstaged files", async () => {
+  it("admits a pinned workspace snapshot as the clean local repository baseline", async () => {
     const adapter = await fixture({ "existing.txt": "kept\n" });
     const client = new BrowserGitClient(adapter);
     const imported = await client.importSnapshot({
@@ -164,10 +164,7 @@ describe("in-memory browser Git adapter", () => {
       "airship",
       "snapshot-owner-repo-0123456789ab",
     ]);
-    expect(imported.worktree?.status).toEqual([
-      expect.objectContaining({ path: ".airship-import.json", index: null, worktree: { kind: "added" } }),
-      expect.objectContaining({ path: "README.md", index: null, worktree: { kind: "added" } }),
-    ]);
+    expect(imported.worktree?.status).toEqual([]);
     expect(imported.repository.remotes[0]?.url).toBe("https://github.com/owner/repo");
     await expect(client.importSnapshot({
       repositoryId: "snapshot-owner-repo-0123456789ab",

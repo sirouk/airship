@@ -48,8 +48,7 @@ export type LocalProviderDiagnosticCode =
   /** The response body stopped arriving mid-stream. Not a payload verdict. */
   | "stream-interrupted"
   /** The endpoint answered, then reported its own failure on the wire. */
-  | "provider-reported"
-  | "model-details-unavailable";
+  | "provider-reported";
 
 export type LocalProviderDiagnostic = Readonly<{
   code: LocalProviderDiagnosticCode;
@@ -102,7 +101,6 @@ export type LocalProviderOptions = LocalEndpointAccess & Readonly<{
   timeoutMs?: number;
   maxResponseBytes?: number;
   maxModels?: number;
-  capabilityProbeConcurrency?: number;
 }>;
 
 export interface BrowserLocalModelProvider {

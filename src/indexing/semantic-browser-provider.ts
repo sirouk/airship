@@ -68,20 +68,22 @@ export async function prepareConfidentialEmbeddings(
 ): Promise<{ provider: ChutesEmbeddingProvider; readiness: ConfidentialEmbeddingReadiness }> {
   const catalog = await discoverChutesEmbeddingModels(signal ? { signal } : {});
   /*
-   * A recorded choice outranks the automatic pick, and only a recorded choice
-   * does. When Chutes publishes one usable embedding chute there is nothing to
-   * decide and nobody is asked; when it publishes several, the tie was being
-   * broken by whichever one was warm at that instant, which is not a basis for
-   * deciding where a corpus lives. An id that no longer appears in the catalog
-   * loses here rather than throwing — a retired deployment is not an error.
+   * A recorded choice is the only way to resolve more than one live
+   * deployment. Catalog order and warmth are observations, not a person's
+   * choice, so neither is allowed to become a hidden model pin. A single
+   * deployment is unambiguous and may be adopted by its live id.
    */
   const chosen = readConfidentialEmbeddingChoice();
-  // Prefer a deployment with a live instance; a cold one still works, it just
-  // pays a scale-up. Order is otherwise the catalog's, which is stable by id.
-  const model = (chosen ? catalog.models.find((candidate) => candidate.id === chosen) : undefined)
-    ?? catalog.models.find((candidate) => candidate.hot)
-    ?? catalog.models[0];
+  const model = (chosen
+    ? catalog.models.find((candidate) => candidate.id === chosen)
+    : undefined)
+    ?? (catalog.models.length === 1 ? catalog.models[0] : undefined);
   if (!model) {
+    if (catalog.models.length > 1) {
+      throw new Error(
+        "Chutes published multiple confidential embedding deployments. Choose one in the Connection view before enabling confidential embeddings.",
+      );
+    }
     throw new Error(
       catalog.declined > 0
         ? `Chutes lists ${catalog.declined} embedding chute${catalog.declined === 1 ? "" : "s"}, but none of them is confidential compute with an OpenAI-compatible embeddings path, so none can hold this corpus.`

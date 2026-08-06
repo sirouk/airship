@@ -131,7 +131,7 @@ test("clicking a conversation in the rail opens that conversation, not the libra
   await expect(page.locator(".session-bar__title")).toHaveText("rail journey: thread two");
 });
 
-test("a rail click during a turn queues the requested conversation and opens it after settlement", async ({ page }, testInfo) => {
+test("a same-model rail click during a turn opens immediately and keeps the turn durable", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "the rail is a desktop surface");
 
   await page.goto("/#chat");
@@ -148,19 +148,23 @@ test("a rail click during a turn queues the requested conversation and opens it 
   const busyThread = page.url();
   await expect(page.locator(".load-indicator")).toContainText("1 active");
 
-  /* A running turn keeps its live projection. The requested row is held as a
-     named pending action, then the exact audited resume runs at the safe
-     journal boundary. */
+  /* Same-model history is safe to activate immediately. The running turn's
+     stream stays fenced to its original session, while its durable result can
+     still be reopened after it settles. */
   await railRows(page).filter({ hasText: "rail journey: original thread" }).first().click();
 
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toHaveCount(0);
-  await expect(page).toHaveURL(busyThread);
-  await expect(page.locator(".transcript")).toContainText("rail journey: busy thread");
-    await expect(page.locator(".runtime-line__text")).toContainText("after this turn");
-  await finishTurn(page, "rail journey: busy thread");
-  await expect(page.locator(".load-indicator")).toContainText("Ready");
   await expect(page).toHaveURL(original);
   await expect(page.locator(".session-bar__title")).toHaveText("rail journey: original thread");
+  await expect(page.locator(".transcript")).not.toContainText("rail journey: busy thread");
+  await expect(page.locator(".load-indicator")).toContainText("Ready");
+
+  // The turn settled in its original session, not in the conversation that
+  // happened to be visible while it ran.
+  await railRows(page).filter({ hasText: "rail journey: busy thread" }).first().click();
+  await expect(page).toHaveURL(busyThread);
+  await expect(page.locator(".session-bar__title")).toHaveText("rail journey: busy thread");
+  await expect(page.locator(".transcript")).toContainText("rail journey: busy thread");
 });
 
 test("All conversations stays reachable in the rail once the thread list overflows", async ({ page }, testInfo) => {

@@ -144,6 +144,16 @@ describe("local device Vault setup boundaries", () => {
  */
 describe("ceremony continuity contracts", () => {
   const view = readFileSync(new URL("./local-device-vault-setup.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./local-device-vault-setup.css", import.meta.url), "utf8");
+
+  it("keeps the replacement warning in one readable column", () => {
+    // The warning used a two-column durability-card grid even though its
+    // heading, explanation, and actions are one sequence. A long paragraph
+    // consumed the auto column, collapsing the heading and buttons into a
+    // narrow strip at the left edge of the alert.
+    expect(styles).toMatch(/\.local-device-vault__replacement\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/u);
+    expect(styles).toContain(".local-device-vault__replacement > .local-device-vault__actions");
+  });
 
   it("hands focus to the commit button when acknowledgement unmounts the checkbox", () => {
     // The acknowledge transition swaps the revealed panel (with the focused

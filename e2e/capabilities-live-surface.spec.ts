@@ -53,11 +53,10 @@ test("the live-load reading is on routes that are not #capabilities, and says wh
 
     const reading = await accessibleReading(indicator);
     expect(reading, `${hash} leaves a screen reader something to read`).not.toBe("");
-    expect(reading).toMatch(/execution runs? in flight|No execution run is in flight/u);
-    expect(reading).toMatch(/Peak \d+ this page/u);
-    // The boundary rides with the reading wherever it is rendered, because a
-    // number in the corner of a shell is exactly what gets read as CPU load.
-    expect(reading).toContain("Browser-wide CPU load is not observable from a page");
+    // The rail reports the activity that matters while someone is working:
+    // active turns plus the durable events represented by the conversations
+    // on this page. It deliberately does not invent a browser-wide CPU meter.
+    expect(reading).toMatch(/(?:Ready|\d+ active) · \d+ events/u);
   }
 });
 

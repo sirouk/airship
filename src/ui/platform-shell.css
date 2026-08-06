@@ -39,16 +39,6 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .nav-item.active::after { background: var(--accent-bright); opacity: 1; }
 .nav-item.active::before { content: none; }
 .session-attestation { display: inline-flex; min-height: 2rem; align-items: center; padding: .25rem .5rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.trust-hub-tabs { position: sticky; z-index: 8; top: 0; display: flex; gap: .25rem; min-height: 2.75rem; align-items: center; padding: .375rem max(1rem, env(safe-area-inset-left)); overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--ground); scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
-.trust-hub-tabs::-webkit-scrollbar { height: 3px; }
-.trust-hub-tabs::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-strong); }
-.trust-hub-tabs button { min-height: 2.75rem; padding: 0 .75rem; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-muted); scroll-snap-align: nearest; }
-.trust-hub-tabs button.is-active { border-color: var(--line-strong); box-shadow: inset 0 -2px var(--accent); color: var(--ink); background: var(--surface-soft); }
-/* The scope seam, stated rather than implied: Proof is this conversation's
-   evidence, the other three outlive every conversation, and flat peers said the
-   opposite. The rail's own `GLOBAL` heading, and a label not a control. */
-.trust-hub-tabs__band { flex: none; align-self: center; margin-inline-start: .25rem; padding-inline-start: .75rem; border-left: 1px solid var(--line); white-space: nowrap; }
-
 .command-palette {
   width: min(42rem, 100%);
   overflow: hidden;
@@ -312,14 +302,6 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 :root[data-keyboard-open="true"] .fixed-mobile-nav { display: none; }
 
 @media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
-  .trust-hub-tabs { box-sizing: border-box; min-height: 45px; padding-block: 0; padding-inline-start: max(8px, env(safe-area-inset-left)); padding-inline-end: max(8px, env(safe-area-inset-right)); background: var(--ground); box-shadow: none; scrollbar-width: none; overscroll-behavior-inline: contain; }
-  .trust-hub-tabs::-webkit-scrollbar { display: none; }
-  .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
-  .trust-hub-tabs button.is-active { border: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
-  .trust-hub-tabs button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
-  /* The seam survives the phone: one word and a rule, and the whole reason the
-     strip is honest. */
-  .trust-hub-tabs__band { margin-inline-start: 2px; padding-inline-start: 10px; }
   /*
    * Docked to the visual viewport, not the layout viewport.
    *

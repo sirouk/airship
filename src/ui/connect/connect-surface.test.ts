@@ -79,11 +79,26 @@ describe("the Companion keeps every word it carried as a card", () => {
 });
 
 describe("lane rows", () => {
+  it("opens local provider settings without passing the click event as a provider id", () => {
+    // The local panel has no provider argument. Passing the handler directly
+    // let Preact supply the MouseEvent as `provider`, so focusDirectProviders
+    // looked for `provider-setup-[object PointerEvent]` and silently did
+    // nothing. Keep the zero-argument wrapper explicit at this boundary.
+    expect(source).toContain('onClick={() => onOpenDirectProviders()}');
+    expect(source).not.toContain('onClick={onOpenDirectProviders}>Open the local model server settings');
+  });
+
   it("keeps the status sentence at every width", () => {
     // The phone override deleted `.connect-lane__detail`, so a phone read a
     // lane's state and never its reason.
     expect(declarations).not.toMatch(/\.connect-lane__detail \{\s*display: none/u);
     expect(source).toContain('<p class="connect-lane__detail">{lane.status.detail}</p>');
+  });
+
+  it("keeps local checks catalog-only until a person chooses a model", () => {
+    expect(source).toContain("keeps every model returned by its live catalog");
+    expect(source).toContain("only that model is checked before a conversation starts");
+    expect(source).not.toContain("If exactly one text model is evidenced");
   });
 
   it("aligns an open lane's copy under its own title", () => {
@@ -135,6 +150,12 @@ describe("lane rows", () => {
     // disclosure that reopened itself on the press that closed it.
     expect(source).toContain('const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none" | undefined>(() => reconnectIntent?.lane);');
     expect(source).toContain('setChosenLane(openLane === lane.id ? "none" : lane.id)');
+  });
+
+  it("brings a newly opened lane into view", () => {
+    expect(source).toContain("lane.scrollIntoView({ behavior: reduced ? \"auto\" : \"smooth\", block: \"start\" });");
+    expect(source).toContain("const laneList = useRef<HTMLUListElement>(null);");
+    expect(styles).toContain("scroll-margin-block-start: var(--sp-3);");
   });
 });
 

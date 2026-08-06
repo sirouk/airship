@@ -333,11 +333,7 @@ export function ProviderConnectionsView({
                 onConnect={(endpoint) => run(provider.kind, async (signal) => {
                   setNotice(`Checking ${provider.label} at ${endpoint} and reading its installed-model evidence…`);
                   const connected = await browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal });
-                  const firstModel = connected.models[0];
-                  if (!firstModel) throw new Error(`${provider.label} answered but published no selectable models.`);
-                  const route = await browserInferenceFabric.activate(connected.connection.id, firstModel.id, signal);
-                  await onActivate(route, signal);
-                  setNotice(`${provider.label}/${firstModel.label} is active directly over this machine's loopback interface at ${endpoint}.`);
+                  setNotice(`${provider.label} is connected at ${endpoint} with ${connected.models.length} advertised models. Choose a text model in Chat or below to verify and start a conversation.`);
                 }, false)}
               />
             ))}
@@ -402,7 +398,7 @@ function ConnectedProvider({
   const activationErrorId = useId();
   const activeModel = isActiveConnection(entry, activeBinding) ? activeBinding?.modelId : undefined;
   const [modelId, setModelId] = useState(
-    targetModelId ?? activeModel ?? entry.models[0]?.id ?? "",
+    targetModelId ?? activeModel ?? "",
   );
   const [disconnectArmed, setDisconnectArmed] = useState(false);
   const continuesRequestedConversation = returningToConversation && modelId === targetModelId;
@@ -415,7 +411,7 @@ function ConnectedProvider({
     setModelId((current) => {
       if (targetModelId && entry.models.some((model) => model.id === targetModelId)) return targetModelId;
       if (activeModel && entry.models.some((model) => model.id === activeModel)) return activeModel;
-      return entry.models.some((model) => model.id === current) ? current : entry.models[0]?.id ?? "";
+      return entry.models.some((model) => model.id === current) ? current : "";
     });
     setDisconnectArmed(false);
   }, [activeModel, entry.connection.generation, entry.models, targetModelId]);

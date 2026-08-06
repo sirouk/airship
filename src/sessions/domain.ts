@@ -913,7 +913,7 @@ export function decideSessionResume(
       severity: "error",
       message: firstIssue
         ? firstIssue.message
-        : "Structural history issues must be reviewed before this session can resume.",
+        : "Review history before resuming.",
     });
   } else if (assessment.status === "incomplete") {
     /*

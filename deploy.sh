@@ -121,7 +121,7 @@ case "${choice}" in
     echo "  Base path:   ${AIRSHIP_PUBLIC_BASE_PATH}"
     echo "  App origin:  ${VITE_AIRSHIP_PUBLIC_ORIGIN}"
     if [ -z "${VITE_GOOGLE_CLIENT_ID:-}" ]; then
-      echo -e "  Vault default: ${YELLOW}local-device${NC} (no Google client ID configured)"
+      echo -e "  Vault default: ${YELLOW}ephemeral${NC} (no Google client ID configured)"
     else
       echo -e "  Vault default: google-drive"
     fi

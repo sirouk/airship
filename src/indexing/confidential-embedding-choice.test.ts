@@ -85,14 +85,13 @@ describe("the recorded embedding choice", () => {
 });
 
 describe("resolving which deployment a corpus is embedded by", () => {
-  it("takes the live deployment when nobody has chosen", async () => {
+  it("refuses to guess when several deployments are live and none was chosen", async () => {
     const asked = install(twoDeployments());
 
-    const { readiness } = await prepareConfidentialEmbeddings();
-
-    expect(readiness.catalog.count).toBe(2);
-    expect(readiness.modelId).toBe("BAAI/bge-m3-TEE");
-    expect(asked).toEqual(["BAAI/bge-m3-TEE"]);
+    await expect(prepareConfidentialEmbeddings()).rejects.toThrow(
+      "Choose one in the Connection view",
+    );
+    expect(asked).toEqual([]);
   });
 
   it("takes the recorded choice over the live one, because warmth is not a decision", async () => {
@@ -105,14 +104,25 @@ describe("resolving which deployment a corpus is embedded by", () => {
     expect(asked).toEqual(["Qwen/Qwen3-Embedding-8B-TEE"]);
   });
 
-  it("falls back rather than failing when the chosen deployment is gone", async () => {
-    // A deployment can be retired between two page loads. That is not an error
-    // and may not break an index build; the automatic resolution simply applies.
+  it("refuses a stale choice instead of silently changing deployments", async () => {
     install(twoDeployments());
     writeConfidentialEmbeddingChoice("a-model-chutes-no-longer-publishes");
 
+    await expect(prepareConfidentialEmbeddings()).rejects.toThrow(
+      "Choose one in the Connection view",
+    );
+  });
+
+  it("adopts the sole deployment by its live id", async () => {
+    const asked = install({
+      ...twoDeployments(),
+      total: 1,
+      items: [twoDeployments().items[0]],
+    });
+
     const { readiness } = await prepareConfidentialEmbeddings();
 
-    expect(readiness.modelId).toBe("BAAI/bge-m3-TEE");
+    expect(readiness.modelId).toBe("Qwen/Qwen3-Embedding-8B-TEE");
+    expect(asked).toEqual(["Qwen/Qwen3-Embedding-8B-TEE"]);
   });
 });

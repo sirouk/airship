@@ -134,6 +134,13 @@ describe("Airship Instrument design contract", () => {
     expect(menuStyles).toContain(".menu-select.placement-down .menu-select-popover");
   });
 
+  it("carries each profile theme into its muted initials badge", () => {
+    expect(appSource).toContain("profileThemeFor(catalog, option.value)");
+    expect(appSource).toContain('"--profile-accent": theme.colors.accent');
+    expect(styles).toContain("--profile-accent: var(--accent)");
+    expect(styles).toContain("color-mix(in srgb, var(--profile-accent) 10%, var(--profile-surface))");
+  });
+
   it("uses one focus token, immutable verdict tones, and the display face across rem views", () => {
     expect(property("--focus")).toBe("var(--accent-bright)");
     expect(`${vaultStyles}\n${localLabStyles}`).not.toMatch(/--signal-(?:good|warn|info)|#8db8df|var\(--focus,/u);

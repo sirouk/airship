@@ -12,6 +12,14 @@
   padding: 0;
 }
 
+/* Vault keeps the same readable measure as Connection and Account. Dense
+   workbench routes opt into their own full-width root below. */
+.route-layout > .vault-route {
+  width: min(1160px, 100%);
+  max-width: 1160px;
+  margin-inline: auto;
+}
+
 /*
  * The route shell owns the only outer content gutter. Feature views own their
  * internal panels and rhythm, never a second page edge. Keeping the gutter on
@@ -46,7 +54,7 @@
     var(--route-gutter-inline-start);
 }
 
-.route-layout > :not(.trust-hub-tabs) {
+.route-layout > * {
   width: min(1160px, 100%);
   margin-inline: auto;
 }
@@ -61,22 +69,6 @@
 .route-layout > [data-route-measure="wide"] {
   width: 100%;
   max-width: none;
-}
-
-.trust-route-layout {
-  padding-top: 0;
-}
-
-.trust-route-layout > .trust-hub-tabs {
-  width: auto;
-  margin-right: calc(-1 * var(--route-gutter-inline-end));
-  margin-left: calc(-1 * var(--route-gutter-inline-start));
-  padding-right: var(--route-gutter-inline-end);
-  padding-left: var(--route-gutter-inline-start);
-}
-
-.trust-route-layout > :not(.trust-hub-tabs) {
-  margin-top: var(--route-gutter-block);
 }
 
 .vault-setup-slot {
@@ -3395,23 +3387,18 @@
   }
 
   .message {
-    grid-template-columns: 26px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 7px;
     width: 94%;
     margin-bottom: 13px;
   }
 
   .message.user {
-    grid-template-columns: minmax(0, 1fr) 26px;
     width: 88%;
     margin-right: 0;
     margin-left: auto;
   }
 
-  .message-rail span {
-    width: 25px;
-    height: 25px;
-  }
 
   .message-body {
     padding: 10px;

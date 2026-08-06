@@ -161,10 +161,21 @@ export function ConnectSurface({
     if (reconnectIntent?.lane) setChosenLane(reconnectIntent.lane);
   }, [reconnectIntent?.lane, reconnectIntent?.returnSessionId]);
   const openLane = chosenLane ?? leadLane;
+  const laneList = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (!openLane || openLane === "none") return;
+    const frame = requestAnimationFrame(() => {
+      const lane = laneList.current?.querySelector<HTMLElement>(`[data-lane="${openLane}"]`);
+      if (!lane) return;
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      lane.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [openLane]);
 
   return (
     <section class="connect-surface" aria-label="Providers">
-      <ul class="connect-lane-list">
+      <ul ref={laneList} class="connect-lane-list">
         {lanes.map((lane) => (
           <ConnectLaneCard
             key={lane.id}
@@ -741,12 +752,12 @@ function LocalPanel({
           </ul>
         ) : null}
         {results?.some((result) => result.outcome === "answered") ? (
-          <p class="connect-local__next-step">When one server answers, Airship verifies its first model and opens Chat. If more than one answers, choose the intended model below under <strong>Provider fabric</strong>.</p>
+          <p class="connect-local__next-step">When a server answers, Airship keeps every model returned by its live catalog. Choose the model you want in Chat or below under <strong>Provider fabric</strong>; only that model is checked before a conversation starts.</p>
         ) : null}
       </div>
       {failure ? <p class="connect-lane__failure" role="alert"><Icon name="warning" size={16} />{failure}</p> : null}
       {onOpenDirectProviders ? (
-        <button type="button" onClick={onOpenDirectProviders}>Open the local model server settings</button>
+        <button type="button" onClick={() => onOpenDirectProviders()}>Open Airship local provider setup</button>
       ) : null}
     </div>
   );

@@ -679,12 +679,7 @@ for (const density of densities) {
         }
 
         if (["proof", "vault", "connection", "account"].includes(hash)) {
-          const activeTab = main.getByRole("navigation", { name: "Trust hub" }).locator("button[aria-current='page']");
-          await expect(activeTab).toBeInViewport();
-          const tabBox = await activeTab.boundingBox();
-          expect(tabBox).not.toBeNull();
-          expect(tabBox!.x).toBeGreaterThanOrEqual(-1);
-          expect(tabBox!.x + tabBox!.width).toBeLessThanOrEqual(width + 1);
+          await expect(main.locator(".trust-hub-tabs")).toHaveCount(0);
         }
       }
 

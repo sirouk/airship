@@ -8,8 +8,6 @@ import {
   measuredBytesLabel,
   runtimeLoadFigures,
   runtimeLoadIndicatorLabel,
-  sessionActivityIndicatorLabel,
-  SESSION_ACTIVITY_BOUNDARY,
   runtimeLoadLaneSummary,
   type RuntimeLoadHost,
 } from "./runtime-load";
@@ -187,19 +185,8 @@ describe("shell load indicator", () => {
     expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).toContain("Peak 2 this page");
   });
 
-  it("keeps the caveat out of the announced reading and in the region beside it", () => {
-    // The reading is re-announced on every start and finish; the boundary is
-    // not, because a live region that replays its own caveat on every count
-    // change is a region readers learn to talk over. The component renders the
-    // boundary as a static sibling inside the same `role="status"` container,
-    // so it is read when the region is read and never announced twice.
-    const load = monitor();
-    expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).not.toContain(RUNTIME_LOAD_BOUNDARY);
-    expect(indicator).toContain("<span class=\"sr-only\">{reading}</span>");
-    expect(indicator).toContain("<span class=\"sr-only\">{boundary}</span>");
-    // Splitting the strings only helps if the region is not atomic: `status`
-    // implies `aria-atomic="true"`, which would announce the caveat again on
-    // every count change and undo the split.
+  it("keeps the live activity reading atomic and explicit", () => {
+    expect(indicator).toContain("<span class=\"sr-only\">{text}</span>");
     expect(indicator).toContain("aria-atomic=\"false\"");
   });
 
@@ -208,8 +195,8 @@ describe("shell load indicator", () => {
     // descendants are not in the accessibility tree. The earlier shape — an
     // `aria-label` over two `aria-hidden` spans — therefore announced nothing on
     // change and left a browse-mode reader on an empty status container. The
-    // visible glyphs stay hidden (so the count is not read twice); the two
-    // `sr-only` spans are the region's content.
+    // visible glyphs stay hidden (so the count is not read twice); the
+    // `sr-only` sentence is the region's content.
     expect(indicator).toContain("role=\"status\"");
     // Sliced from the rendered element rather than the file: the docblock above
     // it names the defect, and naming it is not committing it.
@@ -218,7 +205,7 @@ describe("shell load indicator", () => {
     const hidden = region.match(/aria-hidden="true"/gu) ?? [];
     const spoken = region.match(/class="sr-only"/gu) ?? [];
     expect(hidden).toHaveLength(2);
-    expect(spoken.length).toBeGreaterThanOrEqual(hidden.length);
+    expect(spoken.length).toBeGreaterThanOrEqual(1);
   });
 
   it("uses the singular only for a single run", () => {
@@ -283,24 +270,16 @@ describe("shell load indicator", () => {
     expect(indicatorStyles).toContain("[data-placement=\"nav\"]");
   });
 
-  it("renders counts, not a meter, and reads its words from the monitor", () => {
-    expect(indicator).toContain("runtimeLoadIndicatorLabel(report)");
-    expect(indicator).toContain("RUNTIME_LOAD_BOUNDARY");
-    // The invariant from browser-runtime: a scheduling ceiling is not a count
-    // of running workers, and this chip is the surface most tempted to blur it.
+  it("renders active turns and durable events, not a meter", () => {
+    expect(indicator).toContain("activity?.[0]");
+    expect(indicator).toContain("activity?.[1]");
     expect(indicator).not.toContain("maxWorkerConcurrency");
     expect(indicator).not.toContain("%");
   });
 
   it("describes active conversations and their durable events on the rail", () => {
-    expect(sessionActivityIndicatorLabel({
-      activeTurns: 2,
-      events: 7,
-    }).text).toBe("2 active turns · 7 durable events");
-    expect(sessionActivityIndicatorLabel({
-      activeTurns: 0,
-      events: 7,
-    }).text).toBe("Ready · 7 durable events");
-    expect(SESSION_ACTIVITY_BOUNDARY).toContain("Page activity");
+    expect(indicator).toContain("activity?.[1]");
+    expect(app).toContain("durableEventCount: item.headSequence");
+    expect(app).toContain("recentDurableEventCount");
   });
 });

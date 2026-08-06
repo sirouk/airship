@@ -665,6 +665,7 @@
 /* ── What has left this device ───────────────────────────────────────── */
 
 .proof-egress {
+  order: 1;
   display: grid;
   gap: var(--sp-1);
   padding: var(--sp-2) var(--sp-3);
@@ -673,6 +674,24 @@
   background: var(--surface-raised);
   min-width: 0;
 }
+
+/* Proof reads in the order a person needs it: the network boundary, then the
+   journal's structural answer, then the claim detail. The DOM keeps the
+   existing deferred inspector and activity ownership; grid order keeps the
+   presentation stable while those pieces load independently. */
+.proof-surface-panel--prose > .proof-journal { order: 2; }
+.proof-surface-panel--prose > .proof-inspector,
+.proof-surface-panel--prose > .claim-rail-summary { order: 3; }
+.proof-surface-panel--prose > .proof-activity { order: 4; }
+
+.proof-inspector .claim-groups { gap: var(--sp-4); }
+.proof-inspector .claim-group { display: grid; gap: var(--sp-1); }
+.proof-inspector .claim-list,
+.proof-inspector .claim-absence { background: color-mix(in srgb, var(--surface-soft) 56%, transparent); }
+.proof-inspector .claim-absence { border-color: color-mix(in srgb, var(--ink-faint) 45%, var(--line)); }
+.proof-inspector .claim-absence > summary { background: color-mix(in srgb, var(--ink-faint) 5%, transparent); }
+.proof-inspector .claim-absence > summary > span { color: var(--ink); font-weight: var(--fw-strong); }
+.proof-inspector .claim-absence > summary > strong { color: var(--ink); }
 
 .proof-egress p { margin: 0; font-size: var(--fs-caption); color: var(--ink-muted); overflow-wrap: anywhere; }
 .proof-egress__route { font-size: var(--fs-micro) !important; color: var(--ink-faint) !important; }
@@ -683,6 +702,24 @@
   display: grid;
   gap: var(--sp-2);
   margin: 0;
+}
+
+.proof-surface-panel--prose > .proof-actions {
+  order: 5;
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-soft);
+}
+
+.proof-surface-panel--prose > .proof-export-boundary {
+  order: 6;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface-soft) 52%, transparent);
 }
 
 .proof-view dl.proof-export-boundary > div { display: grid; gap: 1px; min-width: 0; }

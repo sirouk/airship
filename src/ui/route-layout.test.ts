@@ -24,8 +24,8 @@ const [app, styles, sessions, proofSource, proofStyles, terminalSource, featureS
 describe("route layout contract", () => {
   it("assigns every non-chat destination to the shell-owned route layout", () => {
     expect(app).toContain('? "main chat-layout"');
-    expect(app).toContain('? "main route-layout trust-route-layout"');
     expect(app).toContain(': "main route-layout"');
+    expect(app).not.toContain("TrustHubTabs");
   });
 
   it("owns one outer gutter family and keeps feature roots padding-free", () => {
@@ -49,11 +49,13 @@ describe("route layout contract", () => {
     expect(sessions).not.toMatch(/\.session-library-view\s*\{[^}]*safe-area-inset/su);
   });
 
-  it("keeps trust navigation full-bleed without adding a second content gutter", () => {
-    const tabs = cssRule(styles, ".trust-route-layout > .trust-hub-tabs");
-    expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-start))");
-    expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-end))");
-    expect(cssRule(styles, ".trust-route-layout > :not(.trust-hub-tabs)")).toContain("margin-top: var(--route-gutter-block)");
+  it("keeps the Vault route centered while dense workbenches stay full width", () => {
+    const vault = cssRule(styles, ".route-layout > .vault-route");
+    expect(vault).toContain("width: min(1160px, 100%)");
+    expect(vault).toContain("margin-inline: auto");
+    const wide = cssRule(styles, '.route-layout > [data-route-measure="wide"]');
+    expect(wide).toContain("width: 100%");
+    expect(wide).toContain("max-width: none");
   });
 
   /*
@@ -74,7 +76,7 @@ describe("route layout contract", () => {
     // The rule has to outrank the default measure, which it can only do on
     // source order: both selectors weigh (0,2,0).
     expect(styles.indexOf('.route-layout > [data-route-measure="wide"]'))
-      .toBeGreaterThan(styles.indexOf(".route-layout > :not(.trust-hub-tabs)"));
+      .toBeGreaterThan(styles.indexOf(".route-layout > *"));
 
     // On the opening tag of each route root, not on something inside it.
     expect(terminalSource).toMatch(/<section\s+class=\{`terminal-route[^>]*?data-route-measure="wide"/su);

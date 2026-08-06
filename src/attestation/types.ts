@@ -14,6 +14,14 @@ export type ChutesInstanceEvidence = {
   instanceId: string;
   reportedInstanceId?: string;
   certificate: string;
+  /** Optional attestation-proxy response signature (Chutes proxy >= 0.2.0). */
+  signature?: string;
+  /** Decoded byte length of `signature`, retained to avoid re-decoding it downstream. */
+  signatureByteLength?: number;
+  /** Exact response bytes covered by `signature`, base64 encoded. */
+  attestedBody?: string;
+  /** Decoded byte length of `attestedBody`, retained to avoid re-decoding it downstream. */
+  attestedBodyByteLength?: number;
 };
 
 export type EvidenceFetchResult = {

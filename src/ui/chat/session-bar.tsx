@@ -80,6 +80,8 @@ export type SessionBarProps = Readonly<{
   title: string;
   profileName: string;
   monogram: string;
+  /** Paint the profile mark with the active profile's semantic theme. */
+  profileBadgeStyle?: Readonly<Record<string, string>>;
   /** The model chip. A slot: this package places it, the model package fills it. */
   model: ComponentChildren;
   statusFacts: readonly SessionStatusFact[];
@@ -107,6 +109,7 @@ export function SessionBar({
   title,
   profileName,
   monogram,
+  profileBadgeStyle,
   model,
   statusFacts,
   durabilityLabel,
@@ -174,7 +177,7 @@ export function SessionBar({
       <h1 class={renaming ? "session-bar__identity is-renaming" : "session-bar__identity"}>
         {renaming ? (
           <span class="session-bar__rename">
-            <span class="profile-monogram" role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
+            <span class="profile-monogram" style={profileBadgeStyle} role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
             <input
               ref={renameInput}
               defaultValue={title}
@@ -215,7 +218,7 @@ export function SessionBar({
             {/* Carries the retired `ACTIVE SESSION · GENERAL` eyebrow. The words
                 are not lost, they stopped being 15px of band for a fact that
                 labels the screen the user is already looking at. */}
-            <span class="profile-monogram" role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
+            <span class="profile-monogram" style={profileBadgeStyle} role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
             <span class="session-bar__title">{title}</span>
           </button>
         )}

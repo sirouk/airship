@@ -178,6 +178,13 @@ describe("the rail's you-are-here state", () => {
 describe("the rail's rows all speak the same language", () => {
   const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
 
+  it("keeps profile configuration inside the profile hub", () => {
+    expect(source).not.toContain("profile-scoped-routes");
+    expect(source).not.toContain("PROFILE_SCOPED_ROUTES");
+    expect(readFileSync(new URL("./app.tsx", import.meta.url), "utf8"))
+      .toContain('class="profile-hub-tabs"');
+  });
+
   it("leaves the nested hairline to genuine nesting, and to nothing else", () => {
     // Editor and Terminal are pages *inside* the row above them, which is what
     // the indent and the 1px rule say. Skills, Capabilities and the conversation
@@ -189,7 +196,8 @@ describe("the rail's rows all speak the same language", () => {
 
   it("gives every rail row a scope to draw its mark from", () => {
     expect(source).toContain("data-scope={ALL_CONVERSATIONS_SCOPE}");
-    expect(source).toContain("data-scope={route.scope}");
+    expect(source).toContain("data-scope={row.scope}");
+    expect(source).toContain("data-scope={nested.scope}");
   });
 
   it("reads each scope out of the destination table rather than restating it", () => {

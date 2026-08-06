@@ -131,6 +131,18 @@ export type ChutesEndpointEvidenceRecord = Readonly<{
       /** Chutes documents this certificate as reference material only. */
       binding: "not-established";
     }>;
+    /** Optional response-authentication material from attestation proxy >= 0.2.0. */
+    signature?: Readonly<{
+      format: "rsa-pkcs1v15-sha256";
+      base64: string;
+      byteLength: number;
+    }>;
+    /** Exact response bytes covered by `signature`, when supplied by Chutes. */
+    attestedBody?: Readonly<{
+      format: "base64";
+      base64: string;
+      byteLength: number;
+    }>;
   }>;
   binding: Readonly<{
     construction: "SHA-256(UTF8(nonce + e2e_pubkey))";

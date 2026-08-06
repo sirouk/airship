@@ -85,6 +85,24 @@ describe("workspace endpoint-evidence persistence", () => {
     expect(loaded.snapshot.entries[0]?.record.recordId).toBe(newer.recordId);
   });
 
+  it("removes only one conversation's evidence when proof cleanup is explicitly requested", async () => {
+    const workspace = new MemoryWorkspace();
+    const store = new WorkspaceEndpointEvidencePersistence(workspace, PROFILE_ID);
+    const kept = await evidenceRecord({ nonce: "nonce-kept", fetchedAt: "2026-07-28T12:00:04.000Z" });
+    const removed = await evidenceRecord({ nonce: "nonce-removed", fetchedAt: "2026-07-28T12:00:05.000Z" });
+    await store.commit({ identity: evidenceIdentity("receipt-kept", kept), record: kept }, NOW);
+    await store.commit({
+      identity: { ...evidenceIdentity("receipt-removed", removed), sessionId: "session-removed" },
+      record: removed,
+    }, NOW);
+
+    const result = await store.removeSession("session-removed", NOW + 1);
+
+    expect(result.removed).toBe(1);
+    expect(result.snapshot.entries.map((entry) => entry.identity.receiptId)).toEqual(["receipt-kept"]);
+    expect((await store.load(NOW + 1)).snapshot.entries.map((entry) => entry.identity.receiptId)).toEqual(["receipt-kept"]);
+  });
+
   it("does not silently age-prune durable evidence", async () => {
     const workspace = new MemoryWorkspace();
     const store = new WorkspaceEndpointEvidencePersistence(workspace, PROFILE_ID);

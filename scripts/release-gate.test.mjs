@@ -290,13 +290,11 @@ describe("release gate", () => {
     // AMENDED again for the same reason: the editor-theme pass recorded a
     // third, larger pair in this block, and a claim that blanks two of three
     // readings proves nothing while the operative one survives.
-    // AMENDED a third time, for the same reason as the first two: the phone
-    // pass recorded a fourth and larger pair in this block and demoted the
-    // 84,687 B reading to a "grown from" clause, so that line no longer starts
-    // "Re-measured on this build". Blank all four or the operative one survives
-    // and the claim proves nothing.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 86,284 B raw / 27,585 B gzip", "Re-weighed at 86,284 B and 27,585 B")
-      .replace("84,687 B raw / 26,979 B gzip", "84,687 B and 26,979 B")
+    // The current editor-workbench block has three operative readings. Blank
+    // all three; leaving any one of them would let the largest pair keep
+    // justifying the ceiling.
+    expect(() => assertDocumentedBudgetMeasurements(source
+      .replace("Re-measured on this build: 87,281 B raw / 27,905 B gzip", "Re-weighed at 87,281 B and 27,905 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
@@ -324,10 +322,9 @@ describe("release gate", () => {
       // granted without a sentence behind it is 29.
       ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
-      // 127 KiB when exact continuation began staging the bounded transcript,
-      // and that step is the tightest one above its recorded measurement — so
-      // the step this row grants without paying for it is now the one past it.
-      ["deferredCapabilities", "gzip: 127 * 1024", "gzip: 128 * 1024"],
+      // 128 KiB after the conversation-proof cleanup operation, and the
+      // step this row grants without paying for it is now the one past it.
+      ["deferredCapabilities", "gzip: 128 * 1024", "gzip: 129 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);

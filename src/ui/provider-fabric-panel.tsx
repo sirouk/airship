@@ -382,11 +382,10 @@ function ProviderConnectionCard({
   onDisconnect(): void;
 }>) {
   const isActiveConnection = connection.id === activeConnectionId;
-  const availableModel = connection.models.find((model) => model.availability === "available");
   const activeModel = isActiveConnection
     ? connection.models.find((model) => model.id === activeModelId)
     : undefined;
-  const selectedModelId = stagedModelId ?? activeModel?.id ?? availableModel?.id ?? connection.models[0]?.id;
+  const selectedModelId = stagedModelId ?? activeModel?.id ?? "";
   const isActiveRoute = isActiveConnection && selectedModelId === activeModelId;
   const canActivate = (
     Boolean(selectedModelId)
@@ -417,7 +416,7 @@ function ProviderConnectionCard({
       </div>
 
       <div class="provider-connection__model">
-        {connection.models.length && selectedModelId ? (
+        {connection.models.length ? (
           <MenuSelect
             placement="down"
             ariaLabel={`${connection.providerLabel} discovered model`}

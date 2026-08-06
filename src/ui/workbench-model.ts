@@ -388,27 +388,19 @@ function workspaceSegmentError(segment: string): string | undefined {
   return undefined;
 }
 
-/**
- * Whether the editor soft-wraps by default at this pane width.
- *
- * Off is right where a line of code fits; at phone widths `white-space: pre`
- * made a markdown paragraph reachable only by horizontal scrolling, one line at
- * a time. The default follows the width; the toggle then belongs to the user
- * and is persisted with the open tabs.
- */
+/** The editor starts readable on every device; the persisted toggle owns later choices. */
 export const WORKBENCH_WRAP_DEFAULT_MAX_WIDTH = 760;
 
-export function defaultEditorWrap(width: number | undefined): boolean {
-  return typeof width === "number" && Number.isFinite(width) && width <= WORKBENCH_WRAP_DEFAULT_MAX_WIDTH;
+export function defaultEditorWrap(_width: number | undefined): boolean {
+  return true;
 }
 
 /**
  * What the file strip says about the editing surface itself.
  *
- * The gutter and the wrap mode are one decision: numbers down the side of a
- * soft-wrapped buffer label visual rows, not file lines, so a wrapped editor
- * shows no gutter — and then has to say that rather than letting the numbers
- * disappear silently, which is what the ≤760px stylesheet used to do.
+ * The gutter remains visible for wrapped buffers; its rows are measured against
+ * the same text box, so continuation rows stay blank while file numbers remain
+ * attached to their logical line.
  *
  * Wrap is not the only suppressor. `workspaceGutterLines` withholds the gutter
  * entirely past `WORKSPACE_GUTTER_LINE_LIMIT`, and this note was written
@@ -419,7 +411,7 @@ export function defaultEditorWrap(width: number | undefined): boolean {
  */
 export function editorSurfaceNote(input: Readonly<{ wrap: boolean; binary: boolean; gutter?: boolean }>): string {
   if (input.binary) return "Binary · read-only · client-side";
-  if (input.wrap) return "UTF-8 · LF · client-side · wrapped, no line numbers";
+  if (input.wrap) return "UTF-8 · LF · client-side · wrapped with line numbers";
   return input.gutter === false
     ? `UTF-8 · LF · client-side · no line numbers above ${WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US")} lines`
     : "UTF-8 · LF · client-side";

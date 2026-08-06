@@ -11,6 +11,25 @@ import type {
   LocalModelDiscovery,
 } from "./contracts";
 
+/**
+ * A local provider may be connected with several different model kinds in its
+ * directory (for example, an embedding model alongside chat models). Never
+ * choose by catalog order or by a model-name convention. Automatic activation
+ * is only unambiguous when the provider returned exactly one model and its own
+ * evidence says that model accepts and produces text.
+ */
+export function selectSingleTextGenerationModel(
+  models: readonly InferenceModelDescriptor[],
+): InferenceModelDescriptor | undefined {
+  if (models.length !== 1) return undefined;
+  const model = models[0];
+  return model
+    && model.capabilities["text-input"]?.state === "supported"
+    && model.capabilities["text-output"]?.state === "supported"
+    ? model
+    : undefined;
+}
+
 export type LocalCatalogBinding = Readonly<{
   connectionId: string;
   connectionGeneration: number;

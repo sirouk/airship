@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, TRUST_TABS, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
@@ -22,16 +22,20 @@ function shellSource(): string {
 
 
 describe("platform shell contracts", () => {
-  it("defaults to Drive only when this build can open Google authorization", () => {
+  it("defaults to explicit Ephemeral page memory unless Drive is configured", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
     expect(resolveDefaultVaultBackend(undefined, configuredClientId)).toBe("google-drive");
     expect(resolveDefaultVaultBackend("google-drive", configuredClientId)).toBe("google-drive");
-    expect(resolveDefaultVaultBackend(undefined)).toBe("local-device");
-    expect(resolveDefaultVaultBackend(undefined, undefined)).toBe("local-device");
-    expect(resolveDefaultVaultBackend("google-drive", "malformed")).toBe("local-device");
+    expect(resolveDefaultVaultBackend(undefined)).toBe("ephemeral");
+    expect(resolveDefaultVaultBackend(undefined, undefined)).toBe("ephemeral");
+    expect(resolveDefaultVaultBackend("google-drive", "malformed")).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("local-lab", undefined)).toBe("local-lab");
     expect(resolveDefaultVaultBackend("unexpected", configuredClientId)).toBe("google-drive");
-    expect(resolveDefaultVaultBackend("unexpected", undefined)).toBe("local-device");
+    expect(resolveDefaultVaultBackend("unexpected", undefined)).toBe("ephemeral");
+  });
+
+  it("offers the starting page-memory mode before durable providers", () => {
+    expect(VAULT_BACKENDS.slice(0, 2)).toEqual(["ephemeral", "local-device"]);
   });
 
   it("makes every canonical and nested destination plus preferences reachable", () => {
@@ -41,34 +45,12 @@ describe("platform shell contracts", () => {
     expect(entries.some((entry) => entry.id === "settings")).toBe(true);
   });
 
-  it("builds the Trust hub strip out of the navigation table, not a fourth set of literals", () => {
-    /*
-     * The rail, the palette and the More sheet already read
-     * `CANONICAL_DESTINATIONS`; this strip retyped the same four rows, on the
-     * phone, directly above the two headings that had drifted from it
-     * ("Connect models", "Account standing"). Asserted against the table rather
-     * than against a copy of the four labels — a test that restates the
-     * literals proves only that two copies agree.
-     */
-    const trust = CANONICAL_DESTINATIONS
-      .filter((destination) => destination.group === "Trust")
-      .flatMap((destination) => [destination, ...destination.nested]);
-    expect(TRUST_TABS.map((tab) => tab.view)).toEqual(trust.map((destination) => destination.id));
-    expect(TRUST_TABS.map((tab) => tab.label)).toEqual(trust.map((destination) => destination.label));
-    // The strip's accessible name counts them in words, so the count is pinned
-    // to the table that now produces it.
-    expect(TRUST_TABS).toHaveLength(4);
-    /*
-     * And the scope travels with the row, because that is what the strip used
-     * to drop. `Trust` files four destinations together; it does not make them
-     * one scope. Proof is `session` — evidence about the turns of the
-     * conversation you are in — and the other three are `global` services that
-     * outlive every conversation. Read from the table rather than restated, so
-     * the strip cannot be the surface that disagrees with the rail next.
-     */
-    expect(TRUST_TABS.map((tab) => tab.scope)).toEqual(trust.map((destination) => destination.scope));
-    expect(TRUST_TABS.find((tab) => tab.view === "proof")?.scope).toBe("session");
-    expect(TRUST_TABS.filter((tab) => tab.scope === "global").map((tab) => tab.view)).toEqual(["vault", "access", "billing"]);
+  it("keeps global service navigation in the primary rail", () => {
+    const source = shellSource();
+    expect(source).not.toContain("TrustHubTabs");
+    expect(source).not.toContain("TRUST_TABS");
+    expect(CANONICAL_DESTINATIONS.find((destination) => destination.id === "vault")?.scope).toBe("global");
+    expect(CANONICAL_DESTINATIONS.find((destination) => destination.id === "access")?.scope).toBe("global");
   });
 
   it("filters across labels, hashes, group, and keywords", () => {
@@ -508,7 +490,7 @@ describe("modal focus and key ownership", () => {
   const trustSheetSource = () => {
     const source = dialog();
     const start = source.indexOf("export function TrustPostureSheet");
-    return source.slice(start, source.indexOf("const TRUST_TABS", start));
+    return source.slice(start, source.indexOf("type ViewBoundaryProps", start));
   };
 
   it("restores the focus Runtime trust took, the same way its sibling modals do", () => {

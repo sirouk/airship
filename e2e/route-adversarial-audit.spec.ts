@@ -196,8 +196,7 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
       await expect(main).not.toContainText("Private cloud state");
     }
     if (["proof", "vault", "connection", "account"].includes(route.hash)) {
-      const activeTrustTab = main.getByRole("navigation", { name: "Trust hub" }).locator("button[aria-current='page']");
-      await expect(activeTrustTab).toBeInViewport();
+      await expect(main.locator(".trust-hub-tabs")).toHaveCount(0);
     }
     const screenshotPath = testInfo.outputPath(`${testInfo.project.name}-${route.hash}.png`);
     await page.screenshot({ path: screenshotPath, fullPage: !mobile, animations: "disabled" });

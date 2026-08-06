@@ -389,8 +389,7 @@ export class MemoryGitAdapter implements BrowserGitAdapter {
       name: request.name,
       defaultBranch: request.defaultBranch,
       worktreePath: request.destination,
-      files: {},
-      workingFiles: request.files,
+      files: request.files,
       remoteUrl: request.sourceUrl,
     });
     const repository = this.requireRepository(repositoryId);

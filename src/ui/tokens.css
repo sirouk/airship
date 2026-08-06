@@ -435,7 +435,6 @@ body {
 :root[data-density] .skill-card > p { line-height: var(--lh-body); }
 :root[data-density] .message { width: min(100%, var(--density-chat-measure)); max-width: var(--density-chat-measure); margin-bottom: calc(var(--density-gap) + 6px); }
 :root[data-density] .message.user { width: min(88%, 540px); max-width: min(88%, 540px); margin-left: auto; margin-right: 0; }
-:root[data-density] .message-rail { padding-top: var(--density-message-pad-block); }
 :root[data-density] .message-body { padding: var(--density-message-pad-block) var(--density-message-pad-inline); }
 /* The session bar is one row at both densities: comfortable buys 4px and a
    larger title, not a second row. A header that grows with the preference is

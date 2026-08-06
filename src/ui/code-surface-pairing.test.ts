@@ -46,12 +46,18 @@ describe("the editing surface and the layer painted behind it share one geometry
   it("moves both boxes together, in every context that moves either", () => {
     const editor = pairedDeclarations(".code-editor");
     const layer = pairedDeclarations(".code-highlight");
+    const measure = pairedDeclarations(".code-wrap-measure");
     expect(
       [...editor.keys()].sort(),
       "A context that lays out the textarea must lay out the painted layer too.",
     ).toEqual([...layer.keys()].sort());
+    expect(
+      [...editor.keys()].sort(),
+      "The hidden wrapping measurement must use the textarea's exact geometry.",
+    ).toEqual([...measure.keys()].sort());
     for (const [context, declarations] of editor) {
       expect(layer.get(context), `${context || "base rule"}`).toEqual(declarations);
+      expect(measure.get(context), `${context || "base rule"} measurement`).toEqual(declarations);
     }
   });
 

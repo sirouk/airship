@@ -373,16 +373,16 @@ describe("folder operation reporting", () => {
 });
 
 describe("editor wrap", () => {
-  it("defaults on at phone widths and off where a line of code fits", () => {
+  it("defaults on at every width until a saved choice says otherwise", () => {
     expect(defaultEditorWrap(390)).toBe(true);
     expect(defaultEditorWrap(WORKBENCH_WRAP_DEFAULT_MAX_WIDTH)).toBe(true);
-    expect(defaultEditorWrap(WORKBENCH_WRAP_DEFAULT_MAX_WIDTH + 1)).toBe(false);
-    expect(defaultEditorWrap(1440)).toBe(false);
-    expect(defaultEditorWrap(undefined)).toBe(false);
+    expect(defaultEditorWrap(WORKBENCH_WRAP_DEFAULT_MAX_WIDTH + 1)).toBe(true);
+    expect(defaultEditorWrap(1440)).toBe(true);
+    expect(defaultEditorWrap(undefined)).toBe(true);
   });
 
-  it("states that wrapping retires the gutter, instead of numbers vanishing", () => {
-    expect(editorSurfaceNote({ wrap: true, binary: false })).toBe("UTF-8 · LF · client-side · wrapped, no line numbers");
+  it("states that wrapping keeps logical line numbers aligned", () => {
+    expect(editorSurfaceNote({ wrap: true, binary: false })).toBe("UTF-8 · LF · client-side · wrapped with line numbers");
     expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
     // A binary buffer has no editable surface to describe either way.
     expect(editorSurfaceNote({ wrap: true, binary: true })).toBe("Binary · read-only · client-side");
@@ -399,6 +399,6 @@ describe("editor wrap", () => {
     expect(editorSurfaceNote({ wrap: false, binary: false, gutter: true })).toBe("UTF-8 · LF · client-side");
     expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
     // Wrapping already explains itself; the cap does not overwrite that.
-    expect(editorSurfaceNote({ wrap: true, binary: false, gutter: false })).toBe("UTF-8 · LF · client-side · wrapped, no line numbers");
+    expect(editorSurfaceNote({ wrap: true, binary: false, gutter: false })).toBe("UTF-8 · LF · client-side · wrapped with line numbers");
   });
 });

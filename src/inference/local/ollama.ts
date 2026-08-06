@@ -19,7 +19,6 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
   private readonly initialDiagnostics: readonly LocalProviderDiagnostic[];
   private readonly http: ReturnType<typeof boundedOptions>;
   private readonly maxModels: number;
-  private readonly capabilityProbeConcurrency: number;
 
   constructor(options: LocalProviderOptions = {}) {
     const endpoint = resolveLocalEndpoint(options.endpoint ?? OLLAMA_DEFAULT_ENDPOINT, options);
@@ -27,7 +26,6 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
     this.initialDiagnostics = endpoint.diagnostics;
     this.http = boundedOptions(options);
     this.maxModels = boundedInteger(options.maxModels, 64, 1, 256);
-    this.capabilityProbeConcurrency = boundedInteger(options.capabilityProbeConcurrency, 4, 1, 16);
   }
 
   async probeHealth(signal = new AbortController().signal): Promise<LocalProviderHealth> {
@@ -69,7 +67,6 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
     }
 
     const records = payload.models.slice(0, this.maxModels);
-    const diagnostics: LocalProviderDiagnostic[] = [...this.initialDiagnostics];
     const normalizedRecords = records
       .filter(isRecord)
       .map((record) => ({
@@ -78,42 +75,23 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
       }))
       .filter((item): item is { record: Record<string, unknown>; id: string } => !!item.id)
       .filter(({ id }, index, values) => values.findIndex((candidate) => candidate.id === id) === index);
-    const models = await parallelMap(
-      normalizedRecords,
-      this.capabilityProbeConcurrency,
-      async ({ id, record }) => {
-        if (signal.aborted) throw signal.reason ?? new DOMException("Cancelled.", "AbortError");
-        let show: unknown;
-        try {
-          show = await boundedJson(
-            new URL("api/show", this.endpoint),
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: id, verbose: false }),
-            },
-            this.http,
-            signal,
-          );
-        } catch (error) {
-          if (signal.aborted) throw error;
-          diagnostics.push(providerDiagnostic(
-            "model-details-unavailable",
-            `Ollama did not provide capability details for ${id}.`,
-            { severity: "warning", blocking: false, modelId: id },
-          ));
-        }
-        return modelFromOllama(id, record, show);
-      },
-    );
+    /*
+     * `/api/tags` is the provider's advertised directory. Do not follow it
+     * with one `/api/show` request per row: `show` can load a model into
+     * Ollama's runtime, so a directory refresh could page every installed
+     * model into memory before the person has chosen one. Keep only fields
+     * the directory itself returned; capability evidence that is not present
+     * there remains unknown and is checked only for the model the person
+     * explicitly activates.
+     */
+    const models = normalizedRecords.map(({ id, record }) => modelFromOllama(id, record));
     return Object.freeze({
       provider: this.kind,
       endpoint: this.endpoint.origin,
       fetchedAt: new Date().toISOString(),
       models: Object.freeze(models),
-      diagnostics: Object.freeze(diagnostics),
-      complete: payload.models.length <= this.maxModels &&
-        !diagnostics.some((item) => item.code === "model-details-unavailable"),
+      diagnostics: this.initialDiagnostics,
+      complete: payload.models.length <= this.maxModels,
     });
   }
 
@@ -135,24 +113,22 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
 function modelFromOllama(
   id: string,
   tags: Record<string, unknown>,
-  rawShow: unknown,
 ): LocalModelDescriptor {
-  const show = isRecord(rawShow) ? rawShow : undefined;
-  const details = isRecord(show?.details) ? show.details : isRecord(tags.details) ? tags.details : undefined;
-  const rawCapabilities = Array.isArray(show?.capabilities)
-    ? show.capabilities.filter((item): item is string => typeof item === "string").map(normalize)
+  const details = isRecord(tags.details) ? tags.details : undefined;
+  const rawCapabilities = Array.isArray(tags.capabilities)
+    ? tags.capabilities.filter((item): item is string => typeof item === "string").map(normalize)
     : undefined;
-  const modelInfo = isRecord(show?.model_info) ? show.model_info : undefined;
+  const modelInfo = isRecord(tags.model_info) ? tags.model_info : undefined;
   return Object.freeze({
     id,
     provider: "ollama",
     state: "unknown",
     capabilities: Object.freeze([
-      capability("text-generation", rawCapabilities, ["completion"], "/api/show:capabilities"),
-      capability("tools", rawCapabilities, ["tools"], "/api/show:capabilities"),
-      capability("vision", rawCapabilities, ["vision"], "/api/show:capabilities"),
-      capability("embeddings", rawCapabilities, ["embedding"], "/api/show:capabilities"),
-      capability("thinking", rawCapabilities, ["thinking"], "/api/show:capabilities"),
+      capability("text-generation", rawCapabilities, ["completion"], "/api/tags:capabilities"),
+      capability("tools", rawCapabilities, ["tools"], "/api/tags:capabilities"),
+      capability("vision", rawCapabilities, ["vision"], "/api/tags:capabilities"),
+      capability("embeddings", rawCapabilities, ["embedding"], "/api/tags:capabilities"),
+      capability("thinking", rawCapabilities, ["thinking"], "/api/tags:capabilities"),
     ]),
     ...optional("contextTokens", contextLength(modelInfo)),
     ...optional("format", stringField(details?.format)),
@@ -214,25 +190,4 @@ function nonNegativeInteger(value: unknown): number | undefined {
 
 function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
   return value === undefined ? {} : { [key]: value } as { [P in K]?: V };
-}
-
-async function parallelMap<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  operation: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const result = new Array<R>(values.length);
-  let cursor = 0;
-  await Promise.all(Array.from(
-    { length: Math.min(concurrency, values.length) },
-    async () => {
-      for (;;) {
-        const index = cursor;
-        cursor += 1;
-        if (index >= values.length) return;
-        result[index] = await operation(values[index]!);
-      }
-    },
-  ));
-  return result;
 }

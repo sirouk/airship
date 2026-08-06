@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
 const PREFERENCES_KEY = "airship.display-preferences.v1";
 
@@ -27,6 +27,7 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
 
   const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
   await expect(connected).toContainText("This machine · loopback");
+  await chooseOllamaModel(page, connected);
   await connected.getByRole("button", { name: "Use in new conversation" }).click();
 
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
@@ -101,6 +102,7 @@ test("a stopped queue stays paused across conversation switches and reconnects",
   const fabric = page.locator(".provider-fabric");
   await fabric.getByRole("button", { name: "Check Ollama" }).click();
   const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
+  await chooseOllamaModel(page, connected);
   await connected.getByRole("button", { name: "Use in new conversation" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
   await expect.poll(() => chatRequests).toBe(1);
@@ -181,6 +183,7 @@ test("Skills explains why its pinned conversation cannot start during an active 
     const fabric = page.locator(".provider-fabric");
     await fabric.getByRole("button", { name: "Check Ollama" }).click();
     const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
+    await chooseOllamaModel(page, connected);
     await connected.getByRole("button", { name: "Use in new conversation" }).click();
     await expect.poll(() => chatRequests).toBe(1);
 
@@ -189,8 +192,14 @@ test("Skills explains why its pinned conversation cannot start during an active 
     await composer.press("Enter");
     await expect.poll(() => chatRequests).toBe(2);
 
-    await page.getByRole("group", { name: "Profile configuration" })
+    // Skills and Capabilities are intentionally not permanent rail rows. The
+    // profile control beside the agent name is their entry point now; opening
+    // the manager first keeps this journey on the same path a person uses.
+    await page.getByRole("button", { name: "Manage profiles" }).click();
+    await expect(page).toHaveURL(/#profiles$/u);
+    await page.getByRole("navigation", { name: "Agent configuration" })
       .getByRole("button", { name: "Skills", exact: true }).click();
+    await expect(page).toHaveURL(/#skills$/u);
     const start = page.getByRole("button", { name: "New conversation with this set" });
     await expect(start).toBeDisabled();
     await expect(start).toHaveAttribute("aria-describedby", "skill-conversation-start-status");
@@ -291,6 +300,14 @@ async function mockOllama(
     }
     await cors(route, 404, "not found", "text/plain");
   });
+}
+
+async function chooseOllamaModel(page: Page, connection: Locator): Promise<void> {
+  const modelSelect = connection.getByRole("button", { name: "Ollama model for a new pinned conversation" });
+  await modelSelect.click();
+  await page.getByRole("listbox", { name: "Ollama model for a new pinned conversation" })
+    .getByRole("option", { name: "gemma3:latest" })
+    .click();
 }
 
 function ollamaSse(content: string): string {

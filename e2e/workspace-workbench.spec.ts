@@ -142,7 +142,10 @@ test("source status and history open real patch documents with the shared previe
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop diff-document lifecycle");
   await openIsolatedWorkspace(page);
   await page.getByRole("treeitem", { name: /README\.md/u }).click();
-  await page.getByRole("textbox", { name: "Edit README.md" }).fill("Unsaved editor text is not yet a Git patch.\n");
+  const readmeEditor = page.getByRole("textbox", { name: "Edit README.md" });
+  await readmeEditor.fill("Saved Git edit is a real worktree change.\n");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await readmeEditor.fill("Unsaved editor text is not yet a Git patch.\n");
   await page.getByRole("tab", { name: /Source Control/u }).click();
 
   // A status row opens the adapter's bounded diff, not the working file. The
@@ -152,8 +155,8 @@ test("source status and history open real patch documents with the shared previe
   await expect(statusPreview).toBeVisible();
   await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
   const statusPatch = page.getByRole("region", { name: "Working diff README.md" });
-  await expect(statusPatch).toContainText("Initial browser repository snapshot");
-  await expect(statusPatch).toContainText("Private workspace");
+  await expect(statusPatch).toContainText("# Airship workspace");
+  await expect(statusPatch).toContainText("Saved Git edit is a real worktree change.");
   await expect(statusPatch).not.toContainText("Unsaved editor text");
 
   // History comes from git.log/git.show and participates in the exact same
@@ -169,9 +172,9 @@ test("source status and history open real patch documents with the shared previe
   await page.getByRole("button", { name: /Open and keep commit [0-9a-f]+ diff/u }).click();
   await expect(page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u })).toHaveCount(0);
   const keptHistory = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff/u });
-  await page.getByRole("button", { name: /docs\/architecture\.md · Working added/u }).click();
+  await page.getByRole("button", { name: /README\.md · Working modified/u }).click();
   await expect(keptHistory).toBeVisible();
-  await expect(page.getByRole("tab", { name: /docs\/architecture\.md · worktree diff, Working diff, Preview/u })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u })).toBeVisible();
 });
 
 test("file-type icons and Reveal in Explorer preserve exact document context", async ({ page }, testInfo) => {
@@ -182,6 +185,13 @@ test("file-type icons and Reveal in Explorer preserve exact document context", a
   await readme.click();
   const readmeTab = page.getByRole("tab", { name: /README\.md, Preview/u });
   await expect(readmeTab.locator('[data-file-kind="markdown"]')).toBeVisible();
+
+  // The initial workspace commit contains the complete bootstrap tree. Make a
+  // real edit here so the later Source Control assertion exercises the same
+  // clean-baseline-to-working-diff transition as a person does.
+  const readmeEditor = page.getByRole("textbox", { name: "Edit README.md" });
+  await readmeEditor.fill("Reveal uses the current workspace.\n");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
 
   // The same explicit action works with a pointer, keyboard, or finger. It
   // navigates to the path instead of reopening it, and focus lands on the
@@ -195,11 +205,14 @@ test("file-type icons and Reveal in Explorer preserve exact document context", a
   await page.getByRole("button", { name: /Initial browser workspace/u }).click();
   const historyTab = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u });
   await expect(historyTab.locator("svg")).toBeVisible();
-  // This root commit has one exact changed path, so the control is direct. A
-  // multi-path commit promotes the same action to the keyboard/touch menu.
-  const historyReveal = page.getByRole("button", { name: "Reveal in Explorer", exact: true });
+  // The initial workspace commit contains several exact changed paths, so the
+  // same action is a keyboard/touch menu rather than an ambiguous direct
+  // reveal. Choosing README keeps the commit diff open while moving focus to
+  // the exact current workspace row.
+  const historyReveal = page.getByRole("button", { name: "Reveal a changed path from this commit in Explorer" });
   await expect(historyReveal).toBeVisible();
   await historyReveal.click();
+  await page.getByRole("option", { name: "README.md", exact: true }).click();
   await expect(readme).toHaveAttribute("aria-selected", "true");
   // A reveal from a whole-commit document keeps that immutable commit tab
   // active; on a phone, the Files pane is simply presented in front of it.
@@ -253,6 +266,12 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await openIsolatedWorkspace(page);
 
+  // The canonical browser workspace is clean. Create a real saved edit before
+  // asking Source Control to render its working diff.
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  const readmeEditor = page.getByRole("textbox", { name: "Edit README.md" });
+  await readmeEditor.fill("Mobile source-control marker.\n");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByRole("tab", { name: /Source Control/u }).click();
   const keepStatusDiff = page.getByRole("button", { name: "Open and keep unstaged diff README.md" });
   await expect(keepStatusDiff).toBeVisible();
@@ -355,24 +374,22 @@ test("the editor states whether it is wrapping, and stops overflowing when it is
   // prose file ran off the pane and the gutter was `display: none` below 760px
   // with nothing said. Wrap is now a stated, persisted mode.
   const wrap = page.getByRole("button", { name: "Wrap" });
-  await expect(wrap).toHaveAttribute("aria-pressed", "false");
+  await expect(wrap).toHaveAttribute("aria-pressed", "true");
   const overflow = () => page.evaluate(() => {
     const node = document.querySelector(".code-editor");
     return node ? node.scrollWidth - node.clientWidth : -1;
   });
+  expect(await overflow()).toBe(0);
+  await expect(page.locator(".code-gutter")).toBeVisible();
+  await expect(page.locator(".editor-strip")).toContainText("wrapped with line numbers");
+
+  await wrap.click();
+  await expect(wrap).toHaveAttribute("aria-pressed", "false");
   expect(await overflow()).toBeGreaterThan(0);
   await expect(page.locator(".code-gutter")).toBeVisible();
 
-  await wrap.click();
-  await expect(wrap).toHaveAttribute("aria-pressed", "true");
-  expect(await overflow()).toBe(0);
-  // Numbers beside a soft-wrapped buffer would count visual rows, so the gutter
-  // is retired — and the strip says so instead of letting it vanish silently.
-  await expect(page.locator(".code-gutter")).toHaveCount(0);
-  await expect(page.locator(".editor-strip")).toContainText("wrapped, no line numbers");
-
   await page.reload();
-  await expect(page.getByRole("button", { name: "Wrap" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Wrap" })).toHaveAttribute("aria-pressed", "false");
 });
 
 test("the file you just closed reopens, and same-named documents keep distinct close buttons", async ({ page }, testInfo) => {

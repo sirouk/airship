@@ -7,6 +7,7 @@ const [source, styles] = await Promise.all([
   readFile(new URL("./sessions-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("./sessions-view.css", import.meta.url), "utf8"),
 ]);
+const appSource = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 
 /**
  * The library and its detail pane must agree about what is in scope.
@@ -81,6 +82,22 @@ describe("conversation library scope", () => {
     // the reader may still want them.
     expect(source).toContain("<button type=\"button\" onClick={onOpenProof}>");
     expect(source).toContain("{outOfResults ? <p class=\"session-library-actions-caption\">{SESSION_OUT_OF_RESULTS_CAPTION}</p> : null}");
+  });
+});
+
+describe("conversation deletion scope", () => {
+  it("refreshes the shell projections and makes proof cleanup an explicit second scope", () => {
+    expect(source).toContain("onDeleted?: (sessionId: string, removeEvidence: boolean) => void | Promise<void>;");
+    expect(source).toContain("await onDeleted?.(deletedId, removeEvidence);");
+    expect(source).toContain('checked={removeEvidence}');
+    expect(source).toContain("Also remove this conversation’s endpoint evidence and pending evidence checks.");
+    expect(source).toContain("Leave this unchecked to keep its separately stored Proof evidence history.");
+    // A failed optional cleanup must not resurrect a journal row that was
+    // already removed; the announcement names the partial result instead.
+    expect(source).toContain("endpoint evidence was kept because cleanup failed.");
+    expect(appSource).toContain("async function adoptLibraryDelete(deletedSessionId: string, removeEvidence: boolean)");
+    expect(appSource).toContain("onDeleted={adoptLibraryDelete}");
+    expect(appSource).toContain("setSessionRevision((value) => value + 1);");
   });
 });
 

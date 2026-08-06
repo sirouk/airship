@@ -142,6 +142,7 @@ async function connectOpenAi(page: Page): Promise<void> {
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
   });
   await expect(connection).toBeVisible();
+  await chooseProviderModel(page, connection, "OpenAI", FIRST_MODEL);
   await connection.getByRole("button", { name: "Use in new conversation" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 30_000 });
 }
@@ -159,8 +160,25 @@ async function connectAndActivateAnthropic(page: Page): Promise<void> {
     has: page.getByRole("heading", { name: "Anthropic", exact: true }),
   });
   await expect(connection).toBeVisible();
+  await chooseProviderModel(page, connection, "Anthropic", ANTHROPIC_MODEL);
   await connection.getByRole("button", { name: "Use in new conversation" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 30_000 });
+}
+
+async function chooseProviderModel(
+  page: Page,
+  connection: ReturnType<Page["locator"]>,
+  provider: string,
+  modelId: string,
+): Promise<void> {
+  const modelSelect = connection.getByRole("button", { name: `${provider} model for a new pinned conversation` });
+  await modelSelect.click();
+  const options = page.getByRole("listbox", { name: `${provider} model for a new pinned conversation` }).getByRole("option");
+  const matching = options.filter({ hasText: new RegExp(modelId, "u") });
+  // Some providers publish a human display name while keeping the opaque id
+  // only in the connection record. Prefer the returned id when it is visible;
+  // otherwise choose the sole option the provider actually advertised.
+  await (await matching.count() ? matching.first() : options.first()).click();
 }
 
 type ReconnectJourney = Readonly<{

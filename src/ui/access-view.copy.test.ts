@@ -496,7 +496,9 @@ describe("connecting does not interview the person doing it", () => {
     // A reconnect address may select its already-pinned model, but only from
     // this same compatible catalog; ordinary connection keeps the catalog's
     // recommendation and never adds an interview step.
-    expect(source).toContain("setModelId(requestedModel?.id ?? selection.model?.id ?? compatibleModels[0]!.id);");
+    expect(source).toContain("setModelId(requestedModel?.id ?? selection.id);");
+    expect(source).not.toContain("compatibleModels[0]!.id");
+    expect(source).not.toContain("models[0]!.id");
   });
 
   it("carries a pasted key through to chat exactly as a returning redirect is", () => {
@@ -507,16 +509,18 @@ describe("connecting does not interview the person doing it", () => {
     expect(discover.slice(0, discover.indexOf("\n  }"))).toContain("autoConnectAfterDiscovery.current = true;");
   });
 
-  it("asks about the embedding model only when Chutes published a choice", () => {
+  it("keeps embedding choices tied to the fresh Chutes catalog", () => {
     // The count is read, never written down: `askEmbeddingOffer` branches on
-    // `catalog.models.length`, and nothing in this file names a number of
-    // models or a model id.
+    // `catalog.models.length`, and nothing in this file names a model id.
     expect(source).toContain("if (catalog.models.length === 0) return Object.freeze({ state: \"none\" as const });");
     expect(source).toContain("if (catalog.models.length === 1) return Object.freeze({ state: \"adopted\" as const, model: catalog.models[0]! });");
     expect(source).toContain('{embeddingOffer?.state === "choose" ? (');
-    // Zero, one, and an unanswerable catalog all connect. Only a real choice
-    // holds the journey, and it holds it by returning before `activate()`.
-    expect(source).toContain('if (embeddingOffer.state === "choose") return;');
+    // Zero and an unanswerable catalog do not invent a deployment. Multiple
+    // live deployments require an id from the rendered current list.
+    expect(source).toContain('if (embeddingOffer.state === "choose" && !embeddingModelId) return;');
+    expect(source).toContain('disabled={busy || (embeddingOffer?.state === "choose" && !embeddingModelId)}');
+    expect(source).toContain("readConfidentialEmbeddingChoice");
+    expect(source).not.toContain("automaticEmbeddingPick");
   });
 });
 

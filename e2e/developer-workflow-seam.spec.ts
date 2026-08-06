@@ -68,6 +68,12 @@ test("a commit that a reload destroys is named on the route that lost it", async
   // A cold workbench must not accuse itself of losing anything.
   await expect(page.locator(".workbench-lost-work")).toHaveCount(0);
 
+  // The canonical browser workspace starts clean. Create the same small,
+  // real worktree change a developer would make before staging a commit.
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  const readme = page.getByRole("textbox", { name: "Edit README.md" });
+  await readme.fill("A reload-lost commit marker.\n");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByRole("tab", { name: /Source Control/u }).click();
   await page.getByRole("button", { name: "Stage README.md" }).click();
   await allowOnce(page, "git_stage");

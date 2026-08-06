@@ -9,11 +9,10 @@ const changeApprovalMode = source.match(
 )?.[0] ?? "";
 
 /*
- * The composer's approval control has no conversation-scoped representation to
- * write into: a mode lives in a `ProfileRevision`, and a session pin is only
- * accepted against the catalog's *active* revision, so changing it here commits
- * a new profile default. These cases pin the copy to that fact — the defect was
- * not the mutation, it was three strings that described a narrower one.
+ * Idle changes still use the immutable profile-revision flow. During a live
+ * turn the same control swaps the page-memory delegate in place, without
+ * rewriting the pinned manifest or its audit chain. These cases pin both
+ * meanings to the copy the person sees.
  */
 describe("approval policy scope is stated where it is changed", () => {
   it("moves the profile default, which is the state the copy has to describe", async () => {
@@ -38,18 +37,23 @@ describe("approval policy scope is stated where it is changed", () => {
     expect(changeApprovalMode).toContain("replaceProfile(current, revisedProfile)");
     expect(changeApprovalMode).toContain("will start new conversations in ${approvalModeLabel(nextMode)}");
     expect(changeApprovalMode).toContain("${revisedProfile.name}");
-    expect(changeApprovalMode).not.toContain("this conversation's approval policy");
+    const liveBranch = changeApprovalMode.slice(
+      changeApprovalMode.indexOf("if (busy)"),
+      changeApprovalMode.indexOf("if (\n      !runtime.current"),
+    );
+    expect(liveBranch).toContain("setLiveApprovalMode");
+    expect(liveBranch).toContain("approvalPolicyController.replace(approvalModePolicies[nextMode])");
+    expect(liveBranch).toContain("The pinned conversation and audit remain unchanged.");
+    expect(liveBranch).not.toContain("Stop the active turn and wait for model or storage changes before changing the approval policy.");
   });
 
   it("names the composer control by its real scope, without colliding with New conversation", () => {
-    // The name has to say the control reaches past this conversation — but the
-    // first spelling ended in "…this profile's new conversations", which
-    // *contains* "New conversation". Accessible-name matching is substring
-    // matching, so the session bar's New conversation button and this menu
-    // became two elements with one name: every by-name query for either
-    // resolved to both, and eight browser journeys failed on the ambiguity.
+    // The name has to describe both paths: live replacement while a turn runs,
+    // and a new immutable pin when idle. It must not end in "new conversation",
+    // which would collide with the session bar's New conversation button under
+    // accessible-name substring matching.
     expect(source).not.toContain('ariaLabel="Conversation approval policy"');
-    expect(source).toContain('ariaLabel="Conversation approval policy · applies to this conversation and future ones in this profile"');
+    expect(source).toContain('ariaLabel="Conversation approval policy · live during a turn, then starts a pinned conversation when idle"');
     expect(source).not.toMatch(/ariaLabel="[^"]*new conversations?"/iu);
   });
 });

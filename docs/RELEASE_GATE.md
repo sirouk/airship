@@ -43,10 +43,10 @@ ceilings are both blocking.
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 384 KiB | 115 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 181 KiB |
-| Deferred advanced capability bundle | 429 KiB | 127 KiB |
-| First-party and other non-vendor JS/workers | 2,112 KiB | 672 KiB |
+| Deferred advanced capability bundle | 430 KiB | 128 KiB |
+| First-party and other non-vendor JS/workers | 2,118 KiB | 674 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 2,792 KiB | 861 KiB |
+| Absolute installed JavaScript/worker backstop | 2,798 KiB | 862 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 60 KiB | 10 / 14 / 4 / 18 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -54,12 +54,12 @@ ceilings are both blocking.
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
 | Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
-| Optional Workspace / Source Control / browser Git | 85 / 48 / 276 KiB | 28 / 14 / 83 KiB |
+| Optional Workspace / Source Control / browser Git | 86 / 48 / 276 KiB | 28 / 14 / 83 KiB |
 | Optional Sessions / Memory / Memory support / Proof | 64 / 61 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
 | Optional Skills route / skill editor | 7 / 4 KiB | 3 / 2 KiB |
 | Optional Terminal | 423 KiB | 112 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
-| Optional inference/provider + Companion protocol packs | 127 KiB | 40 KiB |
+| Optional inference/provider + Companion protocol packs | 126 KiB | 40 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
 | HTML-referenced entry CSS | 175 KiB | 32 KiB |

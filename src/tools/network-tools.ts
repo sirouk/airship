@@ -113,7 +113,7 @@ export function registerNetworkTools(
             admitted: true,
             repositoryId: admission.repositoryId,
             worktreeId: admission.git.worktree?.id,
-            state: "unstaged",
+            state: admission.git.worktree?.status.length ? "changed" : "clean",
           } : {
             admitted: false,
             reason: "No browser Git adapter is attached to this runtime.",

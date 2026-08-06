@@ -1,6 +1,6 @@
 import type { Ref } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import {
   CANONICAL_DESTINATIONS,
@@ -62,6 +62,9 @@ export type RailProfile = Readonly<{
   description?: string;
 }>;
 
+/** Theme-derived paint for the profile mark, kept optional for old catalogs. */
+export type ProfileBadgeStyle = Readonly<Record<string, string>>;
+
 export type RailProps = Readonly<{
   view: NavigationView;
   state: RailState;
@@ -89,6 +92,8 @@ export type RailProps = Readonly<{
   profileId: string;
   /** The shell's one monogram implementation, passed rather than re-derived. */
   monogram(name: string): string;
+  /** Paint each profile's mark with the theme that profile actually selects. */
+  profileBadgeStyle?: (profileId: string) => ProfileBadgeStyle | undefined;
   onNavigate(view: NavigationView): void;
   /**
    * Opens the profile manager scoped to the pinned profile.
@@ -195,23 +200,6 @@ export function railCurrentHint(view: NavigationView): string | undefined {
 const CURRENT_HINT_ID = "rail-current-destination";
 
 /**
- * The profile-scoped routes the rail draws under the pinned profile.
- *
- * Read out of `CANONICAL_DESTINATIONS` rather than named here, so the rail and
- * the command palette cannot end up calling the same route two things. Only the
- * glyph is stated, which is the one thing the destination table does not hold.
- */
-const PROFILE_SCOPED_ROUTE_ICONS: Readonly<Record<string, IconName>> = Object.freeze({
-  skills: "skills", capabilities: "model",
-});
-
-const PROFILE_SCOPED_ROUTES: readonly Readonly<{ id: NavigationView; label: string; icon: IconName; scope: NavigationScope }>[] = Object.freeze(
-  (CANONICAL_DESTINATIONS.find((destination) => destination.id === "profiles")?.nested ?? [])
-    .filter((nested) => nested.id in PROFILE_SCOPED_ROUTE_ICONS)
-    .map((nested) => Object.freeze({ id: nested.id, label: nested.label, icon: PROFILE_SCOPED_ROUTE_ICONS[nested.id]!, scope: nested.scope })),
-);
-
-/**
  * The ledger row's scope, read from the destination table rather than restated.
  *
  * `data-scope` is what draws a row's left-edge mark (`.nav-item[data-scope]`
@@ -286,6 +274,7 @@ export function Rail({
   profiles,
   profileId,
   monogram,
+  profileBadgeStyle,
   onNavigate,
   onManageProfiles,
   onNewConversation,
@@ -963,12 +952,9 @@ export function Rail({
           disabled={busy}
           placement="down"
           options={profiles.map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
-          leading={(option) => <span class="profile-monogram" aria-hidden="true">{monogram(option.label)}</span>}
+          leading={(option) => <span class="profile-monogram" style={profileBadgeStyle?.(option.value)} aria-hidden="true">{monogram(option.label)}</span>}
           onChange={onChangeProfile}
         />
-        {/* Skills and Capabilities are filed under Profiles and have no rail
-            row, so this control is their stand-in the way a rail row is
-            Context's — see `railStandInFor`. */}
         <button
           type="button"
           class={view === "profiles"
@@ -990,35 +976,6 @@ export function Rail({
               this control has ever used. */}
           <Icon name="profiles" />
         </button>
-        {/*
-          The two routes that decide what the agent *is* and what it can *run*,
-          drawn at last.
-          Measured: the desktop rail enumerated Chat, Workspace (Editor,
-          Terminal), Memory, Proof, then Vault, Connection, Account — and
-          neither `#skills` nor `#capabilities` appeared anywhere in it. They
-          were reachable only by knowing to press `Profiles` first and then
-          finding a tab strip inside that route, which is the menu archaeology
-          Law 4 exists to forbid. They are drawn under the profile they are
-          scoped to, and — since the owner's read of this rail — in the same row
-          language every other destination uses. The filing is carried by the
-          block they sit in, not by a hairline nothing else in the rail draws.
-        */}
-        <div class="profile-scoped-routes" role="group" aria-label="Profile configuration">
-          {PROFILE_SCOPED_ROUTES.map((route) => (
-            <button
-              key={route.id}
-              type="button"
-              class={view === route.id ? "nav-item active" : "nav-item"}
-              data-scope={route.scope}
-              title={`${route.label} · profile scope`}
-              aria-current={view === route.id ? "page" : undefined}
-              onClick={() => onNavigate(route.id)}
-            >
-              <Icon name={route.icon} />
-              <span class="nav-item__label">{route.label}</span>
-            </button>
-          ))}
-        </div>
       </div>
     );
   }
@@ -1053,8 +1010,8 @@ export function Rail({
             It lives here rather than on the Sessions route alone because
             "what is happening right now" is a question asked while doing
             something else, and the rail is the band every route renders at
-            this width. It aggregates turns and durable events across the
-            conversations owned by this page. */}
+            this width. It aggregates the durable events represented by the
+            conversations in this rail. */}
         <RuntimeLoadIndicator placement="rail" activity={activity} />
         {/* The drawer handle on the seam. It was a chevron pinned at the rail's
             bottom-left corner — the shipped design, and the owner's verdict on

@@ -25,6 +25,8 @@ const MAX_GPU_JSON_NODES = 100_000;
 const MAX_GPU_JSON_DEPTH = 32;
 const MAX_PUBLISHED_POLICY_MATCHES = 128;
 const MAX_CAS_ATTEMPTS = 8;
+const MAX_RESPONSE_SIGNATURE_BYTES = 8 * 1_024;
+const MAX_ATTESTED_BODY_BYTES = 2 * 1_024 * 1_024;
 
 export const MAX_PERSISTED_ENDPOINT_EVIDENCE_RECORD_BYTES = 3 * 1_024 * 1_024;
 export const MAX_ENDPOINT_EVIDENCE_CHECKPOINT_BYTES = 12 * 1_024 * 1_024;
@@ -84,6 +86,11 @@ export type EndpointEvidenceCommitResult = Readonly<{
   entry: PersistedEndpointEvidenceEntry;
   snapshot?: EndpointEvidenceSnapshot;
   reason?: string;
+}>;
+
+export type EndpointEvidenceRemovalResult = Readonly<{
+  removed: number;
+  snapshot: EndpointEvidenceSnapshot;
 }>;
 
 export function endpointEvidenceCheckpointPath(profileId: string): string {
@@ -214,6 +221,47 @@ export class WorkspaceEndpointEvidencePersistence {
     }
     throw new Error("Endpoint-evidence persistence exhausted its compare-and-swap retry boundary.");
   }
+
+  /** Remove only the records owned by one deleted conversation. */
+  async removeSession(
+    sessionId: string,
+    now = Date.now(),
+    signal?: AbortSignal,
+  ): Promise<EndpointEvidenceRemovalResult> {
+    const normalizedSessionId = boundedText(sessionId, "endpoint-evidence session ID", MAX_IDENTIFIER_BYTES);
+    const committedAt = checkedNow(now);
+    for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+      signal?.throwIfAborted();
+      const current = await this.load(committedAt, signal);
+      const remaining = current.snapshot.entries.filter((entry) => entry.identity.sessionId !== normalizedSessionId);
+      const removed = current.snapshot.entries.length - remaining.length;
+      if (removed === 0) return Object.freeze({ removed: 0, snapshot: current.snapshot });
+      const envelope: EndpointEvidenceEnvelope = deepFreeze({
+        version: 1,
+        kind: "airship-endpoint-evidence-records",
+        profileId: this.profileId,
+        savedAt: committedAt,
+        entries: remaining,
+      });
+      try {
+        await this.workspace.write(this.path, JSON.stringify(envelope), {
+          expectedRevision: current.revision ?? null,
+        });
+        return Object.freeze({
+          removed,
+          snapshot: freezeSnapshot({
+            version: 1,
+            profileId: this.profileId,
+            savedAt: committedAt,
+            entries: remaining,
+          }),
+        });
+      } catch (error) {
+        if (!(error instanceof WorkspaceConflictError) || attempt === MAX_CAS_ATTEMPTS - 1) throw error;
+      }
+    }
+    throw new Error("Endpoint-evidence removal exhausted its compare-and-swap retry boundary.");
+  }
 }
 
 /**
@@ -261,6 +309,20 @@ export class WorkspaceEndpointEvidenceAuthority {
       if (result.snapshot) {
         this.bindingValue = Object.freeze({ ...binding, snapshot: result.snapshot });
       }
+      return result;
+    });
+  }
+
+  removeSession(
+    binding: WorkspaceEndpointEvidenceBinding,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<EndpointEvidenceRemovalResult> {
+    return this.exclusive(async () => {
+      if (this.bindingValue !== binding) throw authorityAbort();
+      const result = await binding.store.removeSession(sessionId, Date.now(), signal);
+      if (this.bindingValue !== binding) throw authorityAbort();
+      this.bindingValue = Object.freeze({ ...binding, snapshot: result.snapshot });
       return result;
     });
   }
@@ -341,8 +403,8 @@ export async function validateEndpointEvidenceRecord(
 
   const evidence = exactObject(record.evidence, "endpoint-evidence payload", [
     "format", "payloadDigest", "quoteBytes", "certificateBytes", "gpuDeviceCount",
-    "quote", "gpu", "certificate",
-  ]);
+    "quote", "gpu", "certificate", "signature", "attestedBody",
+  ], ["signature", "attestedBody"]);
   exact(evidence.format, "chutes-tee-instance-evidence/v1", "endpoint-evidence format");
   const payloadDigest = patternedString(evidence.payloadDigest, "evidence payload digest", SHA256_DIGEST_PATTERN, 80);
   const quoteBytes = boundedInteger(evidence.quoteBytes, "quote byte length", 1, 2 * 1_024 * 1_024);
@@ -423,6 +485,58 @@ export async function validateEndpointEvidenceRecord(
   }
   exact(certificate.binding, "not-established", "endpoint certificate binding");
 
+  const signature = evidence.signature === undefined
+    ? undefined
+    : exactObject(evidence.signature, "endpoint response signature", [
+      "format", "base64", "byteLength",
+    ]);
+  const attestedBody = evidence.attestedBody === undefined
+    ? undefined
+    : exactObject(evidence.attestedBody, "attested response body", [
+      "format", "base64", "byteLength",
+    ]);
+  if ((signature === undefined) !== (attestedBody === undefined)) {
+    throw new Error("The endpoint response signature and attested body must be supplied together.");
+  }
+  let signatureBase64: string | undefined;
+  let attestedBodyBase64: string | undefined;
+  if (signature && attestedBody) {
+    exact(signature.format, "rsa-pkcs1v15-sha256", "endpoint response signature format");
+    signatureBase64 = boundedText(signature.base64, "endpoint response signature base64", 2 * MAX_RESPONSE_SIGNATURE_BYTES);
+    const signatureDecoded = decodeCanonicalBase64({
+      value: signatureBase64,
+      label: "endpoint response signature",
+      minBytes: 1,
+      maxBytes: MAX_RESPONSE_SIGNATURE_BYTES,
+    });
+    const signatureByteLength = boundedInteger(
+      signature.byteLength,
+      "endpoint response signature byte length",
+      1,
+      MAX_RESPONSE_SIGNATURE_BYTES,
+    );
+    if (signatureDecoded.byteLength !== signatureByteLength) {
+      throw new Error("The endpoint response signature byte lengths disagree.");
+    }
+    exact(attestedBody.format, "base64", "attested response body format");
+    attestedBodyBase64 = boundedText(attestedBody.base64, "attested response body base64", 2 * MAX_ATTESTED_BODY_BYTES);
+    const attestedBodyDecoded = decodeCanonicalBase64({
+      value: attestedBodyBase64,
+      label: "attested response body",
+      minBytes: 1,
+      maxBytes: MAX_ATTESTED_BODY_BYTES,
+    });
+    const attestedBodyByteLength = boundedInteger(
+      attestedBody.byteLength,
+      "attested response body byte length",
+      1,
+      MAX_ATTESTED_BODY_BYTES,
+    );
+    if (attestedBodyDecoded.byteLength !== attestedBodyByteLength) {
+      throw new Error("The attested response body byte lengths disagree.");
+    }
+  }
+
   const binding = exactObject(record.binding, "endpoint-evidence binding", [
     "construction", "state", "expectedDigestHex", "quotedDigestHex", "reportDataHex",
   ]);
@@ -461,6 +575,8 @@ export async function validateEndpointEvidenceRecord(
     gpu_evidence: gpu.payloads,
     instance_id: instanceId,
     certificate: certificateBase64,
+    ...(signatureBase64 ? { signature: signatureBase64 } : {}),
+    ...(attestedBodyBase64 ? { attested_body: attestedBodyBase64 } : {}),
   }));
   if (reconstructedPayloadDigest !== payloadDigest) {
     throw new Error("The endpoint-evidence payload digest does not commit its retained raw evidence.");

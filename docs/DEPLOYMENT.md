@@ -175,15 +175,15 @@ Then the part that is easy to miss (`:37-45`):
 RUN if [ -n "$VITE_GOOGLE_CLIENT_ID" ]; then \
       export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive; \
     else \
-      export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=local-device; \
+      export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral; \
     fi; \
     npm run build
 ```
 
-**This fails closed.** An unconfigured deployment defaults to the Local Device
-vault, which needs no registration, rather than offering a Drive default this
-artifact cannot connect to. It mirrors `.github/workflows/pages.yml`, and it
-mirrors the runtime resolution at `src/ui/platform-shell.tsx:463-468`
+**This fails closed.** An unconfigured deployment starts in explicit Ephemeral
+page memory rather than silently creating durable storage or offering a Drive
+default this artifact cannot connect to. It mirrors `.github/workflows/pages.yml`,
+and it mirrors the runtime resolution at `src/ui/platform-shell.tsx:463-468`
 (`resolveDefaultVaultBackend`). Change one and you must change all three.
 
 `RUN cp dist/index.html dist/404.html` (`:47-49`) — Airship is hash-routed, but a
@@ -324,8 +324,9 @@ VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=
 
 `VITE_AIRSHIP_PUBLIC_ORIGIN` **must match `CADDY_DOMAIN` exactly, scheme
 included, or sign-in comes back to nowhere.** Leaving `VITE_GOOGLE_CLIENT_ID`
-empty is supported and selects the Local Device vault; setting it switches the
-default to Drive, so set it only when the origin above is a registered redirect.
+empty is supported and starts Airship in Ephemeral page memory; setting it
+switches the default to Drive, so set it only when the origin above is a
+registered redirect. Local Device remains an explicit encrypted offline choice.
 
 Commit the sample, never the `.env`. **If `.gitignore` has `.env*`, add
 `!.env.sample` after it** or the template gets swallowed too.

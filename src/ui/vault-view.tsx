@@ -105,6 +105,31 @@ type ProviderProfile = Readonly<{
 
 export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
   Object.freeze({
+    id: "ephemeral",
+    title: "Ephemeral",
+    description: "Page memory only; nothing synced",
+    /*
+     * The retention sentence is appended from the module that implements it.
+     *
+     * "Closing the page releases it" is true of everything a person writes and
+     * was not true of everything Airship keeps: the return ledger persists an
+     * opaque id, a message count and a clock in `localStorage` so a returning
+     * person can be told that something was not kept. Stating that here, at the
+     * moment this option is chosen, is what makes the row honest — and reading
+     * it from `EPHEMERAL_RETENTION_DISCLOSURE` is what stops the claim and the
+     * implementation drifting apart.
+     */
+    note: `Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it. ${EPHEMERAL_RETENTION_DISCLOSURE}`,
+    facts: Object.freeze({
+      survives: "No · released with the page",
+      offline: "Yes, until you close it",
+      reach: "No",
+      supply: "Nothing",
+      keep: "Nothing to keep",
+      lose: "Closing the page",
+    }),
+  }),
+  Object.freeze({
     id: "local-device",
     title: "Local Device",
     description: "Encrypted, offline, and persistent in this browser profile",
@@ -160,31 +185,6 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
       supply: "A loopback endpoint and disposable keys",
       keep: "A recovery key",
       lose: "Deleting the lab bucket",
-    }),
-  }),
-  Object.freeze({
-    id: "ephemeral",
-    title: "Ephemeral",
-    description: "Page memory only; nothing synced",
-    /*
-     * The retention sentence is appended from the module that implements it.
-     *
-     * "Closing the page releases it" is true of everything a person writes and
-     * was not true of everything Airship keeps: the return ledger persists an
-     * opaque id, a message count and a clock in `localStorage` so a returning
-     * person can be told that something was not kept. Stating that here, at the
-     * moment this option is chosen, is what makes the row honest — and reading
-     * it from `EPHEMERAL_RETENTION_DISCLOSURE` is what stops the claim and the
-     * implementation drifting apart.
-     */
-    note: `Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it. ${EPHEMERAL_RETENTION_DISCLOSURE}`,
-    facts: Object.freeze({
-      survives: "No · released with the page",
-      offline: "Yes, until you close it",
-      reach: "No",
-      supply: "Nothing",
-      keep: "Nothing to keep",
-      lose: "Closing the page",
     }),
   }),
 ] as const);

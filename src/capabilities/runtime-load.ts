@@ -42,10 +42,7 @@ export type RuntimeLoadReport = Readonly<{
  * different things, and combining them would make the Capabilities figures
  * claim work they never measured.
  */
-export type SessionActivityReport = Readonly<{
-  activeTurns: number;
-  events: number;
-}>;
+export type SessionActivityReport = readonly [current: number, text: string];
 
 export type RuntimeLoadHost = Readonly<{
   /** `performance.measureUserAgentSpecificMemory()`, where the realm has it. */
@@ -222,20 +219,6 @@ export function runtimeLoadIndicatorLabel(report: RuntimeLoadReport): Readonly<{
       : `${report.current} execution ${report.current === 1 ? "run" : "runs"} in flight. Peak ${report.peak} this page.`,
   });
 }
-
-/** The rail's activity reading, kept next to the execution reading so wording cannot drift. */
-export function sessionActivityIndicatorLabel(report: SessionActivityReport): Readonly<{ text: string; reading: string }> {
-  const turns = `${report.activeTurns} active ${report.activeTurns === 1 ? "turn" : "turns"}`;
-  const events = `${report.events} durable ${report.events === 1 ? "event" : "events"}`;
-  const text = report.activeTurns > 0 ? `${turns} · ${events}` : `Ready · ${events}`;
-  return Object.freeze({
-    text,
-    reading: text,
-  });
-}
-
-export const SESSION_ACTIVITY_BOUNDARY =
-  "Page activity; not CPU.";
 
 let pageMonitor: RuntimeLoadMonitor | undefined;
 

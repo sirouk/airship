@@ -212,10 +212,18 @@ describe("provider connection component contract", () => {
     expect(LM_STUDIO_DEFAULT_ENDPOINT).toBe("http://127.0.0.1:1234");
   });
 
-  it("activates the first discovered local model so Chat does not remain on Demo", () => {
-    expect(source).toContain("const firstModel = connected.models[0]");
-    expect(source).toContain("browserInferenceFabric.activate(connected.connection.id, firstModel.id, signal)");
-    expect(source).toContain("await onActivate(route, signal)");
+  it("never chooses a local model by response order", () => {
+    expect(source).not.toContain("connected.models[0]");
+    expect(source).not.toContain("entry.models[0]");
+    expect(source).not.toContain("selectSingleTextGenerationModel");
+    expect(source).toContain("advertised models");
+    expect(source).toContain("Choose a text model in Chat or below");
+  });
+
+  it("never invokes a local model as part of catalog discovery", () => {
+    const localSetup = source.slice(source.indexOf("<section aria-labelledby=\"local-provider-setup-title\">"));
+    expect(localSetup).not.toContain("browserInferenceFabric.activate(");
+    expect(localSetup).toContain("browserInferenceFabric.connectLocal");
   });
 
   it("offers every permitted origin and refuses the rest with the policy's own diagnostic", () => {

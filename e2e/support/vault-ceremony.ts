@@ -20,7 +20,17 @@ export async function completeLocalDeviceCeremony(
   page: Page,
   options: Readonly<{ setup?: Locator; acknowledgement?: "hand" | "copy" | "download" }> = {},
 ): Promise<void> {
-  const setup = options.setup ?? page.locator(".local-device-vault");
+  let setup = options.setup ?? page.locator(".local-device-vault");
+  // Ephemeral is the intentional first destination in a fresh browser now.
+  // Journeys that exercise the device ceremony must make that durable choice
+  // explicitly instead of depending on the old Local Device default.
+  if (!options.setup && await setup.count() === 0) {
+    const provider = page.getByRole("button", { name: "Vault storage provider" });
+    await provider.click();
+    await page.getByRole("listbox", { name: "Vault storage provider" })
+      .getByRole("option", { name: /^Local Device\b/u }).click();
+    setup = page.locator(".local-device-vault");
+  }
   await expect(setup).toBeVisible({ timeout: 20_000 });
   await setup.getByRole("button", { name: "Create new" }).click();
 

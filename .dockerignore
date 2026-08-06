@@ -1,0 +1,19 @@
+# Build-only dependencies and generated output are installed or produced in
+# the image; sending them from the host wastes time and can leak local state.
+node_modules
+dist
+.git
+
+# Research, native build trees, and local visual-capture artifacts are not part
+# of the static application artifact.
+references
+crates
+.aesthetic
+.ui-capture
+.playwright-mcp
+playwright-report
+.wrangler
+
+# Local session scratch files.
+.sweep-tmp*.mjs
+*-this-session-is-being-continued-from-a-previous-c.txt

@@ -605,6 +605,18 @@ export class ChutesAttestationEvidenceClient {
             byteLength: certificate.byteLength,
             binding: "not-established",
           },
+          ...(fetched.evidence.signature && fetched.evidence.attestedBody ? {
+            signature: {
+              format: "rsa-pkcs1v15-sha256" as const,
+              base64: fetched.evidence.signature!,
+              byteLength: fetched.evidence.signatureByteLength!,
+            },
+            attestedBody: {
+              format: "base64" as const,
+              base64: fetched.evidence.attestedBody!,
+              byteLength: fetched.evidence.attestedBodyByteLength!,
+            },
+          } : {}),
         },
         binding: {
           construction: "SHA-256(UTF8(nonce + e2e_pubkey))",
@@ -1512,6 +1524,8 @@ function portableEvidenceJson(evidence: ChutesInstanceEvidence): JsonValue {
     gpu_evidence: evidence.gpuEvidence,
     instance_id: evidence.reportedInstanceId ?? evidence.instanceId,
     certificate: evidence.certificate,
+    ...(evidence.signature ? { signature: evidence.signature } : {}),
+    ...(evidence.attestedBody ? { attested_body: evidence.attestedBody } : {}),
   } as JsonValue;
 }
 

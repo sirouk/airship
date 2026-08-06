@@ -8,11 +8,13 @@ export type ModelControlOption = Readonly<{
   id: string;
   label: string;
   detail?: string;
+  disabled?: boolean;
 }>;
 
 export function ModelControl({
   active,
   models,
+  providerLabel,
   busy,
   switching: routeSwitching,
   onSelect,
@@ -25,6 +27,12 @@ export function ModelControl({
     boundaryLabel: string;
   }>;
   models: readonly ModelControlOption[];
+  /**
+   * A connected provider whose catalog is ready, but whose model has not been
+   * pinned to a conversation yet. Chat uses this to make the advertised
+   * catalog selectable without pretending a model is active.
+   */
+  providerLabel?: string;
   busy: boolean;
   switching: boolean;
   onSelect: (modelId: string) => Promise<void>;
@@ -77,6 +85,28 @@ export function ModelControl({
     setPendingModelId(undefined);
     setError(undefined);
   }, [active?.modelId, active?.providerLabel]);
+
+  if (!active && models.length > 0) {
+    const label = providerLabel ?? "Connected models";
+    return (
+      <div class="session-runtime remote" aria-busy={activity.switching}>
+        <span class="session-runtime-icon"><Icon name="model" size={17} /></span>
+        <label>
+          <small>{label} · choose a model</small>
+          <MenuSelect
+            ariaLabel={`${label} model; choosing one starts a new pinned conversation`}
+            value=""
+            placement="down"
+            options={options}
+            disabled={activity.disabled}
+            onChange={select}
+          />
+        </label>
+        {activity.switching ? <span class="runtime-posture" role="status">Checking…</span> : null}
+        {error ? <span class="session-runtime-error" role="alert">{error}</span> : null}
+      </div>
+    );
+  }
 
   if (!active) {
     return (
@@ -159,13 +189,14 @@ export function modelControlOptions(
   const listed = models.map((model) => ({
     value: model.id,
     label: model.label,
+    ...(model.disabled ? { disabled: true } : {}),
     description: model.id === activeModelId
       ? model.detail
         ? `${model.detail} · current pinned model`
         : "Current pinned model"
       : model.detail
-        ? `${model.detail} · starts a new pinned conversation`
-        : "Starts a new pinned conversation",
+        ? `${model.detail}${model.disabled ? " · not a chat model" : " · starts a new pinned conversation"}`
+        : model.disabled ? "Not a chat model" : "Starts a new pinned conversation",
   }));
   if (!activeModelId || listed.some((option) => option.value === activeModelId)) return listed;
   return [{

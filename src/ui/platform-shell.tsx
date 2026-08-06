@@ -1,8 +1,8 @@
-import { Component, Fragment, type ComponentChildren } from "preact";
+import { Component, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
-import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationScope, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
@@ -409,8 +409,8 @@ export type PreferenceOverrides = Readonly<{
   bodyFont: "system-sans" | "system-serif";
   /**
    * Durable-storage backend. A configured build may default to the user-owned
-   * Google Drive transport; Local Device is the safe deployable fallback,
-   * local MinIO remains a development adapter, and ephemeral stays page-only.
+   * Google Drive transport; otherwise Airship starts in explicit Ephemeral page
+   * memory until a person chooses a durable provider.
    */
   vaultBackend: "local-device" | "google-drive" | "local-lab" | "ephemeral";
   approvalMode: ApprovalMode;
@@ -465,7 +465,7 @@ export function resolveDefaultVaultBackend(
   googleClientId?: string | null,
 ): PreferenceOverrides["vaultBackend"] {
   return availableVaultBackend(value, googleClientId)
-    ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "local-device");
+    ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "ephemeral");
 }
 
 /**
@@ -513,8 +513,13 @@ const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, c
   ephemeral: Object.freeze(["Ephemeral content", "Your writing dies with the tab. One line per conversation stays, so a return can tell you."] as const),
 });
 
-/** Every destination, in the order the row offers them. */
-export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze(Object.keys(DURABILITY) as VaultBackend[]);
+/** Every destination, starting with the page-memory choice a new tab uses. */
+export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
+  "ephemeral",
+  "local-device",
+  "google-drive",
+  "local-lab",
+] as const);
 
 /**
  * Whether the selected destination is actually holding anything.
@@ -885,75 +890,6 @@ export function TrustPostureSheet({ open, axes, conversationFacts = [], onClose,
     }))
     .filter((group) => group.axisRows.length + group.factRows.length > 0);
   return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><div class="trust-sheet__axes"><ClaimRows rows={group.axisRows} /></div>{group.factRows.length ? <div class="trust-sheet__facts"><ClaimRows rows={group.factRows} /></div> : null}</section>)}</div></div>;
-}
-
-/**
- * The Trust hub strip, read out of the navigation table rather than retyped.
- *
- * This was a fourth set of destination literals — after the rail, the palette
- * and the More sheet — for the same four rows, sitting on the phone directly
- * above the two headings that had already drifted from it ("Connect models",
- * "Account standing"). A strip built from the table cannot be the surface that
- * disagrees next. The `Trust` group, with `access`'s nested `billing` folded in
- * after its parent, is exactly the four in exactly the order they were typed.
- *
- * The scope travels with the row, and that is the part this strip used to drop.
- * `Trust` is a filing group, not a scope: `proof` is `session` — evidence about
- * the turns of the conversation you are in — while `vault`, `access` and
- * `billing` are `global` services that outlive every conversation. The rail has
- * always drawn that seam (its `GLOBAL` band sits above Vault), and the e2e
- * ledger in `profile-silo` asserts `data-scope="global"` on exactly those three
- * and deliberately not on Proof. A strip that renders all four as flat peers is
- * the surface that disagrees with both, and it tells a reader that the receipts
- * for this conversation are a global setting page. So the scope is carried onto
- * the tab, and the strip is banded by it — with the rail's own `GLOBAL` label,
- * in the rail's own place.
- */
-export const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string; scope: NavigationScope }>[] = Object.freeze(
-  CANONICAL_DESTINATIONS
-    .filter((destination) => destination.group === "Trust")
-    .flatMap((destination) => [destination, ...destination.nested])
-    .map((destination) => Object.freeze({ view: destination.id as NavigationView, label: destination.label, scope: destination.scope })),
-);
-
-/**
- * The band that opens the global run of tabs, spelled the way the rail spells
- * it — and the only one drawn, for the same reason the rail draws only one.
- *
- * The rail has no `SESSION` heading above Chat, Workspace, Memory and Proof:
- * the absence of `GLOBAL` is what makes them session-scoped, and one label
- * describes a seam that two labels would only describe twice. The strip does
- * exactly that, and the measurement is why it matters here rather than being a
- * taste argument. At 390x664 the strip's content is 375px in a 390px box with
- * no band at all, 438px with this one, and 585px — 1.5 viewports — with a
- * `THIS CONVERSATION` band as well. The second label costs 147px of a phone's
- * only navigation between these four routes to restate what the first one
- * already implies. Every tab still carries its own scope in `data-scope` and in
- * the `title` a pointer user reads, so nothing is known only to the band.
- */
-const TRUST_TAB_GLOBAL_BAND = "Global";
-
-/**
- * Where the strip's one band goes: before the first tab that leaves session
- * scope. Resolved once from the frozen table rather than per render, because
- * the table cannot change while the page is up.
- */
-const TRUST_TAB_BAND_INDEX = TRUST_TABS.findIndex((tab) => tab.scope === "global");
-
-export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationView; onNavigate(view: NavigationView): void }>) {
-  const tabs = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      const container = tabs.current;
-      const active = container?.querySelector<HTMLElement>("[aria-current='page']");
-      if (!container || !active) return;
-      const centered = active.offsetLeft + active.offsetWidth / 2 - container.clientWidth / 2;
-      const maximum = Math.max(0, container.scrollWidth - container.clientWidth);
-      container.scrollTo({ left: Math.max(0, Math.min(centered, maximum)), behavior: "auto" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [view]);
-  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views; the conversation's own evidence first, then the global services">{TRUST_TABS.map((tab, index) => <Fragment key={tab.view}>{index === TRUST_TAB_BAND_INDEX ? <span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span> : null}<button type="button" class={view === tab.view ? "is-active" : ""} data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button></Fragment>)}</nav>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };

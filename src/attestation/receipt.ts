@@ -756,6 +756,8 @@ function evidenceJson(
       gpu_evidence: evidence.gpuEvidence,
       instance_id: evidence.reportedInstanceId ?? null,
       certificate: evidence.certificate,
+      ...(evidence.signature ? { signature: evidence.signature } : {}),
+      ...(evidence.attestedBody ? { attested_body: evidence.attestedBody } : {}),
     },
   };
 }

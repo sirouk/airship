@@ -148,14 +148,7 @@ test("high-value controls remain usable without credentials on every device clas
   await expectContainedLayout(page);
 
   await page.goto("/#proof");
-  if (testInfo.project.name.startsWith("iphone-")) {
-    const trustRail = await page.locator(".trust-hub-tabs").evaluate((element) => {
-      const style = getComputedStyle(element);
-      return { height: element.getBoundingClientRect().height, background: style.backgroundColor };
-    });
-    expect(trustRail.height).toBeLessThanOrEqual(46);
-    expect(trustRail.background).not.toMatch(/rgba\([^)]*,\s*0(?:\.\d+)?\)$/u);
-  }
+  await expect(page.locator(".trust-hub-tabs")).toHaveCount(0);
   await page.getByRole("tab", { name: "Attestation evidence" }).click();
   await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
   await expectContainedLayout(page);
@@ -173,7 +166,7 @@ test("high-value controls remain usable without credentials on every device clas
   await expect(chutes.getByRole("textbox", { name: "Chutes API key", exact: true })).toBeVisible();
   await expect(chutes.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
   await expect(chutes.getByRole("button", { name: "Discover models with key" })).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Choose a Chutes model" })).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "Choose a model" })).toHaveCount(0);
   await expectContainedLayout(page);
 
   expect(runtimeErrors).toEqual([]);

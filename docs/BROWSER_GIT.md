@@ -158,23 +158,19 @@ Editor. Historical `#sources` navigation resolves to Workspace Editor.
 ### Snapshot import is not clone
 
 The public GitHub importer resolves and verifies a pinned host snapshot, writes
-those exact bytes into Workspace, then initializes a genuine local repository.
-It creates an empty root commit and leaves the admitted files visibly
-untracked so the operator can review, stage, and commit them. It records the
-source URL as `origin`, but it does **not** invent the upstream commit graph.
+those exact bytes into Workspace, then initializes a genuine local repository
+whose first commit contains that complete snapshot. The worktree starts clean:
+HEAD, the index, and the admitted files agree. It records the source URL as
+`origin`, but it does **not** invent the upstream commit graph.
 Use direct clone when upstream objects and history are required — but read the
 Content-Security-Policy section below first: on this build the importer is the
 only working path to a public GitHub repository.
 
-A freshly imported repository presents every admitted file as untracked, so the
-first stage covers the whole tree. One reviewed stage/unstage/restore request
-therefore accepts up to `GIT_LIMITS.maxPathsPerRequest` paths (4096, at least the
-importer's 2000-file default); `BrowserGitClient` executes it as sequential
-chunks of at most `maxPathsPerOperation` (512) per adapter call, chaining each
-chunk's issued worktree version so an interleaved foreign write still fails the
-fence. If a later chunk fails, the error states how many paths were already
-staged: partial staging is a durable outcome and is never reported as a
-rollback.
+The imported files are now an ordinary local baseline: edit one and Source
+Control reports a real modification against the pinned snapshot. A fresh
+repository therefore has no synthetic first-use additions to stage. The source
+URL and pinned commit remain in the import receipt; upstream history is still
+not manufactured.
 
 The converse claim needs the adapter's cooperation, so the adapter contract
 carries it: `stage`, `unstage`, and `restore` must admit or refuse every path

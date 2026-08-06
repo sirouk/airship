@@ -482,7 +482,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
             <div class="git-import-contract">
               <strong>Snapshot contract</strong>
               <p>Public repositories only. Airship contacts <code>api.github.com</code> and <code>raw.githubusercontent.com</code> directly; browser CORS, connectivity, and GitHub’s unauthenticated rate limit apply.</p>
-              <p>This is not a clone: commit history, tags, Git objects, submodules, LFS objects, and binary files are not imported. Text files are bounded, staged before mutation, and written beneath the chosen workspace path.</p>
+              <p>This is not a clone: commit history, tags, Git objects, submodules, LFS objects, and binary files are not imported. Text files are bounded, written beneath the chosen workspace path, and become the clean first local commit so the imported repository opens without a false diff.</p>
             </div>
             {importProgress && busy === "snapshot-import" ? <ImportProgress progress={importProgress} /> : null}
             {importReceipt ? <ImportReceipt receipt={importReceipt} /> : null}
@@ -1249,7 +1249,7 @@ function ImportReceipt({ receipt }: Readonly<{ receipt: RepositoryImportResult }
         <div><dt>Skipped</dt><dd>{receipt.skippedBinary} binary · {receipt.skippedUnsafe} unsafe/oversize</dd></div>
         <div><dt>History</dt><dd>Not imported</dd></div>
       </dl>
-      <p>Receipt provenance is also stored in <code>.airship-import.json</code>. Imported files are unstaged local additions so their exact diff can be reviewed before the first local commit.</p>
+      <p>Receipt provenance is also stored in <code>.airship-import.json</code>. The pinned files are the clean first local commit; edit any file to create a real local diff while the upstream history remains explicitly absent.</p>
     </article>
   );
 }

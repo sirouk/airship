@@ -228,7 +228,7 @@ test.describe("connected chat header on a phone", () => {
     await trigger.focus();
     await trigger.press("Enter");
 
-    let picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    let picker = page.getByRole("dialog", { name: "Choose a model" });
     let search = picker.getByRole("combobox", { name: "Search models" });
     await expect(search).toBeFocused();
     await expect(search).toHaveAttribute("aria-autocomplete", "list");
@@ -260,7 +260,7 @@ test.describe("connected chat header on a phone", () => {
     // and therefore returns to the trigger that opened the picker.
     await trigger.focus();
     await trigger.press("Enter");
-    picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    picker = page.getByRole("dialog", { name: "Choose a model" });
     search = picker.getByRole("combobox", { name: "Search models" });
     await expect(search).toBeFocused();
     await search.press("Escape");
@@ -270,7 +270,7 @@ test.describe("connected chat header on a phone", () => {
     // Removing options from the Tab sequence does not remove pointer choice.
     const pointerModel = chosenModel === MODEL ? ALTERNATE_MODEL : MODEL;
     await trigger.click();
-    picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    picker = page.getByRole("dialog", { name: "Choose a model" });
     await picker.getByRole("option").filter({ hasText: pointerModel }).click();
     await expect(picker).toHaveCount(0);
     await expect(trigger).toContainText(pointerModel);
@@ -285,7 +285,7 @@ test.describe("connected chat header on a phone", () => {
     const targetModel = currentModel === MODEL ? ALTERNATE_MODEL : MODEL;
     await trigger.click();
 
-    const picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    const picker = page.getByRole("dialog", { name: "Choose a model" });
     const search = picker.getByRole("combobox", { name: "Search models" });
     // `fill` models paste/autofill: one input event, then Enter before the
     // picker's 140ms presentation debounce can publish the filtered rows.

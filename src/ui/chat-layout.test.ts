@@ -9,10 +9,10 @@ describe("chat role layout", () => {
     const baseMessage = [...styles.matchAll(/\.message\s*\{([^}]+)\}/gu)]
       .map((match) => match[1] ?? "")
       .find((rule) => rule.includes("grid-template-columns")) ?? "";
-    const desktopUser = userRules.find((rule) => rule.includes("grid-template-columns: minmax(0, 1fr) 31px")) ?? "";
+    const desktopUser = userRules.find((rule) => rule.includes("width: min(78%, 650px)")) ?? "";
 
     expect(baseMessage).toContain("margin: 0 auto 18px 0");
-    expect(desktopUser).toContain("grid-template-columns: minmax(0, 1fr) 31px");
+    expect(baseMessage).toContain("grid-template-columns: minmax(0, 1fr)");
     expect(desktopUser).toContain("margin-right: 0");
     expect(desktopUser).toContain("margin-left: auto");
   });
@@ -22,7 +22,7 @@ describe("chat role layout", () => {
     const mobileUser = userRules.at(-1) ?? "";
 
     expect(userRules.length).toBeGreaterThanOrEqual(2);
-    expect(mobileUser).toContain("grid-template-columns: minmax(0, 1fr) 26px");
+    expect(mobileUser).not.toContain("grid-template-columns");
     expect(mobileUser).toContain("width: 88%");
     expect(mobileUser).toContain("margin-left: auto");
   });

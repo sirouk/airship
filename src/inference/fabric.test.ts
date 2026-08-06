@@ -555,7 +555,7 @@ function fakeLocalProvider(mode: "ready" | "fail"): BrowserLocalModelProvider {
           capabilities: [{
             capability: "text-generation",
             state: "supported",
-            source: "/api/show:capabilities",
+            source: "/api/tags:capabilities",
           }],
         }],
         diagnostics: [],

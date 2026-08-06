@@ -249,11 +249,6 @@ async function askEmbeddingOffer(signal: AbortSignal): Promise<EmbeddingOffer> {
   }
 }
 
-/** The deployment the indexing side would resolve unaided: live first, then order. */
-function automaticEmbeddingPick(models: readonly ChutesEmbeddingModel[]): ChutesEmbeddingModel | undefined {
-  return models.find((model) => model.hot) ?? models[0];
-}
-
 type Candidate = Readonly<{
   credentialKind: ChutesCredentialKind;
   models: readonly AirshipModel[];
@@ -559,24 +554,32 @@ export function AccessView({
   }
 
   /**
-   * Record what the embedding catalog answered, and pick only if nobody must.
-   *
-   * One deployment is adopted outright: there is no decision in a set of one,
-   * and manufacturing a step for it is the interrogation this route is losing.
-   * Two or more are pre-set to the deployment the indexing side would have
-   * resolved unaided, so the step below opens on the answer it would otherwise
-   * have taken silently — and the person changes it, or does not.
+   * Record what the embedding catalog answered without inventing a deployment.
+   * One live deployment is unambiguous. With several, an earlier choice may be
+   * reused only if that exact id is still in the fresh catalog; otherwise the
+   * person chooses from the returned rows.
    */
   async function adoptEmbeddingOffer(offer: EmbeddingOffer): Promise<void> {
     setEmbeddingOffer(offer);
-    const preferred = offer.state === "adopted"
-      ? offer.model
-      : offer.state === "choose"
-        ? automaticEmbeddingPick(offer.models)
-        : undefined;
-    setEmbeddingModelId(preferred?.id ?? "");
-    if (!preferred) return;
-    await recordEmbeddingChoice(preferred.id);
+    if (offer.state === "adopted") {
+      setEmbeddingModelId(offer.model.id);
+      await recordEmbeddingChoice(offer.model.id);
+      return;
+    }
+    if (offer.state !== "choose") {
+      setEmbeddingModelId("");
+      return;
+    }
+    const { readConfidentialEmbeddingChoice, writeConfidentialEmbeddingChoice } =
+      await import("../indexing/confidential-embedding-choice");
+    const saved = readConfidentialEmbeddingChoice();
+    if (saved && offer.models.some((model) => model.id === saved)) {
+      setEmbeddingModelId(saved);
+      return;
+    }
+    // A retired saved id must not silently turn into a different deployment.
+    writeConfidentialEmbeddingChoice(undefined);
+    setEmbeddingModelId("");
   }
 
   /** Hand the indexing side the id, so what is shown is what an index uses. */
@@ -667,7 +670,10 @@ export function AccessView({
       if (compatibleModels.length === 0) {
         throw new Error("Chutes returned no text-in/text-out models explicitly eligible for encrypted confidential-compute invocation.");
       }
-      const selection = selectModel(snapshot.models);
+      // `compatibleModels` is already the live, privacy-filtered set. Passing
+      // an empty policy keeps the ranking deterministic without reapplying the
+      // stricter agent defaults or falling back to an arbitrary first row.
+      const selection = selectModel(compatibleModels, { requirements: {} }).model!;
       const requestedModel = reconnectIntent?.lane === "chutes"
         ? compatibleModels.find((candidate) => candidate.id === reconnectIntent.model)
         : undefined;
@@ -707,7 +713,7 @@ export function AccessView({
         managementState: snapshot.sources.management,
         issues: snapshot.issues,
       }));
-      setModelId(requestedModel?.id ?? selection.model?.id ?? compatibleModels[0]!.id);
+      setModelId(requestedModel?.id ?? selection.id);
       setDetectedKind(credential.kind);
       setStrictProof(false);
       setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms fresh per-turn evidence collection.`);
@@ -779,16 +785,16 @@ export function AccessView({
     /*
      * The one thing that may stop a connection short of chat: a real choice.
      *
-     * Two or more usable embedding deployments means the index a corpus is
-     * built into would otherwise be settled by whichever one happened to be
-     * warm. One, none, or an unanswerable catalog are not choices, and none of
-     * them produces a step.
+     * Two or more usable embedding deployments means the index needs an id
+     * from the current catalog. A previously saved id may carry the user's
+     * earlier decision forward; without one, the explicit buttons below are
+     * the only way this leg proceeds.
      */
     if (!embeddingOffer) return;
+    if (embeddingOffer.state === "choose" && !embeddingModelId) return;
     autoConnectAfterDiscovery.current = false;
-    if (embeddingOffer.state === "choose") return;
     void activate();
-  }, [candidate, modelId, busy, embeddingOffer]);
+  }, [candidate, modelId, busy, embeddingOffer, embeddingModelId]);
 
   async function activate() {
     const credential = ephemeralCredential.current;
@@ -932,7 +938,7 @@ export function AccessView({
         outputModalities: ["text"],
       });
       if (models.length === 0) throw new Error("The enriched catalog contained no compatible encrypted text-generation candidates.");
-      const selection = selectModel(snapshot.models);
+      const selection = selectModel(models, { requirements: {} }).model!;
       const requestedModel = reconnectIntent?.lane === "chutes"
         ? models.find((candidate) => candidate.id === reconnectIntent.model)
         : undefined;
@@ -948,7 +954,7 @@ export function AccessView({
         issues: snapshot.issues,
       }));
       if (!models.some((model) => model.id === modelId)) {
-        setModelId(requestedModel?.id ?? selection.model?.id ?? models[0]!.id);
+        setModelId(requestedModel?.id ?? selection.id);
       }
       setStatus(snapshot.sources.management === "fresh"
         ? "Live availability and TEE deployment claims loaded. These remain metadata, not attestation proof."
@@ -1489,15 +1495,12 @@ export function AccessView({
                         onClick={() => chooseEmbeddingModel(model.id)}
                       >
                         <strong>{model.id}</strong>
-                        {/*
-                          Warm or cold, because that is the difference the first
-                          index build will feel — and because it is the fact the
-                          automatic pick was silently deciding on.
-                        */}
+                        {/* Warm or cold is live catalog context for this choice. */}
                         <small>{model.hot ? "Running now" : "Cold · the first request pays a scale-up"}</small>
                       </button>
                     ))}
                   </div>
+                  {!embeddingModelId ? <p class="candidate-embedding__required" role="status">Choose one deployment to finish connecting. Airship will use the id returned by Chutes; it will not substitute another one.</p> : null}
                 </fieldset>
               ) : null}
               <div class="candidate-decision">
@@ -1511,7 +1514,7 @@ export function AccessView({
               <p class="proof-policy__caveat">This policy is not proof. Completed receipts record only what the browser actually verified.</p>
               <div class="candidate-actions">
                 <button type="button" onClick={chooseDifferentCredential} disabled={busy}>Use a different credential</button>
-                <button class="primary" type="button" onClick={() => void activate()} disabled={busy}>Finish: verify &amp; connect</button>
+                <button class="primary" type="button" onClick={() => void activate()} disabled={busy || (embeddingOffer?.state === "choose" && !embeddingModelId)}>Finish: verify &amp; connect</button>
               </div>
             </div>
           ) : (

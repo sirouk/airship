@@ -41,28 +41,12 @@ describe("progressive disclosure coherence contract", () => {
     expect(styles).not.toMatch(/\.git-sources-trust-disclosure\s*\{[^}]*display:\s*none/u);
   });
 
-  it("advertises the bounded trust navigation contract", async () => {
+  it("keeps global service navigation in the rail instead of a duplicate top strip", async () => {
     const source = await readFile(new URL("./platform-shell.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("./platform-shell.css", import.meta.url), "utf8");
-    expect(source).toContain('aria-label="Trust hub, four horizontally scrollable views; the conversation\'s own evidence first, then the global services"');
-    /*
-     * The strip states the scope it used to drop. `Trust` is a filing group,
-     * not a scope: Proof is `session` — the receipts of the conversation you
-     * are in — and Vault, Connection and Account are `global`. Rendered as flat
-     * peers, the strip told a reader that this conversation's evidence is a
-     * global settings page, and it disagreed with both the rail (whose `GLOBAL`
-     * band sits above Vault) and `profile-silo`'s `data-scope="global"` ledger,
-     * which names those three and deliberately not Proof.
-     */
-    expect(source).toContain('<span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span>');
-    // One band, in one place: the index is resolved from the table, so a
-    // destination that changes scope moves the seam instead of stranding it.
-    expect(source).toContain("const TRUST_TAB_BAND_INDEX = TRUST_TABS.findIndex((tab) => tab.scope === \"global\");");
-    expect(source).toContain('data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`}');
-    expect(styles).toContain(".trust-hub-tabs__band");
-    expect(styles).toContain("scroll-snap-type: x proximity");
-    expect(styles).toContain("overscroll-behavior-inline: contain");
-    expect(styles).toContain(".trust-hub-tabs button { min-height: 44px");
+    expect(source).not.toContain("TrustHubTabs");
+    expect(source).not.toContain("TRUST_TABS");
+    expect(styles).not.toContain(".trust-hub-tabs");
   });
 
   /*

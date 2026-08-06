@@ -395,6 +395,30 @@ export class ReceiptEvidenceAcquisitionQueue {
     });
   }
 
+  /** Remove all terminal acquisition tasks owned by one deleted conversation. */
+  async forgetSession(sessionId: string, signal?: AbortSignal): Promise<number> {
+    return this.exclusive(async () => {
+      this.assertUsable();
+      signal?.throwIfAborted();
+      const matching = [...this.tasks.values()].filter((task) => task.request.sessionId === sessionId);
+      if (matching.some((task) => !isTerminalEvidenceAcquisition(task))) {
+        throw new Error("Evidence acquisition is still running for this conversation.");
+      }
+      if (matching.length === 0) return 0;
+      const previous = new Map(this.tasks);
+      for (const task of matching) this.tasks.delete(task.request.receiptId);
+      try {
+        await this.persistCurrent(signal);
+      } catch (error) {
+        this.replaceTasks(previous);
+        throw error;
+      }
+      this.emit();
+      this.schedule();
+      return matching.length;
+    });
+  }
+
   get(receiptId: string): EvidenceAcquisitionTask | undefined {
     return this.tasks.get(receiptId);
   }

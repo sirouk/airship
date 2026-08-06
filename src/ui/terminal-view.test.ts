@@ -198,6 +198,13 @@ describe("terminal panel bar at phone width", () => {
   });
 });
 
+describe("the terminal body boundary", () => {
+  it("clips xterm paint to its grid cell instead of the panel's next row", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.terminal-emulator\{[^}]*overflow:hidden/u);
+  });
+});
+
 describe("the full-view control a thumb has to hit", () => {
   /*
    * Measured at 390×844: 29×44. The rule that hides its word on a phone left a

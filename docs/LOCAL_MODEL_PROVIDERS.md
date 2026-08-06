@@ -91,10 +91,14 @@ adapter has no persistence dependency or credential-storage API.
 
 ## Discovery and capability truth
 
-Ollama discovery uses `GET /api/tags`, then bounded concurrent
-`POST /api/show` probes. Tools, vision, embeddings, thinking, and text
-generation are reported from `/api/show.capabilities`; if detail probing is
-unavailable the state is `unknown`, never guessed from a model name.
+Ollama discovery uses only the provider's advertised `GET /api/tags` directory.
+Airship does not follow that list with `POST /api/show` requests: Ollama may
+load a model while answering `show`, so probing every installed row during a
+refresh can consume substantial memory before a person chooses a model.
+Capabilities are reported only when `/api/tags` itself includes explicit
+capability fields; otherwise the state is `unknown`, never guessed from a
+model name. An invocation check is reserved for the model a person explicitly
+selects.
 
 LM Studio discovery uses the current native `GET /api/v1/models` schema and
 falls back to `GET /api/v0/models` only when the server explicitly reports that
@@ -107,6 +111,12 @@ The transport supports canonical text, image, tool history, streamed tool
 calls, reasoning progress, and usage events through Airship's existing
 provider-neutral contracts.
 
+Model choice is always catalog-driven. Airship preserves every model id the
+service returns and never derives a model from a name, family, or response
+order. If a provider returns exactly one model with explicit text-generation
+evidence, that unambiguous route may be opened automatically; otherwise the
+Connection view asks the person to choose from the current returned list.
+
 Provider references:
 
 - [Ollama model list](https://docs.ollama.com/api/tags)
@@ -117,8 +127,8 @@ Provider references:
 
 ## Bounds and cancellation
 
-Discovery JSON, model count, detail-probe concurrency, request bodies, SSE
-events, complete streams, tool count, and tool-argument size are bounded.
+Discovery JSON, model count, request bodies, SSE events, complete streams, tool
+count, and tool-argument size are bounded.
 Requests have a total deadline and accept caller cancellation. Stream readers
 are cancelled in `finally`; the adapter never retries an inference request,
 which avoids accidental duplicate tool-producing turns.

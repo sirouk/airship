@@ -69,11 +69,11 @@ function discovery(): LocalModelDiscovery {
       provider: "ollama",
       state: "not-loaded",
       capabilities: [
-        { capability: "text-generation", state: "supported", source: "/api/show:capabilities" },
-        { capability: "tools", state: "supported", source: "/api/show:capabilities" },
-        { capability: "vision", state: "unknown", source: "/api/show:capabilities" },
-        { capability: "embeddings", state: "unsupported", source: "/api/show:capabilities" },
-        { capability: "thinking", state: "unsupported", source: "/api/show:capabilities" },
+        { capability: "text-generation", state: "supported", source: "/api/tags:capabilities" },
+        { capability: "tools", state: "supported", source: "/api/tags:capabilities" },
+        { capability: "vision", state: "unknown", source: "/api/tags:capabilities" },
+        { capability: "embeddings", state: "unsupported", source: "/api/tags:capabilities" },
+        { capability: "thinking", state: "unsupported", source: "/api/tags:capabilities" },
       ],
       contextTokens: 32_768,
     }],
@@ -81,4 +81,3 @@ function discovery(): LocalModelDiscovery {
     complete: true,
   };
 }
-

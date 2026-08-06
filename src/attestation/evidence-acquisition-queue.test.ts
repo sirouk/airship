@@ -179,6 +179,21 @@ describe("receipt evidence acquisition queue", () => {
     queue.dispose();
   });
 
+  it("forgets terminal acquisition history for one deleted conversation only", async () => {
+    const scheduler = new FakeScheduler();
+    const queue = new ReceiptEvidenceAcquisitionQueue({ worker: new ScriptedWorker(async () => undefined), scheduler });
+    await queue.recover();
+    await queue.enqueue(request("receipt-delete", "session-delete"));
+    await queue.enqueue(request("receipt-keep", "session-keep"));
+    scheduler.runDue();
+    await queue.settle();
+
+    await expect(queue.forgetSession("session-delete")).resolves.toBe(1);
+    expect(queue.get("receipt-delete")).toBeUndefined();
+    expect(queue.get("receipt-keep")).toBeDefined();
+    queue.dispose();
+  });
+
   it("recovers a persisted interrupted run as a bounded retry through the supplied port", async () => {
     const persistence = new MemoryCasPersistence();
     const firstScheduler = new FakeScheduler(5_000);
@@ -365,11 +380,11 @@ describe("receipt evidence acquisition queue", () => {
   });
 });
 
-function request(receiptId: string): ReceiptEvidenceAcquisitionRequest {
+function request(receiptId: string, sessionId = "session-1"): ReceiptEvidenceAcquisitionRequest {
   return Object.freeze({
     version: 1,
     receiptId,
-    sessionId: "session-1",
+    sessionId,
     profileId: "profile-1",
     providerId: "chutes",
     modelId: "model-1",

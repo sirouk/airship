@@ -169,7 +169,7 @@ export async function importGithubRepository(options: Readonly<{
   }, null, 2)}\n`;
   const writes = [...staged, { path: manifestPath, content: manifest, byteLength: new TextEncoder().encode(manifest).byteLength }];
   const committed: Array<{ path: string; revision: string }> = [];
-  emitProgress(options.onProgress, { phase: "writing", completed: 0, total: writes.length, bytes: bytesWritten, detail: "Committing staged snapshot to workspace" });
+  emitProgress(options.onProgress, { phase: "writing", completed: 0, total: writes.length, bytes: bytesWritten, detail: "Writing the verified snapshot to workspace" });
   try {
     for (const file of writes) {
       throwIfAborted(options.signal);

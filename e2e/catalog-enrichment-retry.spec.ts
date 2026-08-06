@@ -230,10 +230,20 @@ test("a refused management read is recoverable, and the recovery restores the av
   await expect(settled.getByText("Inference + management metadata loaded")).toBeVisible();
   await expect(settled.getByRole("button", { name: "Load live availability metadata" })).toHaveCount(0);
 
+  // Chutes returned two embedding deployments. The product does not guess
+  // which one should own a workspace index, so make the explicit choice the
+  // real connection flow requires before pressing Finish.
+  const embeddingChoice = page.locator(".candidate-embedding").getByRole("button").first();
+  await expect(embeddingChoice).toHaveAttribute("aria-pressed", "false");
+  await embeddingChoice.click();
+  await expect(embeddingChoice).toHaveAttribute("aria-pressed", "true");
+
   // And the fact the failed read had deleted is back. The picker that can say
   // so is the connected summary's, so the connection is finished first — which
   // also proves the enriched list is the one the connection carries.
-  await page.getByRole("button", { name: "Finish: verify & connect" }).click();
+  // An API-key discovery is already an explicit request to connect. Once the
+  // only real choice (the embedding deployment) is made, the product carries
+  // the verification through to Chat; there is no second confirmation click.
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
   await page.goto("/#connection");
   await page.keyboard.press("Escape");

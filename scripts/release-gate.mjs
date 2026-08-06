@@ -46,6 +46,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // bytes. Raw remains at
   // its reviewed absolute backstop rather than tracking the current minifier
   // split one KiB at a time.
+  /* Current release artifact. */
+
+  // Measured 377186 B raw / 116209 B gzip.
+  // 114 KiB gzip would have left 527 bytes; retain the reviewed 115 KiB startup ceiling.
   entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 115 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains governed by its stricter entry-specific ceiling above. Heavy
@@ -109,6 +113,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the fixed 181 KiB gzip ceiling leaves 1,454 bytes.
   // The raw ceiling remains the reviewed absolute startup backstop rather than
   // tracking the current minifier split one KiB at a time.
+  /* Current release artifact. */
+
+  // Measured 549911 B raw / 183656 B gzip.
+  // 180 KiB gzip would have left 664 bytes; retain the reviewed 181 KiB ceiling.
   allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 181 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
@@ -238,7 +246,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // beyond the root build's former ceiling; raw takes the tightest whole-KiB
   // step and leaves 1,009 bytes. Gzip remains at 127 KiB and leaves 623 bytes.
   // Both paths stay deferred until a person asks for their owning capability.
-  deferredCapabilities: Object.freeze({ raw: 429 * 1024, gzip: 127 * 1024 }),
+  // Re-measured on this build at 439,930 B raw / 130,032 B gzip. The 1,643 raw
+  // bytes and 607 gzip bytes are the conversation-proof cleanup operation now
+  // carried by this pack, so deleting a thread can remove its separately
+  // persisted evidence without loading that authority into the chat shell.
+  // Raw takes 430 KiB (390 B left); 127 KiB gzip would have left 16 B, so
+  // gzip takes 128 KiB (1,040 B left).
+  deferredCapabilities: Object.freeze({ raw: 430 * 1024, gzip: 128 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -549,12 +563,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw would have left 91 bytes, below this aggregate's 768-byte floor, so raw
   // takes one further step and leaves 1,115. The existing gzip ceiling leaves
   // 998 bytes. The entry ceiling remains independently fixed.
-  // Measured 2111.81 KiB raw / 671.5 KiB gzip in the container release artifact
-  // after automatic terminal Git routing, Airship-labelled sideband transcript
-  // output, and the explicit Local Device Vault replacement flow. Those are
-  // deferred first-party paths; the smallest whole-KiB ceilings above the
-  // reading are 2112 KiB raw and 672 KiB gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2112 * 1024, gzip: 672 * 1024 }),
+  // Measured 2162162 B raw / 687403 B gzip in the current release artifact
+  // after dynamic provider-model selection and the explicit Local Device Vault
+  // replacement flow. The 2112 KiB raw ceiling leaves 526 bytes and the 672 KiB
+  // gzip ceiling leaves 725 bytes; both are the smallest whole-KiB steps above
+  // the measured deferred first-party paths.
+  /* Current release artifact. */
+
+  // Re-measured on the current host/container graph at 2,168,617 B raw /
+  // 689,118 B gzip. The added route-state, local-provider, proof-evidence,
+  // and editor journeys remain first-party and are all deferred or split from
+  // the entry surface; this aggregate is the honest ceiling for that shipped
+  // graph. Raw takes 2,118 KiB (215 B left); 2,117 KiB raw would leave a
+  // negative margin, and gzip takes 674 KiB because 673 KiB gzip would have
+  // left 34 B, below the 768-byte minifier-rename floor (1,058 B remain).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2118 * 1024, gzip: 674 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -576,6 +599,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Measured 679.15 KiB raw / 188.84 KiB gzip after the automatic terminal Git
   // sideband and Local Device Vault replacement work; raw takes the next
   // whole-KiB ceiling while gzip remains at 190 KiB.
+  /* Current release artifact. */
+
+  // Measured 694543 B raw / 192868 B gzip.
+  // 679 KiB raw would have left 753 bytes and 189 KiB gzip would have left 668 bytes; retain the reviewed ceilings.
   optionalVendorRuntimeAggregate: Object.freeze({ raw: 680 * 1024, gzip: 190 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
@@ -748,7 +775,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // after the standalone-command safety parser kept compound shell lines with
   // jsh. The smallest whole-KiB ceilings above this installed graph are 2792
   // KiB raw and 861 KiB gzip.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2792 * 1024, gzip: 861 * 1024 }),
+  /* Current release artifact. */
+
+  // Measured 2790.0 KiB raw / 859.6 KiB gzip across the host and container
+  // release artifacts (the same graph varies by a few bytes between Node
+  // runtimes). The 2791 KiB raw ceiling leaves 1,110 bytes in the container
+  // artifact; the 861 KiB gzip ceiling leaves 1,365 bytes in the host build.
+  // The current release artifact measures 2,863,411 B raw / 882,014 B gzip.
+  // This includes the route-state, local-provider, proof-evidence, and editor
+  // journeys above plus their independently cached vendor runtimes. 2,797 KiB
+  // raw would have left 717 B, below the 768-byte aggregate floor, so raw takes
+  // 2,798 KiB and leaves 1,741 B; gzip takes 862 KiB and leaves 674 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2798 * 1024, gzip: 862 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -781,9 +819,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // Exact conversation return adds the journal's audited-head append to this
   // shared implementation: selection must compare-and-set the head it replayed
-  // instead of rebasing onto a concurrent turn. Re-measured at 60,608 B raw /
-  // 17,443 B gzip. Raw still clears its 60 KiB ceiling; 17 KiB is 35 bytes too
-  // small, so gzip takes one whole-KiB step and leaves 989 bytes.
+  // instead of rebasing onto a concurrent turn. The current artifact measures
+  // 60,340 B raw / 17,433 B gzip; raw still clears its 60 KiB ceiling, while
+  // 17 KiB would leave 41 B, so gzip takes 18 KiB.
+  /* Current release artifact. */
+
+  // Measured 60,340 B raw / 17,433 B gzip across the host and container
+  // release artifacts; the same graph varies by a few bytes between Node
+  // runtimes.
+  // 59 KiB raw would have left 76 bytes; retain the reviewed 60 KiB raw ceiling.
   optionalExecutionTools: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
@@ -944,20 +988,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // until Workspace opens. The same pass moved the shared code scanner out of
   // the entry chunk into its own deferred `code-highlight` chunk, which is why
   // `entryJavaScript` falls 3.05 KiB raw in this build rather than rising.
-  // Re-measured on this build: 86,284 B raw / 27,585 B gzip, grown from the
-  // 84,687 B raw / 26,979 B gzip this comment recorded. The 1,597 bytes are
-  // `editor: 56px of chrome above the first file, and a palette that did not
-  // survive a reload` (d11d803), and they are two things: `code-theme-mirror`,
-  // which re-applies the chosen palette from stored state on boot so a reload
-  // stops dropping the reader back to the default scheme, and the header rework
-  // that took 56px of chrome off the top of the first file. Both are Workspace
-  // code and neither is reachable until Workspace opens, so first paint is
-  // untouched and the entry chunk does not move. Raw takes the tightest whole
-  // step above the reading, 85 KiB, leaving 756 B. 27 KiB gzip would have left
-  // 62 bytes — well inside the margin a minifier rename moves, and tighter than
-  // the 305 B this comment already declined once — so gzip takes the next step
-  // to 28 KiB (1,086 B).
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 85 * 1024, gzip: 28 * 1024 }),
+  // Re-measured on this build: 87,281 B raw / 27,905 B gzip, grown from the
+  // 86,284 B raw / 27,585 B gzip this comment recorded. The additional bytes
+  // are the editor's default soft-wrap path: a measured text twin keeps the
+  // logical line gutter aligned across visual continuation rows, and its
+  // setting survives a workspace/profile reload. Both are Workspace code and
+  // neither is reachable until Workspace opens, so first paint is untouched
+  // and the entry chunk does not move. Raw takes the tightest whole step above
+  // the reading, 86 KiB, leaving 783 B; gzip stays at 28 KiB with 767 B left.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 86 * 1024, gzip: 28 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather
@@ -1043,6 +1082,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // measurement by 379 bytes, where the 5 KiB it had been raised to granted 21% of
   // the pack as headroom that no measurement asked for. This route is fetched on
   // navigation; none of it enters first paint.
+  /* Current release artifact. */
+
+  // Measured 12401 B raw / 4215 B gzip.
   optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 4 * 1024 + 512 }),
   // Hardware/browser feature detection is requested after the shell starts so
   // it can select the strongest runtime without inflating the HTML preload set.
@@ -1188,7 +1230,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // counts what actually ran, a receipt for a local turn that previously had
   // none, and provenance a reader can follow from a claim back to its source.
   // Measured 89,774 B raw / 27,986 B gzip, each the tightest whole-KiB step.
-  // Re-measured at 90,166 B raw / 28,109 B gzip. The raw delta is the phone
+  // Re-measured at 90,166 B raw / 28,108 B gzip. The raw delta is the phone
   // pass (e764668): Proof now asks `useShellIsPhone` which layout it is drawing
   // and picks its disclosure defaults from the answer, because how much of a
   // claim ledger sits above the fold is DOM state a stylesheet cannot set. Raw
@@ -1226,6 +1268,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 111.14 KiB gzip; 423 KiB raw and 112 KiB gzip are the tightest whole-KiB
   // ceilings above those readings. First paint does not move. Still fetched
   // only when Terminal opens.
+  /* Current release artifact. */
+
+  // Measured 431218 B raw / 113144 B gzip.
+  // 422 KiB raw would have left 910 bytes and 111 KiB gzip would have left 519 bytes; retain the reviewed ceilings.
   optionalTerminal: Object.freeze({ raw: 423 * 1024, gzip: 112 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
@@ -1260,11 +1306,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Exact conversation return now classifies every held provider route as the
   // pinned generation, a replacement, or unrelated; locks the pinned model;
   // and keeps abandon unavailable once verification reaches its commit point.
-  // The complete six-pack aggregate now measures 128,800 B raw / 39,446 B
-  // gzip. 126 KiB raw would have left 224 bytes and 39 KiB gzip would have
-  // left 489, both below the route aggregate's 768-byte floor, so each takes
-  // one further whole-KiB step and leaves 1,248 / 1,514 bytes.
-  optionalInferenceProviders: Object.freeze({ raw: 127 * 1024, gzip: 40 * 1024 }),
+  // The complete six-pack aggregate now measures 127,963 B raw / 39,200 B
+  // gzip. 125 KiB raw would have left 37 B and 39 KiB gzip would have left
+  // 736 B, both below the route aggregate's 768-byte floor, so raw takes
+  // 126 KiB and gzip 40 KiB, leaving 1,061 / 1,760 B respectively.
+  optionalInferenceProviders: Object.freeze({ raw: 126 * 1024, gzip: 40 * 1024 }),
   // Chutes registration metadata plus PKCE/token operations load for Connect,
   // an OAuth callback, or a scheduled refresh—never for first paint.
   //

@@ -34,13 +34,12 @@ ENV AIRSHIP_PUBLIC_BASE_PATH=${AIRSHIP_PUBLIC_BASE_PATH} \
     VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID} \
     VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID}
 
-# Fail closed on an unconfigured deployment: default to the Local Device vault,
-# which needs no registration, rather than offering a Drive default this
-# artifact cannot connect. Mirrors `.github/workflows/pages.yml`.
+# Fail closed on an unconfigured deployment: start in explicit page-memory mode
+# rather than silently creating durable storage the person did not choose.
 RUN if [ -n "$VITE_GOOGLE_CLIENT_ID" ]; then \
       export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive; \
     else \
-      export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=local-device; \
+      export VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral; \
     fi; \
     npm run build
 

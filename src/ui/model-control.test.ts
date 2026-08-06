@@ -73,6 +73,14 @@ describe("provider-neutral model control", () => {
     expect(appSource).not.toContain("busy={busy || modelSwitching}");
   });
 
+  it("shows a connected catalog in Chat before a model is pinned", () => {
+    expect(appSource).toContain("standbyExternalModels");
+    expect(appSource).toContain("selectStandbyExternalModel");
+    expect(appSource).toContain("standbyExternalModels.length > 0");
+    expect(appSource).toContain("The selected model is no longer in the connected catalog");
+    expect(appSource).not.toContain("soleTextGenerationModel");
+  });
+
   it("retains a pinned model when a refreshed catalog no longer lists it", () => {
     expect(modelControlOptions([
       { id: "new-model", label: "New model", detail: "Vision" },
@@ -97,6 +105,25 @@ describe("provider-neutral model control", () => {
     ], "pinned-model");
     expect(options).toHaveLength(2);
     expect(options[0]?.value).toBe("pinned-model");
+  });
+
+  it("keeps non-chat catalog rows visible but disabled", () => {
+    expect(modelControlOptions([
+      { id: "embedding-model", label: "Embedding model", detail: "Embeddings", disabled: true },
+      { id: "chat-model", label: "Chat model", detail: "Tools" },
+    ])).toEqual([
+      {
+        value: "embedding-model",
+        label: "Embedding model",
+        disabled: true,
+        description: "Embeddings · not a chat model",
+      },
+      {
+        value: "chat-model",
+        label: "Chat model",
+        description: "Tools · starts a new pinned conversation",
+      },
+    ]);
   });
 
   it("redacts credential-shaped failure text", () => {

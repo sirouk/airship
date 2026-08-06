@@ -31,7 +31,7 @@ test("a catalog-declared vision model receives an encrypted inline image", async
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
 
   await page.locator(".model-picker-trigger").first().click();
-  const picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+  const picker = page.getByRole("dialog", { name: "Choose a model" });
   await picker.getByRole("searchbox", { name: "Search models" }).fill(visionModel);
   const option = picker.getByRole("option").filter({ hasText: visionModel }).first();
   await expect(option).toContainText(/Tools/i, { timeout: 15_000 });

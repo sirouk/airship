@@ -115,7 +115,7 @@ describe("Airship browser capability registry", () => {
     }, "agent-import");
     const receipt = JSON.parse(result.content);
 
-    expect(receipt.sources).toMatchObject({ admitted: true, state: "unstaged" });
+    expect(receipt.sources).toMatchObject({ admitted: true, state: "clean" });
     expect((await workspace.list("/workspace/sources/agent-import")).map((entry) => entry.path)).toEqual([
       "/workspace/sources/agent-import/.airship-import.json",
       "/workspace/sources/agent-import/README.md",
@@ -123,11 +123,7 @@ describe("Airship browser capability registry", () => {
     ]);
     const imported = (await git.listRepositories()).find((repository) => repository.id === receipt.sources.repositoryId);
     expect(imported).toMatchObject({ name: "owner/repo" });
-    expect(imported?.worktrees[0]?.status.map((entry) => entry.path)).toEqual([
-      ".airship-import.json",
-      "README.md",
-      "src/index.ts",
-    ]);
+    expect(imported?.worktrees[0]?.status).toEqual([]);
   });
 });
 

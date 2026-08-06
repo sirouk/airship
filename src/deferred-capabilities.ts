@@ -72,3 +72,45 @@ export {
   restoreLocalDeviceVaultBackup,
 } from "./vault/local-device";
 export { SourcesView } from "./ui/sources-view";
+
+type ConversationEvidenceQueue = Readonly<{
+  list(): readonly Readonly<{
+    request: Readonly<{ sessionId: string; receiptId: string }>;
+    status: string;
+  }>[];
+  cancel(receiptId: string, reason: "operator"): Promise<unknown>;
+  forgetSession(sessionId: string): Promise<number>;
+}>;
+
+type ConversationEndpointEvidenceAuthority = Readonly<{
+  current(): unknown;
+  removeSession(binding: unknown, sessionId: string): Promise<unknown>;
+}>;
+
+/**
+ * Removes the separately stored evidence owned by a conversation after its
+ * journal row has been deleted. This stays in the deferred capability pack so
+ * the normal chat shell does not pay for an optional destructive operation.
+ */
+export async function removeConversationProofEvidence(
+  sessionId: string,
+  ports: Readonly<{
+    endpointEvidenceAuthority?: ConversationEndpointEvidenceAuthority;
+    evidenceAcquisitionQueue?: ConversationEvidenceQueue;
+  }>,
+): Promise<void> {
+  const queue = ports.evidenceAcquisitionQueue;
+  if (queue) {
+    for (const task of queue.list()) {
+      if (task.request.sessionId !== sessionId) continue;
+      if (task.status !== "succeeded" && task.status !== "failed" && task.status !== "cancelled") {
+        await queue.cancel(task.request.receiptId, "operator");
+      }
+    }
+    await queue.forgetSession(sessionId);
+  }
+
+  const authority = ports.endpointEvidenceAuthority;
+  const binding = authority?.current();
+  if (authority && binding) await authority.removeSession(binding, sessionId);
+}

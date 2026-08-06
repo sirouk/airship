@@ -573,7 +573,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       remotes: [{ name: "origin", url: validateRemoteUrl(request.sourceUrl) }],
     });
     try {
-      await this.initializeEmptyRepository(record, files.keys().next().value);
+      await this.initializeSnapshotRepository(record, files);
       await git.addRemote({ fs: this.fs.client, dir: root, remote: "origin", url: record.remotes[0]!.url });
       await this.addRepositoryRecord(record);
       const result = await this.result(record, [...files.keys()], context.signal);
@@ -1083,28 +1083,52 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     this.repositories.push(record);
   }
 
-  private async initializeEmptyRepository(repository: RepositoryRecord, firstWorkingPath?: string): Promise<void> {
+  /**
+   * A snapshot is the initial local repository state, not a pile of new files.
+   * The imported bytes already passed the admission check above, so make them
+   * the first commit and leave HEAD, index, and worktree aligned. This keeps a
+   * public snapshot's lack of upstream history honest without manufacturing a
+   * first-use diff for every file.
+   */
+  private async initializeSnapshotRepository(
+    repository: RepositoryRecord,
+    files: ReadonlyMap<string, string>,
+  ): Promise<void> {
     await git.init({ fs: this.fs.client, dir: repository.root, defaultBranch: repository.defaultBranch });
-    const tree = await git.writeTree({ fs: this.fs.client, dir: repository.root, tree: [] });
+    if (files.size === 0) {
+      const indexBootstrapPath = ".airship-git-index-bootstrap";
+      await this.fs.writeText(`${repository.root}/${indexBootstrapPath}`, "");
+      await git.add({ fs: this.fs.client, dir: repository.root, filepath: indexBootstrapPath, force: true });
+      await git.resetIndex({ fs: this.fs.client, dir: repository.root, filepath: indexBootstrapPath });
+      await this.fs.removeFile(`${repository.root}/${indexBootstrapPath}`);
+    } else {
+      for (const path of files.keys()) {
+        await git.add({ fs: this.fs.client, dir: repository.root, filepath: path, force: true });
+      }
+    }
     const identity = gitIdentity({ name: "Airship", email: "airship@local.invalid" }, this.now());
-    await git.commit({
-      fs: this.fs.client,
-      dir: repository.root,
-      ref: `refs/heads/${repository.defaultBranch}`,
-      parent: [],
-      tree,
-      message: "Admit pinned browser snapshot",
-      author: identity,
-      committer: identity,
-    });
-    // isomorphic-git does not write an index for an empty tree until the first
-    // index operation. Create and reset one entry so import leaves a genuine
-    // empty index while all admitted snapshot files remain visibly untracked.
-    const indexBootstrapPath = firstWorkingPath ?? ".airship-git-index-bootstrap";
-    if (!firstWorkingPath) await this.fs.writeText(`${repository.root}/${indexBootstrapPath}`, "");
-    await git.add({ fs: this.fs.client, dir: repository.root, filepath: indexBootstrapPath });
-    await git.resetIndex({ fs: this.fs.client, dir: repository.root, filepath: indexBootstrapPath });
-    if (!firstWorkingPath) await this.fs.removeFile(`${repository.root}/${indexBootstrapPath}`);
+    if (files.size === 0) {
+      const tree = await git.writeTree({ fs: this.fs.client, dir: repository.root, tree: [] });
+      await git.commit({
+        fs: this.fs.client,
+        dir: repository.root,
+        ref: `refs/heads/${repository.defaultBranch}`,
+        parent: [],
+        tree,
+        message: "Admit pinned browser snapshot",
+        author: identity,
+        committer: identity,
+      });
+    } else {
+      await git.commit({
+        fs: this.fs.client,
+        dir: repository.root,
+        ref: `refs/heads/${repository.defaultBranch}`,
+        message: "Admit pinned browser snapshot",
+        author: identity,
+        committer: identity,
+      });
+    }
   }
 
   private async snapshot(repository: RepositoryRecord, signal: AbortSignal): Promise<GitRepositorySnapshot> {

@@ -37,9 +37,11 @@ services:
       - caddy_config:/config
     restart: unless-stopped
     healthcheck:
-      # Asks Caddy for the app over loopback inside the container, so the check
-      # does not depend on public DNS or on a certificate having been issued.
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      # Ask Caddy on the configured listener inside the container. Local mode
+      # moves that listener to CADDY_PORT and serves HTTP; TLS mode uses the
+      # same port with a self-issued/ACME certificate, so the probe ignores
+      # certificate identity but still requires a real handshake and response.
+      test: ["CMD-SHELL", "if [ \"$${CADDY_TLS:-true}\" = \"false\" ]; then wget --no-verbose --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"http://127.0.0.1:$${CADDY_PORT:-443}/\"; else wget --no-verbose --no-check-certificate --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"https://127.0.0.1:$${CADDY_PORT:-443}/\"; fi"]
       interval: 30s
       timeout: 10s
       retries: 3

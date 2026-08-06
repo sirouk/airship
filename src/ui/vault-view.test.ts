@@ -241,14 +241,19 @@ describe("provider comparison", () => {
 
   it("keeps the four shipped option descriptions verbatim", () => {
     expect(PROVIDER_PROFILES.map((profile) => profile.description)).toEqual([
+      "Page memory only; nothing synced",
       "Encrypted, offline, and persistent in this browser profile",
       "Your encrypted cross-device Airship workspace folder",
       // Was "Advanced provider or local development lab". The only S3
       // configuration this build can construct is the loopback lab, so the
       // option no longer offers an "advanced provider" it cannot open.
       "Loopback development lab",
-      "Page memory only; nothing synced",
     ]);
+  });
+
+  it("puts the starting Ephemeral option before Local Device", () => {
+    expect(PROVIDER_PROFILES.slice(0, 2).map((profile) => profile.id))
+      .toEqual(["ephemeral", "local-device"]);
   });
 
   it("promises cross-device reach for the one provider that can deliver it", () => {

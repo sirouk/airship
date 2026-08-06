@@ -10,6 +10,23 @@ import { WorkspaceGitFileSystem, decodeWorkspaceBytes } from "./workspace-fs";
 const signal = new AbortController().signal;
 
 describe("WorkspaceGitAdapter", () => {
+  it("starts a seeded workspace clean when the baseline contains its complete file tree", async () => {
+    const workspace = new MemoryWorkspace();
+    const files = {
+      "README.md": "# Airship\n",
+      "docs/architecture.md": "The browser owns orchestration.\n",
+      "notes/retrieval.md": "Context follows the task.\n",
+    };
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files,
+    }]));
+
+    expect((await client.listRepositories())[0]!.worktrees[0]!.status).toEqual([]);
+  });
+
   it("keeps worktree, index, refs and object database in one authoritative workspace", async () => {
     const workspace = new MemoryWorkspace();
     await workspace.write("README.md", "working copy\n");
@@ -246,7 +263,7 @@ describe("WorkspaceGitAdapter", () => {
     expect((await workspace.read("/workspace/.git/info/exclude"))?.content).not.toContain("application/container-safe");
   });
 
-  it("imports a public snapshot as a real repository while keeping it visibly uncommitted", async () => {
+  it("imports a public snapshot as the clean local repository baseline", async () => {
     const workspace = new MemoryWorkspace();
     const destination = "/workspace/sources/example";
     await workspace.write(`${destination}/README.md`, "# Example\n");
@@ -261,11 +278,11 @@ describe("WorkspaceGitAdapter", () => {
     }, signal);
 
     expect(imported.worktree!.head).toMatch(/^[0-9a-f]{40}$/u);
-    expect(imported.worktree!.status).toEqual([expect.objectContaining({
-      path: "README.md",
-      index: null,
-      worktree: { kind: "added" },
-    })]);
+    expect(imported.worktree!.status).toEqual([]);
+    await workspace.write(`${destination}/README.md`, "# Edited locally\n");
+    expect((await client.status({ repositoryId: "snapshot-example", worktreeId: "main" })).status).toEqual([
+      expect.objectContaining({ path: "README.md", index: null, worktree: { kind: "modified" } }),
+    ]);
     const paths = (await workspace.list(`${destination}/.git`)).map((entry) => entry.path);
     expect(paths).toContain(`${destination}/.git/HEAD`);
     expect(paths).toContain(`${destination}/.git/index`);

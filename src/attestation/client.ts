@@ -7,6 +7,8 @@ export const CHUTES_API_BASE = "https://api.chutes.ai";
 export const DEFAULT_EVIDENCE_TIMEOUT_MS = 30_000;
 export const MAX_EVIDENCE_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const MAX_CERTIFICATE_BYTES = 64 * 1024;
+export const MAX_RESPONSE_SIGNATURE_BYTES = 8 * 1024;
+export const MAX_ATTESTED_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_GPU_EVIDENCE_ITEMS = 16;
 
 const MAX_ERROR_RESPONSE_BYTES = 8 * 1024;
@@ -22,6 +24,8 @@ const ALLOWED_EVIDENCE_FIELDS = new Set([
   "gpu_evidence",
   "instance_id",
   "certificate",
+  "signature",
+  "attested_body",
 ]);
 
 export type EvidenceClientErrorCode =
@@ -265,6 +269,26 @@ export function validateChutesEvidenceResponse(
     throw new Error("evidence.certificate is not a DER SEQUENCE");
   }
 
+  const signature = value.signature === undefined || value.signature === null
+    ? undefined
+    : decodeCanonicalBase64({
+      value: typeof value.signature === "string" ? value.signature : "",
+      label: "signature",
+      minBytes: 1,
+      maxBytes: MAX_RESPONSE_SIGNATURE_BYTES,
+    });
+  const attestedBody = value.attested_body === undefined || value.attested_body === null
+    ? undefined
+    : decodeCanonicalBase64({
+      value: typeof value.attested_body === "string" ? value.attested_body : "",
+      label: "attested_body",
+      minBytes: 1,
+      maxBytes: MAX_ATTESTED_BODY_BYTES,
+    });
+  if ((signature === undefined) !== (attestedBody === undefined)) {
+    throw new Error("signature and attested_body must be supplied together");
+  }
+
   let reportedInstanceId: string | undefined;
   if (value.instance_id !== undefined && value.instance_id !== null) {
     if (typeof value.instance_id !== "string") {
@@ -282,6 +306,14 @@ export function validateChutesEvidenceResponse(
     instanceId: expectedInstanceId,
     reportedInstanceId,
     certificate: value.certificate,
+    ...(signature ? {
+      signature: value.signature as string,
+      signatureByteLength: signature.byteLength,
+    } : {}),
+    ...(attestedBody ? {
+      attestedBody: value.attested_body as string,
+      attestedBodyByteLength: attestedBody.byteLength,
+    } : {}),
   };
 }
 

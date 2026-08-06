@@ -28,7 +28,8 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await expect(receipt).toContainText("Not imported");
   await expect(receipt.locator("dd").filter({ hasText: /^[0-9a-f]{40}$/ })).toBeVisible();
   await expectRepositoryReady(page, "octocat/Hello-World");
-  await expect(page.getByRole("list", { name: "Changed paths" })).toContainText("README");
+  await expect(page.getByRole("tab", { name: /^Changes, 0 changed paths$/u })).toBeVisible();
+  await expect(page.getByText("Nothing to stage", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Close advanced source controls" }).click();
 
   // `exact` is required now that the rail carries an `Expand/Collapse Workspace`
@@ -38,6 +39,10 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await page.getByRole("treeitem", { name: new RegExp(`${destinationName}$`) }).click();
   await expect(page.getByRole("treeitem", { name: /^README /u })).toBeVisible();
   await expect(page.getByRole("treeitem", { name: /^\.git(?:\s|$)/u })).toHaveCount(0);
+  await page.getByRole("treeitem", { name: /^README /u }).dblclick();
+  const importedReadme = page.getByRole("textbox", { name: "Edit README" });
+  await importedReadme.fill("A local edit after a clean snapshot baseline.\n");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await openEditorRoute(page);
   await openAdvancedSourceControls(page);
   await expectRepositoryReady(page, "octocat/Hello-World");
@@ -46,9 +51,9 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await changes.getByRole("checkbox").first().check();
   await page.getByRole("button", { name: "Stage selected", exact: true }).click();
   await page.getByRole("dialog", { name: /Allow git_stage once/ }).getByRole("button", { name: "Allow once" }).click();
-  await expect(page.getByText(/staged · added/).first()).toBeVisible();
+  await expect(page.getByText(/staged · modified/).first()).toBeVisible();
 
-  await page.getByLabel("Message").fill("Admit pinned public snapshot");
+  await page.getByLabel("Message").fill("Update imported snapshot locally");
   await page.getByRole("button", { name: "Commit locally" }).click();
   await page.getByRole("dialog", { name: /Allow git_commit once/ }).getByRole("button", { name: "Allow once" }).click();
   await expect(page.getByText("Commit created locally. Nothing was pushed.")).toBeVisible();
@@ -99,7 +104,7 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await expect(page.locator(".git-repository-meta > span")).toHaveText(committedHead);
   await openRepositoryControls(page);
   await expect(page.locator("details.git-repository-controls .git-worktree-list")).toContainText(linkedBranch);
-  await expect(page.getByRole("list", { name: "Changed paths" })).toBeVisible();
+  await expect(page.getByText("Nothing to stage", { exact: true })).toBeVisible();
 });
 
 // AMENDED: the snapshot importer is no longer a resting button whose label is

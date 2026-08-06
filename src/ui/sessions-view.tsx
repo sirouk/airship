@@ -61,6 +61,12 @@ export type SessionsViewProps = Readonly<{
    * unrelated turn happens to bump the host's revision.
    */
   onRenamed?: (record: SessionRecord) => void;
+  /**
+   * Lets the shell retire the deleted row from its profile-local rail and
+   * palette immediately. The conversation journal owns the deletion; the
+   * shell owns the other live projections.
+   */
+  onDeleted?: (sessionId: string, removeEvidence: boolean) => void | Promise<void>;
   onOpenProof?: (sessionId: string) => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
   /**
@@ -153,6 +159,7 @@ export function SessionsView({
   onResume,
   onForked,
   onRenamed,
+  onDeleted,
   onOpenProof,
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
   quarantine,
@@ -193,6 +200,7 @@ export function SessionsView({
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [removeEvidence, setRemoveEvidence] = useState(false);
   const [favoriteState, setFavoriteState] = useState<Readonly<{
     profileId: string;
     favorites: readonly Readonly<{ sessionId: string; pinnedAt: string; membershipEventId: string }>[];
@@ -494,11 +502,24 @@ export function SessionsView({
       const ledger = await ledgerModule;
       const storage = ledger?.browserReturnLedgerStorage();
       if (ledger && storage) ledger.forgetReturnLedgerEntries(storage, [deletedId]);
+      let cleanupFailure: unknown;
+      try {
+        await onDeleted?.(deletedId, removeEvidence);
+      } catch (error) {
+        // The journal deletion already committed. Keep the row retired and
+        // report a truthful partial result if optional endpoint-evidence
+        // cleanup could not complete; never make a deleted conversation look
+        // present again because a secondary cache refused a write.
+        cleanupFailure = error;
+      }
       setDeleting(false);
       setSelectedId(undefined);
       setDetail(undefined);
       setRefresh((value) => value + 1);
-      setAnnouncement(`Deleted ${removed}. Its transcript and events were removed from this journal.`);
+      setRemoveEvidence(false);
+      setAnnouncement(cleanupFailure
+        ? `Deleted ${removed}. Its transcript and events were removed; endpoint evidence was kept because cleanup failed.`
+        : `Deleted ${removed}. Its transcript and events were removed from this journal.`);
     } catch (caught) {
       setDeleting(false);
       setDetailError(errorMessage(caught));
@@ -973,7 +994,7 @@ export function SessionsView({
               onCommitRename={() => void renameSelected()}
               onForkTitle={setForkTitle}
               onPrepareFork={prepareFork}
-              onRequestDelete={() => setDeleting(true)}
+              onRequestDelete={() => { setRemoveEvidence(false); setDeleting(true); }}
               onCancelFork={() => setForkOpen(false)}
               onCreateFork={() => void createFork()}
               onResume={() => void resumeSelected()}
@@ -1005,6 +1026,17 @@ export function SessionsView({
             Its transcript, every recorded step and its journal entries are removed
             from {durability.state === "ephemeral" ? "this page's memory" : "this journal"}.
             Forks already made from it keep their own copies.
+          </p>
+          <label class="session-delete-evidence-option">
+            <input
+              type="checkbox"
+              checked={removeEvidence}
+              onChange={(event) => setRemoveEvidence(event.currentTarget.checked)}
+            />
+            <span>Also remove this conversation’s endpoint evidence and pending evidence checks.</span>
+          </label>
+          <p class="session-delete-evidence-note">
+            Leave this unchecked to keep its separately stored Proof evidence history.
           </p>
           <p>This cannot be undone.</p>
         </ConfirmDialog>

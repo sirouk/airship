@@ -18,9 +18,7 @@ describe("Ollama browser provider", () => {
     });
   });
 
-  it("discovers models and uses only live /api/show declarations for tools and vision", async () => {
-    let active = 0;
-    let maximumActive = 0;
+  it("discovers the advertised directory without probing or loading each model", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       expect(url.origin).toBe("http://127.0.0.1:11434");
@@ -33,6 +31,7 @@ describe("Ollama browser provider", () => {
               size: 3_338_801_804,
               digest: "sha256:model",
               modified_at: "2026-07-20T00:00:00Z",
+              capabilities: ["completion", "vision", "tools"],
               details: {
                 format: "gguf",
                 family: "gemma3",
@@ -40,62 +39,44 @@ describe("Ollama browser provider", () => {
                 quantization_level: "Q4_K_M",
               },
             },
-            { name: "qwen3:latest" },
+            { name: "qwen3:latest", capabilities: ["completion", "thinking"] },
           ],
         });
       }
-      active += 1;
-      maximumActive = Math.max(maximumActive, active);
-      await Promise.resolve();
-      active -= 1;
-      const body = JSON.parse(String(init?.body)) as { model: string; verbose: boolean };
-      expect(body.verbose).toBe(false);
-      return json(body.model.startsWith("gemma")
-        ? {
-            capabilities: ["completion", "vision", "tools"],
-            model_info: { "gemma3.context_length": 131_072 },
-          }
-        : { capabilities: ["completion", "thinking"] });
+      throw new Error(`unexpected per-model request: ${url.pathname}`);
     }) as typeof fetch;
-    const provider = new OllamaBrowserProvider({
-      fetch: fetchMock,
-      capabilityProbeConcurrency: 2,
-    });
+    const provider = new OllamaBrowserProvider({ fetch: fetchMock });
 
     const snapshot = await provider.discoverModels();
 
     expect(snapshot.complete).toBe(true);
     expect(snapshot.models).toHaveLength(2);
-    expect(maximumActive).toBeGreaterThan(1);
     expect(snapshot.models[0]).toMatchObject({
       id: "gemma3:latest",
       provider: "ollama",
-      contextTokens: 131_072,
       format: "gguf",
       quantization: "Q4_K_M",
     });
     expect(capability(snapshot.models[0]!, "tools")).toMatchObject({
       state: "supported",
-      source: "/api/show:capabilities",
+      source: "/api/tags:capabilities",
     });
     expect(capability(snapshot.models[1]!, "vision").state).toBe("unsupported");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps discovery useful but marks capability evidence unknown when detail probing fails", async () => {
+  it("keeps discovery useful with unknown capability evidence when the directory omits it", async () => {
     const provider = new OllamaBrowserProvider({
       fetch: vi.fn(async (input: RequestInfo | URL) => {
         const url = new URL(String(input));
         if (url.pathname === "/api/tags") return json({ models: [{ name: "offline-details" }] });
-        return new Response("no show", { status: 404, headers: { "Content-Type": "text/plain" } });
+        throw new Error(`unexpected per-model request: ${url.pathname}`);
       }) as typeof fetch,
     });
     const snapshot = await provider.discoverModels();
-    expect(snapshot.complete).toBe(false);
+    expect(snapshot.complete).toBe(true);
     expect(capability(snapshot.models[0]!, "tools").state).toBe("unknown");
-    expect(snapshot.diagnostics).toEqual([
-      expect.objectContaining({ code: "model-details-unavailable", modelId: "offline-details" }),
-    ]);
+    expect(snapshot.diagnostics).toEqual([]);
   });
 });
 

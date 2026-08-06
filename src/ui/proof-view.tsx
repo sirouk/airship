@@ -538,24 +538,24 @@ export function ProofView({
             they want to know what actually happened. */}
         <ProofEgressSummary />
         <div class="proof-actions" role="group" aria-label="Portable evidence actions">
-          {/* Emphasis follows verifiability: the bundle a third party can
-              actually check is the primary, and the privacy-safe summary — whose
-              own note says it is not proof — stops being the loudest control on
-              the trust surface. */}
-          {receipt || audit || endpointEvidenceRecords.length > 0 ? <button class="small-button primary" type="button" onClick={() => void exportVerificationBundle()}><Icon name="proof" size={14} /> Export raw verification bundle</button> : null}
-          {receipt ? <button class="small-button" type="button" onClick={() => void copyReceipt()}><Icon name="proof" size={14} /> Copy safe summary</button> : null}
-          {receipt ? <button class="small-button" type="button" onClick={() => download(serializePortableReceipt(receipt), `airship-receipt-${receipt.receiptId.slice(-8)}.json`, "Privacy-safe unsigned receipt summary exported")}><Icon name="cloud" size={14} /> Export safe summary</button> : null}
-          {audit ? <button class="small-button" type="button" onClick={() => download(JSON.stringify(audit, null, 2), `airship-session-audit-${audit.sessionId.slice(0, 8)}.json`, "Session audit exported")}><Icon name="proof" size={14} /> Export session audit</button> : null}
-          {receiptAction ? <span role="status" aria-live="polite">{receiptAction}</span> : null}
+            {/* Emphasis follows verifiability: the bundle a third party can
+                actually check is the primary, and the privacy-safe summary — whose
+                own note says it is not proof — stops being the loudest control on
+                the trust surface. */}
+            {receipt || audit || endpointEvidenceRecords.length > 0 ? <button class="small-button primary" type="button" onClick={() => void exportVerificationBundle()}><Icon name="proof" size={14} /> Export raw verification bundle</button> : null}
+            {receipt ? <button class="small-button" type="button" onClick={() => void copyReceipt()}><Icon name="proof" size={14} /> Copy safe summary</button> : null}
+            {receipt ? <button class="small-button" type="button" onClick={() => download(serializePortableReceipt(receipt), `airship-receipt-${receipt.receiptId.slice(-8)}.json`, "Privacy-safe unsigned receipt summary exported")}><Icon name="cloud" size={14} /> Export safe summary</button> : null}
+            {audit ? <button class="small-button" type="button" onClick={() => download(JSON.stringify(audit, null, 2), `airship-session-audit-${audit.sessionId.slice(0, 8)}.json`, "Session audit exported")}><Icon name="proof" size={14} /> Export session audit</button> : null}
+            {receiptAction ? <span role="status" aria-live="polite">{receiptAction}</span> : null}
         </div>
         {/* What each control discloses, before it is pressed, in the words the
-            artifact itself carries. The raw bundle's primacy was earned on
-            verifiability and then left undeclared: it ships `responseDigest`,
-            an unsalted SHA-256 of the assistant's verbatim reply, which anyone
-            holding a candidate answer can confirm by hashing it. That is a
-            content-recoverable field on the export a privacy-first operator
-            hands to a third party, and the page said only "bounded endpoint
-            evidence and local commitments". */}
+              artifact itself carries. The raw bundle's primacy was earned on
+              verifiability and then left undeclared: it ships `responseDigest`,
+              an unsalted SHA-256 of the assistant's verbatim reply, which anyone
+              holding a candidate answer can confirm by hashing it. That is a
+              content-recoverable field on the export a privacy-first operator
+              hands to a third party, and the page said only "bounded endpoint
+              evidence and local commitments". */}
         <dl class="proof-export-boundary" aria-label="What each export discloses">
           {EXPORT_DISCLOSURE_LINES.map((line) => <div key={line.label}><dt>{line.label}</dt><dd>{line.value}</dd></div>)}
         </dl>
@@ -1023,4 +1023,3 @@ function verificationBoundary(hasEndpointEvidence: boolean, hasAudit: boolean, h
     "Nothing in this bundle is evidence about the network. The session journal has no field for a request, so no host, method or credential fact can be recomputed from it.",
   ]);
 }
-

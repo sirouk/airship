@@ -9,6 +9,35 @@
   background: var(--ground, #101417);
 }
 
+/* The destructive dialog's optional proof cleanup is a real checkbox, not a
+ * full-width text input. Keep it readable at the same 44px target height as
+ * the other dialog controls. */
+.workbench-dialog .session-delete-evidence-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 12px 0 0;
+  color: var(--ink, #ece8de);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.workbench-dialog .session-delete-evidence-option input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+}
+
+.workbench-dialog .session-delete-evidence-note {
+  margin: 6px 0 0;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
 /*
  * The route's title, eyebrow and sentence now live in <RouteHeader>, and the
  * journal-adapter card is a chip in its status slot. What is left here is the

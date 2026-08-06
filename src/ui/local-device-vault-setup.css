@@ -76,7 +76,10 @@
 }
 
 .local-device-vault__replacement {
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
   border-color: color-mix(in srgb, var(--v-caution) 55%, var(--line));
   border-left-width: 3px;
   background: color-mix(in srgb, var(--v-caution) 8%, var(--surface-soft));
@@ -88,8 +91,13 @@
 }
 
 .local-device-vault__replacement > p {
+  max-width: 78ch;
   color: var(--ink-muted);
   line-height: 1.45;
+}
+
+.local-device-vault__replacement > .local-device-vault__actions {
+  justify-self: start;
 }
 
 .local-device-vault__replacement-ack {

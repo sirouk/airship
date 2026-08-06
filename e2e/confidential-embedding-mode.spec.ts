@@ -439,16 +439,18 @@ test("a second embedding deployment turns a silent pick into a choice", async ({
   await expect(step).toContainText("Chutes publishes 2 embedding deployments");
   const options = step.getByRole("button");
   await expect(options).toHaveCount(2);
-  // It opens on the deployment the indexing side would have resolved unaided —
-  // the live one — so the step never asks a question it has no answer to.
-  await expect(options.filter({ hasText: EMBEDDING_MODEL })).toHaveAttribute("aria-pressed", "true");
+  // Both deployments start unselected. Airship must not infer an embedding
+  // authority from catalog order or warmth; the person chooses the one whose
+  // identifier Chutes returned.
+  await expect(options.filter({ hasText: EMBEDDING_MODEL })).toHaveAttribute("aria-pressed", "false");
   await expect(options.filter({ hasText: SECOND_EMBEDDING_MODEL })).toHaveAttribute("aria-pressed", "false");
   // Connecting has not happened yet: this is the step, not a gate behind one.
   await expect(page).toHaveURL(/#connection$/u);
 
   await options.filter({ hasText: SECOND_EMBEDDING_MODEL }).click();
   await expect(options.filter({ hasText: SECOND_EMBEDDING_MODEL })).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Finish: verify & connect" }).click();
+  // Discovery is the explicit connect action. Choosing the embedding authority
+  // releases the only genuine gate and verification carries the route to Chat.
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
 
   await page.goto("/#context");
