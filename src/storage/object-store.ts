@@ -94,6 +94,73 @@ export function isReclaimableObjectStore(store: ObjectStore): store is Reclaimab
   return typeof (store as Partial<ReclaimableObjectStore>).trash === "function";
 }
 
+/**
+ * A body the provider holds that no object index entry names, addressed by the
+ * provider's own identifier because there is no logical key to address it by.
+ * `createdAt` is whatever the provider recorded for the upload; a store that
+ * cannot prove a creation time omits it and the caller treats the object as
+ * too young for any age-gated reclamation.
+ */
+export type UntrackedProviderObject = Readonly<{
+  providerObjectId: string;
+  size: number;
+  createdAt?: string;
+}>;
+
+export type UntrackedProviderObjectPage = Readonly<{
+  objects: readonly UntrackedProviderObject[];
+  nextPageToken?: string;
+}>;
+
+export type UntrackedReclamationOutcome =
+  | Readonly<{ providerObjectId: string; reclaimed: true }>
+  | Readonly<{ providerObjectId: string; reclaimed: false; reason: "became-tracked" | "refused" | "unconfirmed" }>;
+
+export type UntrackedProviderReclamationReceipt = Readonly<{
+  requested: number;
+  /** Provider-confirmed removals only; every other identifier stays in `retained`. */
+  reclaimed: readonly string[];
+  retained: readonly string[];
+  outcomes: readonly UntrackedReclamationOutcome[];
+}>;
+
+/**
+ * An optional capability beyond `ReclaimableObjectStore`: enumeration of the
+ * crash windows that index-addressed reclamation structurally cannot see —
+ * uploads whose routing-index commit lost a race, and bodies whose index entry
+ * removal committed before a failed trash call.
+ *
+ * The enumeration is computed against a fresh index. Provider pages hold
+ * whatever the folder query matches, so any single page can legitimately
+ * contain zero untracked bodies while a token remains — callers page to
+ * exhaustion and treat the union across pages as the answer. The trash verb
+ * re-loads a fresh index per call, so a body that became tracked between the
+ * sweep's listing and its trash request is answered `became-tracked` and
+ * never touched. The remaining race window — one network round-trip against an
+ * upload that waited the whole safety age before its index commit — is the
+ * documented bound of provider-side reclamation, and callers still apply a
+ * safety age on top of it.
+ */
+export interface UntrackedObjectSweepStore extends ObjectStore {
+  listUntrackedProviderObjects(options?: {
+    pageSize?: number;
+    pageToken?: string;
+    signal?: AbortSignal;
+  }): Promise<UntrackedProviderObjectPage>;
+  trashUntrackedProviderObjects(
+    providerObjectIds: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<UntrackedProviderReclamationReceipt>;
+}
+
+export function hasUntrackedObjectSweep(store: ObjectStore): store is UntrackedObjectSweepStore {
+  const candidate = store as Partial<UntrackedObjectSweepStore>;
+  return (
+    typeof candidate.listUntrackedProviderObjects === "function" &&
+    typeof candidate.trashUntrackedProviderObjects === "function"
+  );
+}
+
 export class ObjectConflictError extends Error {
   constructor(message = "The cloud object changed before the conditional write completed.") {
     super(message);

@@ -324,7 +324,11 @@ describe("release gate", () => {
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 128 KiB after the conversation-proof cleanup operation, and the
       // step this row grants without paying for it is now the one past it.
-      ["deferredCapabilities", "gzip: 128 * 1024", "gzip: 129 * 1024"],
+      // AMENDED again: the Vault reclamation machinery (the aged-supersession
+      // queue and bounded sweep) re-measured the pack and the budget comment
+      // pays for 131 KiB with the 130-Would-have-left-143-B sentence, so the
+      // unpaid step is the one past that.
+      ["deferredCapabilities", "gzip: 131 * 1024", "gzip: 132 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);

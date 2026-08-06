@@ -129,25 +129,49 @@ never destroy data. Reclamation is an **optional** capability,
 when the wrapped authority has it — `isReclaimableObjectStore` therefore stays a
 truthful capability report rather than a method that throws.
 
-`VaultCoordinator` uses it for exactly one case: sweeping a successful probe's
-own objects, which nothing else can reference. It removes the index entry by CAS
-first and asks the provider to trash the body second, so a crash can only leak an
-untracked file and can never break a live reference. A key is reported reclaimed
-only when the provider confirms it; anything unconfirmed keeps the original
-out-of-band cleanup warning verbatim, and a provider with no reclamation
-capability keeps that warning unchanged.
+`VaultCoordinator` uses it for two cases. The first is sweeping a successful
+probe's own objects, which nothing else can reference. It removes the index
+entry by CAS first and asks the provider to trash the body second, so a crash
+can only leak an untracked file and can never break a live reference. A key is
+reported reclaimed only when the provider confirms it; anything unconfirmed
+keeps the original out-of-band cleanup warning verbatim, and a provider with no
+reclamation capability keeps that warning unchanged.
 
-Everything else still accumulates. Workspace `remove()` removes the file from the
-encrypted manifest; it does not erase the historical ciphertext object, and
-`write()` mints a new revision-scoped object per edit. Superseded revisions are
-deliberately **not** trashed inline after a manifest CAS, because a reader
-holding an older manifest generation would hard-fail on the missing object; they
-need an aged candidate queue with a fresh-index recheck, which is not
-implemented. Neither is enumeration of untracked lost-race orphans. Honest
-user-facing deletion, retention, recovery, and garbage collection remain
-production gates. A failed probe cannot promise a complete inventory, so its
-degraded snapshot carries both the unique run prefix and adjacent isolation-test
-prefix as possible residue with `inventory: "unknown-after-failed-probe"`.
+The second is the bounded reclamation sweep (`VaultCoordinator.runReclamationSweep`,
+driven from the Vault route's **Reclaim storage** action). Workspace `remove()`
+removes the file from the encrypted manifest but not the historical ciphertext
+object, and `write()` mints a new revision-scoped object per edit. Those
+superseded revisions are deliberately **not** trashed inline after a manifest
+CAS, because a reader holding an older manifest generation would hard-fail on
+the missing object. Instead the workspace and the context fabric now record
+each supersession at commit time into one encrypted, CAS-guarded durable
+queue ([reclamation-queue.ts](../src/vault/reclamation-queue.ts)). The sweep
+ages queued candidates past a safety window (default seven days, adjustable
+between one hour and ninety days), re-verifies every aged candidate against
+the freshest committed manifest — or, for context segments, the freshest
+committed routing mirror — and only then offers survivors to
+`trash()` in bounded batches. A candidate the fresh root still names is
+reconciled out of the queue, never offered; a candidate kind the run cannot
+re-verify is skipped; and the queue is told exactly which removals the
+provider confirmed, so a later run never silently re-offers them. Providers
+that also expose `UntrackedObjectSweepStore` — today
+`GoogleDriveObjectStore` — additionally enumerate provider-side crash-window
+orphans (bodies no index entry names) by provider identifier, age them by the
+provider's own creation time, and trash them by identifier with a fresh-index
+recheck per call. The sweep's receipt reports provider-confirmed removals
+only, and names offered-but-unconfirmed objects as retained
+([reclamation.ts](../src/vault/reclamation.ts)).
+
+What still accumulates, by design: journal segments whose append CAS lost a
+race stay as recoverable ciphertext — an append retry re-mints the same key
+and adopts them — and conversation deletion already trashes journal objects
+head-first inline. The Local Device runtime does not record into the queue
+yet and has no sweep entrypoint; encrypted leftovers there are covered by the
+full wipe, and the queue hooks are designed for a follow-up sweep wiring.
+Honest user-facing deletion, retention, recovery, and garbage collection
+remain production gates. A failed probe cannot promise a complete inventory,
+so its degraded snapshot carries both the unique run prefix and adjacent
+isolation-test prefix as possible residue with `inventory: "unknown-after-failed-probe"`.
 
 ## Local S3-compatible development
 

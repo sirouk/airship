@@ -119,6 +119,96 @@ describe("Google Drive encrypted ObjectStore", () => {
     expect(drive.liveFilesByRole("encrypted-segment-v1").length).toBeGreaterThan(0);
   });
 
+it("enumerates paged bodies no index entry names, and nothing else", async () => {
+    const { drive, store, workspace } = await driveFixture();
+    // Two live, index-committed objects: enumeration must never surface them.
+    await store.putIfAbsent("live/one", new TextEncoder().encode("one"));
+    await store.putIfAbsent("live/two", new TextEncoder().encode("two"));
+
+    const planted = [
+      drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } }),
+      drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } }),
+      drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } }),
+    ];
+    // Foreign bodies in the same folder are not this Vault's problem to report.
+    drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: "someone-elses-namespace", airshipRole: "encrypted-segment-v1" } });
+    drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "unrelated-role" } });
+
+    // Provider pages hold whatever the query matches — tracked bodies included
+    // — so a page can be legitimately empty of untracked objects. The contract
+    // is: follow the token to the end and the union names exactly the crash
+    // windows, never a live object.
+    const enumerated = new Map<string, { size: number; createdAt?: string }>();
+    let pageToken: string | undefined;
+    let pages = 0;
+    do {
+      const page = await store.listUntrackedProviderObjects({ pageSize: 2, pageToken });
+      pages += 1;
+      expect(pages).toBeLessThanOrEqual(10);
+      for (const object of page.objects) {
+        expect(object.size).toBe(3);
+        expect(typeof object.createdAt).toBe("string");
+        enumerated.set(object.providerObjectId, object);
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+
+    expect(pages).toBeGreaterThan(1);
+    expect([...enumerated.keys()].sort()).toEqual(planted.map((file) => file.id).sort());
+  });
+
+  it("trashes untracked bodies by provider id, sparing anything a fresh index now names", async () => {
+    const { drive, store, workspace } = await driveFixture();
+    await store.putIfAbsent("live/object", new TextEncoder().encode("live"));
+    const trackedFileId = drive.filesByRole("encrypted-segment-v1")[0]!.id;
+
+    const planted = [
+      drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } }),
+      drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } }),
+    ];
+
+    const receipt = await store.trashUntrackedProviderObjects([
+      planted[0]!.id,
+      planted[1]!.id,
+      trackedFileId,
+      "drive_file_never_existed",
+    ]);
+    expect(receipt.requested).toBe(4);
+    expect([...receipt.reclaimed].sort()).toEqual([planted[0]!.id, planted[1]!.id, "drive_file_never_existed"].sort());
+    expect(receipt.retained).toEqual([trackedFileId]);
+    expect(receipt.outcomes).toContainEqual({ providerObjectId: trackedFileId, reclaimed: false, reason: "became-tracked" });
+
+    // The live object survived the sweep untouched; both orphans left the live listing.
+    expect(new TextDecoder().decode((await store.get("live/object"))!.bytes)).toBe("live");
+    expect(drive.liveFilesByRole("encrypted-segment-v1")).toHaveLength(1);
+
+    // A provider refusal is reported as retained, never swept into the reclaimed count.
+    const refused = drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } });
+    drive.refuseTrash = true;
+    const refusedReceipt = await store.trashUntrackedProviderObjects([refused.id]);
+    expect(refusedReceipt).toMatchObject({ requested: 1, reclaimed: [], retained: [refused.id] });
+    expect(refusedReceipt.outcomes).toEqual([{ providerObjectId: refused.id, reclaimed: false, reason: "refused" }]);
+  });
+
+  it("reclaims exactly the crash-window body after the recovered write commits a replacement", async () => {
+    const { drive, store, workspace } = await driveFixture();
+    // The crash window itself: the upload landed; its index commit never did.
+    const orphan = drive.plantRaw({ parents: [workspace.segmentsFolderId], appProperties: { airshipNamespace: workspace.namespaceId, airshipRole: "encrypted-segment-v1" } });
+
+    // The retry the product actually runs: a fresh immutable upload that does
+    // win its index commit. Both bodies now sit in the segments folder.
+    const recovered = await store.putIfAbsent("live/replacement", new TextEncoder().encode("replacement"));
+    expect(recovered.created).toBe(true);
+
+    // Enumeration still names only the window's residue, and the sweep removes
+    // exactly it — the recovered object is not offered up, not touched.
+    expect((await store.listUntrackedProviderObjects()).objects.map((object) => object.providerObjectId)).toEqual([orphan.id]);
+    const receipt = await store.trashUntrackedProviderObjects([orphan.id]);
+    expect(receipt).toMatchObject({ requested: 1, reclaimed: [orphan.id], retained: [] });
+    expect(new TextDecoder().decode((await store.get("live/replacement"))!.bytes)).toBe("replacement");
+    expect((await store.listUntrackedProviderObjects()).objects).toEqual([]);
+  });
+
   it("fails closed when a duplicate matching workspace hierarchy folder exists", async () => {
     const { drive, provider, key, workspace } = await driveFixture();
     drive.duplicateFolderByRole("workspace", "root");
@@ -231,6 +321,7 @@ type StoredFile = {
   parents: string[];
   appProperties: Record<string, string>;
   bytes: Uint8Array;
+  createdTime: string;
   modifiedTime: string;
   etag: string;
   trashed: boolean;
@@ -327,6 +418,19 @@ class FakeDrive {
     }), { status, headers });
   }
 
+  /** Plant bodies the way crash windows do: present in Drive, uncommitted to any index. */
+  plantRaw(
+    metadata: { name?: string; mimeType?: string; parents: string[]; appProperties: Record<string, string> },
+    bytes: Uint8Array = new Uint8Array([7, 7, 7]),
+  ): StoredFile {
+    return this.insert({
+      name: metadata.name ?? `planted_${this.files.size}.enc`,
+      mimeType: metadata.mimeType ?? "application/vnd.airship.encrypted-segment",
+      parents: metadata.parents,
+      appProperties: metadata.appProperties,
+    }, bytes);
+  }
+
   filesByRole(role: string): StoredFile[] {
     return [...this.files.values()].filter((file) => file.appProperties.airshipRole === role);
   }
@@ -384,11 +488,21 @@ class FakeDrive {
     const role = /key='airshipRole' and value='([^']+)'/u.exec(query)?.[1];
     const namespace = /key='airshipNamespace' and value='([^']+)'/u.exec(query)?.[1];
     const excludeTrashed = query.includes("trashed = false");
-    const files = [...this.files.values()].filter((file) =>
+    let files = [...this.files.values()].filter((file) =>
       (!excludeTrashed || !file.trashed)
       && (!parent || file.parents.includes(parent)) && (!role || file.appProperties.airshipRole === role) && (!namespace || file.appProperties.airshipNamespace === namespace),
-    ).map((file) => this.metadata(file));
-    return Response.json({ files });
+    );
+    // Drive pages list responses. Tokens are offsets here; real Drive tokens
+    // are opaque, which the adapter only ever forwards, never interprets.
+    const pageSizeParam = url.searchParams.get("pageSize");
+    const pageSize = pageSizeParam ? Number(pageSizeParam) : files.length;
+    const start = Number(url.searchParams.get("pageToken") ?? "0");
+    const nextPageToken = start + pageSize < files.length ? String(start + pageSize) : undefined;
+    files = files.slice(start, pageSize ? start + pageSize : undefined);
+    return Response.json({
+      files: files.map((file) => this.metadata(file)),
+      ...(nextPageToken ? { nextPageToken } : {}),
+    });
   }
 
   private async createFolder(init: RequestInit): Promise<Response> {
@@ -450,13 +564,14 @@ class FakeDrive {
 
   private insert(metadata: { name: string; mimeType: string; parents: string[]; appProperties: Record<string, string> }, bytes: Uint8Array): StoredFile {
     const id = `drive_file_${++this.sequence}`;
-    const file: StoredFile = { id, ...metadata, bytes, modifiedTime: new Date().toISOString(), etag: `"version-${this.sequence}"`, trashed: false };
+    const createdTime = new Date().toISOString();
+    const file: StoredFile = { id, ...metadata, bytes, createdTime, modifiedTime: createdTime, etag: `"version-${this.sequence}"`, trashed: false };
     this.files.set(id, file);
     return file;
   }
 
   private metadata(file: StoredFile): Record<string, unknown> {
-    return { id: file.id, name: file.name, mimeType: file.mimeType, size: String(file.bytes.byteLength), modifiedTime: file.modifiedTime, appProperties: file.appProperties, webViewLink: `https://drive.google.test/open?id=${file.id}` };
+    return { id: file.id, name: file.name, mimeType: file.mimeType, size: String(file.bytes.byteLength), createdTime: file.createdTime, modifiedTime: file.modifiedTime, appProperties: file.appProperties, webViewLink: `https://drive.google.test/open?id=${file.id}` };
   }
 }
 

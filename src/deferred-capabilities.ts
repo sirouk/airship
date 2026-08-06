@@ -68,6 +68,11 @@ export type { AdoptionCarriedWork } from "./vault/runtime-adoption";
 export { EncryptedObjectWorkspace } from "./vault/encrypted-workspace";
 export { VaultContextFabricPort } from "./vault/context-fabric-port";
 export {
+  DEFAULT_RECLAMATION_SAFETY_AGE_MS,
+  runVaultReclamationSweep,
+} from "./vault/reclamation";
+export { VaultReclamationQueue } from "./vault/reclamation-queue";
+export {
   openLocalDeviceVault,
   restoreLocalDeviceVaultBackup,
 } from "./vault/local-device";

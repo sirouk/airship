@@ -1888,6 +1888,7 @@ export function App() {
   const [localDeviceStatus, setLocalDeviceStatus] = useState<LocalDeviceVaultStatus>();
   const [vaultUsageFacts, setVaultUsageFacts] = useState<VaultUsageFacts>();
   const [vaultWipeBusy, setVaultWipeBusy] = useState(false);
+  const [vaultReclaimBusy, setVaultReclaimBusy] = useState(false);
   const [localDeviceBusy, setLocalDeviceBusy] = useState(false);
   const localDeviceAutoOpenOwner = useRef(0);
   const [localDeviceError, setLocalDeviceError] = useState<string>();
@@ -8169,6 +8170,52 @@ export function App() {
     }
   }
 
+  /*
+   * The aged-supersession queue and the provider-side untracked enumeration,
+   * driven from one button. The sentence built from the receipt reports counts
+   * the provider confirmed in its own words — confirmed removals, offers it
+   * declined, leftovers still inside their safety window — and never upgrades
+   * an offer into a removal.
+   */
+  async function reclaimVaultStorage(): Promise<void> {
+    if (vaultSnapshot.phase !== "ready") return;
+    setVaultReclaimBusy(true);
+    try {
+      const receipt = await vault.runReclamationSweep();
+      const untracked = receipt.untracked.status === "unavailable" ? undefined : receipt.untracked;
+      const confirmed = receipt.queue.reclaimed + (untracked?.reclaimed ?? 0);
+      const offered = receipt.queue.requested + (untracked?.requested ?? 0);
+      const retained = receipt.queue.retained + (untracked?.retained ?? 0);
+      let message: string;
+      if (!offered && !retained && !receipt.queue.skippedUnverifiable) {
+        message = receipt.queue.queued
+          ? `Reclaim finished: nothing was old enough yet — ${receipt.queue.deferredYoung.toLocaleString()} recorded leftover${receipt.queue.deferredYoung === 1 ? "" : "s"} still inside the safety window.`
+          : "Reclaim finished: no unreachable encrypted objects were waiting.";
+      } else {
+        const parts = [
+          `Reclaim finished: ${confirmed.toLocaleString()} of ${offered.toLocaleString()} offered object${offered === 1 ? "" : "s"} confirmed moved to provider trash`,
+        ];
+        if (retained) parts.push(`${retained.toLocaleString()} offered but not confirmed removed, kept for a later run`);
+        if (receipt.queue.deferredYoung) parts.push(`${receipt.queue.deferredYoung.toLocaleString()} still inside the safety window`);
+        if (receipt.queue.skippedUnverifiable) parts.push(`${receipt.queue.skippedUnverifiable.toLocaleString()} untouched because a live reference could not be re-verified`);
+        if (receipt.queue.confirmationCommitted === "uncommitted") parts.push("the queue could not be told which removals landed; the next run re-checks them");
+        if (untracked?.status === "truncated") parts.push("more provider-side leftovers remain; run again");
+        if (!receipt.queue.queueReadable) parts.push("the reclamation queue could not be read this run");
+        message = `${parts.join("; ")}.`;
+      }
+      setRuntimeStatus(message);
+      // Bytes and object counts only fall through a sweep; refresh the facts
+      // the route displays rather than leaving yesterday's numbers up.
+      void vault.collectStorageStats().then((stats) => {
+        if (stats) setVaultUsageFacts({ objects: stats.objectCount, bytes: stats.totalBytes });
+      });
+    } catch (error) {
+      setRuntimeStatus(error instanceof Error ? `Reclaim stopped: ${error.message}` : "Reclaim stopped safely.");
+    } finally {
+      setVaultReclaimBusy(false);
+    }
+  }
+
   async function changeVaultProvider(next: VaultBackend): Promise<void> {
     if (vaultProviderSwitchingRef.current || next === preferences.vaultBackend) return;
     if (inferenceRouteChanging.current) {
@@ -11605,6 +11652,9 @@ export function App() {
                 || vaultSnapshot.phase === "ready"}
               wipeBusy={vaultWipeBusy}
               onWipeStorage={() => void wipeVaultStorage()}
+              reclaimAvailable={vaultSnapshot.phase === "ready"}
+              reclaimBusy={vaultReclaimBusy}
+              onReclaimStorage={() => void reclaimVaultStorage()}
               onEraseContinuityRecord={() => {
                 // Erases the witness alone: no journal, no drafts, no
                 // preferences. A person who chose ephemeral for privacy gets to

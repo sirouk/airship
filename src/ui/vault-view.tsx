@@ -71,6 +71,14 @@ export type VaultViewProps = {
   onWipeStorage?: () => void;
   /** Erases the ephemeral posture's return-ledger witness, and nothing else. */
   onEraseContinuityRecord?: () => void;
+  /**
+   * Storage maintenance. Renderable only while a verified runtime exists —
+   * the sweep needs the adopted workspace and queue, and a reclaim affordance
+   * on an unverified route would be a promise the route cannot keep.
+   */
+  reclaimAvailable?: boolean;
+  reclaimBusy?: boolean;
+  onReclaimStorage?: () => void;
 };
 
 export type ProviderFactKey = "survives" | "offline" | "reach" | "supply" | "keep" | "lose";
@@ -241,6 +249,9 @@ export function VaultView({
   wipeBusy = false,
   onWipeStorage,
   onEraseContinuityRecord,
+  reclaimAvailable = false,
+  reclaimBusy = false,
+  onReclaimStorage,
 }: VaultViewProps) {
   const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
   const [continuityErased, setContinuityErased] = useState(false);
@@ -680,6 +691,22 @@ export function VaultView({
             type="button"
             onClick={() => { onEraseContinuityRecord(); setContinuityErased(true); }}
           >{continuityErased ? "Erased" : "Erase continuity record"}</button>
+        </section>
+      ) : null}
+
+      {reclaimAvailable && onReclaimStorage ? (
+        <section class="vault-reclaim" aria-label="Storage maintenance">
+          <div class="vault-reclaim__copy">
+            <strong>Reclaim unreachable objects</strong>
+            <span>Edits, removals, and interrupted uploads leave encrypted leftovers nothing points at. A reclaim run ages them past a safety window, re-checks the live Vault first, then asks the provider to trash them — and reports only what the provider confirmed. Anything too young or still referenced stays where it is.</span>
+          </div>
+          <button
+            class="vault-reclaim__action"
+            type="button"
+            disabled={reclaimBusy}
+            aria-busy={reclaimBusy || undefined}
+            onClick={onReclaimStorage}
+          >{reclaimBusy ? "Reclaiming…" : "Reclaim storage"}</button>
         </section>
       ) : null}
 

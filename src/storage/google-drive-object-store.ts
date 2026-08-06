@@ -21,6 +21,11 @@ import type {
   PutIfAbsentResult,
   ObjectStoreCapabilities,
   ReclaimableObjectStore,
+  UntrackedObjectSweepStore,
+  UntrackedProviderObject,
+  UntrackedProviderObjectPage,
+  UntrackedProviderReclamationReceipt,
+  UntrackedReclamationOutcome,
 } from "./object-store";
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
@@ -36,6 +41,9 @@ const MAX_OBJECTS = 100_000;
 const MAX_CAS_ATTEMPTS = 5;
 /** One reclamation call is bounded so a sweep cannot become an unbounded job. */
 const MAX_TRASH_KEYS = 1_000;
+/** Drive caps `pageSize` at 1,000; enumeration pages stay well under it. */
+const MAX_UNTRACKED_PAGE_SIZE = 200;
+const MAX_UNTRACKED_TRASH_IDS = 100;
 const INDEX_CACHE_TTL_MS = 1_500;
 const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -68,6 +76,7 @@ type DriveFile = {
   name: string;
   mimeType: string;
   size?: string;
+  createdTime?: string;
   modifiedTime?: string;
   appProperties?: Record<string, string>;
 };
@@ -89,7 +98,7 @@ export type GoogleDriveObjectStoreOptions = Readonly<{
  * A live conformance probe remains the authority for a deployment's actual
  * conditional-request and CORS behavior.
  */
-export class GoogleDriveObjectStore implements ReclaimableObjectStore {
+export class GoogleDriveObjectStore implements ReclaimableObjectStore, UntrackedObjectSweepStore {
   readonly capabilities: ObjectStoreCapabilities = Object.freeze({
     version: 1,
     adapter: "google-drive",
@@ -278,6 +287,119 @@ export class GoogleDriveObjectStore implements ReclaimableObjectStore {
     // Every segment listing filters `trashed = false`, so Drive's own echo of
     // `trashed: true` is exactly the confirmed-absent condition.
     return body.trashed === true ? { key, reclaimed: true } : { key, reclaimed: false, reason: "unconfirmed" };
+  }
+
+  /**
+   * Segments-folder enumeration: the bodies a crash window can leave that no
+   * index entry names. The diff is computed against a fresh index, never the
+   * read cache, and `trashUntrackedProviderObjects` re-verifies before every
+   * removal batch, so enumeration skew alone cannot trash a live segment.
+   */
+  async listUntrackedProviderObjects(options: {
+    pageSize?: number;
+    pageToken?: string;
+    signal?: AbortSignal;
+  } = {}): Promise<UntrackedProviderObjectPage> {
+    const pageSize = options.pageSize ?? MAX_UNTRACKED_PAGE_SIZE;
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1_000) {
+      throw new Error("Google Drive untracked enumeration page size is invalid.");
+    }
+    if (options.pageToken !== undefined && (options.pageToken.length === 0 || options.pageToken.length > 4_096 || /[\r\n]/u.test(options.pageToken))) {
+      throw new Error("Google Drive untracked enumeration page token is invalid.");
+    }
+    const loaded = await this.loadIndex(options.signal, true);
+    const trackedFileIds = new Set(loaded.index.entries.map((entry) => entry.fileId));
+    const namespace = escapeDriveQuery(this.options.workspace.namespaceId);
+    const q = [
+      `'${escapeDriveQuery(this.options.workspace.segmentsFolderId)}' in parents`,
+      "trashed = false",
+      `appProperties has { key='airshipNamespace' and value='${namespace}' }`,
+      "appProperties has { key='airshipRole' and value='encrypted-segment-v1' }",
+    ].join(" and ");
+    const url = new URL(`${DRIVE_API}/files`);
+    url.searchParams.set("q", q);
+    url.searchParams.set("spaces", "drive");
+    url.searchParams.set("pageSize", String(pageSize));
+    url.searchParams.set("fields", "files(id,name,mimeType,size,createdTime,modifiedTime,appProperties),nextPageToken");
+    if (options.pageToken) url.searchParams.set("pageToken", options.pageToken);
+    const response = await this.driveFetch(url, { signal: options.signal });
+    const body = await driveJson<{ files?: DriveFile[]; nextPageToken?: unknown }>(response, "list untracked encrypted segments");
+    const objects: UntrackedProviderObject[] = [];
+    for (const file of body.files ?? []) {
+      assertDriveFile(file);
+      if (file.appProperties?.airshipNamespace !== this.options.workspace.namespaceId
+        || file.appProperties.airshipRole !== "encrypted-segment-v1") continue;
+      if (trackedFileIds.has(file.id)) continue;
+      objects.push(Object.freeze({
+        providerObjectId: file.id,
+        size: parsedDriveSize(file.size, "untracked encrypted segment"),
+        ...(typeof file.createdTime === "string" ? { createdAt: validTimestamp(file.createdTime) } : {}),
+      }));
+    }
+    const nextPageToken = typeof body.nextPageToken === "string" && body.nextPageToken.length ? body.nextPageToken : undefined;
+    return Object.freeze({ objects: Object.freeze(objects), ...(nextPageToken ? { nextPageToken } : {}) });
+  }
+
+  /**
+   * File-ID-addressed trash for bodies no index entry names, with the same
+   * confirmation discipline as key-addressed reclamation. The fresh index is
+   * re-loaded here, not inherited from the sweep's listing, so a body whose
+   * routing-index commit landed in between is answered `became-tracked` and is
+   * never patched.
+   */
+  async trashUntrackedProviderObjects(
+    providerObjectIds: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<UntrackedProviderReclamationReceipt> {
+    if (providerObjectIds.length > MAX_UNTRACKED_TRASH_IDS) {
+      throw new Error("Google Drive untracked reclamation exceeds the client identifier limit.");
+    }
+    const requested = [...new Set(providerObjectIds)];
+    if (!requested.length) {
+      return Object.freeze({ requested: 0, reclaimed: Object.freeze([]), retained: Object.freeze([]), outcomes: Object.freeze([]) });
+    }
+    const loaded = await this.loadIndex(signal, true);
+    const trackedFileIds = new Set(loaded.index.entries.map((entry) => entry.fileId));
+    const outcomes: UntrackedReclamationOutcome[] = [];
+    for (const providerObjectId of requested) {
+      if (trackedFileIds.has(providerObjectId)) {
+        outcomes.push(Object.freeze({ providerObjectId, reclaimed: false, reason: "became-tracked" as const }));
+        continue;
+      }
+      outcomes.push(Object.freeze(await this.trashUntrackedSegment(providerObjectId, signal)));
+    }
+    return Object.freeze({
+      requested: requested.length,
+      reclaimed: Object.freeze(outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.providerObjectId)),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.providerObjectId)),
+      outcomes: Object.freeze(outcomes),
+    });
+  }
+
+  private async trashUntrackedSegment(providerObjectId: string, signal?: AbortSignal): Promise<UntrackedReclamationOutcome> {
+    let response: Response;
+    try {
+      response = await this.driveFetch(`${DRIVE_API}/files/${encodeURIComponent(providerObjectId)}?fields=id,trashed`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trashed: true }),
+        signal,
+      });
+    } catch {
+      return { providerObjectId, reclaimed: false, reason: "refused" };
+    }
+    // A missing file is already absent from every `trashed = false` listing.
+    if (response.status === 404) return { providerObjectId, reclaimed: true };
+    if (!response.ok) return { providerObjectId, reclaimed: false, reason: "refused" };
+    let body: { trashed?: unknown };
+    try {
+      body = await driveJson<{ trashed?: unknown }>(response, "trash untracked encrypted segment");
+    } catch {
+      return { providerObjectId, reclaimed: false, reason: "unconfirmed" };
+    }
+    return body.trashed === true
+      ? { providerObjectId, reclaimed: true }
+      : { providerObjectId, reclaimed: false, reason: "unconfirmed" };
   }
 
   private async loadIndex(signal?: AbortSignal, forceRefresh = false): Promise<LoadedIndex> {
@@ -685,6 +807,13 @@ function validTimestamp(value: string): string {
   const timestamp = new Date(value);
   if (!Number.isFinite(timestamp.getTime())) throw new Error("Google Drive returned an invalid modification time.");
   return timestamp.toISOString();
+}
+
+function parsedDriveSize(value: string | undefined, label: string): number {
+  if (value === undefined || !/^\d+$/u.test(value)) throw new Error(`Google Drive returned an invalid ${label} size.`);
+  const size = Number(value);
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_OBJECT_BYTES) throw new Error(`Google Drive returned an invalid ${label} size.`);
+  return size;
 }
 
 function validRange(start: number, endExclusive: number): void {

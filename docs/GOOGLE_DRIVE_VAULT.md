@@ -144,24 +144,54 @@ these gates pass:
 3. **Garbage collection:** a bounded, resumable client job identifies only
    unreferenced opaque segments after an index snapshot, observes a safety age,
    rechecks a fresh index, and moves candidates to trash with an auditable
-   receipt. Until then, losing uploads are retained ciphertext residue, and so
-   is every superseded file revision — `EncryptedObjectWorkspace` mints a new
-   segment per edit, which is by far the larger volume.
+   receipt. 
 
-   **Partially landed.** `GoogleDriveObjectStore` now implements the optional
-   `ReclaimableObjectStore.trash(keys)` capability, and `VaultCoordinator`
-   sweeps a successful conformance run's own probe objects with it. That is
-   *index-addressed* reclamation with an auditable receipt: the index entry is
-   removed by CAS first, the `trashed: true` PATCH follows, and a key is
-   reported reclaimed only when Drive itself echoes `trashed: true`. Because the
-   entry is dropped first, a crash between the two steps can only leak an
-   untracked file — it can never break a live reference.
+   **Landed, deterministic.** Three cooperating mechanisms, each covered by
+   unit suites and the deterministic Drive fake:
 
-   Still absent, and required to close this gate: enumerating the segments
-   folder to find untracked lost-race orphans that no index entry names, and an
-   aged candidate queue for superseded revisions. Superseded revisions are
-   deliberately **not** trashed inline after a manifest CAS: a reader holding an
-   older manifest generation would hard-fail on the missing object.
+   - *Aged candidate queue.* `EncryptedObjectWorkspace` and
+     `VaultContextFabricPort` record every supersession at commit time into one
+     encrypted, CAS-guarded durable queue
+     ([reclamation-queue.ts](../src/vault/reclamation-queue.ts)): workspace file
+     revisions on `write()`/`remove()`, replaced context-generation segments on
+     `install()`. Recording is best-effort by contract — it never falsifies a
+     committed write — and it stamps the supersession time the safety age is
+     measured from.
+   - *Bounded sweep with fresh-root recheck.*
+     `VaultCoordinator.runReclamationSweep()`
+     ([reclamation.ts](../src/vault/reclamation.ts)) ages queued candidates
+     (default seven days, one-hour floor, ninety-day ceiling), re-verifies
+     every aged candidate against the freshest committed manifest — or routing
+     mirror, for context segments — and only then offers survivors to
+     `ReclaimableObjectStore.trash()` in bounded batches. Still-referenced
+     candidates are reconciled out of the queue without being offered;
+     unverifiable kinds are skipped; providers without a reclamation capability
+     get an honest "cannot reclaim" note; and the queue commits exactly which
+     removals the provider confirmed. The Vault route exposes the run as an
+     explicit **Reclaim storage** action, and the sweep is interruption-safe by
+     construction: every durable decision is the queue document plus the
+     provider's own trash state, so the next run re-derives all progress.
+   - *Segments-folder enumeration.* `GoogleDriveObjectStore` implements
+     `UntrackedObjectSweepStore`: it pages the segments folder for bodies no
+     index entry names (upload-then-crash windows and leakage from
+     index-entry-first trash), ages them by Drive's own `createdTime`, and
+     `trashUntrackedProviderObjects()` re-loads a fresh index per call so a
+     body that became tracked between listing and trash is answered
+     `became-tracked` and never patched. The documented bound of that recheck
+     is one network round-trip against an upload that waited the whole safety
+     age before its index commit — the reason the safety age exists at all.
+
+   Superseded revisions remain deliberately **not** trashed inline after a
+   manifest CAS: a reader holding an older manifest generation would hard-fail
+   on the missing object, which is what the queue's safety window protects.
+   Journal segments whose append CAS lost a race stay recoverable ciphertext —
+   an append retry re-mints the same key and adopts them — and conversation
+   deletion already trashes journal objects head-first inline. What this gate
+   still is not: a live-Google run. Sweep correctness is proven
+   deterministically; Drive's production `createdTime`, paging, and trash
+   semantics are asserted live together with gates 1 and 2 before any
+   production badge.
+
 4. **Sharded index:** before the single encrypted root approaches its bounded
    size or practical Drive latency limit, route key prefixes into independently
    encrypted index shards under one CAS-protected directory root. Load and list

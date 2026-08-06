@@ -44,6 +44,17 @@ type LoadedManifest = {
 };
 
 /**
+ * What the workspace needs from the Vault-wide reclamation queue: a
+ * best-effort record of the revisions a committed CAS just made unreachable.
+ * The queue stamps the supersession time itself; recording never throws and
+ * never participates in whether the write succeeded, which already committed
+ * at the manifest CAS by the time this is called.
+ */
+export interface WorkspaceSupersessionRecorder {
+  recordSuperseded(cloudKeys: readonly string[]): Promise<boolean>;
+}
+
+/**
  * Strict cloud workspace: immutable encrypted file objects are committed first,
  * then one encrypted manifest is advanced with CAS. Lost CAS races leave only
  * opaque ciphertext orphans and never acknowledge the conflicting mutation.
@@ -58,6 +69,7 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     prefix = "state/workspace/v1",
     private readonly now: () => string = () => new Date().toISOString(),
     private readonly id: () => string = randomUuid,
+    private readonly reclamation?: WorkspaceSupersessionRecorder,
   ) {
     this.prefix = canonicalPrefix(prefix);
   }
@@ -176,7 +188,7 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
       await this.dropCachedRevision(cloudKey);
       throw error;
     }
-    if (current) await this.dropCachedRevision(current.cloudKey);
+    if (current) await this.supersedeCommittedRevision(current.cloudKey);
     return structuredClone(file);
   }
 
@@ -189,7 +201,30 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     checkExpectedRevision(current, options.expectedRevision);
     const files = loaded.manifest.files.filter((entry) => entry.path !== normalized);
     await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
-    await this.dropCachedRevision(current.cloudKey);
+    await this.supersedeCommittedRevision(current.cloudKey);
+  }
+
+  /**
+   * The cloud keys the freshest committed manifest still references — the
+   * reclamation sweep's re-verification set. A candidate that appears here is
+   * reconciled out of the queue rather than ever being offered to the
+   * provider; the manifest is the authority, never the queue.
+   */
+  async collectReferencedObjectKeys(): Promise<readonly string[]> {
+    const loaded = await this.loadManifest();
+    if (!loaded) return Object.freeze([] as readonly string[]);
+    return Object.freeze(loaded.manifest.files.map((entry) => entry.cloudKey));
+  }
+
+  /**
+   * A committed manifest CAS is what made this revision unreachable, so the
+   * aged-supersession queue is told first and the read-side acceleration page
+   * second. Neither is the mutation itself: recording is best-effort and the
+   * provider object stays until the bounded sweep ages and re-verifies it.
+   */
+  private async supersedeCommittedRevision(cloudKey: string): Promise<void> {
+    if (this.reclamation) await this.reclamation.recordSuperseded([cloudKey]);
+    await this.dropCachedRevision(cloudKey);
   }
 
   /**
