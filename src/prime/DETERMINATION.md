@@ -123,7 +123,15 @@ Deferred honestly (documented gates, named-not-dropped):
 - Concurrency: k contracts per session (one turn at a time); subagent fan-out
   through admission handles (parent never waits silently).
 
-## 5. Migration safety
+## 5. Full-tree evidence (as of the gate landing)
+
+- `npm test`: 400 test files passed / 4,289 tests passing / 14 skipped —
+  airship suites + every prime suite, zero failures.
+- `npx vitest run src/prime`: 32 files, 552 passing + 13 gated live lane skips.
+- `npm run build:static`: clean; the prime runtime emits as a 72 KB lazy
+  chunk; zero eager HTML module preload (registry updated in vite.config.ts).
+
+## 6. Migration safety
 
 - `src/core/**` is not modified; the selection between `airship-core` and
   `prime` runtimes rides behind an explicit, manifest-pinned, fail-closed
