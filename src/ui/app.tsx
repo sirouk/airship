@@ -40,6 +40,7 @@ import type { InferenceDirectoryPromptDefinition } from "../core/operating-chart
 import { EventJournal, effectiveSessionModel, type DurableEvent, type SessionRecord } from "../core/journal";
 import { planChutesModelSwitch, modelSwitchNeedsCompressionGate } from "./model-switch-plan";
 import { parseReasoningVisibility, setReasoningVisibility } from "./chat/reasoning-visibility";
+import { parsePresentationDensity, setPresentationDensity } from "./density";
 import { randomUuid } from "../core/id";
 import { loadBrowserGit } from "../load-browser-git";
 import { runTurn } from "../load-agent-runtime";
@@ -719,6 +720,7 @@ type ProfileEditorDraft = {
   approvalMode: "ask-first" | "auto-approve" | "full-access";
   minimumPosture: SecurityPosture;
   reasoningVisibility: "collapsed" | "expanded";
+  density: "minimal" | "balanced" | "instrumented";
 };
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
@@ -2591,6 +2593,7 @@ export function App() {
    */
   useEffect(() => {
     setReasoningVisibility(parseReasoningVisibility(activeProfile?.presentation?.reasoningVisibility));
+    setPresentationDensity(parsePresentationDensity(activeProfile?.presentation?.density));
   }, [activeProfile?.revision]);
   useEffect(() => {
     const requested = proofSelection;
@@ -10137,11 +10140,26 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         approvalMode: draft.approvalMode,
         theme: { themeId: theme.themeId, digest: theme.digest },
         skillModes: current.skillModes,
-        presentation: draft.reasoningVisibility === "collapsed"
-          ? current.presentation === undefined
-            ? undefined
-            : { ...current.presentation, reasoningVisibility: "collapsed" }
-          : { ...current.presentation, reasoningVisibility: draft.reasoningVisibility },
+        presentation: (() => {
+          /*
+           * Defaults are byte-stability citizens: they materialize only where
+           * a revision already carried the member, so a profile that never
+           * chose keeps its digest across every preference we add. Explicit
+           * choices always write. Both fields are display-only.
+           */
+          const prior = current.presentation;
+          const reasoningVisibility = draft.reasoningVisibility === "collapsed"
+            ? prior?.reasoningVisibility === undefined ? undefined : "collapsed" as const
+            : draft.reasoningVisibility;
+          const density = draft.density === "minimal"
+            ? prior?.density === undefined ? undefined : "minimal" as const
+            : draft.density;
+          if (reasoningVisibility === undefined && density === undefined) return undefined;
+          return {
+            ...(reasoningVisibility === undefined ? {} : { reasoningVisibility }),
+            ...(density === undefined ? {} : { density }),
+          };
+        })(),
         createdAt: new Date().toISOString(),
       });
       return replaceProfile(currentCatalog, revision);
@@ -14566,11 +14584,25 @@ function ProfileManagerView({
                   { value: "full-access", label: "Full Access" },
                 ]} onChange={(approvalMode) => setDraft({ ...draft, approvalMode: approvalMode as ProfileEditorDraft["approvalMode"] })} /></label>
                 {/*
+                  The Profile's presentation density: how much chatter the app
+                  renders around the work. Minimal keeps the work, the tools,
+                  and the answer; Balanced restores proof pills, counters, and
+                  suggestions where they are relevant; Instrumented adds every
+                  digest, receipt Seam, and diagnostic to the surface. It is
+                  display-only — the same work runs, the same evidence lands —
+                  and it saves with the profile revision, Profile-local beside
+                  the global Preferences.
+                */}
+                <label><span>Presentation density</span><MenuSelect ariaLabel="Profile presentation density" value={draft.density} options={[
+                  { value: "minimal", label: "Minimal", description: "The work and the answer; everything else one action away" },
+                  { value: "balanced", label: "Balanced", description: "Proof, counters, and suggestions where they are relevant" },
+                  { value: "instrumented", label: "Instrumented", description: "Every digest, receipt, and diagnostic on the surface" },
+                ]} onChange={(density) => setDraft({ ...draft, density: density as ProfileEditorDraft["density"] })} /></label>
+                {/*
                   Display-only, like every entry in this row's class: the choice
                   changes how deeply a turn's reasoning begins expanded and
                   nothing else — never what runs, what is stored, or what the
-                  audit sees. It saves with the profile revision, so it is
-                  unmistakably Profile-local beside the global Preferences.
+                  audit sees.
                 */}
                 <label><span>Reasoning</span><MenuSelect ariaLabel="Profile reasoning display" value={draft.reasoningVisibility} options={[
                   { value: "collapsed", label: "Summary", description: "A headline line; the full reasoning opens on demand" },
@@ -14716,6 +14748,7 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
     approvalMode: silo.approvalMode,
     minimumPosture: profile.minimumPosture,
     reasoningVisibility: parseReasoningVisibility(profile.presentation?.reasoningVisibility),
+    density: parsePresentationDensity(profile.presentation?.density),
   };
 }
 

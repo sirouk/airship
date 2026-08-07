@@ -185,6 +185,13 @@ export type ProfileRevisionDraft = Readonly<{
      * a summary line that expands on demand.
      */
     reasoningVisibility?: "collapsed" | "expanded";
+    /**
+     * How much commentary, telemetry, proof echo, suggestion, and raw detail
+     * Preact renders. Retired surfaces are unmounted rather than hidden —
+     * capability, evidence, and agent behavior never change, only the cost
+     * and calm of the view. Absent means the house default: minimal.
+     */
+    density?: "minimal" | "balanced" | "instrumented";
   }>;
   createdAt: string;
 }>;
@@ -681,8 +688,14 @@ function normalizeProfilePresentation(
   const reasoningVisibility = value.reasoningVisibility === undefined
     ? undefined
     : oneOf(value.reasoningVisibility, ["collapsed", "expanded"] as const, "reasoning visibility");
-  if (reasoningVisibility === undefined) return undefined;
-  return deepFreeze({ reasoningVisibility });
+  const density = value.density === undefined
+    ? undefined
+    : oneOf(value.density, ["minimal", "balanced", "instrumented"] as const, "presentation density");
+  if (reasoningVisibility === undefined && density === undefined) return undefined;
+  return deepFreeze({
+    ...(reasoningVisibility === undefined ? {} : { reasoningVisibility }),
+    ...(density === undefined ? {} : { density }),
+  });
 }
 
 function normalizeWorkspaceBinding(value: ProfileWorkspaceBinding | undefined): ProfileWorkspaceBinding {
