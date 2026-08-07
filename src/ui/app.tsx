@@ -163,7 +163,7 @@ import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, t
 import { MemoryWorkspace } from "../workspace/memory";
 import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentity } from "../workspace/profile-scope";
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
-import { ConfirmDialog } from "./confirm-dialog";
+
 import { nextEditorSelection, type EditorSelection } from "./editor-selection";
 import { type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
@@ -1534,6 +1534,22 @@ export function App() {
     windowTokens: number;
     proceed: () => Promise<void>;
   }> | undefined>(undefined);
+  /*
+   * The compression gate's modal loads on first ask rather than statically
+   * from app.tsx — it is a rare, deliberate gesture, and statically sharing
+   * this component with the entry chunk previously double-classified
+   * workspace-view.css into the entry's single allowed stylesheet (solved: one
+   * static .css import may serve the entry alone).
+   */
+  const [ConfirmDialogComp, setConfirmDialogComp] = useState<typeof import("./confirm-dialog")>();
+  useEffect(() => {
+    if (!pendingModelSwitch || ConfirmDialogComp) return;
+    let live = true;
+    void import("./confirm-dialog").then((module) => {
+      if (live) setConfirmDialogComp(module);
+    });
+    return () => { live = false; };
+  }, [pendingModelSwitch, ConfirmDialogComp]);
   const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
   /*
    * Stop has to mean stop. `busy` alone cannot say why a turn ended: the
@@ -12161,8 +12177,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         },
       }} /> : null}
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} conversationFacts={conversationFacts} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
-      {pendingModelSwitch ? (
-        <ConfirmDialog
+      {pendingModelSwitch && ConfirmDialogComp ? (
+        <ConfirmDialogComp.ConfirmDialog
           title={`Switch this conversation to ${pendingModelSwitch.modelLabel}?`}
           confirmLabel={`Switch to ${pendingModelSwitch.modelLabel}`}
           cancelLabel="Keep the current model"
@@ -12180,7 +12196,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             is summarized under the new model&rsquo;s window, while the full history and its
             receipts stay intact and auditable.
           </>
-        </ConfirmDialog>
+        </ConfirmDialogComp.ConfirmDialog>
       ) : null}
       {/*
         The reload the person just pressed is not the departure the guard

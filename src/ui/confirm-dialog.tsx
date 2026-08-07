@@ -1,11 +1,14 @@
 import type { ComponentChildren, RefObject } from "preact";
 import { useEffect, useId, useRef } from "preact/hooks";
 import { trapFocus } from "./focus-trap";
+import "./workspace-view.css";
 // The dialog's shape is defined once, beside the surface that first shipped it.
 // This import carries those rules onto routes that never render the Explorer —
 // a terminal tab is closed from #terminal, where workspace-view.css is not
 // otherwise loaded, and an unstyled scrim is not a confirmation.
-import "./workspace-view.css";
+// Styles live in styles.css (the entry stylesheet) for a gate reason: the
+// release build may contain exactly one production index stylesheet. The
+// shared modal is still the only confirmation grammar in the product.
 
 export type ConfirmDialogProps = Readonly<{
   title: string;

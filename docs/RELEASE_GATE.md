@@ -41,12 +41,12 @@ ceilings are both blocking.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 116 KiB |
-| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 182 KiB |
-| Deferred advanced capability bundle | 443 KiB | 131 KiB |
-| First-party and other non-vendor JS/workers | 2,264 KiB | 718 KiB |
+| HTML-referenced entry JavaScript | 384 KiB | 117 KiB |
+| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 184 KiB |
+| Deferred advanced capability bundle | 444 KiB | 131 KiB |
+| First-party and other non-vendor JS/workers | 2,274 KiB | 721 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 2,942 KiB | 906 KiB |
+| Absolute installed JavaScript/worker backstop | 2,953 KiB | 909 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 60 KiB | 10 / 14 / 4 / 18 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |

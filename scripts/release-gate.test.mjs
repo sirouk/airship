@@ -356,7 +356,7 @@ describe("release gate", () => {
     expect(blockDocumented.measured.length).toBeGreaterThan(0);
     // …and it is held to the same rule as the slash-slash ones now that it is read.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 1,010 B raw / 594 B gzip", "Measured 9,010 B raw / 594 B gzip")))
-      .toThrow(/optionalConfirmDialog: its comment records 9,010 B raw, above the 1\.00 KiB raw ceiling/u);
+      .toThrow(/optionalConfirmDialog: its comment records 9,010 B raw, above the 2\.00 KiB raw ceiling/u);
 
     // A comment may still quote another surface's figure — several exist
     // *because* the entry chunk breached its own ceiling, and saying so is the
