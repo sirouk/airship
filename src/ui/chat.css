@@ -861,10 +861,16 @@ button.runtime-posture {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
 }
 
+/*
+ * A turn that ended badly used to draw a red rectangle around the airship's
+ * own card, because no failure-claim copy existed yet — the border was the
+ * whole sentence a user had to know one action was needed to re-arm. Its
+ * signal is duplicated: the heading row inside the turn parts already says
+ * "Turn failed" with the retry verb beside it, and the session bar already
+ * badges the failing turn. The signal stays, the frame is gone.
+ */
 .message.error .message-body {
-  padding: 11px 13px;
-  border: 1px solid rgba(200, 103, 88, 0.35);
-  border-radius: 4px var(--radius-panel) var(--radius-panel) var(--radius-panel);
+  padding: 0;
 }
 
 /*
