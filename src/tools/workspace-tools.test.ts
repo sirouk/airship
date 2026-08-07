@@ -245,14 +245,17 @@ describe("workspace tools", () => {
 
     const read = await execute(workspace, "read_file", { path: "assets/raw.bin" });
     const stat = await execute(workspace, "stat_path", { path: "assets/raw.bin" });
-    const listed = JSON.parse((await execute(workspace, "list_files", { path: "assets" })).content) as JsonValue[];
+    // list_files is a transcript surface, one line per entry — the agent
+    // reads the same number either way, and people do not decode braces.
+    const listed = (await execute(workspace, "list_files", { path: "assets" })).content;
 
     expect(read.metadata).toMatchObject({ size: 4 });
     expect(stat.metadata).toMatchObject({ size: 4 });
     expect(JSON.parse(stat.content)).toMatchObject({ type: "file", size: 4 });
-    expect(listed).toEqual([expect.objectContaining({ path: "/workspace/assets/raw.bin", size: 4 })]);
+    expect(listed).toContain("/workspace/assets/raw.bin");
+    expect(listed).toContain("4 bytes");
     // One size in the transcript, never the storage field beside it.
-    expect(JSON.stringify(listed)).not.toContain("contentByteLength");
+    expect(listed).not.toContain("contentByteLength");
     expect(stat.content).not.toContain("contentByteLength");
   });
 

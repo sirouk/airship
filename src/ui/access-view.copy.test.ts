@@ -332,17 +332,10 @@ describe("the Chutes lane says when it cannot work, and why, where a person is s
     expect(source).toContain("<strong>{SIGN_IN_UNAVAILABLE}</strong> Paste a Chutes API key instead — it works now and stays in page memory.");
     expect(source).toContain("<summary>Why this build cannot sign in</summary>");
     expect(source).toContain("Deployment detail: {signInBlockedReason}");
-async function answerReset(page: Page, reset: Locator, answer: "cancel" | "confirm"): Promise<void> {
-  await reset.click();
-  const dialog = page.getByRole("dialog", { name: "Reset preferences?" });
-  await expect(dialog).toBeVisible();
-  // The consequence before the commitment, and the boundary of the change in
-  // the same breath: the dialog has to say what it does NOT touch, or
-  // "Conversations·profiles·vault" stays guesswork.
-  await expect(dialog).toContainText("Display, durability, and legacy approval preferences return to their defaults.");
-  await expect(dialog).toContainText("conversations, profiles, vault, and workspaces are not touched");
-  await dialog.getByRole("button", { name: answer === "confirm" ? "Reset to defaults" : "Cancel" }).click();
-}
+    // The verb that swaps to the key lane must also carry focus into the
+    // field it serves — a tab swap that strands the pointer is not a recovery.
+    expect(source).toContain('setChutesMethod("api-key");');
+    expect(source).toContain(">Use an API key</button>");
     // The consequence is above the cause in the rendered order, not merely
     // present somewhere in the file.
     expect(source.indexOf("{SIGN_IN_UNAVAILABLE}")).toBeLessThan(cause);

@@ -1,4 +1,5 @@
 import type { JsonValue, Tool, ToolExecutionResult } from "../core/contracts";
+
 import {
   isWorkspaceControlPlanePath,
   WorkspaceConflictError,
@@ -69,6 +70,16 @@ function userWorkspaceEntries(files: readonly WorkspaceFile[] | readonly Omit<Wo
  * path. Emit the decoded length as `size` and drop the storage field rather
  * than hand the model two competing numbers to choose between.
  */
+/**
+ * One weight the transcript can read without units gymnastics — list_files
+ * is a person surface too (see C1).
+ */
+function formatWorkspaceBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} bytes`;
+}
+
 function presentedWorkspaceEntry(
   entry: Omit<WorkspaceFile, "content">,
 ): Omit<WorkspaceFile, "content" | "contentByteLength"> {
@@ -95,8 +106,22 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const path = userWorkspacePath(normalizeWorkspacePath(
         typeof argumentsObject.path === "string" ? argumentsObject.path : "/workspace",
       ));
-      const files = userWorkspaceEntries(await workspace.list(path)).map(presentedWorkspaceEntry);
-      return { content: JSON.stringify(files, null, 2), metadata: { count: files.length } };
+      const files = userWorkspaceEntries(await workspace.list(path)).map((entry) => {
+        /*
+         * A line per entry, not JSON: this content goes to the transcript,
+         * where a directory listing is read by a person, not parsed. The same
+         * information on one line per entry is what the model reads too —
+         * braces add nothing it uses.
+         */
+        const { contentByteLength: stored, ...rest } = entry;
+        const kind = rest.path.endsWith("/") ? "/" : "";
+        // The file's own weight, decoded — never the storage envelope, which
+        // is how the binary case reads ~4/3 of the file (see stat_path).
+        const sizeText = kind ? "" : ` ${formatWorkspaceBytes(workspaceEntryByteLength(entry))}`;
+        return `${rest.path}${kind}${kind === "/" ? "" : ` ${sizeText.trimStart()}`}`;
+      });
+      const content = files.length ? files.join("\n") : `${path === "/" ? "/" : `${path}/`} (empty)`;
+      return { content, metadata: { count: files.length } };
     },
   };
 
