@@ -17,6 +17,13 @@ import type { KernelBudgets } from "../kernel/kernel-contract";
 import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";
 import type { AgentSignal } from "../../core/agent";
+import { randomUuid } from "../../core/id";
+import {
+  PRIME_DEFAULT_SESSION_TITLE,
+  primeConversationNamingDrafts,
+  primeConversationTitleFromModel,
+  primeConversationTitleFromPrompt,
+} from "./naming";
 import { PrimeAgentSession } from "./session";
 import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
 import type { ConversationReceipt } from "../../receipts/types";
@@ -68,7 +75,11 @@ export type PrimeAttachSessionOptions = PrimeSessionWiring & Readonly<{
   manifest?: SessionManifest;
 }>;
 
-const DEFAULT_SESSION_TITLE = "Prime conversation";
+// App-minted default: a record still wearing this exact string has never
+// seen its first prompt, which is what makes the title on the journal record
+// itself the naming gate (mirrors app.tsx isAppMintedConversationTitle's role
+// for airship's minted titles).
+const DEFAULT_SESSION_TITLE = PRIME_DEFAULT_SESSION_TITLE;
 
 export class PrimeRuntime {
   private readonly options: PrimeRuntimeOptions;
@@ -145,7 +156,79 @@ export class PrimeRuntime {
   }
 
   async prompt(sessionId: string, content: string, images?: readonly CanonicalImageInput[]): Promise<PrimeTurnResult> {
-    return this.requireSession(sessionId).prompt(content, images);
+    const session = this.requireSession(sessionId);
+    const naming = await this.prepareConversationNaming(sessionId, content);
+    const result = await session.prompt(content, images);
+    /*
+     * The model-naming request runs strictly off the turn's critical path:
+     * it fires after the turn completed and its promise is never awaited,
+     * matching app.tsx verbatim. A failed or unusable answer changes
+     * nothing about the result — the request that was made is journaled
+     * either way, because it was requested and billed.
+     */
+    if (naming && result.outcome === "completed") {
+      void this.applyConversationNaming(sessionId, content, naming.transport, naming.model);
+    }
+    return result;
+  }
+
+  /**
+   * Naming gate, mirroring app.tsx exactly: heuristic title first so the
+   * thread is never nameless; the flag is the journal-record title itself
+   * (a default-title record has never met a prompt). Best-effort by
+   * construction — titling is presentational and must never fail a turn.
+   */
+  private async prepareConversationNaming(
+    sessionId: string,
+    content: string,
+  ): Promise<{ transport: InferenceTransport; model: string } | undefined> {
+    const wiring = this.namingWiring.get(sessionId);
+    if (!wiring) return undefined;
+    let record;
+    try {
+      record = await this.options.journal.getSession(sessionId);
+    } catch {
+      return undefined;
+    }
+    if (!record || record.title !== DEFAULT_SESSION_TITLE) return undefined;
+    this.namingWiring.delete(sessionId);
+    try {
+      await this.options.journal.renameSession(sessionId, primeConversationTitleFromPrompt(content));
+    } catch {
+      // A storage race on a presentation detail must not prevent the turn.
+    }
+    return wiring;
+  }
+
+  /** The paid model-naming request and its journaling; never throws outward. */
+  private async applyConversationNaming(
+    sessionId: string,
+    content: string,
+    transport: InferenceTransport,
+    model: string,
+  ): Promise<void> {
+    try {
+      const identity = {
+        sessionId,
+        turnId: `naming-${randomUuid()}`,
+        operationId: `naming-request-${randomUuid()}`,
+      };
+      const named = await primeConversationTitleFromModel({ transport, model, content, identity });
+      if (!named) return;
+      await this.options.journal.append(
+        sessionId,
+        primeConversationNamingDrafts(named, {
+          model,
+          turnId: identity.turnId,
+          operationId: identity.operationId,
+        }),
+      );
+      if (named.title) {
+        await this.options.journal.renameSession(sessionId, named.title);
+      }
+    } catch (error) {
+      // The conversation is already titled heuristically; a naming failure is a no-op.
+    }
   }
 
   async abortTurn(sessionId: string, reason?: string): Promise<void> {
@@ -171,6 +254,9 @@ export class PrimeRuntime {
     return session;
   }
 
+  /** Transport pinned for the side-channel naming request, keyed by session. */
+  private readonly namingWiring = new Map<string, { transport: InferenceTransport; model: string }>();
+
   private buildSession(
     options: PrimeSessionWiring & Readonly<{ sessionId: string; manifest: SessionManifest }>,
   ): PrimeAgentSession {
@@ -185,6 +271,11 @@ export class PrimeRuntime {
       approvalPolicy: this.options.approvalPolicy,
       ...wiring,
     };
+    if (options.transport) {
+      this.namingWiring.set(options.sessionId, { transport: options.transport, model: options.manifest.model });
+    } else {
+      this.namingWiring.delete(options.sessionId);
+    }
     return this.options.factory?.(sessionOptions) ?? new PrimeAgentSession(sessionOptions);
   }
 

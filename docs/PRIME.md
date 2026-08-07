@@ -1,5 +1,13 @@
 # PRIME runtime inside Airship — overview
 
+> PRIME is the **default agentic engine** for new sessions since the W
+  series landed (2026-08). Selection is journal-evidence-driven: fresh
+  sessions start prime, sessions with airship-core history stay
+  airship-core-driven, and a caller contradicting the journal pin is
+  refused with a fork-the-session sentence. The full contract and its
+  acceptance state live in `docs/PRIME-RUNTIME-GATE.md`; verification at
+  the flip: full tree 408 files / 4,350 tests / 0 failures.
+
 This document is the product-level handoff for the port. For engineering
 detail start at `src/prime/README.md`, `src/prime/PORT-MAP.md`, and
 `src/prime/DETERMINATION.md` (the measured architecture call).

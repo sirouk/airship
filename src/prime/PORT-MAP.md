@@ -51,7 +51,11 @@ needs an explicit host capability / acceptance run.
 | packages/ai/src/mcp/* | ~1.5k | — | excluded (seam) | deferred behind adapter seam |
 | packages/ai/src/providers/register-builtins.ts | 17 | `src/prime/ai/providers/register-builtins.ts` | done | lazy chunk loaders |
 | packages/agent/src/types.ts | 421 | `src/prime/agent/types.ts` | done | JsonSchema params for typebox |
-| packages/agent/src/agent-loop.ts | 986 | `src/prime/agent/agent-loop.ts` | done | invariants 16-21 enforcement incl. parallel/sequential twins |
+| packages/agent/src/agent-loop.ts | 986 | `src/prime/agent/agent-loop.ts` | done | invariants 16-21 enforcement; mixed-step batched lane added — contiguous declared-read runs parallelize, everything else is a barrier (W4) |
+| airship fork-context admission (`assertForkContextHistoryCompatible` + seed verify) | ~430 | `src/prime/runtime/fork-admission.ts` | done | v1 replay-only gate first, seed at events[1], byte-identical refusals, byte-equal materialize options (W3) |
+| airship read-effect batch discipline (`readEffectBatch`) | ~140 | `src/prime/agent/tool-batches.ts` | done | allSettled concurrency, completion-order ends, source-order results, abort-blocked starts (W4; session declares from registry effect) |
+| airship conversation naming (`conversationTitleFromModel` / `conversation.named` writer) | ~240 | `src/prime/runtime/naming.ts` | done | heuristic-first, paid naming journaled under naming-* identities with finalized receipt + usage (W5) |
+| airship runtime gate default | — | `src/load-agent-runtime.ts` + `src/prime/runtime/agent-runtimes.ts` + lazy UI tag | done | prime default by journal evidence, fork-the-session refusals, honest status surface (W1/W6) |
 | packages/agent/src/agent.ts | 613 | `src/prime/agent/agent.ts` | done | Agent class + queue semantics + settlement |
 | packages/agent/src/proxy.ts | 367 | — | excluded | daemon transport (in-process single page) |
 | packages/coding-agent/src/core/kernel/* (ZMQ/CPython runtime) | 3329 | `src/prime/kernel/*` | done (kernel-contract, kernel-worker-source, kernel-host, tool-bridge) | persistent worker engine + approval-bound bridge (semantics re-hosted; ZMQ dropped) |
@@ -67,7 +71,7 @@ needs an explicit host capability / acceptance run.
 | packages/coding-agent TUI/themes/export-html | ~31k | — | excluded | airship owns UI |
 | packages/coding-agent/src/core/skills.ts (+ skill creator) | ~2.3k | `src/prime/tools/skills.ts` | done | markdown skills first; python skills execute through eager kernel |
 | packages/coding-agent goals/heartbeats/cron | ~2.6k | `src/prime/tools/goals-tools.ts` + runtime scheduler seam | spec | data-plane CRUD now; tick driver as a host seam |
-| packages/coding-agent compaction | 1398 | session transformContext seam + airship planContextCompression | spec | threshold semantics ported; summarizer = airship context-compressor (integration, not clone) |
+| packages/coding-agent compaction | 1398 | session transformContext seam + airship planContextCompression | done | pinned compression, calibrated summarizer, plan restatement after summary only — see W2 in docs/PRIME-RUNTIME-GATE.md |
 | packages/coding-agent extensions/hooks | 3900 | — | excluded v1 | swallow map later |
 | new: transport vocabulary bridge | — | `src/prime/transport-adapter.ts` | done (child) | both directions incl. receipt out-channel |
 | new: kernel tool bridge | — | `src/prime/kernel/tool-bridge.ts` | done | prime.kernel.* evidence namespace |
