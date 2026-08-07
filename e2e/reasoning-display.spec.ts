@@ -38,8 +38,10 @@ test("provider reasoning lands as its own collapsible part, summary first, full 
   await page.goto("/#sessions", { waitUntil: "domcontentloaded" });
   const library = page.locator(".session-library-view");
   await expect(library).toBeVisible({ timeout: 15_000 });
-  // The reasoning did not fork anything: one thread, one request.
-  await expect(library.getByRole("listitem")).toHaveCount(1, { timeout: 15_000 });
+  // The reasoning did not fork anything: exactly one thread owns the turn.
+  await expect(
+    library.getByRole("listitem").filter({ hasText: "/reason whether to ship on Friday" }),
+  ).toHaveCount(1, { timeout: 15_000 });
 });
 
 test("the Profile display preference opens reasoning by default without touching the turn", async ({ page }) => {

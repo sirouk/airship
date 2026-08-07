@@ -699,7 +699,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // variant measuring one raw byte and twenty-nine gzip bytes under this
   // config-free CI artifact. Gzip takes the smallest whole-KiB step that
   // clears the reading, so 727.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2291 * 1024, gzip: 727 * 1024 }),
+  // Re-measured at 2,346,016 B raw / 743,562 B gzip after the demo-lane
+  // routing guard and slash-local prompt bypass. The claims state the floor
+  // across both build modes, with the origin-inlined Docker variant
+  // measuring one raw byte and twenty-nine gzip bytes under this config-free
+  // CI artifact. Raw takes the smallest whole-KiB step that clears the
+  // reading, so 2,292.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2292 * 1024, gzip: 727 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack

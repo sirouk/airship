@@ -6581,7 +6581,23 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     });
     if (slashRegistry && slashModule) {
       const slashPlan = slashModule?.planSlashCommand(content, slashRegistry);
-      if (slashPlan.kind !== "chat") {
+      /*
+       * The demo's teaching verbs are not product commands: /reason is the
+       * prompt the demo's own help lists to demonstrate reasoning, and the
+       * demo's inference lane owns it. When the composer is the demo and the
+       * planner can only answer "unknown slash command", that verdict is not
+       * a refusal — the prompt falls through to inference, where the demo
+       * answers it. At a real inference connection the verdict still stands,
+       * because nothing beyond the registry would take it.
+       */
+      const unknownSlashDemoPrompt = slashPlan.kind === "invalid"
+        && slashPlan.code === "unknown-command"
+        && !inferenceConnected;
+      /* …and `composerUsesDemo` would be the wrong authority here: it reads
+         `composerPlan`, whose "invalid" verdict on an unknown-ish prompt
+         would turn the demo flag off precisely when the prompt is one of
+         the demo's teaching verbs. The gate is the connection instead. */
+      if (slashPlan.kind !== "chat" && !unknownSlashDemoPrompt) {
         // Local built-ins do not all create an AbortController. Keep a separate
         // synchronous admission lock so duplicate click/key events in one
         // render cannot create two sessions, forks, or local transcript rows.
@@ -6610,7 +6626,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         requestAnimationFrame(() => textarea.current?.focus());
         return true;
       }
-      content = slashPlan.content.trim();
+      content = slashPlan.kind === "chat" ? slashPlan.content.trim() : content;
       if (!content) {
         // Same wedge as above for a plan rewritten to nothing: the item can
         // never become a turn, so a queued head has to leave the queue here.

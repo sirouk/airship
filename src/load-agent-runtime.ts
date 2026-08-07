@@ -37,6 +37,19 @@ export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRu
  * for anything with history.
  */
 export async function runTurn(options: RunTurnOptions & { runtime?: AgentRuntimeKind }): Promise<TurnResult> {
+  /*
+   * The demo transport is the airship-core lane by construction: it exists
+   * exactly while nothing is connected, pinned to `airship-demo` in every
+   * built-in Profile, and nothing about prime provider resolution can take
+   * it — a prime-session lane asking for an airship-demo API key is the
+   * default-on wave's crash of the demo default. Inference for the demo
+   * runs where it always did; only the lane ownership is decided here, not
+   * the engine's evidence, and real inference ignores this branch entirely.
+   */
+  if (options.transport?.id === "airship-demo") {
+    agentRuntime ??= import("./core/agent");
+    return (await agentRuntime).runTurn(options);
+  }
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
   const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned" ? "prime" : history);

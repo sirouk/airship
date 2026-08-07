@@ -71,7 +71,7 @@ describe("thread queue surface contract", () => {
     // re-fires the dispatch effect. The admission lives beside the
     // admission-lock release so both paths through the try/catch settle the
     // queue once.
-    const branch = app.slice(app.indexOf('if (slashPlan.kind !== "chat")'));
+    const branch = app.slice(app.indexOf('if (slashPlan.kind !== "chat" && !unknownSlashDemoPrompt)'));
     expect(branch.indexOf("queue?.onAdmitted();")).toBeGreaterThan(-1);
     expect(branch.indexOf("queue?.onAdmitted();")).toBeLessThan(branch.indexOf("localCommandAdmission.current = false;"));
     // Exactly once on this path: the chat path's admission is unreachable
@@ -80,7 +80,7 @@ describe("thread queue surface contract", () => {
   });
 
   it("acknowledges a queued plan rewritten to empty content instead of wedging", () => {
-    expect(app).toMatch(/content = slashPlan\.content\.trim\(\);\s*\n\s*if \(!content\) \{\s*\n(?:.*\n)*?\s*queue\?\.onAdmitted\(\);\s*\n\s*return false;/u);
+    expect(app).toMatch(/content = slashPlan\.kind === "chat" \? slashPlan\.content\.trim\(\) : content;\s*\n\s*if \(!content\) \{\s*\n(?:.*\n)*?\s*queue\?\.onAdmitted\(\);\s*\n\s*return false;/u);
   });
 
   it("retries a refused queue head when connectivity comes back", () => {

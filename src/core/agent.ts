@@ -1204,9 +1204,18 @@ export function materializeMessages(
         payload.contextSelection === undefined || options.allowEmbeddedContext === false || contextSelection
       )) {
         const messageIndex = messages.length;
+        /*
+         * A slash-shaped prompt is transport-local (/reason and the demo's
+         * teaching verbs): workspace context injection wraps the user text in
+         * a sterile header, and the receiving lane stopped parsing its own
+         * verb — which is precisely how /reason returned the demo's fallback
+         * instead of its reasoning lane. Those prompts are never workspace
+         * queries, so they arrive verbatim.
+         */
+        const slashLocal = payload.content.trimStart().startsWith("/");
         messages.push({
           role: "user",
-          content: options.injectLatestContext !== false && event.eventId === latestRequest?.eventId
+          content: options.injectLatestContext !== false && !slashLocal && event.eventId === latestRequest?.eventId
             ? injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection)
             : payload.content,
           ...(images.length ? { images: [...images] } : {}),
@@ -1218,9 +1227,11 @@ export function materializeMessages(
       const messageIndex = requestMessageIndexes.get(event.turnId);
       const contextSelection = canonicalContextSelection(payload?.contextSelection);
       const message = messageIndex === undefined ? undefined : messages[messageIndex];
+      const slashLocal = message?.role === "user" && message.content.trimStart().startsWith("/");
       if (
         messageIndex !== undefined &&
         message?.role === "user" &&
+        !slashLocal &&
         contextSelection &&
         options.injectLatestContext !== false &&
         event.turnId === latestRequest?.turnId
