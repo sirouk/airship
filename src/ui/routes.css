@@ -2664,7 +2664,7 @@
 
   .edition,
   .brand-name,
-  .runtime-line,
+  .runtime-line:not(.runtime-line--phone),
   .sidebar {
     display: none;
   }

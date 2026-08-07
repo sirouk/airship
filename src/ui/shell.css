@@ -528,7 +528,7 @@
   display: none;
 }
 
-.runtime-line {
+.runtime-line:not(.runtime-line--phone) {
   display: flex;
   flex: 0 1 auto;
   gap: 7px;
