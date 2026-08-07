@@ -76,6 +76,7 @@ import { sha256, stableStringify, toolArgumentsDigest } from "../../core/hash";
 import { randomUuid } from "../../core/id";
 import { withInferenceRetry } from "../../core/inference-retry";
 import type { DurableEvent, EventDraft, EventJournal } from "../../core/journal";
+import { admitPrimeForkContext, type PrimeForkAdmission } from "./fork-admission";
 import {
   injectLiveEnvironment,
   liveEnvironmentScopeMatches,
@@ -519,14 +520,17 @@ export class PrimeAgentSession {
       throw new Error(`Turn ${unfinishedTurn} has no durable terminal event; recover or fork the session before continuing.`);
     }
     assertContextHistoryCompatible(this.eventsCache, manifest);
-    if (manifest.lineage) {
-      // fork-context admission is a named remaining seam, not silently
-      // dropped seed material: refuse rather than run on weakened context.
-      throw new Error(
-        "The prime session authority does not admit fork-context sessions yet; " +
-        "fork-context admission is a named remaining seam.",
-      );
-    }
+    // Fork-context admission, always: lineage-free sessions admit to the
+    // baseline materialize options, lineage sessions only on a verified seed
+    // (the v1 replay-only gate and core's exact refusal sentences live in
+    // src/prime/runtime/fork-admission.ts).
+    const admission = await admitPrimeForkContext({
+      sessionId: this.options.sessionId,
+      events: this.eventsCache,
+      manifest,
+    });
+    if (!admission.ok) throw new Error(admission.reason);
+    this.forkAdmission = admission;
     const images = canonicalImageInputs(entry.images);
     if (!images) throw new TypeError("Turn images do not satisfy the canonical multimodal contract.");
 
@@ -643,14 +647,22 @@ export class PrimeAgentSession {
    * provider request (agent-loop's single call point), which is where the
    * per-step token projection and context budget belong.
    */
+  /** Latest fork-context admission outcome; refreshed at every turn open. */
+  private forkAdmission: Extract<PrimeForkAdmission, { ok: true }> | undefined;
+
   private async convertToLlm(_messages: AgentMessage[]): Promise<Message[]> {
     const turn = this.requireTurn();
     const events = await this.refreshEvents();
     const manifest = this.options.manifest;
-    const canonical = materializeMessages(events as DurableEvent[], {
-      allowEmbeddedContext: manifest.turnContext === undefined,
-      allowSelectedContext: manifest.turnContext !== "disabled",
-    });
+    // Admission output is the provider-input authority's exact option list
+    // (core's literals, incl. forkContextScope + verified digest when pinned).
+    const canonical = materializeMessages(
+      events as DurableEvent[],
+      this.forkAdmission?.materializeOptions ?? {
+        allowEmbeddedContext: manifest.turnContext === undefined,
+        allowSelectedContext: manifest.turnContext !== "disabled",
+      },
+    );
     turn.canonical = canonical;
 
     if (manifest.contextPolicy) {
@@ -850,8 +862,8 @@ export class PrimeAgentSession {
    * Mirror of core/agent.ts runTurn's pinned-compression boundary block. The
    * window is immutable session semantics from the manifest, never inferred;
    * calibration reads provider-reported usage already in the journal, with
-   * the materialize closure carried identically (fork-context scope included
-   * as core carries it; prime's lineage refusal in runTurn makes it inert). When
+   * the materialize closure carried identically (fork-context scope + verified
+   * digest included exactly as core carries them). When
    * the plan says compress, context.summary.updated lands before this turn's
    * first inference.started, followed by the plan restatement exactly when
    * the plan provider reports open work — core's fire/no-fire rule.
@@ -868,12 +880,8 @@ export class PrimeAgentSession {
       ? contextCompressionOptionsFromPolicy(manifest.contextPolicy)
       : undefined;
     if (!pinnedContextCompression) return;
-    const forkContextScope = { sessionId: this.options.sessionId, lineage: manifest.lineage };
-    const materialization = {
-      allowEmbeddedContext: manifest.turnContext === undefined,
-      allowSelectedContext: manifest.turnContext !== "disabled",
-      forkContextScope,
-    } as const;
+    // Admission ran at this turn's open; its options are the single source.
+    const materialization = this.forkAdmission!.materializeOptions;
     const bytesPerToken = calibrateBytesPerToken(existingEvents, {
       systemPrompt: manifest.systemPrompt,
       tools: manifest.tools,
@@ -953,6 +961,14 @@ export class PrimeAgentSession {
       name: definition.name,
       description: definition.description,
       parameters: definition.inputSchema as JsonSchema,
+      /*
+       * The airship effect classification drives execution discipline:
+       * declared reads run concurrently in contiguous batches; every other
+       * effect is a serialization barrier (`readEffectBatch`'s exact rule,
+       * `src/prime/agent/tool-batches.ts`). The loop defaults nothing for
+       * registered tools.
+       */
+      executionMode: (definition.effect === "read" ? "parallel" : "sequential"),
       async execute(toolCallId: string, args: unknown, signal?: AbortSignal) {
         const turn = session.turn;
         if (!turn) throw new Error("No active turn for tool execution.");

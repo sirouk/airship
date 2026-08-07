@@ -13,6 +13,7 @@
 
 import { EventStream } from "../ai/event-stream";
 import { streamSimple } from "../ai/stream";
+import { executePrimeBatch, planPrimeToolBatches } from "./tool-batches";
 import type { AssistantMessage, AssistantMessageEvent, Context, ToolResultMessage } from "../ai/types";
 import { validateJson } from "../ai/validate";
 import type {
@@ -643,13 +644,139 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+  if (config.toolExecution === "sequential") {
+    return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
+  }
+  /*
+   * Three dispatch lanes: a tool the host declared sequential is a write
+   * barrier, and airship's tool phase parallelizes only the contiguous run
+   * between barriers (`readEffectBatch`), never the whole step. Upstream
+   * parity stays exact in the two lanes the port shipped: nothing declared
+   * sequential still takes the whole-step parallel path, and the
+   * config-level sequential lane still runs serially tool by tool. Only a
+   * step mixing both declarations drives the new batched lane, and hosts
+   * reach it through the executionMode declaration alone — no config change.
+   */
   const hasSequentialToolCall = toolCalls.some(
     (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
   );
-  if (config.toolExecution === "sequential" || hasSequentialToolCall) {
+  const hasParallelToolCall = toolCalls.some(
+    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode !== "sequential",
+  );
+  if (!hasSequentialToolCall) {
+    return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+  }
+  if (!hasParallelToolCall) {
     return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
   }
-  return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+  return executeToolCallsBatched(currentContext, assistantMessage, toolCalls, config, signal, emit);
+}
+
+/**
+ * Airship's mixed-step discipline: contiguous runs of parallel-capable
+ * calls settles concurrently; sequential declarations execute one settled
+ * call before the next starts. Admission (`tool_execution_start` + prepare)
+ * stays strict source order across the whole step, results journal in
+ * source order, and each batch's `tool_execution_end` lands in settlement
+ * order — the two projections never derive from each other.
+ */
+async function executeToolCallsBatched(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCalls: AgentToolCall[],
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  emit: AgentEventSink,
+): Promise<ExecutedToolCallBatch> {
+  type Entry =
+    | Readonly<{ kind: "finalized"; parallel: boolean; finalized: FinalizedToolCallOutcome }>
+    | Readonly<{ kind: "prepared"; parallel: boolean; run: () => Promise<FinalizedToolCallOutcome> }>;
+
+  // Phase 1: admission order. Aborts before a start block it, exactly the
+  // sequential lane's rule — a control-flow property, not a timing one.
+  const entries: Entry[] = [];
+  for (const toolCall of toolCalls) {
+    if (signal?.aborted) break;
+    const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+    // Undeclared is parallel-capable: upstream parity default. The airship
+    // session mapping always declares explicitly, so the barrier reading of
+    // an unknown tool is unaffected here.
+    const parallelCapable = tool?.executionMode !== "sequential";
+    await emit({
+      type: "tool_execution_start",
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      args: toolCall.arguments,
+    });
+    const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+    if (preparation.kind === "immediate") {
+      const finalized = {
+        toolCall,
+        result: preparation.result,
+        isError: preparation.isError,
+      } satisfies FinalizedToolCallOutcome;
+      await emitToolExecutionEnd(finalized, emit);
+      entries.push({ kind: "finalized", parallel: parallelCapable, finalized });
+      continue;
+    }
+    entries.push({
+      kind: "prepared",
+      parallel: parallelCapable,
+      run: async () => {
+        const executed = await executePreparedToolCall(preparation, signal, emit);
+        const finalized = await finalizeExecutedToolCall(
+          currentContext,
+          assistantMessage,
+          preparation,
+          executed,
+          config,
+          signal,
+        );
+        await emitToolExecutionEnd(finalized, emit);
+        return finalized;
+      },
+    });
+  }
+
+  // Phase 2+3: partition by the per-tool declaration and execute batches
+  // under the airship discipline, one batch settled before the next starts.
+  const batches = planPrimeToolBatches(entries, (entry) => entry.parallel);
+  const finalizedCalls: (FinalizedToolCallOutcome | undefined)[] = new Array(entries.length).fill(undefined);
+  let cursor = 0;
+  for (const batch of batches) {
+    if (signal?.aborted) break;
+    const batchEntries = entries.slice(cursor, cursor + batch.calls.length);
+    // The planner partitions over entries; call indices stay the slice
+    // cursor's, so executor index maps 1:1 to batchEntries.
+    const execution = await executePrimeBatch(
+      { calls: batchEntries, parallel: batch.parallel },
+      async (entry) => {
+        if (entry.kind === "finalized") return entry.finalized;
+        return entry.run();
+      },
+      { ...(signal ? { signal } : {}) },
+    );
+    for (let index = 0; index < execution.outcomes.length; index += 1) {
+      const outcome = execution.outcomes[index]!;
+      if (outcome.status === "fulfilled") finalizedCalls[cursor + index] = outcome.value;
+      // Rejections surface after the batch settles, never inside it — the
+      // lane mirrors Promise.all's first-rejection surface without tearing
+      // completions that already landed.
+      if (outcome.status === "rejected") throw outcome.reason;
+    }
+    cursor += batch.calls.length;
+  }
+
+  // Phase 4: results in source order over what actually settled. Aborted
+  // tails contribute nothing, matching the sequential lane's shaping.
+  const settled = finalizedCalls.filter((c): c is FinalizedToolCallOutcome => c !== undefined);
+  const messages: ToolResultMessage[] = [];
+  for (const finalized of settled) {
+    const toolResultMessage = createToolResultMessage(finalized);
+    await emitToolResultMessage(toolResultMessage, emit);
+    messages.push(toolResultMessage);
+  }
+  return { messages, terminate: shouldTerminateToolBatch(settled) };
 }
 
 type ExecutedToolCallBatch = {

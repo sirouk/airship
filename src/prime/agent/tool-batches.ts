@@ -1,5 +1,5 @@
 /**
- * Prime read-effect batch parallelism — a byte-faithful mirror of the airship
+ * Read-effect batch parallelism — a byte-faithful mirror of the airship
  * tool-phase pipeline (`src/core/agent.ts` `readEffectBatch` and the cursor
  * loop around it, lines 484-624) for sessions the prime engine settles.
  *
