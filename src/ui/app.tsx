@@ -40,7 +40,7 @@ import type { InferenceDirectoryPromptDefinition } from "../core/operating-chart
 import { EventJournal, effectiveSessionModel, type DurableEvent, type SessionRecord } from "../core/journal";
 import { planChutesModelSwitch, modelSwitchNeedsCompressionGate } from "./model-switch-plan";
 import { parseReasoningVisibility, setReasoningVisibility } from "./chat/reasoning-visibility";
-import { parsePresentationDensity, setPresentationDensity } from "./density";
+import { densityAllows, parsePresentationDensity, setPresentationDensity, usePresentationDensity } from "./density";
 import { randomUuid } from "../core/id";
 import { loadBrowserGit } from "../load-browser-git";
 import { runTurn } from "../load-agent-runtime";
@@ -1787,10 +1787,21 @@ export function App() {
    * for somebody who reads this every turn.
    */
   const [claimRailOpen, setClaimRailOpen] = useState(() => readClaimRailPreference());
+  /*
+   * The Profile's information density, subscribed once at the shell so every
+   * gate in this file — proof rail, suggestions, first run — reads the same
+   * authority the profile publishes. One store, one frame.
+   */
+  const appDensity = usePresentationDensity();
   useEffect(() => {
+    // The rail opens itself only at the rungs where proof is ambient chrome.
+    // At minimal the first receipt does not rearrange the layout: the rail
+    // stays collapsed, and opening it is one deliberate action, exactly like
+    // expanding an attestation pill at that perch.
     if (!lastReceipt || lastReceipt.posture === "local" || claimRailOpen) return;
+    if (!densityAllows("proof", appDensity)) return;
     setClaimRailOpen(true);
-  }, [lastReceipt?.receiptId]);
+  }, [lastReceipt?.receiptId, appDensity]);
   useEffect(() => {
     try { localStorage.setItem(CLAIM_RAIL_STORAGE_KEY, claimRailOpen ? "open" : "summary"); }
     catch { /* The rail stays as it is for this page. */ }
@@ -10870,7 +10881,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
    */
   const queueVisibleItems = queueExpanded || messageQueue.length === 1 ? messageQueue : [];
   const isBranchTranscript = messages.some((message) => message.marker?.carriedContext !== undefined);
-  const firstRunTranscript = messages.length <= 1 && !isBranchTranscript;
+  /*
+   * The suggestion cards are a suggestion, in the density taxonomy — at
+   * minimal a fresh thread shows the composer and nothing else, which is the
+   * rest of the mandate: the next action was already obvious, and three
+   * buttons were extra weight beside it.
+   */
+  const firstRunTranscript = messages.length <= 1 && !isBranchTranscript && densityAllows("suggestion", appDensity);
   const e2eeTrustAxis = trustAxes.find((axis) => axis.id === "e2ee")!;
   // The vocabulary this claim belongs to owns the mapping: page memory is `none`
   // rather than `failed` (nothing went wrong, no durability evidence was asked
@@ -14109,6 +14126,14 @@ function MessageCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [copyFailure, setCopyFailure] = useState<string>();
+  /*
+   * The Profile's density decides which of this card's *explanatory* extras
+   * mount at all. The model chip, the capability pill, the disposition line
+   * and the evidence row are tags of commentary, telemetry and proof — never
+   * the work itself, so minimal spends nothing on them while the journal and
+   * the attestations route keep everything.
+   */
+  const density = usePresentationDensity();
 
   async function copyMessage(): Promise<void> {
     setCopyFailure(undefined);
@@ -14145,7 +14170,7 @@ function MessageCard({
       <div class="message-body">
         <div class="message-label">
           <strong>{message.role === "user" ? "You" : "Airship"}</strong>
-          {message.role === "assistant" && capabilityTier ? (
+          {message.role === "assistant" && capabilityTier && densityAllows("telemetry", density) ? (
             <span
               class={`message-capability-tier ${capabilityTier}`}
               title={`Initial session observation. ${capabilityTierDetail(capabilityTier)} Tool results name their live producing runtime separately.`}
@@ -14179,7 +14204,13 @@ function MessageCard({
             <pre>{message.liveToolOutput.text}</pre>
           </section>
         ) : null}
-        {message.history ? (
+        {/* A disposition that explains a healthy turn is commentary and goes
+            quiet with the density; one that says the turn ended badly or that
+            the provider could not carry it forward is a warning, and warnings
+            only ever render when they require attention. */}
+        {message.history && (densityAllows("commentary", density)
+          || message.history.turnStatus !== "completed"
+          || message.history.providerContext === "excluded") ? (
           <div class="message-history" role="group" aria-label="Durable turn disposition">
             <span class={message.history.turnStatus}>{message.history.turnStatus} turn</span>
             <span class={message.history.providerContext}>
@@ -14187,7 +14218,7 @@ function MessageCard({
             </span>
           </div>
         ) : null}
-        {message.receipt ? (
+        {message.receipt && densityAllows("proof", density) ? (
           <div class="message-evidence-chips">
             {/*
               * Which model produced this answer, on the answer.
@@ -14593,7 +14624,7 @@ function ProfileManagerView({
                   and it saves with the profile revision, Profile-local beside
                   the global Preferences.
                 */}
-                <label><span>Presentation density</span><MenuSelect ariaLabel="Profile presentation density" value={draft.density} options={[
+                <label><span>Presentation</span><MenuSelect ariaLabel="Profile presentation density" value={draft.density} options={[
                   { value: "minimal", label: "Minimal", description: "The work and the answer; everything else one action away" },
                   { value: "balanced", label: "Balanced", description: "Proof, counters, and suggestions where they are relevant" },
                   { value: "instrumented", label: "Instrumented", description: "Every digest, receipt, and diagnostic on the surface" },

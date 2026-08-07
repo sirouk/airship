@@ -4,6 +4,7 @@ import type { ConversationReceipt, ProofStatus } from "../receipts/types";
 import { downloadText } from "./file-download";
 import { Icon } from "./icons";
 import { Seal, sealStateForProofStatus } from "./seal";
+import { densityAllows, usePresentationDensity } from "./density";
 import { postureLabel, proofLevelLabel, proofStatusLabel, relativeEvidenceAge } from "./trust-language";
 import {
   ATTESTATION_DIMENSIONS,
@@ -129,6 +130,7 @@ export function AttestationsView({
   onExport,
   embedded = false,
 }: AttestationsViewProps) {
+  const density = usePresentationDensity();
   const inputOverflow = attestationInputOverflow({ endpointRecords, receipts });
   const records = useMemo(
     () => attestationInputOverflow({ endpointRecords, receipts })
@@ -257,6 +259,7 @@ export function AttestationsView({
         </div>
       </header>
 
+      {densityAllows("commentary", density) ? (
       <section class="attestations-boundary" aria-labelledby="evidence-state-meanings">
         <header>
           <Icon name="lock" />
@@ -272,6 +275,7 @@ export function AttestationsView({
           {EVIDENCE_STATE_MEANINGS.map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.meaning}</dd></div>)}
         </dl>
       </section>
+      ) : null}
 
       {acquisitionNotice ? <div class="attestations-alert" role="status"><Icon name="warning" /><span>{acquisitionNotice}</span></div> : null}
       {error ? <div class="attestations-alert error" role="alert"><Icon name="warning" /><span>{error}</span></div> : null}
@@ -300,7 +304,7 @@ export function AttestationsView({
                 : null}
             </div>
           </div>
-          {!inputOverflow && !requestedRecordMissing ? <div class="attestations-empty__flow" role="group" aria-label="Evidence lifecycle">
+          {!inputOverflow && !requestedRecordMissing && densityAllows("commentary", density) ? <div class="attestations-empty__flow" role="group" aria-label="Evidence lifecycle">
             <div><span>01</span><strong>Acquire</strong><small>{onOpenConnection
               ? "Connect Chutes inference, then fetch fresh endpoint evidence for that runtime."
               : "Fetch fresh endpoint evidence for the selected Chutes runtime."}</small></div>

@@ -66,8 +66,14 @@ export function presentationDensity(): PresentationDensity {
  * listener re-reads it for components that gate their own render.
  */
 export function setPresentationDensity(next: PresentationDensity): void {
+  /*
+   * A dedicated dataset key, never the legacy `data-density` one: that one is
+   * the Preferences spacing preference (comfortable/compact) and clobbering
+   * it would collapse the spacing tokens on every profile switch. Two
+   * densities, two axes — spacing and information.
+   */
   if (typeof document !== "undefined" && document.documentElement) {
-    document.documentElement.dataset.density = next;
+    document.documentElement.dataset.presentationDensity = next;
   }
   if (next === density) return;
   density = next;

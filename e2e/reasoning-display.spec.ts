@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 /*
  * The reasoning the provider chose to expose must read like the rest of the
@@ -7,6 +8,12 @@ import { expect, test } from "@playwright/test";
  * by default is display-only — same turn, same evidence, a deeper expansion.
  */
 test("provider reasoning lands as its own collapsible part, summary first, full text one action away", async ({ page }) => {
+  await page.goto("/#chat", { waitUntil: "domcontentloaded" });
+  // Reasoning is commentary under the Profile's density: at the house
+  // default — minimal — it unmounts outright. This journey is about its
+  // rendering, so it runs one rung up, where collapse vs. expand is the
+  // Profile's reasoning preference instead of the density's.
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#chat", { waitUntil: "domcontentloaded" });
 
   const composer = page.getByRole("combobox", { name: "Message Airship" });
@@ -36,6 +43,10 @@ test("provider reasoning lands as its own collapsible part, summary first, full 
 });
 
 test("the Profile display preference opens reasoning by default without touching the turn", async ({ page }) => {
+  await page.goto("/#chat", { waitUntil: "domcontentloaded" });
+  // Same premise as the first journey: the reasoning preference perches on
+  // top of the density rung, so both are exercised one above the default.
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#chat", { waitUntil: "domcontentloaded" });
 
   const composer = page.getByRole("combobox", { name: "Message Airship" });

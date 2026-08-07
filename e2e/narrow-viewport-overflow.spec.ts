@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 /*
  * No route may scroll sideways on a phone.
@@ -187,6 +188,15 @@ test("no chip in a message label holds its column open at 320px", async ({ page 
   await page.setViewportSize({ width: 320, height: 812 });
   await page.goto("/#chat");
 
+  // The chips this geometry protects unmount at the house density rung —
+  // minimal renders no capability pill, so there is nothing to measure.
+  // Instrumented is the rung where they exist and are full-width, which is
+  // precisely the case this assertion protects: a chip, measured, inside
+  // its label's own column at the narrowest phone.
+  await setProfilePresentationDensity(page, "Instrumented");
+  await page.setViewportSize({ width: 320, height: 812 });
+  await page.goto("/#chat");
+
   await page.getByRole("combobox", { name: "Message Airship" }).fill("/help");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".message-capability-tier").last()).toBeVisible();
@@ -277,6 +287,13 @@ for (const width of [320, 390, 768] as const) {
  */
 test("the intro tier button keeps its touch floor at 320px", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone widths are a mobile-project concern");
+  await page.setViewportSize({ width: 320, height: 812 });
+  await page.goto("/#chat");
+
+  /* The tier is telemetry in the density taxonomy: the house default
+   * (minimal) does not render it at all. The floor it must keep applies at
+   * the rungs where it exists, so the measurement runs one rung up. */
+  await setProfilePresentationDensity(page, "Balanced");
   await page.setViewportSize({ width: 320, height: 812 });
   await page.goto("/#chat");
 

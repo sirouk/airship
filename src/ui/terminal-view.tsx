@@ -12,6 +12,7 @@ import { WEB_CONTAINER_TERMINAL_RUNTIME, type TerminalSessionSnapshot } from "..
 import { ConfirmDialog } from "./confirm-dialog";
 import { durabilityLabel, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
+import { densityAllows, usePresentationDensity } from "./density";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
 import { readTerminalDockState, terminalDockStorageKey, terminalOpenRequestForAuthority, updateTerminalDockState, type TerminalOpenRequest } from "./terminal-dock-state";
@@ -337,6 +338,9 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   const [reconcilable, setReconcilable] = useState(false);
   /** Shell work no reconciliation has followed into Explorer, from the lineage. */
   const drift = useMemo(() => terminalUnreconciledInputs(sessions), [sessions]);
+  /* The Profile's density settles the assurance sentence: commentary in the
+     summary retires at minimal; the alarm below (drift) never does. */
+  const density = usePresentationDensity();
   const cancelRename = useRef(false);
   const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
@@ -567,12 +571,17 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
           <span><Icon name="terminal" size={16} /><strong>{WEB_CONTAINER_TERMINAL_RUNTIME.engineLabel} · {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel}</strong></span>
           <small>Interactive PTY, not Bash/Linux or a device shell — read the boundary</small>
           <span class="terminal-assurance" role="note">
-            <span>Interactive process · this page</span>
-            <span>Metadata · {terminalDurabilityLabel(effectiveDurability)}</span>
-            <span>{profileId ? `Profile ${compactId(profileId)}` : "Legacy unscoped"}</span>
-            {/* The drift reading, beside the boundary facts it belongs with.
-                Absent at zero: "0 unreconciled" is not a caveat, and a chip
-                that is always there stops being read. */}
+            {/* The assurance sentence is commentary above the boundary copy
+                and retires with the density; the boundary itself stays read
+                one action below, in the detail body. The alarm never leaves:
+                an unreconciled drift stays loud at every perch. */}
+            {densityAllows("commentary", density) ? (
+              <>
+                <span>Interactive process · this page</span>
+                <span>Metadata · {terminalDurabilityLabel(effectiveDurability)}</span>
+                <span>{profileId ? `Profile ${compactId(profileId)}` : "Legacy unscoped"}</span>
+              </>
+            ) : null}
             {drift ? <span data-state="attention">{terminalDriftSentence(drift)}</span> : null}
           </span>
         </summary>

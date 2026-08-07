@@ -1,6 +1,7 @@
 import type { ConversationReceipt } from "../../receipts/types";
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
 import type { SessionPresentationMarker } from "./session-message-presentation";
+import { densityAllows, usePresentationDensity } from "../density";
 
 /**
  * What an empty conversation says, in one place.
@@ -95,6 +96,17 @@ export function TranscriptIntro({
   tier,
   onOpenCapabilities,
 }: TranscriptIntroProps) {
+  /*
+   * Minimal spends the empty conversation on the composer, not on the
+   * marketing: the capability sentence, the runtime line and the tier chip
+   * are commentary and telemetry, and unmount. Consequence never mounts out —
+   * the per-seed note, the not-being-saved warning and the honesty that the
+   * composer is a demo stay in every density, because those are answers to
+   * "what is this" and "what will persist", not interpretation of the chrome.
+   */
+  const density = usePresentationDensity();
+  const full = densityAllows("commentary", density);
+  if (!full && !note && !unsaved && !demo) return null;
   return (
     <section class="transcript-intro" aria-label="About this conversation">
       <div class="transcript-intro__copy">
@@ -109,13 +121,17 @@ export function TranscriptIntro({
             ) : null}
           </p>
         ) : null}
-        <p class="transcript-intro__lead">
-          <strong>{TRANSCRIPT_INTRO_CAPABILITY_LINE}</strong>
-          {demo ? ` ${TRANSCRIPT_INTRO_DEMO_LINE}` : null}
-        </p>
-        <p class="transcript-intro__runtime">{TRANSCRIPT_INTRO_RUNTIME_LINE}</p>
+        {full ? (
+          <p class="transcript-intro__lead">
+            <strong>{TRANSCRIPT_INTRO_CAPABILITY_LINE}</strong>
+            {demo ? ` ${TRANSCRIPT_INTRO_DEMO_LINE}` : null}
+          </p>
+        ) : demo ? (
+          <p class="transcript-intro__lead">{TRANSCRIPT_INTRO_DEMO_LINE}</p>
+        ) : null}
+        {full ? <p class="transcript-intro__runtime">{TRANSCRIPT_INTRO_RUNTIME_LINE}</p> : null}
       </div>
-      {tier ? (
+      {full && tier ? (
         <button
           class={`message-capability-tier transcript-intro__tier ${tier}`}
           type="button"
@@ -161,6 +177,7 @@ export type TranscriptMarkerProps = Readonly<{
  * row had no route at all. A receipt nothing can open is not evidence.
  */
 export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps) {
+  const density = usePresentationDensity();
   const receipt = marker.receipt;
   return (
     <div
@@ -189,10 +206,16 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
           </ol>
         </details>
       ) : null}
-      <p class="transcript-marker__provenance">
-        {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
-      </p>
-      {receipt && onOpenProof ? (
+      {/* The provenance line is raw detail — sequence, kind, digest — which
+          the mantra puts one deliberate action away, always; and the proof
+          verb is proof chrome, which retires with the density. The record's
+          own sentence above is neither. */}
+      {densityAllows("raw", density) ? (
+        <p class="transcript-marker__provenance">
+          {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
+        </p>
+      ) : null}
+      {receipt && onOpenProof && densityAllows("proof", density) ? (
         <button
           type="button"
           class="transcript-marker__proof"

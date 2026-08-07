@@ -809,25 +809,50 @@ button.runtime-posture {
   margin-left: auto;
 }
 
+/* Unboxed speech wants a little more air at its edges than a card did: the
+   whitespace is what now says "another turn", where a border used to. */
+.message.assistant {
+  margin-bottom: 26px;
+}
+
+/*
+ * The profile's information density settles the chrome budget the whole
+ * transcript shares. Under instrumented it steps back up: more on the screen
+ * is the point of that mode.
+ */
+:root[data-presentation-density="instrumented"] .message.assistant {
+  margin-bottom: 30px;
+}
+
+/*
+ * House voice: the agent speaks on the page, the person speaks in a bubble.
+ *
+ * An assistant answer is the work itself, so it carries no card — no border,
+ * no raised surface, no padding of its own — and reads off the transcript's
+ * own measure like a written answer in a notebook. The person's message keeps
+ * the bounding box, quietened: a hairline, a whisper of accent, right-aligned
+ * so the two speakers can never be confused at a glance.
+ *
+ * A turn that ended badly is the exception: failure keeps a soft danger
+ * outline on either side, because failure must be loud enough to explain
+ * itself against the calm around it.
+ */
 .message-body {
   position: relative;
   min-width: 0;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 4px var(--radius-panel) var(--radius-panel) var(--radius-panel);
-  /* The literal was the dark `--surface-raised`; message bodies have to
-     follow the colour mode like every other raised surface. */
-  background: color-mix(in srgb, var(--surface-raised) 73%, transparent);
 }
 
 .message.user .message-body {
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
   border-radius: var(--radius-panel) 4px var(--radius-panel) var(--radius-panel);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
 }
 
 .message.error .message-body {
-  border-color: rgba(200, 103, 88, 0.35);
+  padding: 11px 13px;
+  border: 1px solid rgba(200, 103, 88, 0.35);
+  border-radius: 4px var(--radius-panel) var(--radius-panel) var(--radius-panel);
 }
 
 /*

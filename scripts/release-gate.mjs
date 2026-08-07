@@ -161,7 +161,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // semantics are all first-party lazy. 185 KiB gzip leaves 402 bytes;
   // the claims state the floor across both build modes, one raw byte and
   // twenty-nine gzip under this config-free CI artifact.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 185 * 1024 }),
+    // Re-measured at 568,618 B raw / 189,687 B gzip after the House Voice pass:
+  // the density authority, the density gates in the entry's MessageCard and
+  // load indicator, and the transcript's unboxed assistant voice are all
+  // first-party baseline. The claims state the floor across both build
+  // modes; the origin-inlined Docker variant measures one raw byte and
+  // twenty-nine gzip bytes under this config-free CI artifact. 185 KiB
+  // leaves under 300 bytes of headroom, below the 768-byte tripwire, so
+  // gzip takes one whole-KiB step to 186.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 186 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -677,7 +685,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // origin-inlined Docker variant measures one raw and twenty-nine gzip bytes
   // under this config-free CI artifact. 2,289 KiB raw and 726 KiB gzip leave
   // 487 / 801 B, above the aggregate's 768-byte floor.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2289 * 1024, gzip: 726 * 1024 }),
+  // Re-measured at 2,345,058 B raw / 743,081 B gzip after the House Voice
+  // pass: the density authority, the MessageCard and load-indicator gates,
+  // and the transcript's unboxed-voice changes are first-party. The claims
+  // state the floor across both build modes, with the origin-inlined Docker
+  // variant measuring one raw byte and twenty-nine gzip bytes under this
+  // config-free CI artifact. Raw takes the smallest whole-KiB step that
+  // clears the reading (2,290 KiB), so 2,291; the gzip ceiling stays put.
+  // Re-measured at 2,345,647 B raw / 743,470 B gzip after the every-density
+  // pass over markers, journal chips, keyhints, assurance strips, provenance,
+  // call ids and the evidence educators — all first-party. The claims state
+  // the floor across both build modes, with the origin-inlined Docker
+  // variant measuring one raw byte and twenty-nine gzip bytes under this
+  // config-free CI artifact. Gzip takes the smallest whole-KiB step that
+  // clears the reading, so 727.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2291 * 1024, gzip: 727 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -910,7 +932,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // twenty-nine gzip bytes under this config-free CI artifact. 2,966 raw
   // leaves one whole-KiB step; 909 KiB gzip becomes 914 (832 B left), above the aggregate's
   // 768-byte floor.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2968 * 1024, gzip: 914 * 1024 }),
+  // Re-measured at 3,039,852 B raw / 935,976 B gzip after the House Voice
+  // pass: the density authority, the transcript gates and the unboxed-voice
+  // changes are the growth, all first-party. The claims state the floor
+  // across both build modes; the origin-inlined Docker variant measures one
+  // raw byte and twenty-nine gzip bytes under this config-free CI artifact.
+  // Both ceilings take the smallest whole-KiB step that clears the reading,
+  // so raw 2,969 and gzip 915.
+  // Re-measured at 3,040,570 B raw / 936,390 B gzip: the every-density builds
+  // of the entry, baseline and optional chunks are larger and the absolute
+  // backstop tracks them in whole KiB. The claims state the floor across
+  // both build modes; the origin-inlined Docker variant measures one raw
+  // byte and twenty-nine gzip bytes under this config-free CI artifact.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2970 * 1024, gzip: 915 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -2955,13 +2989,14 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalTerminal: optionalTerminalMeasurement,
   });
 
+
   const artifacts = releasableFiles.map((file) => ({
     path: file.path,
     bytes: file.payload.byteLength,
     sha256: createHash("sha256").update(file.payload).digest("hex"),
   }));
   const manifest = createReleaseManifest(artifacts);
-  const serialized = serializeReleaseManifest(manifest);
+    const serialized = serializeReleaseManifest(manifest);
   await writeFile(resolve(output, RELEASE_MANIFEST_NAME), serialized, { encoding: "utf8", mode: 0o644 });
   const written = await readFile(resolve(output, RELEASE_MANIFEST_NAME), "utf8");
   if (written !== serialized) throw new Error("Release manifest changed while it was being written.");

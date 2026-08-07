@@ -9,9 +9,24 @@ import type { MessagePart, TextPart, ToolCallAuthority, ToolCallPart, ToolResult
 import { MarkdownView } from "./markdown";
 import { useTranscriptOperations, type TranscriptOperationsMode } from "./transcript-operations";
 import { useReasoningVisibility } from "./reasoning-visibility";
+import { densityAllows, usePresentationDensity, type DensityTag } from "../density";
 import "./message-parts-view.css";
 
 export const DEFAULT_OPERATION_RENDER_LIMIT = 12;
+
+/**
+ * Which kind of presentation each narrative part *is*, for the Profile's
+ * density preference. A part named here renders only when the density allows
+ * its tag — minimal unmounts the reasoning block and the turn receipt footer
+ * outright, re-mounting them when the density rises, because retired is
+ * unrendered, never hidden. Parts not named here (text, tool work, errors,
+ * citations, attachments) are the work itself or its consequences, and those
+ * never leave the page.
+ */
+const NARRATIVE_PART_DENSITY_TAG: Partial<Record<NarrativePart["kind"], DensityTag>> = Object.freeze({
+  "reasoning-summary": "commentary",
+  footer: "proof",
+} as const);
 
 /** The count below which a summary header would hide more than it saves. */
 export const OPERATION_COLLAPSE_THRESHOLD = 4;
@@ -554,6 +569,7 @@ function OperationRow({ operation, onCapture, onSettle }: {
   onCapture(): void;
   onSettle(details: HTMLDetailsElement): void;
 }) {
+  const density = usePresentationDensity();
   const tier = operation.capabilityTier;
   const chip = operationAuthorityChip(operation);
   return (
@@ -588,7 +604,10 @@ function OperationRow({ operation, onCapture, onSettle }: {
         ) : null}
         <p class="op__sheet-head">
           <span class="op__label">Arguments · bounded display</span>
-          <code class="op__call-id" title={`Tool call ${operation.callId}`}>{operation.callId}</code>
+          {/* The call id is raw internal addressing: it sits here for
+              instrumented eyes, and the whole line stays one action away in
+              the journal either way. */}
+          {densityAllows("raw", density) ? <code class="op__call-id" title={`Tool call ${operation.callId}`}>{operation.callId}</code> : null}
         </p>
         <pre>{operation.hasCall ? operation.argumentsSummary || "No arguments" : "This result has no recorded originating call."}</pre>
         <p class="op__sheet-head">
@@ -652,6 +671,13 @@ function MessagePartView({ part, answer, live, onRetry }: {
   onRetry?: () => void;
 }) {
   const reasoningVisibility = useReasoningVisibility();
+  const density = usePresentationDensity();
+  const partTag = NARRATIVE_PART_DENSITY_TAG[part.kind];
+  /* Retired means unrendered: a tagged part the density refuses never mounts
+     at all, and it returns the frame the density re-raises it. The journal,
+     the receipts and the reasoning record are untouched — this page simply
+     spends less. */
+  if (partTag && !densityAllows(partTag, density)) return null;
   if (part.kind === "text") {
     return <div class={answer ? "message-part text text--answer" : "message-part text"}><MarkdownView source={part.content} /></div>;
   }

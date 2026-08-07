@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
+import { densityAllows, usePresentationDensity } from "../density";
 import { MenuSelect } from "../menu-select";
 import { Popover } from "../popover";
 import { RENAME_START_HINT, renameEditorKeyHandler, renameStartKeyHandler } from "../rename-interaction";
@@ -381,6 +382,10 @@ function JournalChip({ journal, durabilityLabel, onOpenSession }: Readonly<{
   onOpenSession(): void;
 }>) {
   const shortId = journal.sessionId ? journal.sessionId.slice(0, 8) : "starting";
+  /* The chip's event count and short id retire with the density; the record
+     button itself — glyph, tooltip and accessible name — is the one-action
+     door to conversation details and never leaves. */
+  const density = usePresentationDensity();
   /*
    * The count says where it is kept.
    *
@@ -419,16 +424,20 @@ function JournalChip({ journal, durabilityLabel, onOpenSession }: Readonly<{
         onClick={onOpenSession}
       >
         <span class="journal-chip__glyph" aria-hidden="true">⌗</span>
-        {/* The unit is rendered text, not an attribute. A bare integer beside
-            the model chip's own bare integer is two numbers of unstated kind;
-            a glyph plus a tooltip is not a label for the one number a reader
-            is asked to compare with the one next to it. It is clipped with the
-            short id at scrolled widths, so it costs nothing at rest. */}
-        <span class="journal-chip__count">
-          {journal.eventCount}{" "}
-          <span class="journal-chip__unit">{journal.eventCount === 1 ? "event" : "events"}</span>
-        </span>
-        <small class="journal-chip__id">#{shortId}</small>
+        {/* The count and the short id are telemetry: at a minimal Profile the
+            chip renders its glyph and keeps the full count and id on its
+            accessible name and tooltip, so the door stays, the faithful claim
+            stays, and only the two strings retire until the density asks for
+            the counted shell back. */}
+        {densityAllows("telemetry", density) ? (
+          <>
+            <span class="journal-chip__count">
+                  {journal.eventCount}{" "}
+              <span class="journal-chip__unit">{journal.eventCount === 1 ? "event" : "events"}</span>
+            </span>
+            <small class="journal-chip__id">#{shortId}</small>
+          </>
+        ) : null}
       </button>
     </span>
   );

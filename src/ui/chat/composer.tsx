@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { type SealState } from "../seal";
+import { densityAllows, usePresentationDensity } from "../density";
 import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
 
 /**
@@ -261,6 +262,13 @@ export function composerKeyhints(busy: boolean): readonly ComposerKeyhint[] {
 }
 
 export function ComposerKeyhintLegend({ busy }: Readonly<{ busy: boolean }>) {
+  /*
+   * The chords a person learns once are commentary on an interface they can
+   * already feel: at minimal the composer stays unadorned, and the legend is
+   * off the keys until the density asks for the explanatory shell back.
+   */
+  const density = usePresentationDensity();
+  if (!densityAllows("commentary", density)) return null;
   return (
     // `aria-hidden`: this is a redundant legend for a contract screen-reader
     // users already receive from the textarea's own role and from the queue's

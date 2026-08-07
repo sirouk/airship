@@ -1,4 +1,5 @@
 import type { SessionActivityReport } from "../capabilities/runtime-load";
+import { densityAllows, usePresentationDensity } from "./density";
 import "./runtime-load-indicator.css";
 
 /**
@@ -39,8 +40,16 @@ export function RuntimeLoadIndicator({
   placement?: RuntimeLoadPlacement;
   activity?: SessionActivityReport;
 }> = {}) {
+  /*
+   * The count-band itself is density-tagged telemetry: at a minimal Profile
+   * this indicator unmounts entirely, and the topbar's runtime line remains
+   * the one sentence that says whether anything is running. Nothing about the
+   * counters changes — only whether this strip spends pixels on them.
+   */
+  const density = usePresentationDensity();
   const current = activity?.[0] ?? 0;
   const text = activity?.[1] ?? "0 active · 0 events";
+  if (!densityAllows("telemetry", density) && current === 0) return null;
   return (
     <div
       class="load-indicator"
