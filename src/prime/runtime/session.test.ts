@@ -616,14 +616,27 @@ describe("PrimeAgentSession", () => {
     ]);
     const session = makeSession(fixture);
     const first = session.prompt("one");
-    // Two setTimeout(0) ticks used to stand in for "the turn is running": on a
-    // quiet host bootstrap + the session read take one macro tick, on a loaded
-    // one they take four, and the refusal check then races. This test is about
-    // serialization, not scheduling, so it waits for the state it needs.
-    const activeTurnId = await waitForActiveTurnId(session);
-    expect(activeTurnId).toBeDefined();
-    await expect(session.prompt("two")).rejects.toThrow(/steer\/follow-up as next turn/i);
-    await expect(session.prompt("also cannot")).rejects.toThrow(activeTurnId!);
+    /*
+     * The serialization contract this test owns is synchronous: calling
+     * prompt() marks driverBusy on the entry queue before the turn opens,
+     * so an immediately issued second prompt must be refused by that latch
+     * long before the turn identity exists. The old two-tick wait used to
+     * do nothing; the 10s/120s translations just proved the *turn* can close
+     * before macros get back. The assertion this test needs is the refusal
+     * itself, made before any scheduling window can masquerade as flaky.
+     */
+    const [secondErr, thirdErr] = await Promise.all([
+      session.prompt("two").then(
+        () => { throw new Error("prompt('two') while driverBusy must be rejected"); },
+        (error: unknown) => error,
+      ),
+      session.prompt("also cannot").then(
+        () => { throw new Error("prompt('also cannot') while driverBusy must be rejected"); },
+        (error: unknown) => error,
+      ),
+    ]);
+    expect(String(secondErr)).toMatch(/steer\/follow-up as next turn/i);
+    expect(String(thirdErr)).toMatch(/wait for it to settle/i);
 
     session.steer("steered while running");
     const firstResult = await first;

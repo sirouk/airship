@@ -522,6 +522,12 @@
    phones, the opposite of what `menu-select.css` does with the live control.
    `dead-selector-contract.test.ts` keeps the name from coming back. */
 
+/* Desktop keeps its status in the topbar; the phone mount lives in
+   routes.css as its own shell track because the row here answer is fixed. */
+.runtime-line--phone {
+  display: none;
+}
+
 .runtime-line {
   display: flex;
   flex: 0 1 auto;

@@ -2621,6 +2621,7 @@
     grid-template-columns: 1fr;
     grid-template-rows:
       calc(var(--touch-target) + 4px + env(safe-area-inset-top))
+      auto
       minmax(0, 1fr)
       calc(56px + env(safe-area-inset-bottom));
   }
@@ -2635,7 +2636,7 @@
    * impose row tracks on the desktop two-column shell.
    */
   :root[data-keyboard-open="true"] .app-shell {
-    grid-template-rows: calc(var(--touch-target) + 4px + env(safe-area-inset-top)) minmax(0, 1fr) 0;
+    grid-template-rows: calc(var(--touch-target) + 4px + env(safe-area-inset-top)) auto minmax(0, 1fr) 0;
   }
 
   /* Three children, three columns. Two columns wrapped the actions onto a
@@ -2666,6 +2667,24 @@
   .runtime-line,
   .sidebar {
     display: none;
+  }
+
+  /*
+   * …and its sentence lands here instead: the same runtime line as its own
+   * shell track, because "what is happening?" is a sharp question at every
+   * width, and hiding it on the smallest one measured every status in the
+   * product as invisible (queue arms, policy scope sentences, vault notices).
+   * The override must outrank the topbar hide two rules above, so it sits
+   * inside the same block rather than borrowing shell.css's base rule.
+   */
+  .runtime-line--phone {
+    display: flex;
+    max-width: none;
+    min-height: 34px;
+    padding-right: max(13px, env(safe-area-inset-right));
+    padding-left: max(13px, env(safe-area-inset-left));
+    background: var(--ground);
+    border-bottom: 1px solid var(--line);
   }
 
   /* One chip fits where four pills did not. The phone used to render a second

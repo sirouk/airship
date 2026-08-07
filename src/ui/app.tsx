@@ -1411,9 +1411,6 @@ const MINTED_ADDRESS_PREFIX = "airship.minted-chat-address.v1:";
  */
 const RESUME_SETTLE_CEILING_MS = 8_000;
 
-/** Keystroke-rate persistence into tab storage; cheap enough to run this often. */
-const DRAFT_TAB_PERSIST_MS = 160;
-
 /**
  * The encrypted copy costs an authenticated envelope write, so it settles on a
  * slower clock than the tab copy. A composer left mid-sentence is idle for far
@@ -3277,13 +3274,21 @@ export function App() {
       // frames. Reapply the saved coordinate after those bounded anchor
       // corrections so A → B → A returns to A's reading position, not merely
       // to a generic detached posture.
-      if (pass < 3) frame = requestAnimationFrame(restore);
+      if (pass < 8) frame = requestAnimationFrame(restore);
     };
     frame = requestAnimationFrame(restore);
+    // Windowed activation can land after the painted-fewest transcript rows
+    // collapse their estimate into real heights; three frames and one 120 ms
+    // settle covered a first paint from a cold boot, not a rail switch over an
+    // already-mounted transcript whose deferred message parts re-tall it. A
+    // bounded second settle at half a second measured enough for the largest
+    // transcripts; everything after that is the reader's own scroll.
     const settle = window.setTimeout(restore, 120);
+    const settleLate = window.setTimeout(restore, 500);
     return () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
       window.clearTimeout(settle);
+      window.clearTimeout(settleLate);
     };
   }, [profileId, sessionId, profileCockpitTransition, activeSessionRecord?.manifest.profile?.profileId]);
   useEffect(() => {
@@ -3387,17 +3392,25 @@ export function App() {
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
     if (!draftSessionId) return;
-    const timer = window.setTimeout(() => {
-      try {
-        writeThreadDraft(draftSessionId, input, sessionStorage);
-        // Text in the composer is the plainest evidence that this tab has been
-        // worked in, so from here on a lost address is a lost conversation and
-        // is reported as one. See `rememberMintedAddress`.
-        if (input) forgetMintedAddresses();
-      } catch {
-        // Draft persistence is optional; the live composer remains authoritative.
-      }
-    }, DRAFT_TAB_PERSIST_MS);
+    /*
+     * The tab copy writes synchronously with the keystroke. A `setItem` costs
+     * less than a frame even for a page-long draft, and the 160 ms debounce it
+     * replaced bought nothing except a window in which navigation could race
+     * hydration: type, tap a thread, and the going-away conversation's stored
+     * draft was still the previous keystroke's — hydration then overwrote the
+     * live composer with the stale copy and the line was gone. "Preserve
+     * input" admits no clock here; the encrypted copy below keeps its slower
+     * one because an authenticated envelope genuinely costs one.
+     */
+    try {
+      writeThreadDraft(draftSessionId, input, sessionStorage);
+      // Text in the composer is the plainest evidence that this tab has been
+      // worked in, so from here on a lost address is a lost conversation and
+      // is reported as one. See `rememberMintedAddress`.
+      if (input) forgetMintedAddresses();
+    } catch {
+      // Draft persistence is optional; the live composer remains authoritative.
+    }
     /*
      * The encrypted copy runs on its own, slower clock: the tab write is a
      * `sessionStorage.setItem`, this one is an authenticated envelope through
@@ -3412,7 +3425,6 @@ export function App() {
       void writeDurableDraft(durablePort, draftSessionId, input);
     }, DRAFT_DURABLE_PERSIST_MS) : undefined;
     return () => {
-      window.clearTimeout(timer);
       if (durableTimer !== undefined) window.clearTimeout(durableTimer);
     };
   }, [chatRouteRequest, durableAuthorityAdopted, input, sessionId]);
@@ -6788,7 +6800,22 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         return false;
       }
     }
-    queue?.onAdmitted();
+    /*
+     * The queue head leaves the durable queue when the turn it became is
+     * durable — never at admission. An armed "open after turn" can abort a
+     * freshly admitted turn between this gate and the journal's own
+     * turn.requested append, and until now the item was already struck from
+     * the queue when that happened: no bubble, no turn, no notice — typed
+     * input silently gone on exactly the multi-tasking path the queue exists
+     * for. "What persists" is the one question this product may never answer
+     * with "nothing did."
+     */
+    let queueAdmitted = queue === undefined;
+    const admitQueuedTurn = () => {
+      if (queueAdmitted) return;
+      queueAdmitted = true;
+      queue?.onAdmitted();
+    };
     if (retryPrompt === undefined) {
       setInput("");
       setAttachments([]);
@@ -6832,6 +6859,12 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         maxSteps: 32,
         onSignal(signal) {
           if (signal.type === "durable") {
+            // The queue head is struck exactly when its turn is durable, and
+            // only then (see the admission comment above).
+            if (!queueAdmitted && signal.events.some((event) => event.type === "turn.requested")) {
+              queueAdmitted = true;
+              queue?.onAdmitted();
+            }
             const reachedAssistantBoundary = signal.events.some((event) => event.type === "assistant.completed");
             if (reachedAssistantBoundary) clearPendingDelta(assistantId);
             // Held from the live signal because a failed turn never returns a
@@ -7006,8 +7039,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   function stopTurn() {
     // A follow-up typed while the turn ran is newer intent than the aborted
     // prompt; restoring unconditionally overwrote it, and the draft effect
-    // then persisted the overwrite. Restore only into an empty composer.
-    if (activePrompt.current) setInput((current) => current.trim() ? current : activePrompt.current ?? current);
+    // then persisted the overwrite. Restore only into an empty composer —
+    // and only the composer of the conversation the turn runs in. Stop can be
+    // pressed from a different thread mid-flight, and the abort's own prompt
+    // parked onto that thread's draft was never anyone's intent; the stopped
+    // turn's transcript keeps the prompt as its durable record instead.
+    if (activePrompt.current && activeTurnSessionId.current === activeSessionIdentity.current) {
+      setInput((current) => current.trim() ? current : activePrompt.current ?? current);
+    }
     // Latch before the abort: the abort's teardown is what frees `busy`, and
     // the queue effect runs on that same commit.
     const stoppedSessionId = activeTurnSessionId.current ?? activeSessionIdentity.current ?? sessionId;
@@ -10951,6 +10990,18 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         </div>
       </header>
 
+      {/*
+        The topbar hides its runtime line below 640px — the grid there is one
+        row, and the sentence used to wrap a control onto the session bar.
+        Hiding the line meant the phone answered "what is happening?" with
+        nothing ("Opening after turn", the policy-change scope sentence, the
+        vault notices — all invisible at exactly the width multi-tasking
+        matters most). This is the same sentence, the same live region, the
+        same semantics; only the place it stands changes. The two are
+        display-exclusives, so a reader never gets it twice.
+      */}
+      <div class="runtime-line runtime-line--phone" role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
+
       <Rail
         view={view}
         state={railState}
@@ -11511,7 +11562,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                       {busy ? (
                         <div class="composer-primary-actions">
                           {input.trim() ? <button class="queue-button" type="button" onClick={enqueueCurrentComposer}>Queue</button> : null}
-                          <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
+                          {/*
+                            Stop is global by mechanism and thread-scoped by
+                            meaning. Pressed from a different conversation
+                            mid-flight, the button says whose turn it ends;
+                            silence on that point is how a person "stopped
+                            something" without knowing what.
+                          */}
+                          <button class="send-button stop" type="button" onClick={stopTurn} aria-label={activeTurnSessionId.current && activeSessionIdentity.current && activeTurnSessionId.current !== activeSessionIdentity.current ? "Stop the other conversation's turn" : "Stop turn"}><Icon name="stop" /></button>
                         </div>
                       ) : (
                         <button

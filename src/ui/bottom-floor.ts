@@ -16,7 +16,7 @@ import { useEffect, useState } from "preact/hooks";
  * of it. Both now read the same measurement, so the next thing anchored to that
  * corner inherits the fix instead of rediscovering the bug.
  */
-export const BOTTOM_BAR_BLOCKERS: readonly string[] = Object.freeze([".composer", ".mobile-nav"]);
+export const BOTTOM_BAR_BLOCKERS: readonly string[] = Object.freeze([".composer-wrap", ".mobile-nav"]);
 
 export function blockerHeight(selector: string): number {
   const rect = document.querySelector(selector)?.getBoundingClientRect();

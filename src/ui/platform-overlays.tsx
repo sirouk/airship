@@ -4,6 +4,7 @@ import type { ApprovalMode } from "../approvals/modes";
 import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
+import { ConfirmDialog } from "./confirm-dialog";
 import {
   DEFAULT_PREFERENCES,
   SHORTCUT_SHEET_CHORD,
@@ -148,6 +149,7 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
   }>;
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
+  const [resetArmed, setResetArmed] = useState(false);
   // Same defect and the same fix as the palette: the `document.activeElement`
   // capture here ran a commit too late and could only ever read `<body>`.
   useOpenerRestore(open);
@@ -215,12 +217,25 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
         <button
           class="preferences-dialog__reset"
           type="button"
-          onClick={() => {
-            if (window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")) {
-              onChange(DEFAULT_PREFERENCES);
-            }
-          }}
+          onClick={() => setResetArmed(true)}
         >Reset preferences</button>
+        {resetArmed ? (
+          <ConfirmDialog
+            title="Reset preferences?"
+            confirmLabel="Reset to defaults"
+            onCancel={() => setResetArmed(false)}
+            onConfirm={() => {
+              setResetArmed(false);
+              onChange(DEFAULT_PREFERENCES);
+            }}
+          >
+            <>
+              Display, durability, and legacy approval preferences return to their defaults.
+              Your conversations, profiles, vault, and workspaces are not touched — nothing
+              outside this dialog changes.
+            </>
+          </ConfirmDialog>
+        ) : null}
       </div>
     </div>
   );

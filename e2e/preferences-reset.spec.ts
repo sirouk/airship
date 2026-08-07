@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const RESET_PROMPT = "Reset display, durability, and legacy approval preferences to their defaults?";
+
 
 async function openPreferences(page: Page): Promise<Locator> {
   const desktopControl = page.getByRole("button", { name: "Open Preferences" });
@@ -22,14 +22,15 @@ async function choose(preferences: Locator, label: string, option: string): Prom
 }
 
 async function answerReset(page: Page, reset: Locator, answer: "cancel" | "confirm"): Promise<void> {
-  const dialogPromise = page.waitForEvent("dialog");
-  const clickPromise = reset.click();
-  const dialog = await dialogPromise;
-  expect(dialog.type()).toBe("confirm");
-  expect(dialog.message()).toBe(RESET_PROMPT);
-  if (answer === "confirm") await dialog.accept();
-  else await dialog.dismiss();
-  await clickPromise;
+  await reset.click();
+  const dialog = page.getByRole("dialog", { name: "Reset preferences?" });
+  await expect(dialog).toBeVisible();
+  // The consequence before the commitment, and the boundary of the change in
+  // the same breath: the dialog has to say what it does NOT touch, or
+  // "Conversations·profiles·vault" stays guesswork.
+  await expect(dialog).toContainText("Display, durability, and legacy approval preferences return to their defaults.");
+  await expect(dialog).toContainText("conversations, profiles, vault, and workspaces are not touched");
+  await dialog.getByRole("button", { name: answer === "confirm" ? "Reset to defaults" : "Cancel" }).click();
 }
 
 test("Preferences reset preserves changes on Cancel and restores named defaults on Confirm", async ({ page }) => {

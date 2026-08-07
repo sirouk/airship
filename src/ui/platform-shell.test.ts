@@ -247,7 +247,13 @@ describe("platform shell contracts", () => {
   it("makes appearance choices visual and requires confirmation before a broad reset", () => {
     const dialog = shellSource();
     expect(dialog).toContain('mode === "dark" ? "moon" : "sun"');
-    expect(dialog).toContain('window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")');
+    // The shared confirm carries the consequence and the boundary in one
+    // grammar with every other irreversible surface; the native confirm it
+    // replaced could name neither.
+    expect(dialog).not.toContain("window.confirm(");
+    expect(dialog).toContain('from "./confirm-dialog"');
+    expect(dialog).toContain('title="Reset preferences?"');
+    expect(dialog).toContain("not touched");
   });
 
   it("downgrades a stale Drive preference to the configured available default", () => {

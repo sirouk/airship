@@ -1594,7 +1594,18 @@ export function AccessView({
                               <summary>Why this build cannot sign in</summary>
                               <p>Deployment detail: {signInBlockedReason}</p>
                             </details>
-                            <button type="button" onClick={() => setChutesMethod("api-key")}>Use an API key</button>
+                            {/*
+                          Switching to the key lane without moving focus strands
+                          the person mid-air: the tab changed, their hands did
+                          not follow, and the next Tab stop walked the rest of
+                          the blocked panel first. The recovery verb and the
+                          field it serves are one motion.
+                        */}
+                        <button type="button" onClick={(event) => {
+                          setChutesMethod("api-key");
+                          const panel = event.currentTarget.closest("[data-connect-method]");
+                          requestAnimationFrame(() => panel?.querySelector<HTMLInputElement>('input[type="password"], input[type="text"]')?.focus());
+                        }}>Use an API key</button>
                           </div>
                         ) : null}
                         {/*

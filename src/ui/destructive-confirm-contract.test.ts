@@ -6,8 +6,9 @@ import { describe, expect, it } from "vitest";
  *
  * Airship shipped three grammars for the same question: a designed modal for
  * deleting one workspace file, the browser's grey `window.confirm` for removing
- * a profile and for resetting preferences, and — for closing a terminal tab,
- * which ends a live process and its shell history — no gate at all. A native
+ * a profile and (formerly) for resetting preferences, and — for closing a
+ * terminal tab, which ends a live process and its shell history — no gate at
+ * all. A native
  * confirm cannot carry the consequence sentence the modal carries, cannot be
  * styled, and on iOS is stamped with the origin, so it reads as the browser
  * asking rather than as Airship asking.
@@ -19,9 +20,6 @@ import { describe, expect, it } from "vitest";
  */
 const NATIVE_CONFIRM_HOLDOUTS = Object.freeze([
   "app.tsx",
-  // The palette and the preferences dialog moved to `platform-overlays.tsx`
-  // when they left the entry chunk; the reset confirmation went with them.
-  "platform-overlays.tsx",
 ]);
 
 async function* uiSources(directory: URL): AsyncGenerator<URL> {
@@ -33,7 +31,7 @@ async function* uiSources(directory: URL): AsyncGenerator<URL> {
 }
 
 describe("destructive confirmation", () => {
-  it("uses no native browser confirm outside the two files still owed a pass", async () => {
+  it("uses no native browser confirm outside the file still owed a pass", async () => {
     const offenders: string[] = [];
     for await (const file of uiSources(new URL("./", import.meta.url))) {
       const source = await readFile(file, "utf8");

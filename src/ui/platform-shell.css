@@ -188,6 +188,16 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .preference-row { display: grid; grid-template-columns: 1fr minmax(10rem, 45%); align-items: center; gap: 1rem; min-height: 3.25rem; border-top: 1px solid var(--line); }
 .preference-menu { width: 100%; }
 .preference-menu .menu-select-trigger { min-height: 2.5rem; border-color: var(--line-strong); background: var(--surface-soft); }
+/*
+ * Floor, not style: 2.5rem is 40px, under the documented 44px touch floor,
+ * and this dialog is where Preferences get changed from a phone. The
+ * trigger and the dialog's own buttons move to the documented floor on
+ * coarse pointers; density on fine pointers does not change.
+ */
+@media (pointer: coarse) {
+  .preference-menu .menu-select-trigger,
+  .preferences-dialog button { min-height: var(--touch-target); }
+}
 /* Right-aligned only. `top`/`bottom` used to be set here, which forced the
    sheet downward while `MenuSelect` still thought it was placed upward — so the
    arm that measures the room below the trigger never ran, and the last row in a

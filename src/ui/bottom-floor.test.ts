@@ -38,7 +38,7 @@ describe("notices anchored to the bottom edge", () => {
     // The composer on desktop, the navigation bar on a phone. Missing either
     // reintroduces the overlap on exactly one form factor, which is how a fix
     // ships looking complete.
-    expect([...BOTTOM_BAR_BLOCKERS]).toEqual([".composer", ".mobile-nav"]);
+    expect([...BOTTOM_BAR_BLOCKERS]).toEqual([".composer-wrap", ".mobile-nav"]);
   });
 
   it("keeps one implementation of the measurement, not one per notice", () => {
@@ -49,6 +49,21 @@ describe("notices anchored to the bottom edge", () => {
     for (const source of [dock, shell]) {
       expect(source).toContain('from "./bottom-floor"');
       expect(source).not.toContain("DEFERRED_BAR_BLOCKERS");
+    }
+  });
+
+  it("locates the composer by its real element, not a name it no longer answers to", () => {
+    // The phone measure this guards: a floor computed from a selector that
+    // matches nothing lets the deferred approval strip rest on the nav band
+    // alone, laying itself across the composer's input row at phone width.
+    expect(BOTTOM_BAR_BLOCKERS).toContain(".composer-wrap");
+    const sources = ["./app.tsx", "./mobile-navigation.tsx"].map((path) =>
+      readFileSync(new URL(path, import.meta.url), "utf8"),
+    );
+    for (const selector of BOTTOM_BAR_BLOCKERS) {
+      const exists = sources.some((source) => source.includes(`class="${selector.slice(1)}"`))
+        || sources.some((source) => source.includes(`class="${selector.slice(1)} `));
+      expect(exists, `${selector} must name an element that exists`).toBe(true);
     }
   });
 });
