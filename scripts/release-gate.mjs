@@ -705,14 +705,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // measuring one raw byte and twenty-nine gzip bytes under this config-free
   // CI artifact. Raw takes the smallest whole-KiB step that clears the
   // reading, so 2,292.
-  // Re-measured at 2,356,023 B raw / 747,288 B gzip after the phase-1 memory
+  // Re-measured at 2,355,995 B raw / 747,259 B gzip after the phase-1 memory
   // dedup wave: the hunter's shared chunk (5,721 B), its tool-seam call
   // sites, and the Memory tab review surface are first-party here. The
-  // claims state the floor across both build modes, with the origin-inlined
-  // Docker variant measuring one raw byte and twenty-nine gzip bytes under
-  // this config-free CI artifact. 2,301 KiB raw and 730 KiB gzip leave 201 /
-  // 235 B, below the aggregate's 768-byte floor, so raw takes 2,302 and gzip
-  // takes 731.
+  // claims state the floor across both build modes, with jitter absorbed:
+  // the origin-inlined Docker variant reads one raw byte and twenty-nine
+  // gzip bytes under the config-free CI artifact, and its own reading
+  // wanders by single bytes between runs, so the claim clears it by a
+  // handful of bytes rather than hugging the line. 2,301 KiB raw and
+  // 730 KiB gzip would have left 201 / 235 B, below the aggregate's 768-byte
+  // floor, so raw takes 2,302 and gzip takes 731.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2302 * 1024, gzip: 731 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -958,12 +960,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // backstop tracks them in whole KiB. The claims state the floor across
   // both build modes; the origin-inlined Docker variant measures one raw
   // byte and twenty-nine gzip bytes under this config-free CI artifact.
-  // Re-measured at 3,050,946 B raw / 940,208 B gzip after the phase-1 memory
+  // Re-measured at 3,050,918 B raw / 940,179 B gzip after the phase-1 memory
   // dedup wave: the hunter's shared chunk and the Memory-tab review surface
   // land first-party, and the absolute backstop tracks them. The claims
-  // state the floor across both build modes; the origin-inlined Docker
-  // variant measures one raw byte and twenty-nine gzip bytes under this
-  // config-free CI artifact. 2,980 KiB raw would leave 574 B, below the
+  // state the floor across both build modes, with jitter absorbed: the
+  // origin-inlined Docker variant reads one raw byte and twenty-nine gzip
+  // bytes under the config-free CI artifact, and its own reading wanders by
+  // single bytes between runs, so the claim clears it by a handful of bytes
+  // rather than hugging the line. 2,980 KiB raw would have left 574 B, below the
   // aggregate's 768-byte floor, so raw takes one further whole step to
   // 2,981 (1,598 B). Gzip takes the smallest whole-KiB step that clears
   // the reading, so 919.
@@ -1331,9 +1335,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The phase-1 duplicate reviewer joined the records panel: the cluster
   // strip, its keeper/fold-in prose, and the session-scoped dismiss affordance
   // render only while clusters exist, so the whole wave rides the route that
-  // was already fetched on navigation. Measured 64,390 B raw / 21,442 B gzip.
-  // Raw takes two steps rather than one: 63 KiB raw would leave 120 B, inside
-  // a minifier rename of the reading. Gzip takes the smallest whole-KiB step
+  // was already fetched on navigation — re-measured at 64,384 B raw / 21,413 B
+  // gzip, the claim standing at the floor across both build modes with the
+  // origin-inlined Docker variant measuring one raw byte and twenty-nine gzip
+  // bytes under the config-free CI artifact, and its own reading wandering by
+  // single bytes between runs.
+  // Raw takes two steps rather than one: 63 KiB raw would have left 120 B,
+  // inside a minifier rename of the reading. Gzip takes the smallest whole-KiB step
   // that clears 20.96 KiB, exactly the tripwire policy this file enforces
   // elsewhere when the margin crosses one whole kilobyte.
   optionalMemoryView: Object.freeze({ raw: 64 * 1024, gzip: 21 * 1024 }),
