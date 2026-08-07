@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
@@ -8,6 +9,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("disconnected Chat keeps local commands live and offers one clear inference handoff", async ({ page }) => {
+  /* Balanced is its measured perch: the capability tier, the local-command
+     provenance and the transcript-intro lines all retire at minimal, and
+     this is the journey that reads them. */
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#chat");
   // The 42px band is deleted; both of its sentences render verbatim in the
   // transcript intro, which is where an empty conversation says what it

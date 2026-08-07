@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { completeLocalDeviceCeremony } from "./support/vault-ceremony";
+import { setProfilePresentationDensity } from "./support/density";
 
 /**
  * A finished conversation is continued by opening it, not by forking it.
@@ -58,8 +59,13 @@ async function sendOneTurn(page: Page, prompt: string): Promise<void> {
  * before the first turn is sent, and the sentence's presence is that fact.
  */
 async function expectVaultAdopted(page: Page): Promise<void> {
-  await expect(page.locator(".runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }))
-    .toHaveCount(1, { timeout: 40_000 });
+  /* The sentence lives on one runtime-line carrier per shell — the topbar
+     line on the desktop shell and the track that resumes it on the phone
+     shell — so the adoption check is about *one visible carrier*, never
+     about the count: the two shells exist in the DOM at every width now,
+     which is what the older CARRIER-count contract measured. */
+  await expect(page.locator(".runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }).first())
+    .toBeVisible({ timeout: 40_000 });
 }
 
 /** Change something the person can see and nothing a turn is run by. */
@@ -90,6 +96,11 @@ test.describe("a conversation you finished yesterday", () => {
     await completeLocalDeviceCeremony(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await expectVaultAdopted(page);
+    /* The turn footer is proof chrome: at the house default — minimal — it
+       unmounts. This whole journey waits on that exact row, so it runs one
+       rung up where the row exists. */
+    await setProfilePresentationDensity(page, "Balanced");
+    await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
 
     await saveANewThemeRevision(page, namespace);
@@ -149,6 +160,8 @@ test.describe("a conversation you finished yesterday", () => {
     await completeLocalDeviceCeremony(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await expectVaultAdopted(page);
+    await setProfilePresentationDensity(page, "Balanced");
+    await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
 
     /*

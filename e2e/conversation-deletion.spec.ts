@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 /*
  * "Delete conversation" on a Local Device vault.
@@ -60,6 +61,10 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
 
   await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
   await expect(page.getByText("encrypted Local Device Vault is active")).toBeVisible({ timeout: 30_000 });
+  /* The turn footer this journey fences on retires at minimal, so the
+     delete-fence waits are taken one rung up where the row exists. */
+  await setProfilePresentationDensity(page, "Balanced");
+  await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
   await page.getByRole("combobox", { name: "Message Airship" }).fill("delete this line");
   await page.getByRole("button", { name: "Send message" }).click();
   // Scoped to the transcript, not to the page: the conversation now takes its

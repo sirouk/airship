@@ -9,7 +9,11 @@ export async function setProfilePresentationDensity(
   page: Page,
   mode: "Minimal" | "Balanced" | "Instrumented",
 ): Promise<void> {
-  await page.goto("/#profiles", { waitUntil: "domcontentloaded" });
+  /* Keep the laboratory namespace alive: local-device vault lanes slice
+   * plumbing through the query string, and dropping it would leave the spec
+   * anywhere but the journal it is trapped in comparison against. */
+  const namespaceQuery = new URL(page.url()).search;
+  await page.goto(`/${namespaceQuery}#profiles`, { waitUntil: "domcontentloaded" });
   const editor = page.locator(".profile-editor");
   await expect(editor.getByRole("textbox", { name: "Name" })).toBeVisible({ timeout: 15_000 });
   await editor.getByRole("button", { name: /Profile presentation density/u }).click();

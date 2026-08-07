@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { completeLocalDeviceCeremony } from "./support/vault-ceremony";
+import { setProfilePresentationDensity } from "./support/density";
 
 /**
  * Airship reopened rather than resumed, and said nothing either way.
@@ -71,6 +72,10 @@ test.describe("a person who comes back", () => {
     const namespace = `resume-report-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
+    /* Turn-completion rows retire at the house density: the whole journey
+       fences on that row, so the run starts one rung up where the row exists. */
+    await setProfilePresentationDensity(page, "Balanced");
+    await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
 
     // A reload is the cheapest real page-session boundary: the journal lived in
@@ -112,6 +117,8 @@ test.describe("a person who comes back", () => {
     const namespace = `resume-dismiss-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
+    await setProfilePresentationDensity(page, "Balanced");
+    await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Something worth keeping.");
     await page.reload();
     await expect(page.locator(REPORT)).toBeVisible({ timeout: 25_000 });
@@ -178,6 +185,8 @@ test.describe("a person whose Vault held the conversation", () => {
     await expect(page.locator("header .runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }))
       .toBeVisible({ timeout: 40_000 });
     const prompt = "Draft the Q3 pricing memo intro paragraph.";
+    await setProfilePresentationDensity(page, "Balanced");
+    await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, prompt);
     // Anchored on the role, not on an index: an empty conversation renders an
     // assistant-shaped intro card first, so `.message` nth(1) is the prompt

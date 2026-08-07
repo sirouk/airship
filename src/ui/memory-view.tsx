@@ -17,6 +17,7 @@ import { ContextView } from "./context-route";
 import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { MemoryKindLegend } from "./memory-controls";
+import { densityAllows, usePresentationDensity } from "./density";
 import { groupMemoryRelationships } from "./memory-relationships";
 import { messagePlainText, type MessagePart } from "./chat/message-parts";
 import { useShellIsPhone } from "./phone-viewport";
@@ -501,6 +502,10 @@ export function MemoryView({
    * `conversation-navigation` asserts the canvas is on screen at rest.
    */
   const phone = useShellIsPhone();
+  /* The posture band reads the Profile's density: telemetry at minimal, the
+     durability warning retrievable at every rung while anything risks a
+     data-loss reading. */
+  const density = usePresentationDensity();
   const [query, setQuery] = useState(restoredPresentation?.query ?? "");
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [hiddenMemoryKinds, setHiddenMemoryKinds] = useState<ReadonlySet<MemoryNodeKind>>(() => new Set(DEFAULT_HIDDEN_KINDS));
@@ -932,11 +937,19 @@ export function MemoryView({
           * that says which question it answers — the pills at the top of the
           * route carried the answers with the questions missing.
           */}
+        {/* The posture *band* is telemetry at minimal, with one sharp
+          * answer protected: "records live …" is the route's reply to "what
+          * will persist" — one of the six sharp questions — so it renders at
+          * every density while anything is unsynced, unsettled or page-memory
+          * only, and quiets only once the record is durably held or synced. */}
         <dl class="memory-posture">
+          {densityAllows("telemetry", density) ? (
           <div>
             <dt>Recall runs</dt>
             <dd><Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." /></dd>
           </div>
+          ) : null}
+          {(densityAllows("telemetry", density) || (recallDurability.state !== "synced" && recallDurability.state !== "local")) ? (
           <div>
             <dt>Records live</dt>
             <dd><Seal
@@ -946,6 +959,7 @@ export function MemoryView({
               detail={recallDurability.detail}
             /></dd>
           </div>
+          ) : null}
         </dl>
 
       {/*
