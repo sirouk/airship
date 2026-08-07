@@ -783,6 +783,15 @@
 .workbench-dialog label small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.5; }
 .workbench-dialog input, .workbench-dialog textarea { width: 100%; }
 .workbench-dialog > div:last-child { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+/*
+ * The floor every other surface gets for free. These buttons were unstyled
+ * children of the grid above and rendered 24px tall — the smallest targets in
+ * the product sitting under the actions with the biggest consequences, on the
+ * one dialog that is exclusively a tap target (delete a conversation, wipe a
+ * vault). 44px is the documented touch floor; nothing about the row's width
+ * changes.
+ */
+.workbench-dialog > div:last-child button { min-height: 44px; padding-inline: 14px; }
 
 /* The dialog never said which file it was about. Now it does, twice. */
 .workbench-dialog__where {

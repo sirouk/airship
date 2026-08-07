@@ -37,7 +37,9 @@ import { finalizeProviderReceipt } from "../receipts/types";
 import type { CanonicalMessage, InferenceTransport, JsonValue, SecurityPosture, SessionManifest, ToolContext, ToolDefinition } from "../core/contracts";
 import type { LiveEnvironmentEntry } from "../core/live-environment";
 import type { InferenceDirectoryPromptDefinition } from "../core/operating-charter";
-import { EventJournal, type DurableEvent, type SessionRecord } from "../core/journal";
+import { EventJournal, effectiveSessionModel, type DurableEvent, type SessionRecord } from "../core/journal";
+import { planChutesModelSwitch, modelSwitchNeedsCompressionGate } from "./model-switch-plan";
+import { parseReasoningVisibility, setReasoningVisibility } from "./chat/reasoning-visibility";
 import { randomUuid } from "../core/id";
 import { loadBrowserGit } from "../load-browser-git";
 import { runTurn } from "../load-agent-runtime";
@@ -161,6 +163,7 @@ import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, t
 import { MemoryWorkspace } from "../workspace/memory";
 import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentity } from "../workspace/profile-scope";
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
+import { ConfirmDialog } from "./confirm-dialog";
 import { nextEditorSelection, type EditorSelection } from "./editor-selection";
 import { type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
@@ -715,6 +718,7 @@ type ProfileEditorDraft = {
   memoryScope: "session" | "profile" | "workspace";
   approvalMode: "ask-first" | "auto-approve" | "full-access";
   minimumPosture: SecurityPosture;
+  reasoningVisibility: "collapsed" | "expanded";
 };
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
@@ -1521,6 +1525,18 @@ export function App() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
   const [composerNotice, setComposerNotice] = useState<string>();
+  /*
+   * The compression gate before an in-place model switch. When the chosen
+   * model's context window is smaller than what this conversation already
+   * uses, the switch waits behind this dialog: the consequence is stated
+   * before it happens, and "keep the current model" is the way back.
+   */
+  const [pendingModelSwitch, setPendingModelSwitch] = useState<Readonly<{
+    modelLabel: string;
+    usedTokens: number;
+    windowTokens: number;
+    proceed: () => Promise<void>;
+  }> | undefined>(undefined);
   const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
   /*
    * Stop has to mean stop. `busy` alone cannot say why a turn ended: the
@@ -2518,6 +2534,16 @@ export function App() {
   const activeProfile = catalog?.profiles.find((profile) => profile.profileId === profileId);
   const activeProfileRef = useRef<ProfileRevision>();
   activeProfileRef.current = activeProfile;
+  /*
+   * Profile-level presentation becomes live here, with the profile that owns
+   * it. The revision digest is the dependency — a saved preference *is* a new
+   * revision — so switching profiles and saving preferences land through the
+   * same frame, and no render ever applies one profile's display setting to
+   * another's transcript.
+   */
+  useEffect(() => {
+    setReasoningVisibility(parseReasoningVisibility(activeProfile?.presentation?.reasoningVisibility));
+  }, [activeProfile?.revision]);
   useEffect(() => {
     const requested = proofSelection;
     const active = runtime.current;
@@ -3674,7 +3700,21 @@ export function App() {
     inferenceConnected,
     authMethod: activeInferenceBinding?.authMethod,
   });
-  const conversationFacts: readonly ClaimRow[] = Object.freeze([
+  /*
+ * The visible conversation's own relationship to the connected Chutes route:
+ * truthy when this thread's manifest pins the live connection, making it the
+ * thread whose model can change in place. Every "which model am I talking
+ * to" surface reads the durable in-flight choice before the connection
+ * default, so an in-place switch is seen everywhere at once — the chip, the
+ * picker, and the proof sheet can never disagree about what answers next.
+ */
+const visibleChutesThread = Boolean(
+  activeSessionRecord
+  && activeSessionRecord.manifest.inferenceBinding?.providerId === "chutes"
+  && activeSessionRecord.manifest.inferenceBinding.connectionId === chutesConnectionId.current,
+);
+const visibleSessionEffectiveModel = visibleChutesThread ? activeSessionRecord!.modelOverride : undefined;
+const conversationFacts: readonly ClaimRow[] = Object.freeze([
     /*
      * The bound model, and only while there is one.
      *
@@ -3690,12 +3730,12 @@ export function App() {
       id: "session-model",
       state: "asserted" as const,
       label: activeChutesConnection
-        ? connection.model
+        ? (visibleSessionEffectiveModel ?? connection.model)
         : activeExternalConnection?.pin.model.id ?? inferenceStatusLabel,
       detail: isChutesConnected(connection)
         ? connection.posture === "encrypted-attested"
-          ? `Encrypted inference through ${connection.model}; fresh endpoint proof is required before the next invocation.`
-          : `Encrypted inference through ${connection.model}; this compatibility connection has no required endpoint-proof gate.`
+          ? `Encrypted inference through ${visibleSessionEffectiveModel ?? connection.model}; fresh endpoint proof is required before the next invocation.`
+          : `Encrypted inference through ${visibleSessionEffectiveModel ?? connection.model}; this compatibility connection has no required endpoint-proof gate.`
         : inferenceStatusDetail,
       action: Object.freeze({ label: "Models", onSelect: () => navigatePrimary("access") }),
     })] : []),
@@ -9484,7 +9524,7 @@ export function App() {
     releaseChutesAuthority("Inference disconnected · conversation retained");
   }
 
-  async function switchChutesModel(modelId: string): Promise<void> {
+  async function switchChutesModel(modelId: string): Promise<ChutesModelSwitchOutcome> {
     const routeProfile = activeProfileRef.current;
     if (!runtime.current || !routeProfile || !catalog || !isChutesConnected(connection)) {
       throw new Error("Connect Chutes before selecting a remote model.");
@@ -9492,7 +9532,28 @@ export function App() {
     const model = availableModels.find((candidate) => candidate.id === modelId);
     if (!model) throw new Error("The selected model is not in the active authoritative Chutes catalog snapshot.");
     const reconnectIntent = accessReconnectIntent;
-    if (model.id === connection.model && activeChutesConnection && !reconnectIntent) return;
+    /*
+     * A conversation whose manifest pins this same Chutes connection changes
+     * its model in place: one durable `session.model-changed` event beside
+     * the manifest, and the next reply routes to the new model without a
+     * fork, a transcript reset, or a dropped turn. The planner reads the
+     * record's *effective* model — choosing the connection's pinned model
+     * while an override is active is the change "back to the thread's birth
+     * model", not a no-op — and only a thread pinning this exact connection
+     * earns the in-place route; everything else keeps the fork it had.
+     */
+    const plan = planChutesModelSwitch({
+      reconnectIntent: Boolean(reconnectIntent),
+      activeSession: activeSessionRecord,
+      connectionId: chutesConnectionId.current,
+      connectionModel: connection.model,
+      activeConnection: Boolean(activeChutesConnection),
+      targetModelId: model.id,
+    });
+    if (plan.kind === "noop") return;
+    if (plan.kind === "in-place") {
+      return switchChutesModelInPlace(model, plan.session);
+    }
     const transport = chutesTransport.current;
     const connectionId = chutesConnectionId.current;
     const expectedAuthorityRevision = chutesAuthorityRevision.current;
@@ -9624,7 +9685,103 @@ export function App() {
         ? `Audited conversation resumed · ${encryptedSessionReadyStatus(connection.posture)}`
         : encryptedSessionReadyStatus(connection.posture));
       if (reconnectSession) navigate("chat");
+      return "forked" as const;
     }, reconnectIntent);
+  }
+
+  /**
+   * The same-thread model change. Where the fork path mints a new pinned
+   * session and rewires the profile routing, a conversation whose manifest
+   * already names this connection takes one durable event instead: the
+   * record's modelOverride governs the next turn's minting, digests, and
+   * receipts — and a turn already running keeps the model its request was
+   * minted with, because honest sequencing beats cosmetic immediacy. The
+   * profile default is untouched, and the runtime is deliberately left
+   * alone: it expresses the profile/connection default, which the status
+   * sentence below promises did not change.
+   *  /**
+   * The same-thread model change. Where the fork path mints a new pinned
+   * session and rewires the profile routing, a conversation whose manifest
+   * already names this connection takes one durable event instead: the
+   * record's modelOverride governs the next turn's minting, digests, and
+   * receipts — and a turn already running keeps the model its request was
+   * minted with, because honest sequencing beats cosmetic immediacy. The
+   * profile default is untouched, and the runtime is deliberately left
+   * alone: it expresses the profile/connection default, which the status
+   * sentence below promises did not change.
+   *
+   * Failures throw rather than sink into a notice: every caller of this
+   * path — the chat model control, the Connection screen — owns an error
+   * surface that an exception routes into, and the compression dialog's
+   * deferred `proceed` catches its own. Swallowing here would let the
+   * Connection screen print "model changed" over a refusal.
+   */
+  async function switchChutesModelInPlace(model: AirshipModel, session: SessionRecord): Promise<ChutesModelSwitchOutcome> {
+    const conversationRuntime = runtime.current;
+    const transport = chutesTransport.current;
+    if (!conversationRuntime || !transport || !chutesConnectionId.current
+      || inferenceRouteChanging.current || sessionNavigationChanging.current) {
+      throw new Error("The active conversation is not ready to change its model.");
+    }
+    setModelSwitching(true);
+    try {
+      await transport.verifyModelAccess(model.id);
+      const policy = await contextPolicyForModel(model);
+      const candidateWindow = policy?.contextWindowTokens;
+      if (candidateWindow !== undefined) {
+        const used = await recentSessionUseTokens(conversationRuntime.journal, session);
+        if (modelSwitchNeedsCompressionGate(used, candidateWindow)) {
+          setPendingModelSwitch({
+            modelLabel: model.id,
+            usedTokens: used,
+            windowTokens: candidateWindow,
+            proceed: async () => {
+              try {
+                await commitChutesModelInPlace(model, session.id, policy);
+              } catch (error) {
+                setComposerNotice(error instanceof Error
+                  ? `The model could not be changed for this conversation. ${error.message}`
+                  : "The model could not be changed for this conversation.");
+              }
+            },
+          });
+          return "confirming-compression";
+        }
+      }
+      await commitChutesModelInPlace(model, session.id, policy);
+      return "in-place";
+    } finally {
+      setModelSwitching(false);
+    }
+  }
+
+  async function commitChutesModelInPlace(
+    model: AirshipModel,
+    sessionId: string,
+    policy: SessionManifest["contextPolicy"],
+  ): Promise<void> {
+    const conversationRuntime = runtime.current;
+    if (!conversationRuntime || inferenceRouteChanging.current || sessionNavigationChanging.current) {
+      throw new Error("The active conversation is not ready to change its model.");
+    }
+    sessionNavigationChanging.current = true;
+    try {
+      /*
+       * `policy ?? null`: a model whose window the catalog does not know must
+       * not inherit the previous override's window — `null` clears the
+       * override so the manifest policy resumes, never a stale number.
+       */
+      const updated = await conversationRuntime.journal.setSessionModel(sessionId, model.id, {
+        contextPolicy: policy ?? null,
+      });
+      if (activeSessionRecord?.id === updated.id) setActiveSessionRecord(updated);
+      setEventCount(updated.headSequence);
+      setSessionRevision((value) => value + 1);
+      setRuntimeStatus(`Model changed to ${model.id} for this conversation. The profile default for new conversations is unchanged.`);
+      setComposerNotice(undefined);
+    } finally {
+      sessionNavigationChanging.current = false;
+    }
   }
 
   async function activateExternalInference(
@@ -9890,6 +10047,11 @@ export function App() {
         approvalMode: draft.approvalMode,
         theme: { themeId: theme.themeId, digest: theme.digest },
         skillModes: current.skillModes,
+        presentation: draft.reasoningVisibility === "collapsed"
+          ? current.presentation === undefined
+            ? undefined
+            : { ...current.presentation, reasoningVisibility: "collapsed" }
+          : { ...current.presentation, reasoningVisibility: draft.reasoningVisibility },
         createdAt: new Date().toISOString(),
       });
       return replaceProfile(currentCatalog, revision);
@@ -10858,7 +11020,7 @@ export function App() {
                   <ModelControl
                     active={activeChutesConnection ? {
                       providerLabel: "Chutes",
-                      modelId: connection.model,
+                      modelId: visibleSessionEffectiveModel ?? connection.model,
                       boundaryLabel: e2eeBoundaryLabel,
                     } : activeExternalConnection ? {
                       providerLabel: activeExternalConnection.pin.provider.label,
@@ -10888,6 +11050,7 @@ export function App() {
                         : standbyExternalModels}
                     busy={busy}
                     switching={modelSwitching}
+                    inPlace={visibleChutesThread}
                     onSelect={activeChutesConnection
                       ? switchChutesModel
                       : activeExternalConnection
@@ -10897,7 +11060,7 @@ export function App() {
                     picker={activeChutesConnection && ModelPickerControl ? (control) => (
                       <ModelPickerControl
                         models={availableModels}
-                        value={connection.model}
+                        value={visibleSessionEffectiveModel ?? connection.model}
                         disabled={control.disabled}
                         onSelect={control.select}
                       />
@@ -11756,11 +11919,13 @@ export function App() {
             onAbandonReconnect={abandonReconnectRequest}
             connectionActive={Boolean(activeChutesConnection)}
             onUseConnection={isChutesConnected(connection) && (!accessReconnectIntent || chutesReconnectExact)
-              ? () => switchChutesModel(
-                  accessReconnectIntent?.lane === "chutes"
-                    ? accessReconnectIntent.model
-                    : connection.model,
-                )
+              ? async () => {
+                  await switchChutesModel(
+                    accessReconnectIntent?.lane === "chutes"
+                      ? accessReconnectIntent.model
+                      : connection.model,
+                  );
+                }
               : undefined}
             onConnect={({ connection: nextConnection, transport, model, models, credential }) =>
               connectChutes(transport, model, models, credential, nextConnection)}
@@ -11938,6 +12103,27 @@ export function App() {
         },
       }} /> : null}
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} conversationFacts={conversationFacts} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
+      {pendingModelSwitch ? (
+        <ConfirmDialog
+          title={`Switch this conversation to ${pendingModelSwitch.modelLabel}?`}
+          confirmLabel={`Switch to ${pendingModelSwitch.modelLabel}`}
+          cancelLabel="Keep the current model"
+          onCancel={() => setPendingModelSwitch(undefined)}
+          onConfirm={() => {
+            const pending = pendingModelSwitch;
+            setPendingModelSwitch(undefined);
+            void pending.proceed();
+          }}
+        >
+          <>
+            This conversation is already using about {pendingModelSwitch.usedTokens.toLocaleString()} tokens,
+            and {pendingModelSwitch.modelLabel}&rsquo;s context window is {pendingModelSwitch.windowTokens.toLocaleString()}.
+            The next reply will compress what came before to fit: wording in the thread
+            is summarized under the new model&rsquo;s window, while the full history and its
+            receipts stay intact and auditable.
+          </>
+        </ConfirmDialog>
+      ) : null}
       {/*
         The reload the person just pressed is not the departure the guard
         exists for. Released synchronously, because `reload()` navigates in this
@@ -12114,6 +12300,37 @@ async function compatibleProfileSession(
     expected,
     preferredSessionId,
   );
+}
+
+/**
+ * What this conversation is using right now, answered from the journal's own
+ * usage records. The last `inference.usage` event of a request names the
+ * prompt the transport actually saw, so it is the honest comparison for "the
+ * chosen model's window is smaller than the thread's current use". Only the
+ * tail is scanned — usage events land on every request, so the most recent
+ * one is never far from the head. No usage record means nothing measurable
+ * has happened yet, and the gate stays silent instead of guessing.
+ */
+/**
+ * How a chosen Chutes model actually landed, so every surface states the
+ * outcome truthfully: in place on this thread, as a new pinned conversation,
+ * or paused behind the compression gate.
+ */
+type ChutesModelSwitchOutcome = "in-place" | "forked" | "confirming-compression" | void;
+
+async function recentSessionUseTokens(journal: EventJournal, session: SessionRecord): Promise<number | undefined> {
+  const events = await journal.readEvents(session.id, Math.max(0, session.headSequence - 400));
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== "inference.usage") continue;
+    const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+      ? event.payload as { inputTokens?: unknown; outputTokens?: unknown }
+      : undefined;
+    const input = typeof payload?.inputTokens === "number" ? payload.inputTokens : 0;
+    const output = typeof payload?.outputTokens === "number" ? payload.outputTokens : 0;
+    if (input + output > 0) return input + output;
+  }
+  return undefined;
 }
 
 async function contextPolicyForModel(model: AirshipModel): Promise<SessionManifest["contextPolicy"] | undefined> {
@@ -14224,6 +14441,17 @@ function ProfileManagerView({
                   { value: "auto-approve", label: "Auto Approve" },
                   { value: "full-access", label: "Full Access" },
                 ]} onChange={(approvalMode) => setDraft({ ...draft, approvalMode: approvalMode as ProfileEditorDraft["approvalMode"] })} /></label>
+                {/*
+                  Display-only, like every entry in this row's class: the choice
+                  changes how deeply a turn's reasoning begins expanded and
+                  nothing else — never what runs, what is stored, or what the
+                  audit sees. It saves with the profile revision, so it is
+                  unmistakably Profile-local beside the global Preferences.
+                */}
+                <label><span>Reasoning</span><MenuSelect ariaLabel="Profile reasoning display" value={draft.reasoningVisibility} options={[
+                  { value: "collapsed", label: "Summary", description: "A headline line; the full reasoning opens on demand" },
+                  { value: "expanded", label: "Show by default", description: "The full provider-exposed reasoning starts open" },
+                ]} onChange={(reasoningVisibility) => setDraft({ ...draft, reasoningVisibility: reasoningVisibility as ProfileEditorDraft["reasoningVisibility"] })} /></label>
                 <label><span>Minimum proof</span><MenuSelect ariaLabel="Profile minimum proof posture" value={draft.minimumPosture} options={[
                   { value: "local", label: "Local", description: "No remote inference proof is required" },
                   { value: "plaintext-remote", label: "Remote", description: "Permit any connected remote runtime" },
@@ -14363,6 +14591,7 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
     memoryScope: enforcedMemoryScope(silo.memoryScope),
     approvalMode: silo.approvalMode,
     minimumPosture: profile.minimumPosture,
+    reasoningVisibility: parseReasoningVisibility(profile.presentation?.reasoningVisibility),
   };
 }
 

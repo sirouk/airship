@@ -172,6 +172,20 @@ export type ProfileRevisionDraft = Readonly<{
   }>;
   /** Missing entries are equivalent to `inherit`. */
   skillModes: Readonly<Record<string, SkillMode>>;
+  /**
+   * Display-only presentation choices made on this profile. They change what
+   * Preact renders and how deeply information begins expanded — never
+   * capabilities, permissions, context, storage, evidence, agent behavior,
+   * or the audit trail. Absent means the ordinary default.
+   */
+  presentation?: Readonly<{
+    /**
+     * Whether a turn's provider-exposed reasoning opens expanded or behind
+     * one deliberate action. `collapsed` is the ordinary default: the part is
+     * a summary line that expands on demand.
+     */
+    reasoningVisibility?: "collapsed" | "expanded";
+  }>;
   createdAt: string;
 }>;
 
@@ -639,14 +653,36 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
     createdAt: isoTimestamp(draft.createdAt),
   };
   if (version === 1) {
-    if (draft.workspaceBinding !== undefined || draft.memoryScope !== undefined || draft.approvalMode !== undefined) {
+    if (
+      draft.workspaceBinding !== undefined || draft.memoryScope !== undefined || draft.approvalMode !== undefined
+      || draft.presentation !== undefined
+    ) {
       throw new Error("Version 1 profiles cannot carry silo settings; create a new revision instead.");
     }
     return parentRevision ? { ...base, parentRevision } : base;
   }
   const silo = resolveProfileSilo(draft);
-  const v2 = { ...base, ...silo };
+  const presentation = normalizeProfilePresentation(draft.presentation);
+  const v2 = presentation ? { ...base, ...silo, presentation } : { ...base, ...silo };
   return parentRevision ? { ...v2, parentRevision } : v2;
+}
+
+/**
+ * The presentation payload a revision may carry: every member validated, and
+ * nothing when nothing is set. Byte stability is the rule — a revision that
+ * stored no presentation must digest identically before and after this field
+ * existed, and an all-default presentation object must never materialize as
+ * an empty key that changes that digest.
+ */
+function normalizeProfilePresentation(
+  value: ProfileRevisionDraft["presentation"],
+): ProfileRevisionDraft["presentation"] | undefined {
+  if (value === undefined) return undefined;
+  const reasoningVisibility = value.reasoningVisibility === undefined
+    ? undefined
+    : oneOf(value.reasoningVisibility, ["collapsed", "expanded"] as const, "reasoning visibility");
+  if (reasoningVisibility === undefined) return undefined;
+  return deepFreeze({ reasoningVisibility });
 }
 
 function normalizeWorkspaceBinding(value: ProfileWorkspaceBinding | undefined): ProfileWorkspaceBinding {

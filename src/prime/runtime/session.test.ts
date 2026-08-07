@@ -607,7 +607,7 @@ describe("PrimeAgentSession", () => {
     expect(result.text ?? "").toContain("kernel finished");
   });
 
-  it("t7: prompt during an active turn refuses with the serialization error; queued steer lands as next turn", async () => {
+  it("t7: prompt during an active turn refuses with the serialization error; queued steer lands as next turn", { timeout: 120_000 }, async () => {
     const fixture = await makeFixture({});
     fixture.registration.setResponses([
       fauxAssistantMessage("first answer"),
@@ -711,19 +711,23 @@ describe("PrimeAgentSession", () => {
  * The queued turn must become *active* under contended event loops on any
  * machine the suite runs on: a fixed number of `setTimeout(0)` ticks races on
  * loaded runners, while a millisecond deadline does not depend on tick
- * scheduling at all. A prompt is only allowed to take two hundredths of its
- * own timeout budget to enter its turn, so the wait refuses loudly instead
- * of flaking.
+ * scheduling at all. Its only clock is the file's own test timeout: the
+ * state it waits for is one the session always reaches, so a fixed poll
+ * budget only ever decides whether a slow machine or a broken session gets
+ * the blame.
  */
 async function waitForActiveTurnId(session: PrimeAgentSession): Promise<string | undefined> {
-  // Two seconds sat empty on a four-worker CI runner (we measured 2,002 ms):
-  // the turn-open chain itself is queue-bound, so the deadline rides at a
-  // third of the global suite timeout rather than an event-loop budget.
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+  /*
+   * No wall-clock deadline: fixed budgets keep losing to load (2 s sat empty
+   * on a four-worker runner, 10 s sat empty beside a six-browser verification
+   * swarm — the turn opened right after the budget expired in both). The
+   * state this test needs is one the session ALWAYS reaches; the file's own
+   * 30 s testTimeout is the backstop if it somehow never does, and failing at
+   * that boundary names the real regression instead of racing a clock.
+   */
+  for (;;) {
     const turnId = session.getActiveTurnId();
     if (turnId) return turnId;
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  return session.getActiveTurnId();
 }

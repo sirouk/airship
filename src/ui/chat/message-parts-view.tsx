@@ -8,6 +8,7 @@ import { ASSISTANT_LENGTH_CODE } from "./message-parts";
 import type { MessagePart, TextPart, ToolCallAuthority, ToolCallPart, ToolResultPart } from "./message-parts";
 import { MarkdownView } from "./markdown";
 import { useTranscriptOperations, type TranscriptOperationsMode } from "./transcript-operations";
+import { useReasoningVisibility } from "./reasoning-visibility";
 import "./message-parts-view.css";
 
 export const DEFAULT_OPERATION_RENDER_LIMIT = 12;
@@ -650,11 +651,38 @@ function MessagePartView({ part, answer, live, onRetry }: {
   live: boolean;
   onRetry?: () => void;
 }) {
+  const reasoningVisibility = useReasoningVisibility();
   if (part.kind === "text") {
     return <div class={answer ? "message-part text text--answer" : "message-part text"}><MarkdownView source={part.content} /></div>;
   }
 
   if (part.kind === "reasoning-summary") {
+    /*
+     * One control, two defaults. Collapsed — the Profile default — the part
+     * is a headline line that opens on demand; expanded, the profile asked
+     * for the whole reasoning up front and the fold is not offered, exactly
+     * like tool steps under "Every step". The text itself is only ever what
+     * the provider exposed; the part says so rather than letting the block
+     * read as the model's private mind.
+     */
+    if (part.full) {
+      const provenance = "Shown as the provider exposed it";
+      if (reasoningVisibility === "expanded") {
+        return (
+          <article class="message-part reasoning-summary reasoning-full">
+            <header><Icon name="context" size={14} /><span>{part.label ?? "Reasoning"}</span><small>{provenance}</small></header>
+            <p class="reasoning-summary__headline">{part.summary}</p>
+            <pre class="reasoning-summary__text">{part.full}</pre>
+          </article>
+        );
+      }
+      return (
+        <details class="message-part reasoning-summary reasoning-full">
+          <summary><Icon name="context" size={14} /><span>{part.label ?? "Reasoning"}</span><small>{`${provenance} · ${part.full.length.toLocaleString()} characters`}</small></summary>
+          <pre class="reasoning-summary__text">{part.full}</pre>
+        </details>
+      );
+    }
     return (
       <details class="message-part reasoning-summary">
         <summary><Icon name="context" size={14} /><span>{part.label ?? "Reasoning summary"}</span><small>Public summary</small></summary>

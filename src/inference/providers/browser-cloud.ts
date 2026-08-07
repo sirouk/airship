@@ -657,7 +657,12 @@ class ResponsesStreamAssembler {
         : [];
     }
     if (type === "response.reasoning_text.delta" || type === "response.reasoning_summary_text.delta") {
-      return [{ type: "progress", phase: "reasoning" }];
+      // Same phase signal as before, now with the text the provider let the
+      // person read: the reasoning-delta is the transcript's record, the
+      // progress frame is only the live indicator.
+      return typeof payload.delta === "string" && payload.delta
+        ? [{ type: "progress", phase: "reasoning" }, { type: "reasoning-delta", text: payload.delta }]
+        : [{ type: "progress", phase: "reasoning" }];
     }
     if (type === "response.output_item.added" || type === "response.output_item.done") {
       const item = isRecord(payload.item) ? payload.item : undefined;
@@ -781,9 +786,18 @@ class AnthropicStreamAssembler {
         return [{ type: "text-delta", text: delta.text }];
       }
       if (delta?.type === "thinking_delta") {
-        if (this.reportedReasoning) return [];
-        this.reportedReasoning = true;
-        return [{ type: "progress", phase: "reasoning" }];
+        // Anthropic thinking deltas arrive as text on delta.thinking; every
+        // chunk after the first used to be dropped on the floor. Report the
+        // phase once, carry the content every time.
+        const events: InferenceEvent[] = [];
+        if (!this.reportedReasoning) {
+          this.reportedReasoning = true;
+          events.push({ type: "progress", phase: "reasoning" });
+        }
+        if (typeof delta.thinking === "string" && delta.thinking) {
+          events.push({ type: "reasoning-delta", text: delta.thinking });
+        }
+        return events;
       }
       if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
         const tool = this.tools.get(streamIndex(payload.index));

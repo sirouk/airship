@@ -215,6 +215,14 @@ export type InferenceRequest = {
 export type InferenceEvent =
   | { type: "text-delta"; text: string }
   | { type: "progress"; phase: "reasoning" }
+  | {
+      // Private chain-of-thought the provider chose to expose as a stream.
+      // It is evidence about how the answer was formed, never answer text,
+      // and runTurn journals it as its own `turn.reasoning` record beside the
+      // assistant text it preceded.
+      type: "reasoning-delta";
+      text: string;
+    }
   | { type: "tool-call"; call: ToolCall }
   | { type: "usage"; inputTokens?: number; outputTokens?: number }
   | {

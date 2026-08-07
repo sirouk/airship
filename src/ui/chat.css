@@ -1117,6 +1117,44 @@ button.runtime-posture {
   font-size: var(--fs-caption);
 }
 
+/* The reasoning part with recorded content: a pre-wrapped reading block. */
+.message-part.reasoning-summary.reasoning-full > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 9px;
+  color: var(--ink-muted);
+}
+
+.message-part.reasoning-summary.reasoning-full > header span {
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+}
+
+.message-part.reasoning-summary.reasoning-full > .reasoning-summary__headline,
+.message-part.reasoning-summary.reasoning-full > p.reasoning-summary__headline {
+  margin: 0;
+  padding: 0 10px 8px 32px;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+.message-part.reasoning-summary.reasoning-full > pre.reasoning-summary__text {
+  margin: 0;
+  padding: 0 10px 10px 32px;
+  max-height: 40vh;
+  overflow: auto;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+
 .message-part.reference {
   display: grid;
   gap: 7px;

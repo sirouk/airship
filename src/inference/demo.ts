@@ -58,6 +58,21 @@ export class DemoInferenceTransport implements InferenceTransport {
       return;
     }
 
+    const reasoningRequest = last.role === "user" ? last.content.trim() : "";
+    if (reasoningRequest.startsWith("/reason ")) {
+      const thought = reasoningRequest.slice(8).trim() || "reasoning demo";
+      yield { type: "progress", phase: "reasoning" };
+      const lineOne = `First I decide what "${thought}" asks for. `;
+      const lineTwo = `\nThen I answer briefly, in the voice the profile set.`;
+      yield { type: "reasoning-delta", text: lineOne };
+      await Promise.resolve();
+      yield { type: "reasoning-delta", text: lineTwo };
+      const answer = `Considered "${thought}" out loud for ${String((lineOne + lineTwo).length)} characters, per your request.`;
+      yield* textEvents(answer, signal);
+      yield { type: "usage", inputTokens: Math.ceil(last.content.length / 4), outputTokens: Math.ceil(answer.length / 4) };
+      yield { type: "completed", finishReason: "stop" };
+      return;
+    }
     const requestedCall = last.role === "user" ? commandFor(last.content) : undefined;
     if (requestedCall) {
       yield { type: "tool-call", call: requestedCall };
@@ -67,7 +82,7 @@ export class DemoInferenceTransport implements InferenceTransport {
 
     const answer =
       "Airship is running this turn entirely on your device with the deterministic demo provider. " +
-      "Try /write notes/hello.md followed by content, /read notes/hello.md, or /ls.";
+      "Try /write notes/hello.md followed by content, /read notes/hello.md, /reason followed by a thought, or /ls.";
     yield* textEvents(answer, signal);
     yield { type: "usage", inputTokens: Math.ceil(last.content.length / 4), outputTokens: Math.ceil(answer.length / 4) };
     yield { type: "completed", finishReason: "stop" };

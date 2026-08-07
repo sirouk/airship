@@ -28,14 +28,22 @@ describe("buildOpenAiPayload multimodal serialization", () => {
 });
 
 describe("OpenAiStreamAssembler private reasoning boundary", () => {
-  it("reports a reasoning phase once without exposing private reasoning tokens", () => {
+  it("reports the phase once and carries every provider-exposed chunk as reasoning, never as answer text", () => {
     const assembler = new OpenAiStreamAssembler({ maxToolCalls: 8, maxToolArgumentsChars: 8_192 });
-    const first = assembler.consume(JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: "hidden one" }, finish_reason: null }] }));
-    const second = assembler.consume(JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: "hidden two", content: "Visible" }, finish_reason: "stop" }] }));
+    const first = assembler.consume(JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: "plan one" }, finish_reason: null }] }));
+    const second = assembler.consume(JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: "plan two", content: "Visible" }, finish_reason: "stop" }] }));
 
-    expect(first).toEqual([{ type: "progress", phase: "reasoning" }]);
-    expect(second).toEqual([{ type: "text-delta", text: "Visible" }]);
-    expect(JSON.stringify([...first, ...second])).not.toContain("hidden");
+    expect(first).toEqual([
+      { type: "progress", phase: "reasoning" },
+      { type: "reasoning-delta", text: "plan one" },
+    ]);
+    // The phase signal fires exactly once; the text keeps arriving as reasoning.
+    expect(second).toEqual([
+      { type: "reasoning-delta", text: "plan two" },
+      { type: "text-delta", text: "Visible" },
+    ]);
+    // What the provider exposed rides its own event type; the answer stays clean.
+    expect(second.some((event) => event.type === "text-delta" && "text" in event && event.text.includes("plan"))).toBe(false);
     expect(assembler.finalize()).toMatchObject({ finishReason: "stop", toolCalls: [] });
   });
 

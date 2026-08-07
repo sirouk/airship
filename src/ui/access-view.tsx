@@ -134,7 +134,7 @@ export type AccessViewProps = Readonly<{
   onConnect: (request: AccessConnectRequest) => Promise<void>;
   onDisconnect: () => Promise<void>;
   models?: readonly AirshipModel[];
-  onSelectModel?: (modelId: string) => Promise<void>;
+  onSelectModel?: (modelId: string) => Promise<"in-place" | "forked" | "confirming-compression" | void>;
   connectionActive?: boolean;
   onUseConnection?: () => Promise<void>;
   onInvocationTelemetry?: (telemetry: ChutesInvocationTelemetry) => void;
@@ -1049,13 +1049,17 @@ export function AccessView({
       && reconnectIntent.model === modelId;
     setStatus(returning
       ? "Verifying the requested conversation against this exact Chutes route…"
-      : "Creating a new model-pinned session…");
+      : "Changing to the selected model…");
     setError(undefined);
     try {
-      await onSelectModel(modelId);
+      const outcome = await onSelectModel(modelId);
       setStatus(returning
         ? "The requested audited conversation is active."
-        : "Model changed in a new pinned session; prior history remains intact.");
+        : outcome === "in-place"
+          ? "Model changed for this conversation in place; the profile default is unchanged."
+          : outcome === "confirming-compression"
+            ? "Review the compression choice before the model finishes changing."
+            : "Model changed in a new pinned session; prior history remains intact.");
     } catch (caught) {
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);

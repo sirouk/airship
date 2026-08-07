@@ -67,6 +67,9 @@ export class OpenAiStreamAssembler {
             this.reportedPrivateReasoning = true;
             events.push({ type: "progress", phase: "reasoning" });
           }
+          // The phase signal says reasoning is happening; this carries what
+          // the provider let the person see of it, for the reasoning record the transcript carries.
+          events.push({ type: "reasoning-delta", text: delta.reasoning_content });
         }
         if (typeof delta.content === "string" && delta.content) {
           this.sawVisibleContent = true;

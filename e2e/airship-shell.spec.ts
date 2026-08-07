@@ -545,10 +545,17 @@ test("profile-owned approval policy clearly switches new pinned conversations", 
   await page.screenshot({ path: testInfo.outputPath("approval-mode-menu.png"), fullPage: true });
 });
 
-test("the composer changes approval policy in place through a new immutable conversation", async ({ page }, testInfo) => {
+test("the composer changes approval policy in place on the conversation being read", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop composer approval contract");
   await openReadyApp(page);
-  const initialUrl = page.url();
+  // The control governs the conversation being read, so there must be one:
+  // a message first, then the keyboard path through the same select.
+  await page.getByRole("combobox", { name: "Message Airship" }).fill("approval in place check");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/, { timeout: 20_000 });
+  await expect(page.locator(".transcript")).toContainText("in place check", { timeout: 20_000 });
+  const conversationUrl = page.url();
+
   const picker = page.getByRole("button", { name: "Conversation approval policy" });
   await expect(picker).toContainText("Ask First");
   await picker.focus();
@@ -558,9 +565,10 @@ test("the composer changes approval policy in place through a new immutable conv
     .getByRole("option", { name: "Auto Approve", exact: true })
     .click();
   await expect(picker).toContainText("Auto Approve");
-  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
-  expect(page.url()).not.toBe(initialUrl);
-  await expect(page.getByText(/Approval policy changed to Auto Approve/u)).toBeVisible();
+  // In place, on the thread being read: the address and the conversation do
+  // not move, and the sentence explains the exact scope of what changed.
+  expect(page.url()).toBe(conversationUrl);
+  await expect(page.getByText(/Approval policy changed to Auto Approve for this conversation/u)).toBeVisible({ timeout: 15_000 });
 });
 
 test("desktop profile menu restores each profile's conversation cockpit", async ({ page }, testInfo) => {

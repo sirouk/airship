@@ -5,6 +5,7 @@ import {
   ASSISTANT_LENGTH_CODE,
   MESSAGE_PART_DISPLAY_LIMITS,
   boundedDisplayText,
+  reasoningHeadline,
   messagePartFactsFromDurableEvents,
   messagePartsFromDurableEvents,
   messagePartsFromFacts,
@@ -358,3 +359,56 @@ function fact<Kind extends MessagePartFact["kind"]>(
 ): Extract<MessagePartFact, { kind: Kind }> {
   return { kind, factId, sequence, ...fields } as Extract<MessagePartFact, { kind: Kind }>;
 }
+
+
+describe("reasoning parts from durable records", () => {
+  function reasoningEvent(text: string, truncated = false): DurableEvent {
+    return {
+      version: 1,
+      eventId: "evt-r1",
+      sessionId: "s1",
+      sequence: 5,
+      recordedAt: "2026-08-06T00:00:00.000Z",
+      previousDigest: "p",
+      digest: "d",
+      turnId: "t1",
+      operationId: "req1",
+      type: "turn.reasoning",
+      payload: { text, ...(truncated ? { truncated: true } : {}) },
+    } as DurableEvent;
+  }
+
+  it("projects headline and full text through the parts pipeline", () => {
+    const parts = messagePartsFromDurableEvents([reasoningEvent("Line one of the plan.\nThe rest of the plan, in detail.")], { turnId: "t1" });
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      kind: "reasoning-summary",
+      label: "Reasoning",
+      summary: "Line one of the plan.",
+      full: "Line one of the plan.\nThe rest of the plan, in detail.",
+    });
+  });
+
+  it("carries the truncation notice when the journal said the record was bounded", () => {
+    const parts = messagePartsFromDurableEvents([reasoningEvent("Bounded reasoning.", true)], { turnId: "t1" });
+    expect(parts[0]).toMatchObject({ label: "Reasoning · record truncated" });
+  });
+
+  it("bounds the full text at the reasoning limit without pretending it all fits", () => {
+    const huge = "reasoning ".repeat(40_000);
+    const parts = messagePartsFromDurableEvents([reasoningEvent(huge)], { turnId: "t1" });
+    const part = parts[0];
+    expect(part?.kind).toBe("reasoning-summary");
+    if (part?.kind === "reasoning-summary" && part.full) {
+      expect(part.full.length).toBeLessThanOrEqual(MESSAGE_PART_DISPLAY_LIMITS.reasoningFullChars);
+    }
+  });
+});
+
+describe("reasoningHeadline", () => {
+  it("takes the first non-empty line and answers empties with a sentence", () => {
+    expect(reasoningHeadline("\n\n  The real start.\nMore." )).toBe("The real start.");
+    expect(reasoningHeadline("   \n \n")).toBe("The model reasoned before answering.");
+    expect(reasoningHeadline("x".repeat(400)).length).toBeLessThanOrEqual(160);
+  });
+});

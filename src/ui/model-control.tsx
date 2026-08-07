@@ -17,6 +17,7 @@ export function ModelControl({
   providerLabel,
   busy,
   switching: routeSwitching,
+  inPlace = false,
   onSelect,
   onOpenConnection,
   picker,
@@ -35,7 +36,14 @@ export function ModelControl({
   providerLabel?: string;
   busy: boolean;
   switching: boolean;
-  onSelect: (modelId: string) => Promise<void>;
+  /**
+   * True when the active conversation pins this same connection: choosing a
+   * model then changes this conversation in place (one durable event, next
+   * reply governed), which the copy must promise instead of a new pinned
+   * conversation. False/absent keeps the fork semantics the copy names.
+   */
+  inPlace?: boolean;
+  onSelect: (modelId: string) => Promise<unknown>;
   onOpenConnection: () => void;
   /**
    * The catalogue-aware picker, for a route whose models are real
@@ -59,7 +67,7 @@ export function ModelControl({
   const [error, setError] = useState<string>();
   const [pendingModelId, setPendingModelId] = useState<string>();
   const operation = useRef(0);
-  const options = modelControlOptions(models, active?.modelId);
+  const options = modelControlOptions(models, active?.modelId, inPlace);
   const activity = modelControlActivity(busy, routeSwitching, pendingModelId);
 
   /**
@@ -131,14 +139,16 @@ export function ModelControl({
         // from its contents, and wrapping it would forward stray clicks inside
         // the open popover back to the trigger.
         <div class="session-runtime-picker">
-          <small>{active.providerLabel} · session model</small>
+          <small>{active.providerLabel} · {inPlace ? "conversation model" : "session model"}</small>
           {picker({ select, disabled: activity.disabled })}
         </div>
       ) : (
       <label>
-        <small>{active.providerLabel} · session model</small>
+        <small>{active.providerLabel} · {inPlace ? "conversation model" : "session model"}</small>
         <MenuSelect
-          ariaLabel={`${active.providerLabel} session model; choosing another starts a new pinned conversation`}
+          ariaLabel={inPlace
+            ? `${active.providerLabel} conversation model; choosing another changes this conversation in place, next reply governed`
+            : `${active.providerLabel} session model; choosing another starts a new pinned conversation`}
           value={active.modelId}
           placement="down"
           options={options}
@@ -185,24 +195,27 @@ export function modelControlActivity(
 export function modelControlOptions(
   models: readonly ModelControlOption[],
   activeModelId?: string,
+  inPlace = false,
 ): readonly Readonly<{ value: string; label: string; description: string }>[] {
+  const currentDescription = inPlace ? "Current conversation model" : "Current pinned model";
+  const nextDescription = inPlace ? "Changes this conversation in place" : "Starts a new pinned conversation";
   const listed = models.map((model) => ({
     value: model.id,
     label: model.label,
     ...(model.disabled ? { disabled: true } : {}),
     description: model.id === activeModelId
       ? model.detail
-        ? `${model.detail} · current pinned model`
-        : "Current pinned model"
+        ? `${model.detail} · ${currentDescription.toLowerCase()}`
+        : currentDescription
       : model.detail
-        ? `${model.detail}${model.disabled ? " · not a chat model" : " · starts a new pinned conversation"}`
-        : model.disabled ? "Not a chat model" : "Starts a new pinned conversation",
+        ? `${model.detail}${model.disabled ? " · not a chat model" : ` · ${nextDescription.toLowerCase()}`}`
+        : model.disabled ? "Not a chat model" : nextDescription,
   }));
   if (!activeModelId || listed.some((option) => option.value === activeModelId)) return listed;
   return [{
     value: activeModelId,
     label: activeModelId,
-    description: "Current pinned model · catalog details unavailable",
+    description: `${currentDescription} · catalog details unavailable`,
   }, ...listed];
 }
 

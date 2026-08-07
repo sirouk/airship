@@ -65,6 +65,13 @@ const KNOWN_EVENT_TYPES = new Set([
   "context.summary.updated",
   "turn.requested",
   "turn.context.selected",
+  /*
+   * The provider-exposed reasoning for one inference step. runTurn journals it
+   * once per request the moment the request completes, beside the answer it
+   * preceded; it carries text the provider chose to stream to the person, so
+   * the completeness rule is the presence of the record, not its content.
+   */
+  "turn.reasoning",
   TASK_PLAN_NOTE_EVENT_TYPE,
   "inference.started",
   "inference.usage",

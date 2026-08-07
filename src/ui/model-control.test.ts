@@ -107,6 +107,40 @@ describe("provider-neutral model control", () => {
     expect(options[0]?.value).toBe("pinned-model");
   });
 
+  it("names in-place semantics when the visible thread pins the same connection", () => {
+    expect(modelControlOptions([
+      { id: "model-b", label: "Model B", detail: "Vision" },
+    ], "model-a", true)).toEqual([
+      {
+        value: "model-a",
+        label: "model-a",
+        description: "Current conversation model · catalog details unavailable",
+      },
+      {
+        value: "model-b",
+        label: "Model B",
+        description: "Vision · changes this conversation in place",
+      },
+    ]);
+  });
+
+  it("keeps fork semantics the default so a caller cannot promise in place by accident", () => {
+    expect(modelControlOptions([
+      { id: "model-b", label: "Model B" },
+    ], "model-a")).toEqual([
+      {
+        value: "model-a",
+        label: "model-a",
+        description: "Current pinned model · catalog details unavailable",
+      },
+      {
+        value: "model-b",
+        label: "Model B",
+        description: "Starts a new pinned conversation",
+      },
+    ]);
+  });
+
   it("keeps non-chat catalog rows visible but disabled", () => {
     expect(modelControlOptions([
       { id: "embedding-model", label: "Embedding model", detail: "Embeddings", disabled: true },

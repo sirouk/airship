@@ -21,6 +21,7 @@ export const MESSAGE_PART_DISPLAY_LIMITS = Object.freeze({
   toolArgumentsChars: 768,
   toolResultChars: 8_192,
   reasoningSummaryChars: 4_096,
+  reasoningFullChars: 262_144,
   citationLabelChars: 256,
   citationExcerptChars: 2_048,
   referenceChars: 2_048,
@@ -166,9 +167,19 @@ export type ToolResultPart = MessagePartBase<"tool-result"> & Readonly<{
 }>;
 
 export type ReasoningSummaryPart = MessagePartBase<"reasoning-summary"> & Readonly<{
-  /** Provider- or agent-authored user-visible summary; never hidden chain-of-thought. */
+  /**
+   * The one-line answer to "what did the reasoning establish": the author's
+   * summary when one was authored, else the first line of the recorded
+   * reasoning itself. Never hidden chain-of-thought — only text the provider
+   * chose to expose.
+   */
   summary: string;
   label?: string;
+  /**
+   * The full provider-exposed reasoning for this step, bounded at
+   * `reasoningFullChars`. Absent when the record carried only a summary.
+   */
+  full?: string;
 }>;
 
 export type CitationPart = MessagePartBase<"citation"> & Readonly<{
@@ -255,9 +266,11 @@ export type ToolResultMessagePartFact = MessagePartFactBase<"tool-result"> & Rea
 }>;
 
 export type ReasoningSummaryMessagePartFact = MessagePartFactBase<"reasoning-summary"> & Readonly<{
-  /** Must contain only a user-visible summary, never private reasoning tokens. */
+  /** Must contain only provider-exposed, user-visible reasoning text. */
   summary: string;
   label?: string;
+  /** The complete provider-exposed reasoning, when the journal recorded it. */
+  full?: string;
 }>;
 
 export type CitationMessagePartFact = MessagePartFactBase<"citation"> & Readonly<{
@@ -481,6 +494,29 @@ export function messagePartFactsFromDurableEvents(
       continue;
     }
 
+    if (event.type === "turn.reasoning") {
+      /*
+       * The provider-exposed reasoning for one inference step, journaled by
+       * runTurn the moment the request completes. The transcript line is its
+       * own record — first line as the headline, full text one action away —
+       * never a free-floating "the model thought" caption.
+       */
+      const text = typeof payload?.text === "string" ? payload.text : "";
+      if (text) {
+        facts.push({
+          kind: "reasoning-summary",
+          factId: eventFactId(event, "reasoning"),
+          sequence: event.sequence,
+          summary: reasoningHeadline(text),
+          full: text,
+          label: payload?.truncated === true
+            ? "Reasoning · record truncated"
+            : "Reasoning",
+        });
+      }
+      continue;
+    }
+
     if (event.type === "tool.requested") {
       const call = toolCallFrom(payload?.call);
       if (!call) continue;
@@ -583,6 +619,19 @@ export function summarizeJson(
     encoded = "[Unserializable value]";
   }
   return boundedDisplayText(encoded, maxChars);
+}
+
+/**
+ * The collapsed line of a reasoning part: the first non-empty line of the
+ * provider-exposed reasoning, bounded for the strip it renders in. A record
+ * whose first line is empty still opens with a sentence rather than silence.
+ */
+export function reasoningHeadline(text: string): string {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) return boundedDisplayText(trimmed, 160);
+  }
+  return "The model reasoned before answering.";
 }
 
 /** Replaces unsafe controls and truncates without leaving a dangling surrogate. */
@@ -706,6 +755,7 @@ function applyFact(parts: MessagePart[], fact: MessagePartFact): boolean {
         fact.summary,
         MESSAGE_PART_DISPLAY_LIMITS.reasoningSummaryChars,
       ),
+      ...(fact.full ? { full: boundedDisplayText(fact.full, MESSAGE_PART_DISPLAY_LIMITS.reasoningFullChars) } : {}),
       ...(fact.label
         ? { label: displayLabel(fact.label, "Reasoning summary", 128) }
         : {}),

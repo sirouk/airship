@@ -435,6 +435,8 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       notifySignal(options.onSignal, { type: "status", turnId, status: "thinking" });
 
       let content = "";
+      let reasoningText = "";
+      let reasoningTruncated = false;
       const toolCalls: ToolCall[] = [];
       let completed: Extract<Awaited<ReturnType<typeof collectInference>>, { completed: true }> | undefined;
       const collected = await collectInference(
@@ -463,8 +465,28 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
             notifySignal(options.onSignal, { type: "status", turnId, status: "reasoning" });
           }
         },
+        (reasoningDelta) => {
+          if (reasoningText.length < MAX_TURN_REASONING_CHARS) {
+            reasoningText = (reasoningText + reasoningDelta).slice(0, MAX_TURN_REASONING_CHARS);
+          } else {
+            reasoningTruncated = true;
+          }
+        },
       );
       if (collected.completed) completed = collected;
+      if (reasoningText) {
+        await append([{
+          type: "turn.reasoning",
+          turnId,
+          operationId: requestId,
+          payload: {
+            text: reasoningText,
+            ...(reasoningTruncated ? { truncated: true } : {}),
+          },
+        }]);
+        reasoningText = "";
+        reasoningTruncated = false;
+      }
       if (!completed) throw new Error("Inference ended without a terminal completion event.");
 
       if (toolCalls.length) {
@@ -1048,6 +1070,14 @@ function reserveToolCallBatch(toolCalls: readonly ToolCall[], reserved: Set<stri
   for (const operationId of batch) reserved.add(operationId);
 }
 
+/**
+ * As much reasoning text as one request may hand the transcript. Chains of
+ * thought run long by design; the bound exists for the same reason the
+ * assistant-text bound does — a provider bug must not page the journal.
+ * Past it, recording truncates and the record says so.
+ */
+const MAX_TURN_REASONING_CHARS = 200_000;
+
 async function collectInference(
   transport: InferenceTransport,
   request: Parameters<InferenceTransport["stream"]>[0],
@@ -1056,6 +1086,7 @@ async function collectInference(
   onToolCall: (call: ToolCall) => void,
   onUsage: (usage: JsonValue) => Promise<void>,
   onProgress: (phase: "reasoning") => void,
+  onReasoning?: (text: string) => void,
 ): Promise<
   | { completed: false }
   | { completed: true; finishReason: "stop" | "tool-calls" | "length"; receipt?: ConversationReceipt }
@@ -1089,6 +1120,7 @@ async function collectInference(
     }
     if (event.type === "usage") await onUsage(event as unknown as JsonValue);
     if (event.type === "progress") onProgress(event.phase);
+    if (event.type === "reasoning-delta") onReasoning?.(event.text);
     if (event.type === "completed") {
       terminal = { completed: true, finishReason: event.finishReason, receipt: event.receipt };
     }

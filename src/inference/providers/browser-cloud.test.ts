@@ -128,6 +128,52 @@ describe("browser-direct cloud inference adapters", () => {
     expect(JSON.stringify(requestBody)).not.toContain("sk-memory-only");
   });
 
+
+  it("streams OpenAI Responses reasoning as its own event beside the answer", async () => {
+    const transport = new OpenAiBrowserTransport({
+      connectionId: "openai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-memory-only",
+      fetch: async () => sseResponse([
+        event("response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", delta: "Plan: check the budget. " }),
+        event("response.reasoning_text.delta", { type: "response.reasoning_text.delta", delta: "Numbers add up." }),
+        event("response.output_text.delta", { type: "response.output_text.delta", delta: "The budget holds." }),
+        event("response.completed", { type: "response.completed", response: { usage: {} } }),
+      ]),
+    });
+
+    const events = await collect(transport.stream(request(), new AbortController().signal));
+    expect(events.slice(0, 4)).toEqual([
+      { type: "progress", phase: "reasoning" },
+      { type: "reasoning-delta", text: "Plan: check the budget. " },
+      { type: "progress", phase: "reasoning" },
+      { type: "reasoning-delta", text: "Numbers add up." },
+    ]);
+    expect(events.some((event) => event.type === "text-delta" && event.text.includes("Plan"))).toBe(false);
+  });
+
+  it("streams Anthropic thinking deltas once as progress and every time as reasoning", async () => {
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async () => sseResponse([
+        event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Considering the cost. " } }),
+        event("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "It is fine." } }),
+        event("content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Ship it." } }),
+        event("message_stop", { type: "message_stop" }),
+      ]),
+    });
+
+    const events = await collect(transport.stream(request(), new AbortController().signal));
+    expect(events.filter((event) => event.type === "progress")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "reasoning-delta")).toEqual([
+      { type: "reasoning-delta", text: "Considering the cost. " },
+      { type: "reasoning-delta", text: "It is fine." },
+    ]);
+    expect(events.some((event) => event.type === "text-delta" && event.text.includes("Considering"))).toBe(false);
+  });
+
   it("adapts Anthropic Messages streaming and direct-browser headers", async () => {
     const requests: Array<{ url: string; headers: Headers; body?: Record<string, unknown> }> = [];
     const transport = new AnthropicBrowserTransport({
