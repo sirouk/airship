@@ -281,14 +281,16 @@ export class PrimeAgentSession {
       sessionId: options.sessionId,
       getApiKey: options.getApiKey,
       /*
-       * Airship reviews a batch in strict call order and runs declared reads
-       * read-parallel. The prime loop's parallel mode reviews in order but
-       * executes everything concurrently, which lets concurrent writes race
-       * where airship serializes them; sequential mode is the conservative
-       * twin. The read-parallel speedup is a documented lossy note, not a
-       * semantic change: journal order is call order in both worlds.
+       * Airship reviews a batch in strict call order and runs contiguous
+       * declared reads concurrently while everything else acts as a write
+       * barrier (`readEffectBatch`). The loop's batched lane now mirrors
+       * that discipline from the per-tool executionMode this session
+       * declares off the registry effect vocabulary, so parallel mode is
+       * the correct twin: reviews still run in strict call order during
+       * phase 1, only settlement overlaps, and journal order stays call
+       * order exactly as serialized execution produced.
        */
-      toolExecution: "sequential",
+      toolExecution: "parallel",
     });
     this.agentLoop.convertToLlm = (_messages) => this.convertToLlm(_messages);
     this.agentLoop.streamFn = this.createInstrumentedStreamFn();
