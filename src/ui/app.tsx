@@ -786,6 +786,41 @@ function warmMessageParts(): void {
   else setTimeout(warm, 0);
 }
 
+/*
+ * The agent-runtime status tag, deferred — same mount-once shape as the
+ * message parts above.
+ *
+ * Nothing asks which engine owns the session before the shell exists, and the
+ * answer is an async journal read anyway, so the question's whole surface —
+ * the status derivation in `src/prime/runtime/agent-runtimes.ts` included —
+ * rides its own chunk and arrives after first paint.
+ */
+function loadAgentRuntimeStatus() {
+  return loadRetryableChunk(
+    "agent-runtime-status",
+    () => import("./agent-runtime-status"),
+    developmentChunkEntry("agent-runtime-status.ts"),
+  );
+}
+
+type AgentRuntimeStatusTagComponent = typeof import("./agent-runtime-status").AgentRuntimeStatusTag;
+
+let agentRuntimeStatusTag: AgentRuntimeStatusTagComponent | undefined;
+
+function DeferredAgentRuntimeStatus(props: Parameters<AgentRuntimeStatusTagComponent>[0]) {
+  const [Tag, setTag] = useState<AgentRuntimeStatusTagComponent | undefined>(() => agentRuntimeStatusTag);
+  useEffect(() => {
+    if (agentRuntimeStatusTag) return;
+    let live = true;
+    void loadAgentRuntimeStatus().then((module) => {
+      agentRuntimeStatusTag = module.AgentRuntimeStatusTag;
+      if (live) setTag(() => module.AgentRuntimeStatusTag);
+    });
+    return () => { live = false; };
+  }, []);
+  return Tag ? <Tag {...props} /> : null;
+}
+
 let messagePartsView: ((props: MessagePartsViewProps) => VNode) | undefined;
 
 function DeferredMessageParts(props: MessagePartsViewProps) {
@@ -10669,6 +10704,21 @@ export function App() {
         {view === "chat" ? (
           <>
             <section class="chat-stage" aria-label="Agent session" data-scrolled={stageScrolled ? "true" : undefined}>
+              {/*
+                * Which engine owns this session, one deferred line beside the
+                * bar that carries the conversation's title. Renders nothing
+                * until its chunk and one journal read have both landed — see
+                * `agent-runtime-status.ts` for why a loading tag is an honest
+                * absence rather than "prime (default)" said early.
+                */}
+              {sessionId && runtime.current?.journal ? (
+                <DeferredAgentRuntimeStatus
+                  journal={runtime.current.journal}
+                  sessionId={sessionId}
+                  manifest={activeSessionRecord?.manifest}
+                  revision={eventCount}
+                />
+              ) : null}
               <SessionBar
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}

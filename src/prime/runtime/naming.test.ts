@@ -207,8 +207,12 @@ describe("PrimeRuntime naming flow", () => {
     expect(result.outcome).toBe("completed");
 
     // The heuristic lands first and synchronously enough to observe here.
-    const afterHeuristic = await journal.getSession(session.id);
-    expect(afterHeuristic?.title).toBe("draft memo intro");
+    // Poll so a slow first settle cannot masquerade as a skipped heuristic.
+    const afterHeuristic = await waitForJournal(async () => {
+      const record = await journal.getSession(session.id);
+      return record && record.title !== "Prime conversation" ? record : undefined;
+    });
+    expect(afterHeuristic.title).toBe("draft memo intro");
 
     // The paid naming chain is fire-and-forget; poll until it lands.
     const events = await waitForJournal(async () => {
@@ -232,8 +236,11 @@ describe("PrimeRuntime naming flow", () => {
     expect(namedEvent?.operationId).toMatch(/^naming-request-/);
     expect(usageEvent?.turnId).toBe(namedEvent?.turnId);
 
-    const afterNaming = await journal.getSession(session.id);
-    expect(afterNaming?.title).toBe("Memo intro title");
+    const afterNaming = await waitForJournal(async () => {
+      const record = await journal.getSession(session.id);
+      return record?.title === "Memo intro title" ? record : undefined;
+    });
+    expect(afterNaming.title).toBe("Memo intro title");
   });
 
   it("skips naming entirely for explicitly titled sessions", async () => {
