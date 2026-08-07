@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 async function openPreferences(page: Page): Promise<void> {
   const desktopControl = page.getByRole("button", { name: "Open Preferences" });
@@ -17,7 +18,9 @@ async function enableLocalLabVault(page: Page): Promise<void> {
 }
 
 async function expectLocalVaultAdopted(page: Page, timeout = 20_000): Promise<void> {
-  await expect(page.locator(".runtime-line")).toHaveAttribute("title", /Encrypted S3 vault active/u, { timeout });
+  // The phone shell keeps a live-region twin of the desktop runtime line in
+  // the DOM at every width; the title attribute lives on the desktop carrier.
+  await expect(page.locator(".runtime-line:not(.runtime-line--phone)")).toHaveAttribute("title", /Encrypted S3 vault active/u, { timeout });
   if ((page.viewportSize()?.width ?? 1_440) <= 640) {
     // The desktop status strip is intentionally hidden on narrow screens;
     // the same runtime state remains exposed through its live-region contract.
@@ -65,7 +68,7 @@ test("durability preference moves safely between encrypted S3 and ephemeral page
   // product honours. See `EPHEMERAL_RETENTION_DISCLOSURE`.
   await page.getByRole("option", { name: "Ephemeral content" }).click();
   await page.getByRole("button", { name: "Done" }).click();
-  await expect(page.locator(".runtime-line")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
+  await expect(page.locator(".runtime-line:not(.runtime-line--phone)")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
   await expect(page.getByText("Ephemeral mode is active.", { exact: false })).toBeVisible();
 
   await openPreferences(page);
@@ -210,8 +213,14 @@ test("a renamed conversation still adopts its vault, and the rename is on screen
   // `openFreshVaultPage` already asserts the vault adopted. This is the part
   // the shipped build could not do: resume the renamed session rather than
   // strand everything behind it.
-  await expect(second.locator(".runtime-line")).toHaveAttribute("title", /audited session resumed/u);
-  await expect(second.locator(".runtime-line")).not.toHaveAttribute("title", /could not be replayed/u);
+  await expect(second.locator(".runtime-line:not(.runtime-line--phone)")).toHaveAttribute("title", /audited session resumed/u);
+  await expect(second.locator(".runtime-line:not(.runtime-line--phone)")).not.toHaveAttribute("title", /could not be replayed/u);
+
+  // The marker's provenance line — sequence, kind, digest — is raw protocol
+  // detail that only mounts at the instrumented rung, and this journey
+  // asserts exactly that line: step the profile up, then return to the chat.
+  await setProfilePresentationDensity(second, "Instrumented");
+  await second.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#chat`);
 
   // The durable record is re-presented, not skipped: its sentence, its
   // sequence, its type and its digest.

@@ -341,7 +341,10 @@ test("in-app navigation cancels a held exact return before selection can publish
   const connection = page.locator("article.provider-connection").filter({
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
   });
-  const runtimeLine = page.locator(".runtime-line__text");
+  /* One runtime sentence now lives on two carriers — the desktop topbar's own
+   * and its phone-shell twin — and strict mode reads both. The check is about
+   * the words the carriers share, so it takes the desktop shell's one. */
+  const runtimeLine = page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text");
   const runtimeBeforeReconnect = await runtimeLine.innerText();
   const responseHeld = mock.holdNextResponse();
   await connection.getByRole("button", { name: "Continue requested conversation" }).click();

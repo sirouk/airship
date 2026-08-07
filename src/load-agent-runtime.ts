@@ -50,9 +50,25 @@ export async function runTurn(options: RunTurnOptions & { runtime?: AgentRuntime
     agentRuntime ??= import("./core/agent");
     return (await agentRuntime).runTurn(options);
   }
+  /*
+   * Every vendor transport the product carries (Chutes, anthropic, openai,
+   * ollama, lm-studio) reaches this gate with its own credential plumbing
+   * already bound. The prime lane asks the provider itself to resolve a key
+   * from a vault = it has never been told about, so a fresh conversation's
+   * first real-provider turn currently dies inside runPrimeTurn with "No API
+   * key for provider: <id>". Until runPrimeTurn is taught to forward both
+   * the vendor stream and its key getter, fresh unpinned sessions take the
+   * lane the merge built them on: airship-core runs every vendor transport
+   * directly, the way it always did. Prime remains the lane of every
+   * prime-pinned journal and every explicit runtime request; the engine is
+   * central, and this is the move that protects it from being blamed for a
+   * missing credential bridge.
+   */
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
-  const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned" ? "prime" : history);
+  const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned"
+    ? options.transport !== undefined ? "airship-core" : "prime"
+    : history);
 
   if (options.runtime !== undefined) {
     if (options.runtime === "airship-core" && history === "prime") {

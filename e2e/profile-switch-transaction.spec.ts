@@ -85,7 +85,9 @@ test("A → B → A publishes authority and identity together and never reports 
 
   // The status line is the only place a switch can report itself, so a clean
   // round trip must never have written a failure into it.
-  await expect(page.locator(".runtime-line__text")).not.toContainText("Profile switch failed");
+  // The phone shell keeps a second `.runtime-line__text` in the DOM at every
+  // width; read the sentence from the one desktop carrier.
+  await expect(page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text")).not.toContainText("Profile switch failed");
   expect(await readRejections(page)).toEqual([]);
 });
 

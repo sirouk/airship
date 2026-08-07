@@ -793,6 +793,17 @@ function warmMessageParts(): void {
 }
 
 /*
+ * Same offline reality as the parts view: any route that lands cold on an
+ * already-offline tab fetches this chunk twice and loses both times, and the
+ * status tag is the W6 surface every fresh cockpit's chat stage takes.
+ */
+function warmAgentRuntimeStatus(): void {
+  const warm = () => { void loadAgentRuntimeStatus(); };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+  else setTimeout(warm, 0);
+}
+
+/*
  * The agent-runtime status tag, deferred — same mount-once shape as the
  * message parts above.
  *
@@ -2192,6 +2203,7 @@ export function App() {
     approvalDockOwnerLive.current = true;
     beginApprovalDockLoad();
     warmMessageParts();
+    warmAgentRuntimeStatus();
     return () => { approvalDockOwnerLive.current = false; };
   }, [beginApprovalDockLoad]);
   /* Same deferral, same reason: a sheet nobody has asked for yet is not

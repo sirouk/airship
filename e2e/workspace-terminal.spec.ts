@@ -1,4 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 async function openEphemeralTerminal(page: Page): Promise<void> {
   await page.addInitScript(() => localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
@@ -10,6 +11,12 @@ async function openEphemeralTerminal(page: Page): Promise<void> {
     vaultBackend: "ephemeral",
     approvalMode: "full-access",
   })));
+  await page.goto("/#terminal");
+  // The setup strip's assurance chips ("Interactive process · this page",
+  // "Metadata · …", "Profile …") are commentary chrome that retires at the
+  // default minimal rung; both journeys through this helper read them, so
+  // the profile steps up before the strip is read.
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#terminal");
   await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
   const setup = page.locator("details.terminal-route__setup");
@@ -137,6 +144,10 @@ test("mobile terminal keeps process controls and horizontal tabs usable", async 
 
 test("Workspace opens, resizes, collapses, and promotes one profile-scoped terminal dock", async ({ page }, testInfo) => {
   test.skip(!["desktop-chromium", "mobile-chromium"].includes(testInfo.project.name), "browser workspace-terminal contract");
+  await page.goto("/#workspace");
+  // The journey ends on the full Terminal route reading its assurance chips,
+  // which retire at the default minimal rung: step the profile up first.
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#workspace");
   await expect(page.getByRole("region", { name: "Workspace editor" })).toBeVisible();
   const dock = page.getByRole("region", { name: "Workspace terminal dock" });

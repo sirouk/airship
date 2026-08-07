@@ -2680,11 +2680,23 @@
   .runtime-line--phone {
     display: flex;
     max-width: none;
+    min-width: 0;
+    overflow: hidden;
     min-height: 34px;
     padding-right: max(13px, env(safe-area-inset-right));
     padding-left: max(13px, env(safe-area-inset-left));
     background: var(--ground);
     border-bottom: 1px solid var(--line);
+  }
+
+  /* A phone shell never borrows its columns from content lengths: the
+     file's connected journey proved this exact reason — a long runtime
+     sentence set the whole shell's auto-minimum off the right edge of a
+     430px screen until this pair of rules held it at exactly 430. */
+  .runtime-line--phone .runtime-line__text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* One chip fits where four pills did not. The phone used to render a second

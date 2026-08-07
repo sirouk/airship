@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 import { waitForShellSettled } from "./support/settled";
 
 const routes = [
@@ -403,6 +404,12 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
 });
 
 test("an empty conversation centres its zero state without ever clipping it", async ({ page }) => {
+  /* The first-run zero state — the intro with its offerings — is suggestion
+     class: at the minimal house rung the transcript keeps only its
+     consequence lines and the `no-turns` centring never applies, so the
+     geometry this journey protects is the Balanced transcript's. The test's
+     own gotos re-navigate back to #chat at each viewport. */
+  await setProfilePresentationDensity(page, "Balanced");
   const readTranscript = () => page.locator(".transcript").evaluate((element) => {
     const first = element.firstElementChild as HTMLElement | null;
     const box = element.getBoundingClientRect();

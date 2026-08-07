@@ -1,4 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 import { waitForShellSettled } from "./support/settled";
 
 /*
@@ -62,6 +63,10 @@ async function setActiveProfileApproval(page: Page, option: "Ask First" | "Auto 
 
 test("desktop shell navigates real routes and presents a coherent session header", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop shell contract");
+  /* The journal chip's typed id is telemetry: at the minimal house rung the
+     chip renders only its glyph and keeps the id on its accessible name and
+     tooltip, so the header this contract reads mounts at Balanced. */
+  await setProfilePresentationDensity(page, "Balanced");
   await openReadyApp(page);
 
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
@@ -568,7 +573,11 @@ test("the composer changes approval policy in place on the conversation being re
   // In place, on the thread being read: the address and the conversation do
   // not move, and the sentence explains the exact scope of what changed.
   expect(page.url()).toBe(conversationUrl);
-  await expect(page.getByText(/Approval policy changed to Auto Approve for this conversation/u)).toBeVisible({ timeout: 15_000 });
+  /* One sentence, two carriers: the topbar runtime line and its phone-shell
+     twin both exist in the DOM at every width and hold the same text, so the
+     check is about one visible carrier — the topbar's comes first in DOM
+     order at this width. */
+  await expect(page.locator(".runtime-line__text").filter({ hasText: /Approval policy changed to Auto Approve for this conversation/u }).first()).toBeVisible({ timeout: 15_000 });
 });
 
 test("desktop profile menu restores each profile's conversation cockpit", async ({ page }, testInfo) => {

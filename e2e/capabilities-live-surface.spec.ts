@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 /*
  * The two claims about Airship's live-load reading that only a browser can
@@ -40,6 +41,12 @@ async function accessibleReading(indicator: Locator): Promise<string> {
 
 test("the live-load reading is on routes that are not #capabilities, and says what it counted", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "rail geometry contract");
+  /* The idle strip is telemetry: at the minimal house rung an indicator with
+     nothing running unmounts, and this journey reads exactly that idle
+     reading ("/Ready · \d+ events/") on both routes — so it runs one rung up,
+     where the strip it protects exists. The loop's first goto returns the
+     route it measures. */
+  await setProfilePresentationDensity(page, "Balanced");
   // Two non-#capabilities destinations, which is the criterion verbatim: the
   // finding was that the only live reading in the product lived on the route a
   // reader has to navigate to in order to ask "what is running right now".

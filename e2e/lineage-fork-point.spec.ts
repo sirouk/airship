@@ -20,8 +20,19 @@ test("the source conversation names the fork point of every alternate", async ({
   await composer.fill("Explain fork points in one sentence.");
   await page.getByRole("button", { name: "Send message" }).click();
   const answer = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  const fork = answer.getByRole("button", { name: "Fork from here" });
+  /*
+   * The actions toolbar arms `pointer-events` only under a live hover, and
+   * a hover anchored while the answer is still streaming dies with it: turn
+   * settlement reflows the transcript (the idle load strip unmounts at the
+   * house rung; completion chrome mounts above it), the card slides out
+   * from under the anchored pointer, and the eventual hit test lands on
+   * `.message-body`. Enabled, then hover the settled card, then click — the
+   * order a person's hand does it in.
+   */
+  await expect(fork).toBeEnabled();
   await answer.hover();
-  await answer.getByRole("button", { name: "Fork from here" }).click();
+  await fork.click();
   await expect(page.locator(".composer-notice")).toContainText("True fork created at the audited boundary after this answer");
   await expect.poll(() => page.url()).not.toContain(sourceId);
 

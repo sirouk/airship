@@ -372,6 +372,16 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
     sessionId: options.sessionId,
     manifest,
     model,
+    /* Whatever the caller was going to carry: a vault-backed resolver, or a
+       connection-pinned API key. The prime lane's provider streams resolve
+       their credential at call time from this, not from ambient page state. */
+    /*
+     * NOTE(2026-08-07): vendor transports reach vendor keys or not vendor keys
+     * — runPrimeTurn must forward the vendor stream AND the key getter before
+     * vault-backed providers can take fresh prime turns. Until that day the
+     * gate at load-agent-runtime.ts routes fresh vendor sessions on the
+     * airship-core lane. Leave this slot empty until then.
+     */
     onSignal: options.onSignal,
     maxSteps: options.maxSteps,
     signal: options.signal,

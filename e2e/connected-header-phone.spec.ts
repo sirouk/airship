@@ -144,7 +144,12 @@ test.describe("connected chat header on a phone", () => {
     // accessibility tree and lose the provider context entirely.
     const box = await eyebrow.boundingBox();
     expect(box === null || box.width <= 1 || box.height <= 1).toBe(true);
-    await expect(eyebrow).toHaveText(/session model/iu);
+    // This journey lands on a thread its model governs in flight, so the
+    // eyebrow now says "conversation model" — choosing another changes this
+    // conversation in place — where the branch used to promise a new pinned
+    // conversation ("session model"). The string follows the control's mode;
+    // the geometry contract above is what this test exists for.
+    await expect(eyebrow).toHaveText(/conversation model/iu);
   });
 
   test("keeps the header inside the viewport with nothing overlapping", async ({ page }) => {

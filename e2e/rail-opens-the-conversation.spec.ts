@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { waitForShellSettled } from "./support/settled";
+import { setProfilePresentationDensity } from "./support/density";
 
 /*
  * The rail's two navigation promises, driven rather than read.
@@ -136,6 +137,15 @@ test("a same-model rail click during a turn opens immediately and keeps the turn
 
   await page.goto("/#chat");
   await waitForShellSettled(page);
+  await waitForShellSettled(page);
+  /*
+   * The sentence this journey settles on — the idle load strip's "Ready" —
+   * retires at the house rung: only the busy strip renders there, so the
+   * idle sentence the second half of this contract reads exists one rung
+   * up. Prime it before the journey, like every spec that reads idle chrome.
+   */
+  await setProfilePresentationDensity(page, "Balanced");
+  await page.goto("/#chat");
   await waitForShellSettled(page);
   await openRailRecents(page);
 

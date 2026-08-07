@@ -169,10 +169,20 @@ test("conversation branches preserve their source and navigate back through line
   await seedComposer.fill("Explain immutable context in one sentence.");
   await page.getByRole("button", { name: "Send message" }).click();
   const message = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
-  await message.hover();
   await expect(message.getByRole("button", { name: "Retry" })).toBeEnabled();
   const fork = message.getByRole("button", { name: "Fork from here" });
   await expect(fork).toBeEnabled();
+  /*
+   * Hover anchors the pointer; it does not keep it there. The actions
+   * toolbar arms `pointer-events` only under a live `:hover`, and a
+   * settling turn reflows the transcript out from under a pointer anchored
+   * before it — at the house rung the idle load strip unmounts on
+   * completion, one rung up the receipt and evidence chips mount; either
+   * way the hit test that follows lands on `.message-body` instead of the
+   * button. So the gesture order is the human one: wait for the settled
+   * card, hover it, then click.
+   */
+  await message.hover();
   await fork.click();
   // The notice names the boundary and the reach of the bounded seed. It used
   // to claim "audited context through this answer" unconditionally, which is a
@@ -204,8 +214,13 @@ test("edit and retry create distinct immutable branches", async ({ page }, testI
   await page.getByRole("button", { name: "Send message" }).click();
 
   const user = page.locator('[data-transcript-card][data-message-role="user"]').last();
+  const editBranch = user.getByRole("button", { name: "Edit & branch" });
+  // Same hover law as the fork above: the toolbar arms only under a live
+  // hover, and the turn settling reflows the transcript out from under a
+  // pointer anchored earlier. Enabled first, then hover, then click.
+  await expect(editBranch).toBeEnabled();
   await user.hover();
-  await user.getByRole("button", { name: "Edit & branch" }).click();
+  await editBranch.click();
   await expect(page.locator(".composer-notice")).toContainText("immutable pre-turn boundary");
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   const editUrl = page.url();
@@ -214,8 +229,12 @@ test("edit and retry create distinct immutable branches", async ({ page }, testI
   await expect(page).toHaveURL(sourceUrl);
 
   const assistant = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  const retry = assistant.getByRole("button", { name: "Retry" });
+  // Re-anchor hover on the settled, re-rendered card before clicking: the
+  // round trip through the branch replaced the card under the old pointer.
+  await expect(retry).toBeEnabled();
   await assistant.hover();
-  await assistant.getByRole("button", { name: "Retry" }).click();
+  await retry.click();
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   await expect(page).not.toHaveURL(editUrl);
   await expect(page.locator('[data-transcript-card][data-message-role="user"]')).toContainText(prompt);
