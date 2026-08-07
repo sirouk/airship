@@ -9,6 +9,7 @@ import {
   type MemoryRelationshipGraph,
 } from "../memory-graph";
 import { stableMemoryContentHash } from "../memory-graph/derive";
+import { findDuplicateClusters } from "../retrieval/dedup";
 import type { ProfileCatalog } from "../profiles/catalog";
 import type { ProfileRevision } from "../profiles/domain";
 import type { ClientEncryptedWorkspacePort, WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
@@ -1532,6 +1533,29 @@ function MemoryRecords({ expanded: initiallyExpanded, page, error, commit, durab
   const records = page?.records ?? [];
   const total = page?.total ?? records.length;
   const quarantined = page?.legacyQuarantined ?? 0;
+  /**
+   * The duplicate hunter (src/retrieval/dedup.ts) crosses the visible records
+   * the moment they land and crosses them again only when the list actually
+   * changes — 512 records is its whole envelope, so recompute cost is noise.
+   * `dismissed` is deliberately session-scoped: forgetting the dismissal
+   * rather than persisting it keeps the tab honest by default — a person who
+   * said "not duplicates" meant it about these records, maybe, and the hunter
+   * asks once per sitting rather than never again. The corpus handed in is
+   * already the profile-scoped page, so the silo partition lives upstream of
+   * this strip — the hunter cannot pair across what the reader never listed.
+   */
+  const clusters = useMemo(
+    () => records.length > 1
+      ? findDuplicateClusters(records, (record) => record.content, {
+        createdAt: (record) => record.createdAt,
+      }).filter((cluster) => cluster.members.length >= 2)
+      : [],
+    [records],
+  );
+  const [dismissedClusters, setDismissedClusters] = useState<readonly string[]>([]);
+  const clusterKey = (cluster: (typeof clusters)[number]): string =>
+    cluster.members.map((member) => records[member]!.id).sort().join("|");
+  const visibleClusters = clusters.filter((cluster) => !dismissedClusters.includes(clusterKey(cluster)));
 
   const run = async (change: MemoryChange, key: string) => {
     if (!commit) return;
@@ -1590,6 +1614,25 @@ function MemoryRecords({ expanded: initiallyExpanded, page, error, commit, durab
             <p id="memory-remember-note">Writes one record through the same approval-gated <code>update_memory</code> tool the slash command uses, into {profileName} only. {durability.detail}</p>
           </form>
         ) : null}
+        <MemoryDuplicates
+          clusters={visibleClusters}
+          records={records}
+          busy={busy}
+          onMerge={(cluster) => {
+            // Merge is a sequence of honest single forgets so every consent
+            // review names one record; the updated page recomputes clusters
+            // as each lands.
+            void (async () => {
+              for (const member of cluster.members) {
+                if (member === cluster.representative) continue;
+                const record = records[member];
+                if (!record) continue;
+                await run({ action: "forget", id: record.id }, `dedup:${record.id}`);
+              }
+            })();
+          }}
+          onDismiss={(cluster) => setDismissedClusters((current) => [...current, clusterKey(cluster)])}
+        />
         {notice ? <p class={notice.tone === "ok" ? "memory-records__notice" : "memory-records__notice attention"} role="status">{notice.text}</p> : null}
         {error ? <p class="memory-records__notice attention" role="alert">{error}</p> : null}
         {!error && page && records.length === 0
@@ -2172,6 +2215,63 @@ function formatGraphDensity(graph: MemoryRelationshipGraph): string {
 
 function scrollToMemorySection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ block: "start" });
+}
+
+/**
+ * The phase-1 duplicate review strip, rendered ONLY when clusters exist — the
+ * clean case claims zero chrome (the owner's warning-discipline: warnings
+ * appear when attention is required and leave no wire behind). A dismissed
+ * cluster is forgotten with the session on purpose: persistence would turn
+ * "not duplicates" into a permanent blind spot for a judgement the person
+ * may have meant about those exact two records.
+ */
+function MemoryDuplicates({ clusters, records, busy, onMerge, onDismiss }: Readonly<{
+  clusters: readonly import("../retrieval/dedup").DedupCluster[];
+  records: readonly MemoryRecordEntry[];
+  busy?: string;
+  onMerge: (cluster: import("../retrieval/dedup").DedupCluster) => void;
+  onDismiss: (cluster: import("../retrieval/dedup").DedupCluster) => void;
+}>) {
+  if (!clusters.length) return null;
+  return (
+    <div class="memory-duplicates" role="region" aria-label="Possible duplicates">
+      <p class="memory-records__notice attention" role="status">
+        {clusters.length} group{clusters.length === 1 ? "" : "s"} of near-identical records — recall answers best when a fact is kept once.
+      </p>
+      {clusters.map((cluster) => {
+        const representative = records[cluster.representative]!;
+        const members = [...cluster.members].sort((a, b) => (a === cluster.representative ? -1 : b === cluster.representative ? 1 : a - b));
+        return (
+          <article class="memory-duplicates__cluster" key={cluster.members.map((member) => records[member]!.id).join("|")}>
+            <h4>Possibly pinned {cluster.members.length}× · keep the fullest, merge the rest</h4>
+            <ul class="memory-duplicates__list">
+              {members.map((member) => {
+                const record = records[member]!;
+                const representativeHere = member === cluster.representative;
+                return (
+                  <li key={record.id} class="memory-duplicates__record">
+                    <span class={`eyebrow ${representativeHere ? "memory-duplicates__keep" : "memory-duplicates__fold"}`}>{representativeHere ? "keep" : "fold in"}</span>
+                    <span class="memory-duplicates__excerpt">{record.content.length > 96 ? `${record.content.slice(0, 93)}…` : record.content}</span>
+                    <small>{record.source || "memory"} · {record.createdAt.slice(0, 10)}</small>
+                  </li>
+                );
+              })}
+            </ul>
+            <div class="memory-duplicates__actions">
+              <button
+                class="small-button"
+                type="button"
+                disabled={Boolean(busy)}
+                onClick={() => onMerge(cluster)}
+              >Merge into one record</button>
+              <button class="small-button ghost" type="button" onClick={() => onDismiss(cluster)}>Not duplicates</button>
+              <small class="memory-duplicates__explain">folds {cluster.members.length - 1} record{cluster.members.length === 2 ? "" : "s"} into the kept one, one approval each</small>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
 }
 
 /**

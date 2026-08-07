@@ -1398,3 +1398,85 @@
     transition: none;
   }
 }
+
+/*
+ * Phase-1 dedup review (src/retrieval/dedup.ts). The strip only ever exists
+ * when the hunter crossed the visible corpus and found self-pinning facts;
+ * the clean case occupies zero pixels, at every density rung.
+ */
+.memory-duplicates {
+  display: grid;
+  gap: calc(var(--space-2, 8px) * 1.5);
+  margin-block: var(--space-3, 12px);
+}
+
+.memory-duplicates__cluster {
+  border: 1px solid color-mix(in srgb, var(--text-muted, #8a94a6) 30%, transparent);
+  border-radius: var(--radius-panel, 12px);
+  padding: var(--space-3, 12px) var(--space-3, 12px);
+  display: grid;
+  gap: var(--space-2, 8px);
+}
+
+.memory-duplicates__cluster > h4 {
+  margin: 0;
+  font: var(--fw-strong) var(--fs-caption)/1.35 var(--font-body);
+  letter-spacing: 0.01em;
+}
+
+.memory-duplicates__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1, 4px);
+}
+
+.memory-duplicates__record {
+  display: grid;
+  grid-template-columns: 5.2em 1fr auto;
+  gap: var(--space-2, 8px);
+  align-items: baseline;
+  font-size: var(--fs-meta);
+}
+
+.memory-duplicates__keep { color: var(--accent, #7fb069); }
+.memory-duplicates__fold { color: var(--text-muted, #8a94a6); }
+
+.memory-duplicates__excerpt {
+  overflow-wrap: anywhere;
+}
+
+.memory-duplicates__record > small {
+  color: var(--text-muted, #8a94a6);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.memory-duplicates__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 8px);
+  flex-wrap: wrap;
+}
+
+.memory-duplicates__explain {
+  color: var(--text-muted, #8a94a6);
+  font-size: var(--fs-micro);
+}
+
+.memory-rename-hidden { display: none; }
+
+.memory-duplicates__cluster[data-busy="true"] { opacity: 0.6; }
+
+.history-rename-input,
+.session-rename-input,
+.memory-rename-input {
+  font: inherit;
+  color: inherit;
+  background: color-mix(in srgb, var(--surface, #141a22) 90%, black);
+  border: 1px solid color-mix(in srgb, var(--accent, #7fb069) 55%, transparent);
+  border-radius: 8px;
+  padding: 2px 8px;
+  max-width: 100%;
+}

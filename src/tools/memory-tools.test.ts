@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JsonValue } from "../core/contracts";
 import { createSessionManifest } from "../core/agent";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
@@ -127,6 +128,93 @@ describe("profile-scoped explicit memory", () => {
     };
     expect(() => parseMemoryDocument(JSON.stringify({ version: 2, records: [record, record] })))
       .toThrow("duplicate memory IDs");
+  });
+});
+
+describe("memory duplicates (phase 1: the hunter at the tool seam)", () => {
+  it("re-pinning the same wording is idempotent instead of growing the corpus", async () => {
+    const harness = await setup();
+    const session = await harness.session("general");
+
+    await run(harness, session, "update_memory", {
+      action: "remember",
+      content: "The turbine pressure limit is 42 bar.",
+      source: "turn:pressure-review",
+    }, "remember-1");
+    const again = await run(harness, session, "update_memory", {
+      action: "remember",
+      content: "the TURBINE pressure limit   is 42 bar!!",
+      source: "turn:pressure-review",
+    }, "remember-2");
+
+    expect(again.content).toContain("Already remembered");
+    expect(again.metadata).toMatchObject({ status: "already-remembered" });
+    expect(JSON.parse((await harness.workspace.read(MEMORY_PATH))!.content).records).toHaveLength(1);
+  });
+
+  it("a rephrased re-pin writes but names its near-twins in metadata", async () => {
+    const harness = await setup();
+    const session = await harness.session("general");
+
+    const first = await run(harness, session, "update_memory", {
+      action: "remember",
+      content: "The turbine pressure limit is 42 bar.",
+      source: "turn:pressure-review",
+    }, "remember-1");
+    const second = await run(harness, session, "update_memory", {
+      action: "remember",
+      content: "The turbine pressure limit is 42 bar at the inlet manifold.",
+      source: "turn:pressure-review",
+    }, "remember-2");
+
+    expect((second.metadata as Record<string, JsonValue> | undefined)?.status).toBeUndefined();
+    const duplicates = ((second.metadata as Record<string, JsonValue> | undefined)?.duplicates) as { id: string; similarity: number }[] | undefined ?? [];
+    expect(duplicates.length).toBe(1);
+    expect(first).toBeDefined();
+    expect(duplicates[0]!.similarity).toBeGreaterThan(0.87);
+    expect(JSON.parse((await harness.workspace.read(MEMORY_PATH))!.content).records).toHaveLength(2);
+  });
+
+  it("recall duplicates: true reports the cluster, keep-first, and never couples Berlin with Paris", async () => {
+    const harness = await setup();
+    const session = await harness.session("general");
+
+    await run(harness, session, "update_memory", {
+      action: "remember", content: "The owner lives in Berlin.", source: "turn:profile",
+    }, "remember-berlin");
+    await run(harness, session, "update_memory", {
+      action: "remember", content: "The owner lives in Paris.", source: "turn:profile",
+    }, "remember-paris");
+    await run(harness, session, "update_memory", {
+      action: "remember", content: "The deployment key rotates every 90 days.", source: "turn:ops",
+    }, "remember-key-1");
+    await run(harness, session, "update_memory", {
+      action: "remember", content: "the deployment key rotates every 90 DAYS now", source: "turn:ops",
+    }, "remember-key-2");
+
+    const review = await run(harness, session, "recall_memory", { duplicates: true }, "review-dupes");
+    const clusters = JSON.parse(review.content) as { keep: string; members: { id: string }[] }[];
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]!.members).toHaveLength(2);
+    expect(review.metadata).toMatchObject({ duplicatesClusterCount: 1 });
+  });
+
+  it("identical wording in two profiles is an intended duplicate: the silo wall wins over the hunter", async () => {
+    const harness = await setup();
+    const engineer = await harness.session("engineer");
+    const researcher = await harness.session("researcher");
+
+    await run(harness, engineer, "update_memory", {
+      action: "remember", content: "The deployment key rotates every 90 days.", source: "turn:ops",
+    }, "remember-eng");
+    const again = await run(harness, researcher, "update_memory", {
+      action: "remember", content: "The deployment key rotates every 90 days.", source: "turn:ops",
+    }, "remember-res");
+
+    expect(again.content).toContain("Remembered");
+    expect(again.metadata).not.toMatchObject({ status: "already-remembered" });
+    const engineerReview = await run(harness, engineer, "recall_memory", { duplicates: true }, "review-eng");
+    expect(JSON.parse(engineerReview.content)).toHaveLength(0);
   });
 });
 

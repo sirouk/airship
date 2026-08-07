@@ -2,6 +2,7 @@ import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, SessionProfileBinding, Tool, ToolContext } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
+import { findDedupCandidates, findDuplicateClusters } from "../retrieval/dedup";
 import { rankProfileMemories } from "../retrieval/memory-ranking";
 import type { EventJournal } from "../core/journal";
 import type { WorkspacePort } from "../workspace/contracts";
@@ -61,6 +62,27 @@ type MemoryDocument = Readonly<{
   legacyCount: number;
 }>;
 
+
+type DuplicateSummary = { id: string; excerpt: string; similarity: number; exact: boolean };
+
+/** Compact summary line(s) for tool metadata — ids + excerpts never full prose. */
+function duplicateSummaries(
+  records: readonly MemoryRecord[],
+  candidates: readonly { index: number; similarity: number; exact: boolean }[],
+): DuplicateSummary[] {
+  return candidates.map((candidate) => {
+    const record = records[candidate.index]!;
+    return {
+      id: record.id,
+      excerpt: record.content.length > 96 ? `${record.content.slice(0, 93)}\u2026` : record.content,
+      similarity: Math.round(candidate.similarity * 1000) / 1000,
+      exact: candidate.exact,
+    };
+  });
+}
+
+const MEMORY_DUPLICATE_EXCERPT_LIMIT = 96;
+
 export function registerMemoryTools(
   registry: ToolRegistry,
   workspace: WorkspacePort,
@@ -69,13 +91,15 @@ export function registerMemoryTools(
   const recall: Tool = {
     definition: {
       name: "recall_memory",
-      description: "Search explicit memories belonging to this session's pinned profile, ranked by bounded relevance with recency as the tiebreak; an omitted query returns the most recent records. Workspace/source search remains separately shared; legacy unscoped records are quarantined.",
+      description: "Search explicit memories belonging to this session's pinned profile, ranked by bounded relevance with recency as the tiebreak; an omitted query returns the most recent records, and `duplicates: true` reports duplicate clusters for review. Workspace/source search remains separately shared; legacy unscoped records are quarantined.",
       effect: "read",
       inputSchema: {
         type: "object",
         properties: {
           query: { type: "string", maxLength: 2_048 },
           limit: { type: "integer", minimum: 1, maximum: 50 },
+          /** When true: rehearse the stored corpus and report duplicate clusters instead of searching. */
+          duplicates: { type: "boolean" },
         },
         additionalProperties: false,
       },
@@ -93,6 +117,41 @@ export function registerMemoryTools(
         memoryScope,
         sessionId: context.sessionId,
       });
+      if (args.duplicates === true) {
+        // The review lane: the same hunter the write path consults, asked
+        // over the whole visible corpus, so the agent can say "show me what
+        // is pinned twice" without a human opening the Memory tab. Cluster
+        // summaries carry ids + excerpts only — full content stays with the
+        // records themselves, where digging further already means recall.
+        const clusters = findDuplicateClusters(
+          records,
+          (memory) => memory.content,
+          {
+            scopeKey: (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+            createdAt: (memory) => memory.createdAt,
+          },
+        );
+        const sourceDigest = file ? await sha256(file.content) : null;
+        const summaries: { keep: string; members: { id: string; excerpt: string }[]; similarity: number; exact: boolean }[] = await Promise.all(clusters.map(async (cluster) => ({
+          keep: records[cluster.representative]!.id,
+          members: cluster.members.map((member) => ({ id: records[member]!.id, excerpt: records[member]!.content.slice(0, MEMORY_DUPLICATE_EXCERPT_LIMIT) })),
+          similarity: Math.round(cluster.similarity * 1000) / 1000,
+          exact: cluster.exact,
+        })));
+        const reviewMetadata: JsonValue = {
+          duplicatesClusterCount: clusters.length,
+          count: 0,
+          total: records.length,
+          ranking: "duplicate-review",
+          scope: memoryScope,
+          profileId: profile.profileId,
+          profileRevision: profile.profileRevision,
+          legacyQuarantined: document.legacyCount,
+          revision: file?.revision ?? null,
+          sourceDigest,
+        };
+        return { content: JSON.stringify(summaries, null, 2), metadata: reviewMetadata };
+      }
       // An empty query is a browse, not a search: keep the newest records. A real
       // query uses the same ranker as automatic turn injection, so the agent's
       // fallback can never be worse than the lane that already ran.
@@ -100,22 +159,24 @@ export function registerMemoryTools(
         ? rankProfileMemories(records, query, { limit }).map((candidate) => candidate.record)
         : records.slice(-limit).reverse();
       const sourceDigest = file ? await sha256(file.content) : null;
+      const searchMetadata: JsonValue = {
+        count: selected.length,
+        total: records.length,
+        ranking: query ? "bounded-bm25-recent-v1" : "reverse-chronological",
+        duplicatesClusterCount: 0,
+        scope: memoryScope,
+        profileId: profile.profileId,
+        profileRevision: profile.profileRevision,
+        legacyQuarantined: document.legacyCount,
+        revision: file?.revision ?? null,
+        sourceDigest,
+      };
       return {
         content: JSON.stringify(await Promise.all(selected.map(async (record) => ({
           ...record,
           contentDigest: await sha256(record.content),
         }))), null, 2),
-        metadata: {
-          count: selected.length,
-          total: records.length,
-          ranking: query ? "bounded-bm25-recent-v1" : "reverse-chronological",
-          scope: memoryScope,
-          profileId: profile.profileId,
-          profileRevision: profile.profileRevision,
-          legacyQuarantined: document.legacyCount,
-          revision: file?.revision ?? null,
-          sourceDigest,
-        },
+        metadata: searchMetadata,
       };
     },
   };
@@ -123,7 +184,7 @@ export function registerMemoryTools(
   const update: Tool = {
     definition: {
       name: "update_memory",
-      description: "Remember or forget one explicit memory in this session's pinned profile scope. Profile identity is derived from the accountable session, never tool arguments.",
+      description: "Remember or forget one explicit memory in this session's pinned profile scope. Exact re-pins are idempotent (returned as `already-remembered`); rephrased re-pins report their near-twins in `duplicates`. Profile identity is derived from the accountable session, never tool arguments.",
       effect: "write",
       inputSchema: {
         type: "object",
@@ -150,11 +211,49 @@ export function registerMemoryTools(
       };
       let next: MemoryRecord[];
       let message: string;
+      let pendingDuplicates: readonly import("../retrieval/dedup").DedupCandidate[] | undefined;
+      let scopedForDuplicateSummary: readonly MemoryRecord[] | undefined;
       if (action === "remember") {
         if (document.records.length >= MAX_MEMORIES) throw new Error(`Memory is at its ${MAX_MEMORIES}-record limit.`);
+        const content = requiredString(args.content, "content");
+        const scoped = scopedMemories(document.records, binding);
+        // One fact, once. Re-pinning the same wording idempotently returns
+        // the standing record instead of growing the corpus with noise, and a
+        // rephrased re-pin surfaces its near-twins so the Memory tab's review
+        // and the agent lane share one duplicate hunter. `findDedupCandidates`
+        // (src/retrieval/dedup.ts) carries the same gates there.
+        const duplicates = findDedupCandidates(
+          content,
+          scoped,
+          (memory) => memory.content,
+          (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+          profile.profileId,
+        );
+        const exact = duplicates.find((candidate) => candidate.exact);
+        if (exact) {
+          const standing = scoped[exact.index]!;
+          const alreadyMetadata: JsonValue = {
+            status: "already-remembered",
+            recordId: standing.id,
+            count: scoped.length,
+            scope: binding.memoryScope,
+            profileId: profile.profileId,
+            profileRevision: profile.profileRevision,
+            duplicates: duplicateSummaries(scoped, duplicates),
+            schemaVersion: 2,
+          };
+          return { content: `Already remembered as ${standing.id}; the fact is kept once.`, metadata: alreadyMetadata };
+        }
+        // The write path surfaces near-twins in metadata; the exact lane above
+        // already returned. `pendingDuplicates`/`scopedForDuplicateSummary`
+        // remember them across the branch so the final metadata can attach.
+        if (duplicates.length) {
+          pendingDuplicates = duplicates;
+          scopedForDuplicateSummary = scoped;
+        }
         const record: MemoryRecord = Object.freeze({
           id: randomUuid(),
-          content: requiredString(args.content, "content"),
+          content,
           source: requiredString(args.source, "source"),
           createdAt: new Date().toISOString(),
           scope: Object.freeze({
@@ -180,19 +279,23 @@ export function registerMemoryTools(
       const written = await workspace.write(MEMORY_PATH, serializeMemoryDocument(next), {
         expectedRevision: current?.revision ?? null,
       });
-      return {
-        content: message,
-        metadata: {
-          count: scopedMemories(next, binding).length,
-          scope: binding.memoryScope,
-          profileId: profile.profileId,
-          profileRevision: profile.profileRevision,
-          legacyQuarantined: next.filter((record) => record.scope.kind === "legacy-unscoped").length,
-          schemaVersion: 2,
-          revision: written.revision,
-          path: written.path,
-        },
+      const committedMetadata: JsonValue = {
+        count: scopedMemories(next, binding).length,
+        scope: binding.memoryScope,
+        profileId: profile.profileId,
+        profileRevision: profile.profileRevision,
+        legacyQuarantined: next.filter((record) => record.scope.kind === "legacy-unscoped").length,
+        schemaVersion: 2,
+        revision: written.revision,
+        path: written.path,
+        // Always one shape: a clean `[]` reports that the hunter crossed
+        // the corpus and stayed silent. Agent lanes reading this metadata
+        // JSON can rely on the key rather than its presence.
+        duplicates: pendingDuplicates?.length
+          ? duplicateSummaries(scopedForDuplicateSummary ?? [], pendingDuplicates)
+          : [],
       };
+      return { content: message, metadata: committedMetadata };
     },
   };
 
