@@ -25,7 +25,11 @@
 import { Agent } from "../agent";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "../agent";
 import { streamSimple as registryStreamSimple } from "../ai/stream";
-import { createTransportForPrimeModel, type PrimeModelStreamFunction } from "../transport-adapter";
+import {
+  createInferenceTransportForPrimeStream,
+  createTransportForPrimeModel,
+  type PrimeModelStreamFunction,
+} from "../transport-adapter";
 import type {
   Api,
   AssistantMessage,
@@ -33,11 +37,12 @@ import type {
   JsonSchema,
   Message,
   Model,
+  StreamFunction,
   ToolResultMessage,
   Usage,
 } from "../ai/types";
 import { approvalProvenance } from "../../approvals/modes";
-import { boundToolResultContent, materializeMessages } from "../../core/agent";
+import { boundToolResultContent, materializeMessages, TASK_PLAN_NOTE_EVENT_TYPE } from "../../core/agent";
 import type { AgentSignal } from "../../core/agent";
 import type {
   ApprovalPolicy,
@@ -46,6 +51,7 @@ import type {
   InferenceTransport,
   JsonValue,
   SessionManifest,
+  TaskPlanEntry,
   Tool,
   ToolCall,
   ToolContext,
@@ -54,14 +60,29 @@ import {
   canonicalContextSelection,
   canonicalTurnContextQuery,
   contextSelectionScopeMatches,
+  injectContextSelection,
   verifyContextSelection,
   verifyContextSelectionQuery,
+  type CanonicalContextSelection,
 } from "../../core/context-selection";
-import { estimateInferenceTokens } from "../../core/context-compressor";
+import {
+  calibrateBytesPerToken,
+  createInferenceTransportContextSummarizer,
+  estimateInferenceTokens,
+  planContextCompression,
+} from "../../core/context-compressor";
 import { contextCompressionOptionsFromPolicy } from "../../core/context-policy";
 import { sha256, stableStringify, toolArgumentsDigest } from "../../core/hash";
 import { randomUuid } from "../../core/id";
+import { withInferenceRetry } from "../../core/inference-retry";
 import type { DurableEvent, EventDraft, EventJournal } from "../../core/journal";
+import {
+  injectLiveEnvironment,
+  liveEnvironmentScopeMatches,
+  sealLiveEnvironmentSnapshot,
+  verifyLiveEnvironmentSnapshot,
+  type LiveEnvironmentSnapshot,
+} from "../../core/live-environment";
 import { canonicalImageInputs } from "../../core/multimodal";
 import { createLocalReceipt, finalizeProviderReceipt } from "../../receipts/types";
 import type { ConversationReceipt } from "../../receipts/types";
@@ -70,6 +91,12 @@ import type { KernelBudgets, KernelJobEvent, KernelJobResult } from "../kernel/k
 import type { KernelBridgePort, KernelWorkerLike } from "../kernel/kernel-host";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { KernelToolBridge } from "../kernel/tool-bridge";
+import {
+  PRIME_DEFAULT_SESSION_TITLE,
+  primeConversationNamingDrafts,
+  primeConversationTitleFromModel,
+  primeConversationTitleFromPrompt,
+} from "./naming";
 import { noticeDraft, PRIME_EVENT_TYPES } from "./prime-events";
 
 /** Mirrors core/agent.ts MAX_TOOL_CALLS_PER_STEP; one capped batch per assistant step. */
@@ -202,6 +229,16 @@ export class PrimeAgentSession {
 
   private turn?: ActiveTurn;
   private lastPromptSystemPrompt?: string;
+  /*
+   * One-shot post-turn naming state: the latch makes "issue at most one paid
+   * naming request per attached session authority" a synchronous fact, the
+   * job keeps `waitForIdle` honest about work the turn result deliberately
+   * did not wait on, and the controller lets dispose drop a best-effort
+   * request instead of waiting out a provider round trip.
+   */
+  private namingIssued = false;
+  private namingJob?: Promise<void>;
+  private readonly namingController = new AbortController();
   private readonly steerQueue: QueuedTurnEntry[] = [];
   private readonly followUpQueue: QueuedTurnEntry[] = [];
   private promptQueue: QueuedTurnEntry[] = [];
@@ -214,9 +251,22 @@ export class PrimeAgentSession {
   constructor(options: PrimeSessionOptions) {
     this.options = options;
     this.maxStepsLimit = options.maxSteps ?? PRIME_DEFAULT_MAX_STEPS;
+    /*
+     * Manifest admission mirrors core/agent.ts assertSupportedTurnManifest
+     * plus its replay-only turn gate, with the same refusal sentences: prime
+     * authorities take custody of v2 turns only, so both protocol-v1 refusals
+     * land at construction instead of at the first turn.
+     */
+    const gatedManifest = options.manifest as SessionManifest & { protocolVersion?: unknown; turnContext?: unknown };
+    if (gatedManifest.protocolVersion === 1) {
+      if (gatedManifest.turnContext !== undefined) {
+        throw new Error("Protocol-v1 session manifests cannot pin turn-context policy.");
+      }
+      throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
+    }
     if (
-      options.manifest.protocolVersion !== 2 ||
-      (options.manifest.turnContext !== "required" && options.manifest.turnContext !== "disabled")
+      gatedManifest.protocolVersion !== 2 ||
+      (gatedManifest.turnContext !== "required" && gatedManifest.turnContext !== "disabled")
     ) {
       throw new Error("The session manifest uses an unsupported protocol or turn-context policy.");
     }
@@ -507,6 +557,17 @@ export class PrimeAgentSession {
       this.agentLoop.state.systemPrompt = systemPrompt;
       this.agentLoop.state.tools = this.mapRegistryTools();
 
+      /*
+       * The boundary block mirrors core/agent.ts runTurn in order: the live
+       * environment is sealed before the request record it rides inside,
+       * turn.requested lands first, the verified selection follows as its own
+       * event, and compression plus the plan restatement land before the
+       * first inference.started of the turn. existingEvents is the journal as
+       * the turn opened it — calibration and planning must not see this
+       * turn's own drafts, exactly like core's existingEvents read.
+       */
+      const existingEvents = [...this.eventsCache];
+      const liveEnvironment = await this.prepareLiveEnvironment(turn);
       await this.appendTurnDrafts(turn, [
         {
           type: "turn.requested",
@@ -514,10 +575,21 @@ export class PrimeAgentSession {
           payload: {
             content: entry.content,
             ...(images.length ? { images: images as unknown as JsonValue } : {}),
+            ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
           },
         },
       ]);
-      await this.prepareTurnContext(turn, entry.content);
+      const contextSelection = await this.prepareTurnContext(turn, entry.content);
+      if (contextSelection) {
+        await this.appendTurnDrafts(turn, [
+          {
+            type: "turn.context.selected",
+            turnId,
+            payload: { contextSelection: contextSelection as unknown as JsonValue },
+          },
+        ]);
+      }
+      await this.planTurnCompression(turn, entry.content, existingEvents, liveEnvironment, contextSelection);
 
       const imageContent: ImageContent[] | undefined = images.length
         ? images.map((image) => canonicalImageToPrime(image))
@@ -705,16 +777,25 @@ export class PrimeAgentSession {
     return this.lastPromptSystemPrompt;
   }
 
-  private async prepareTurnContext(turn: ActiveTurn, content: string): Promise<void> {
+  /*
+   * Mirror of core/agent.ts prepareTurnContext: select, canonicalize, and
+   * verify, then hand the selection back; the caller journals
+   * turn.context.selected after turn.requested, in core's exact position.
+   * Every refusal sentence is core's verbatim.
+   */
+  private async prepareTurnContext(turn: ActiveTurn, content: string): Promise<CanonicalContextSelection | undefined> {
     const provider = this.options.registry.getTurnContextProvider();
     const manifest = this.options.manifest;
-    const mode = manifest.turnContext ?? "disabled";
-    if (mode === "disabled") return;
+    // Historical protocol-v1 manifests omitted the pin; core preserves the
+    // provider-if-present behavior there. Prime never admits v1 (the
+    // constructor gate), so the fallback pattern still mirrors core exactly.
+    const mode = manifest.turnContext ?? (provider ? "required" : "disabled");
+    if (mode === "disabled") return undefined;
     if (!provider) {
       throw new Error("This session requires turn-context retrieval, but no provider is attached.");
     }
     const query = canonicalTurnContextQuery(content);
-    if (!query) return;
+    if (!query) return undefined;
     const selected = await provider.selectForTurn(query, {
       sessionId: this.options.sessionId,
       signal: turn.controller.signal,
@@ -730,13 +811,138 @@ export class PrimeAgentSession {
     if (!contextSelectionScopeMatches(canonical, this.options.sessionId, manifest)) {
       throw new Error("The turn-context provider returned lineage outside this session's pinned scope.");
     }
+    return canonical;
+  }
+
+  /*
+   * Mirror of core/agent.ts prepareLiveEnvironment: capture from the
+   * registry's provider, seal against the pinned manifest, verify, scope
+   * check. Core seals against transport.posture; prime's inferencePosture()
+   * is that same value whenever a transport is attached and refuses to claim
+   * a posture the runtime cannot see otherwise.
+   */
+  private async prepareLiveEnvironment(turn: ActiveTurn): Promise<LiveEnvironmentSnapshot | undefined> {
+    const provider = this.options.registry.getLiveEnvironmentProvider();
+    if (!provider) return undefined;
+    turn.controller.signal.throwIfAborted();
+    const observation = await provider.capture({
+      sessionId: this.options.sessionId,
+      signal: turn.controller.signal,
+    });
+    turn.controller.signal.throwIfAborted();
+    const snapshot = await sealLiveEnvironmentSnapshot({
+      sessionId: this.options.sessionId,
+      manifest: this.options.manifest,
+      toolDefinitions: this.options.registry.definitions(),
+      transportPosture: this.inferencePosture(),
+      observation,
+    });
+    if (!await verifyLiveEnvironmentSnapshot(snapshot)) {
+      throw new Error("The sealed live-environment snapshot did not verify.");
+    }
+    if (!liveEnvironmentScopeMatches(snapshot, this.options.sessionId, this.options.manifest)) {
+      throw new Error("The live-environment snapshot is outside this session's pinned scope.");
+    }
+    return snapshot;
+  }
+
+  /*
+   * Mirror of core/agent.ts runTurn's pinned-compression boundary block. The
+   * window is immutable session semantics from the manifest, never inferred;
+   * calibration reads provider-reported usage already in the journal, with
+   * the materialize closure carried identically (fork-context scope included
+   * as core carries it; prime's lineage refusal in runTurn makes it inert). When
+   * the plan says compress, context.summary.updated lands before this turn's
+   * first inference.started, followed by the plan restatement exactly when
+   * the plan provider reports open work — core's fire/no-fire rule.
+   */
+  private async planTurnCompression(
+    turn: ActiveTurn,
+    content: string,
+    existingEvents: readonly DurableEvent[],
+    liveEnvironment: LiveEnvironmentSnapshot | undefined,
+    contextSelection: CanonicalContextSelection | undefined,
+  ): Promise<void> {
+    const manifest = this.options.manifest;
+    const pinnedContextCompression = manifest.contextPolicy
+      ? contextCompressionOptionsFromPolicy(manifest.contextPolicy)
+      : undefined;
+    if (!pinnedContextCompression) return;
+    const forkContextScope = { sessionId: this.options.sessionId, lineage: manifest.lineage };
+    const materialization = {
+      allowEmbeddedContext: manifest.turnContext === undefined,
+      allowSelectedContext: manifest.turnContext !== "disabled",
+      forkContextScope,
+    } as const;
+    const bytesPerToken = calibrateBytesPerToken(existingEvents, {
+      systemPrompt: manifest.systemPrompt,
+      tools: manifest.tools,
+      materialize: (events) => materializeMessages([...events], materialization),
+    });
+    const summarizerPolicy = manifest.contextPolicy!.compression.summarizer;
+    const contextSummary = await planContextCompression({
+      events: existingEvents,
+      messages: materializeMessages([...existingEvents], { injectLatestContext: false, ...materialization }),
+      ...(bytesPerToken !== undefined ? { bytesPerToken } : {}),
+      projectedUserContent: injectContextSelection(
+        injectLiveEnvironment(content, liveEnvironment),
+        contextSelection,
+      ),
+      systemPrompt: manifest.systemPrompt,
+      tools: manifest.tools,
+      options: pinnedContextCompression,
+      ...(summarizerPolicy.mode === "inference-transport" ? {
+        summarizer: createInferenceTransportContextSummarizer({
+          transport: this.compressionTransport(),
+          model: manifest.model,
+          sessionId: this.options.sessionId,
+        }),
+        summarizerFailure: summarizerPolicy.onFailure === "extractive-fallback"
+          ? "extractive-fallback" as const
+          : "throw" as const,
+      } : {}),
+      signal: turn.controller.signal,
+    });
+    if (!contextSummary) return;
     await this.appendTurnDrafts(turn, [
       {
-        type: "turn.context.selected",
+        type: "context.summary.updated",
         turnId: turn.turnId,
-        payload: { contextSelection: canonical as unknown as JsonValue },
+        payload: contextSummary as unknown as JsonValue,
       },
     ]);
+    /*
+     * A compaction is the one moment the plan can fall out of the prompt:
+     * restate it once, bounded, through the same payload builder core uses —
+     * and not at all when the plan is empty or unreadable-by-absence.
+     */
+    const planNote = await primeTaskPlanNotePayload(
+      this.options.registry,
+      this.options.sessionId,
+      turn.controller.signal,
+    );
+    if (planNote) {
+      await this.appendTurnDrafts(turn, [
+        { type: TASK_PLAN_NOTE_EVENT_TYPE, turnId: turn.turnId, payload: planNote },
+      ]);
+    }
+  }
+
+  /*
+   * The retrying transport view for the compaction summarizer, mirroring
+   * core/agent.ts runTurn's withInferenceRetry wrap. The session's own
+   * transport is used when attached; a streamFn-only session crosses the
+   * adapter boundary the other way so the summarizer still speaks the
+   * canonical InferenceTransport vocabulary core's seal verifies.
+   */
+  private compressionTransport(): InferenceTransport {
+    const streamFn = (this.options.streamFn ?? registryStreamSimple) as StreamFunction;
+    const transport = this.options.transport ?? createInferenceTransportForPrimeStream(
+      streamFn,
+      this.options.manifest.providerId,
+      this.inferencePosture(),
+    );
+    return withInferenceRetry(transport);
   }
 
   /** Every registry definition becomes a prime tool whose execute is the airship ticket path. */
@@ -1547,6 +1753,51 @@ function plainRecord(value: JsonValue | undefined): Record<string, JsonValue> | 
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, JsonValue>
     : undefined;
+}
+
+/** Mirror of core/agent.ts: bounds what one restated plan note can cost. */
+const MAX_PLAN_NOTE_TASKS = 16;
+
+/*
+ * Mirror of core/agent.ts taskPlanNotePayload, kept private there — the
+ * byte-parity test in session-boundary.test.ts pins both engines to the
+ * identical journaled payload, so any drift here fails that suite rather
+ * than shipping a second dialect of the one note the plan produces.
+ */
+async function primeTaskPlanNotePayload(
+  registry: ToolRegistry,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<JsonValue | undefined> {
+  const provider = registry.getTaskPlanProvider();
+  if (!provider) return undefined;
+  let tasks: readonly TaskPlanEntry[];
+  try {
+    tasks = await provider.openTasks({ sessionId, signal });
+  } catch (error) {
+    if (signal.aborted || isAbortError(error)) throw error;
+    // The plan file is the model's own to repair, and a turn that dies because
+    // it wrote bad JSON into it cannot repair anything. Say what happened, in
+    // the channel that can act on it.
+    return { unreadable: errorMessage(error) };
+  }
+  if (!tasks.length) return undefined;
+  return {
+    // The true open count, carried separately from the bounded list: the cap
+    // is about note size, the count is about the plan, and conflating them
+    // made the note lie about the thing it exists to report.
+    openTaskCount: tasks.length,
+    tasks: tasks.slice(0, MAX_PLAN_NOTE_TASKS).map((task) => ({
+      id: task.id,
+      content: task.content,
+      status: task.status,
+    })),
+  } as unknown as JsonValue;
+}
+
+/** Mirror of core/agent.ts isAbortError. */
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
 }
 
 function errorMessage(error: unknown): string {
