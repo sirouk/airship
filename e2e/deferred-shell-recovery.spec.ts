@@ -191,7 +191,10 @@ test("Skills chunk failure preserves configuration navigation and recovers in pl
 
 async function expectReadyShell(page: Page): Promise<void> {
   await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator(".runtime-line__text")).toHaveText("Local kernel ready", { timeout: 20_000 });
+  // The phone shell keeps a second `.runtime-line__text` in the DOM at every
+  // width (twin-carrier policy); the non-phone carrier is the one this
+  // desktop lane can read.
+  await expect(page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text")).toHaveText("Local kernel ready", { timeout: 20_000 });
 }
 
 async function openSurface(page: Page, surface: "Command Center" | "Preferences"): Promise<void> {

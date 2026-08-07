@@ -157,13 +157,25 @@ export function ConnectSurface({
    * immediately reopened it — a disclosure that could not be closed.
    */
   const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none" | undefined>(() => reconnectIntent?.lane);
-  useEffect(() => {
-    if (reconnectIntent?.lane) setChosenLane(reconnectIntent.lane);
-  }, [reconnectIntent?.lane, reconnectIntent?.returnSessionId]);
   const openLane = chosenLane ?? leadLane;
   const laneList = useRef<HTMLUListElement>(null);
+  /*
+   * The scroll exists for a lane somebody just opened or returned to, not for
+   * the lane that opened itself on arrival: that one fired mid-layout, and
+   * `block: "start"` carried the route's own header — h1, seal, the sentence
+   * that names where you are — past the top of the scroller on every entry
+   * from another route (S1). Arrival leaves the page where it began; a hand
+   * on a toggle, or a reconnect intent that names its lane, earns the bring.
+   */
+  const earnedScroll = useRef(false);
   useEffect(() => {
-    if (!openLane || openLane === "none") return;
+    if (!reconnectIntent?.lane) return;
+    earnedScroll.current = true;
+    setChosenLane(reconnectIntent.lane);
+  }, [reconnectIntent?.lane, reconnectIntent?.returnSessionId]);
+  useEffect(() => {
+    if (!openLane || openLane === "none" || !earnedScroll.current) return;
+    earnedScroll.current = false;
     const frame = requestAnimationFrame(() => {
       const lane = laneList.current?.querySelector<HTMLElement>(`[data-lane="${openLane}"]`);
       if (!lane) return;
@@ -181,7 +193,10 @@ export function ConnectSurface({
             key={lane.id}
             lane={lane}
             open={openLane === lane.id}
-            onToggle={() => setChosenLane(openLane === lane.id ? "none" : lane.id)}
+            onToggle={() => {
+              earnedScroll.current = true;
+              setChosenLane(openLane === lane.id ? "none" : lane.id);
+            }}
           >
             {lane.id === "chutes" ? chutesPanel : null}
             {lane.id === "codex" ? (

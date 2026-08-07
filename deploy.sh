@@ -125,6 +125,11 @@ case "${choice}" in
     else
       echo -e "  Vault default: google-drive"
     fi
+    if [ -z "${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID:-}" ]; then
+      echo -e "  Chutes sign-in: ${YELLOW}api-key${NC} (no public client ID configured)"
+    else
+      echo -e "  Chutes sign-in: oauth"
+    fi
     echo
 
     if ! docker info > /dev/null 2>&1; then
