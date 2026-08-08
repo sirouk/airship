@@ -82,6 +82,11 @@
   z-index: 60;
   top: calc(100% + var(--sp-2));
   display: grid;
+  /* One column, floored at zero. The panel's own width — 320px anchored, the
+     viewport when it is a sheet — has to be the width its rows lay out in, and
+     an `auto` track instead takes its floor from the widest row's min-content.
+     That floor is how the nowrap header below used to size this entire panel. */
+  grid-template-columns: minmax(0, 1fr);
   width: var(--popover-width, 320px);
   max-width: calc(100vw - (2 * var(--sp-3)));
   border: 1px solid var(--line-control);
@@ -124,11 +129,29 @@
   --popover-origin: top right;
 }
 
+/*
+ * The header may not size the panel.
+ *
+ * A grid item whose overflow is visible takes its automatic minimum size from
+ * its own min-content, and this header's min-content is the nowrap heading plus
+ * the Done button — around 490px for `Memory index · revision-bound local
+ * materialization`. So the panel laid every row out at 490px: inside the 320px
+ * anchored card the heading ran past the panel's own background with Done
+ * trailing it into the page beneath, and inside the phone sheet — which is
+ * pinned to the viewport by its insets and cannot grow — the heading was cut
+ * mid-word at the screen edge, the body's paragraphs wrapped to a 490px measure
+ * and were guillotined by the same edge, and the 44px Done target sat entirely
+ * off-screen, leaving a touch reader with no visible way to dismiss the sheet.
+ *
+ * Zero is what gives the heading's `text-overflow: ellipsis` below a box narrow
+ * enough to act in, and what brings Done back inside the panel it dismisses.
+ */
 .popover__header {
   display: flex;
   gap: var(--sp-2);
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
   min-height: 44px;
   padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--line);

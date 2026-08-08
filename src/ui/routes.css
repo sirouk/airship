@@ -265,7 +265,47 @@
 .proof-surface-panel { min-width: 0; }
 
 @media (max-width: 760px) {
-  .proof-surface-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  /*
+   * `1fr 1fr` means one column per tab, and it was written on the wrong box.
+   *
+   * This class sits on the `.tabs` root, whose two children are the scrolling
+   * strip and the `⌄ n` overflow control — so the halving gave the strip half a
+   * 320px screen and the chevron the other half. Both labels still laid out at
+   * their nowrap widths inside that half, the strip scrolled the selected one
+   * into view, and `Receipt & journal` rendered as an 8px sliver of glyph beside
+   * a permanent overflow badge: a two-item switcher reading as a rendering
+   * fault, on the one route whose content is meaningless without knowing which
+   * view you are in.
+   *
+   * The halving belongs to the strip, where the tabs actually are. Each tab then
+   * owns a real half and `.tabs__label` ellipsises inside it — the primitive
+   * already carries that rule — so nothing is scrolled out of the frame and the
+   * overflow control has nothing left to report. The root stays the flex row it
+   * is at every other width, because a two-column root is a claim about how many
+   * children there are, and there are two only while the chevron exists.
+   */
+  .proof-surface-tabs { width: 100%; }
+
+  .proof-surface-tabs .tabs__strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 1 1 auto;
+  }
+
+  /* A grid item, and it would otherwise refuse to shrink below the nowrap label
+     it contains — which is the whole reason the labels overflowed the strip
+     rather than ellipsising inside it. */
+  .proof-surface-tabs .tabs__tab { min-width: 0; }
+
+  .proof-surface-tabs .tabs__tab-button {
+    /* Fills the segment it was given, and shrinks below its own label to do it.
+       A pill narrower than its half reads as a button that has come loose from
+       the control it belongs to. */
+    flex: 1 1 auto;
+    justify-content: center;
+    min-width: 0;
+  }
+
   .proof-surface-tabs button { min-height: var(--touch-target); }
 }
 
@@ -2758,6 +2798,33 @@
   .topbar-posture-chip .seal__label {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /*
+   * Past the point where an ellipsis still leaves a word, the claim steps
+   * behind its own seal.
+   *
+   * The rule above buys the label room by clipping it, and that trade stops
+   * paying: measured at 320px the chip rendered a state ring, the single
+   * character `B` and an ellipsis — `Browser / Edge runtime` reduced to one
+   * letter, with the count already clipped out below to pay for it. A legible
+   * glyph is worth more than a legible fragment, and the fragment is exactly
+   * the defect `topbar.tsx` says the band collapse exists to remove.
+   *
+   * Clipped out of the layout, never removed: the ring keeps the state colour,
+   * the chip keeps its whole 44px target, and the claim itself is still in the
+   * button's accessible name and rendered verbatim in the sheet a tap opens.
+   * 400px is the tier the session bar's own chips already yield at, a few rules
+   * down — one width for "this phone has run out of room for words", not two.
+   */
+  @media (max-width: 400px) {
+    .topbar-posture-chip .seal__label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
   }
 
   /*
