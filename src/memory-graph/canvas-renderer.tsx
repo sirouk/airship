@@ -79,6 +79,16 @@ export type MemoryGraphViewportControls = Readonly<{
 /** One press of a zoom control. Matched to roughly three wheel notches. */
 const ZOOM_STEP = 1.35;
 
+/**
+ * The widest a label may be drawn, and the narrowest stub still worth drawing.
+ *
+ * The floor is about six characters and the ellipsis that admits the cut. Below
+ * it the text names nothing the node's own shape and colour had not already
+ * said, while still spending ink, a reservation, and the reader's attention.
+ */
+const MAX_LABEL_WIDTH = 190;
+const MIN_LABEL_WIDTH = 44;
+
 export type CanvasEngine = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
@@ -783,6 +793,43 @@ function drawCanvasEngine(engine: CanvasEngine): void {
   context.globalAlpha = 1;
 }
 
+/**
+ * The longest leading run of `label` that fits `maxWidth` at the current font,
+ * ellipsised when it had to cut, or nothing when not even a cut run fits.
+ *
+ * Canvas will fit text to a width for you — `fillText`'s fourth argument — but
+ * it does it by CONDENSING the glyphs, not by dropping any. An 83-character
+ * message preview measures about 460px at this face; asked to occupy 190px it
+ * came out as 2px-wide letters at full height, painted straight across the
+ * graph body on tablet-768: a run of ink shaped like a sentence that nobody can
+ * read. A label too small to read is not a label. So the string is cut to the
+ * room available and the cut is declared with an ellipsis — the same bargain
+ * `cleanLabel` in derive.ts already strikes in characters, struck here in the
+ * pixels that actually decide legibility.
+ */
+export function fitLabelToWidth(
+  context: Pick<CanvasRenderingContext2D, "measureText">,
+  label: string,
+  maxWidth: number,
+): { text: string; width: number } | undefined {
+  if (!(maxWidth > 0) || label.length === 0) return undefined;
+  const full = context.measureText(label).width;
+  if (full <= maxWidth) return { text: label, width: full };
+  const ellipsisWidth = context.measureText("…").width;
+  // Binary search the longest prefix that still leaves room for the ellipsis.
+  let fits = 0;
+  let over = label.length;
+  while (fits < over) {
+    const middle = Math.ceil((fits + over) / 2);
+    if (context.measureText(label.slice(0, middle)).width + ellipsisWidth <= maxWidth) fits = middle;
+    else over = middle - 1;
+  }
+  const kept = label.slice(0, fits).trimEnd();
+  if (kept.length === 0) return undefined;
+  const text = `${kept}…`;
+  return { text, width: context.measureText(text).width };
+}
+
 export function drawNodeLabels(
   engine: CanvasEngine,
   visibleNodes: readonly MemoryGraphNode[],
@@ -831,16 +878,38 @@ export function drawNodeLabels(
     }
     return cells;
   };
-  for (const node of candidates) {
+  /*
+   * How far right of `startX` the label band stays clear, capped at `limit`.
+   *
+   * The second pass asks this rather than retrying a ladder of guessed widths:
+   * the stub it then paints is exactly as long as the room the first pass left
+   * beside the node, and cannot reach one column into a neighbour.
+   */
+  const clearWidthFrom = (startX: number, minY: number, maxY: number, limit: number): number => {
+    const firstRow = Math.floor(minY / rowHeight);
+    const lastRow = Math.floor(maxY / rowHeight);
+    for (let column = Math.floor(startX / columnWidth); column * columnWidth < startX + limit; column += 1) {
+      for (let row = firstRow; row <= lastRow; row += 1) {
+        if (occupied.has(`${column}:${row}`)) return Math.max(0, column * columnWidth - startX);
+      }
+    }
+    return limit;
+  };
+  /** Where a node's label starts: clear of the node's own shape, on its right. */
+  const anchorOf = (node: MemoryGraphNode) => {
     const point = graphToCanvasPoint(node, engine.viewport);
-    const forced = node.id === selected || node.id === engine.hoverId;
     const radius = Math.max(2.5, node.size);
-    const labelX = point.x + radius + 6;
-    // Reserve the label's ACTUAL measured footprint (not a coarse fixed bucket)
+    return { point, radius, labelX: point.x + radius + 6 };
+  };
+  /** Draws one label at no more than `budget` pixels, reporting whether it went down. */
+  const place = (node: MemoryGraphNode, budget: number, forced: boolean): boolean => {
+    const fitted = fitLabelToWidth(context, node.label, budget);
+    if (!fitted) return false;
+    const { point, radius, labelX } = anchorOf(node);
+    // Reserve the label's ACTUAL drawn footprint (not a coarse fixed bucket)
     // so wide labels block later ones instead of overlapping into unreadable soup.
-    const labelWidth = Math.min(190, context.measureText(node.label).width);
-    const labelCells = cellsWithin(labelX, labelX + labelWidth, point.y - labelHalfHeight, point.y + labelHalfHeight);
-    if (!forced && labelCells.some((cell) => occupied.has(cell))) continue;
+    const labelCells = cellsWithin(labelX, labelX + fitted.width, point.y - labelHalfHeight, point.y + labelHalfHeight);
+    if (!forced && labelCells.some((cell) => occupied.has(cell))) return false;
     for (const cell of labelCells) occupied.add(cell);
     /*
      * A drawn label also spends its own node's shape, because text is painted
@@ -856,7 +925,40 @@ export function drawNodeLabels(
      * label; a label lost is worse than a dot touched.
      */
     for (const cell of cellsWithin(point.x - radius, point.x + radius, point.y - radius, point.y + radius)) occupied.add(cell);
-    context.fillText(node.label, labelX, point.y, 190);
+    context.fillText(fitted.text, labelX, point.y);
+    return true;
+  };
+
+  /*
+   * First pass: every candidate at its full width, highest priority first. This
+   * is the whole policy the collision grid was built for, and it runs to
+   * completion before anything else asks for a cell, so nothing the second pass
+   * does can cost it a label.
+   */
+  const anonymous: MemoryGraphNode[] = [];
+  for (const node of candidates) {
+    const forced = node.id === selected || node.id === engine.hoverId;
+    if (!place(node, MAX_LABEL_WIDTH, forced)) anonymous.push(node);
+  }
+
+  /*
+   * Second pass: whoever the first refused.
+   *
+   * Suppressing a collision by dropping the label outright throws away the fact
+   * the node exists to convey. On phone-320 that turned all three workspace-file
+   * nodes into bare teal squares at once — nothing on screen said which file any
+   * of them was, and a still frame has no hover to fall back on. So each refused
+   * node is offered whatever horizontal room the first pass happened to leave
+   * beside it: enough for a readable stub of its name and the stub is drawn,
+   * not enough and the node stays anonymous rather than gaining ink nobody can
+   * read. Showing some of the names beats showing none of them, and the room
+   * spent here is by construction room no drawn label wanted.
+   */
+  for (const node of anonymous) {
+    const { point, labelX } = anchorOf(node);
+    const room = clearWidthFrom(labelX, point.y - labelHalfHeight, point.y + labelHalfHeight, MAX_LABEL_WIDTH);
+    if (room < MIN_LABEL_WIDTH) continue;
+    place(node, room, false);
   }
 }
 
