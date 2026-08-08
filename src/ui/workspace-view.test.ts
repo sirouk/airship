@@ -1421,7 +1421,15 @@ describe("Explorer density", () => {
     // a whole tab.
     const button = [...styles.matchAll(/\.tabs\.workbench-mode-tabs \.tabs__tab-button \{([^}]+)\}/gu)]
       .map((match) => match[1] ?? "").join("\n");
-    expect(button).toContain("padding: 0 var(--sp-3);");
+    // `--sp-2`, and it is the label's width rather than a taste in gutters: the
+    // 255px rail this strip gets at laptop-1024 and tablet-768 was 37px short of
+    // what its two cells asked for at `--sp-3`, all 37 are charged to "Source
+    // Control", and stepping the gutter back returns 16 of them — the difference
+    // between a cell reading "Source …" and one reading "Source Con…". `--sp-1`
+    // is the step that made two bordered controls read as prose and is not the
+    // way to find the rest.
+    expect(button).toContain("padding: 0 var(--sp-2);");
+    expect(button).not.toContain("padding: 0 var(--sp-1);");
     // The step down in *size* keeps its documented reason: "Source Control"
     // plus its count has to fit a 15rem rail.
     expect(button).toContain("font-size: var(--fs-body);");

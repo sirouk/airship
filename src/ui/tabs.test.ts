@@ -9,6 +9,7 @@ import {
   tabOverflowLabel,
   tabScrollLeft,
   tabStripEdges,
+  tabStripOverflows,
   tabsOutOfView,
   type TabItem,
 } from "./tabs";
@@ -59,6 +60,64 @@ describe("the edge fade", () => {
     expect(tabStripEdges({ scrollLeft: 0, scrollWidth: 1593, clientWidth: 797 })).toBe("end");
     expect(tabStripEdges({ scrollLeft: 796, scrollWidth: 1593, clientWidth: 797 })).toBe("start");
     expect(tabStripEdges({ scrollLeft: 300, scrollWidth: 1593, clientWidth: 797 })).toBe("both");
+  });
+});
+
+/*
+ * The measured latch, and the one reading of the row that does not have it.
+ *
+ * The `⌄ n` control is the strip's sibling, so it takes ~52px off the box whose
+ * fullness decided it should appear. 347px of tabs is then "nothing hidden" in
+ * the 374px row without it and "one hidden" in the 322px row with it, both
+ * stable, and the strip keeps whichever it arrived in. That is what put
+ * "…lorer | Editor | Source Contro  ⌄ 1" on the Workspace pane switcher at
+ * 390px with its container never having changed width. The numbers below are
+ * that phone, so a rule that reintroduces the latch fails on the case it broke.
+ */
+describe("which row decides the overflow control exists", () => {
+  it("does not grow a control the row without it has no need of", () => {
+    expect(tabStripOverflows({ contentWidth: 347, rowWidth: 374 })).toBe(false);
+  });
+
+  it("unlatches a strip already narrowed by the control it grew", () => {
+    // The losing fixed point: the same tabs in the same viewport, read from the
+    // 322px the control left behind. Measured against the row rather than
+    // against that remainder, the answer is the one the reader can act on.
+    expect(tabStripOverflows({ contentWidth: 347, rowWidth: 322 })).toBe(true);
+    expect(tabStripOverflows({ contentWidth: 347, rowWidth: 374 })).toBe(false);
+  });
+
+  it("still grows one for a row that genuinely cannot hold the tabs", () => {
+    // The same three labels at 320px: 304px of row against 347px of tabs. The
+    // control is honest there and must survive the fix to the case above.
+    expect(tabStripOverflows({ contentWidth: 347, rowWidth: 304 })).toBe(true);
+  });
+
+  it("does not report a phantom from sub-pixel layout", () => {
+    expect(tabStripOverflows({ contentWidth: 374.5, rowWidth: 374 })).toBe(false);
+    expect(tabStripOverflows({ contentWidth: 376, rowWidth: 374 })).toBe(true);
+  });
+
+  it("is the first thing the live measurement asks, and it asks it of the container", async () => {
+    // The rule is only worth having if it is the gate. Both halves are pinned:
+    // the measurement runs the rule before it looks at a single tab box, and the
+    // row it hands it comes from the strip's parent — `strip.clientWidth` is the
+    // number the chevron already ate, and reading it here is the latch itself.
+    const source = await readFile(new URL("./tabs.tsx", import.meta.url), "utf8");
+    const measure = source.slice(source.indexOf("function measureTabOverflow"));
+    expect(measure.slice(0, measure.indexOf("const boxes")))
+      .toContain("tabStripOverflows({ contentWidth: strip.scrollWidth, rowWidth: tabStripRowWidth(strip) })");
+    const rowWidth = source.match(/function tabStripRowWidth\(strip: HTMLElement\): number \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(rowWidth).toContain("strip.parentElement");
+  });
+
+  it("claims nothing about a row nobody has measured", () => {
+    // A strip read before layout. This holds because the rule asserts that the
+    // tabs overflow rather than negating that they fit — `!(content <= row)`
+    // reads the same until a width is NaN, and then it is a chevron grown over
+    // a row that was never measured, which narrows the row it was guessing at.
+    expect(tabStripOverflows({ contentWidth: Number.NaN, rowWidth: 374 })).toBe(false);
+    expect(tabStripOverflows({ contentWidth: 347, rowWidth: Number.NaN })).toBe(false);
   });
 });
 
