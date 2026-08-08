@@ -1335,6 +1335,28 @@ describe("Explorer density", () => {
   });
 });
 
+/*
+ * The editor column has to be able to run out of room. With the terminal dock
+ * open on a 932×430 landscape phone it has about 65px for the code frame and
+ * the file strip together; the frame shrinks to nothing, as its flex terms ask,
+ * and then the only question is whether its content stays inside it. It did
+ * not: three wrapped lines painted straight through the Modified verdict, the
+ * path, the revision and the Wrap/Save controls.
+ */
+describe("the editing sheet under a column that has run out of height", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+
+  it("clips the code frame instead of letting it paint over the file strip", () => {
+    const frame = styles.match(/\.code-editor-frame \{([^}]+)\}/u)?.[1] ?? "";
+    expect(frame).toContain("flex: 1 1 auto");
+    expect(frame).toContain("min-height: 0");
+    expect(frame).toContain("overflow: hidden");
+    // The strip is the half that must not shrink; the frame is the half that
+    // must. A strip that could shrink would simply lose the same facts slowly.
+    expect(styles.match(/\.editor-strip \{([^}]+)\}/u)?.[1] ?? "").toContain("flex: 0 0 auto");
+  });
+});
+
 /** The one `@media (pointer: coarse)` block a workbench sheet is allowed. */
 function coarseBlock(styles: string): string {
   return [...styles.matchAll(/@media \(pointer: coarse\) \{\n((?:[^@]|\n)*?)\n\}\n/gu)].map((match) => match[1] ?? "").join("\n");

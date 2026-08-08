@@ -227,6 +227,44 @@ describe("terminal panel bar at phone width", () => {
   });
 });
 
+describe("the terminal panel's process controls", () => {
+  /*
+   * Restart and Close ran off the right edge of a 768px tablet with no
+   * scrollbar, fade or chevron: the group was `flex:0 1 auto` over an
+   * `overflow-x:auto` viewport, and the rescue that reversed it lived inside
+   * `@media(max-width:760px)` — eight pixels short. The contract is that the
+   * decision sits on the base rule, so no breakpoint can fall outside it.
+   */
+  it("never shrinks below the buttons, at any width", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const base = css.slice(0, css.indexOf("@media(max-width:760px)"));
+    expect(base).toContain(".terminal-panel__bar>div:last-child{flex:0 0 auto;min-width:0}");
+    expect(base).not.toMatch(/\.terminal-panel__bar>div:last-child\{[^}]*overflow-x:auto/u);
+    // The shrink has to land on the state group instead, and land inside it:
+    // a group that spills is the same clipped control by another route.
+    expect(base).toContain(".terminal-panel__bar>div:first-child{min-width:0;overflow:hidden}");
+  });
+});
+
+describe("the terminal route on a short viewport", () => {
+  /*
+   * At 932×430 the runtime disclosure and the tab strip were crushed to a 2px
+   * stripe: both carry non-visible overflow, so their automatic minimum size
+   * is zero and the emulator's 14rem floor took the entire height budget. The
+   * emulator is the row that yields, because it scrolls its own scrollback.
+   */
+  it("lowers the emulator's floor so the disclosure and tabs survive", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+    expect(short).toContain(".terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto");
+    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(3rem,1fr) auto}");
+    expect(short).toContain(".terminal-emulator{min-height:3rem}");
+    // The dock declares its own rows and is clamped against a measured parent;
+    // an unscoped `.terminal-route` here would impose a fifth row on its four.
+    expect(short).not.toMatch(/\n\s*\.terminal-route\{/u);
+  });
+});
+
 describe("the terminal body boundary", () => {
   it("clips xterm paint to its grid cell instead of the panel's next row", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");

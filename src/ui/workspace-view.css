@@ -379,8 +379,18 @@
  * theme — is unchanged. The editor theme reaches nothing outside this frame:
  * it is the sheet on the desk, not a second answer to the colour-mode
  * preference the whole instrument obeys.
+ *
+ * `overflow: hidden` is what makes the frame lose height rather than paint
+ * outside it. `flex: 1 1 auto; min-height: 0` already gives the column's slack
+ * to the code and the floor to the strip beneath it, but with the terminal
+ * dock open on a 932×430 landscape phone the column has about 65px for both:
+ * the frame duly shrank to nothing and then went on painting three wrapped
+ * lines straight through the Modified verdict, the file path, the revision and
+ * the Wrap/Save controls, with both layers illegible where they crossed. A
+ * pane with no room left is honest; a pane that overruns its own chrome is a
+ * lie about which one you are reading.
  */
-.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--code-ground, transparent); }
+.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; background: var(--code-ground, transparent); }
 /* The gutter must share the textarea's exact metrics or the numbers drift out
    of register as the file scrolls. Keep the font/line-height/padding paired. */
 .code-gutter { position: relative; box-sizing: border-box; flex: 0 0 auto; width: calc(4ch + 1.35rem); margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: color-mix(in srgb, var(--code-ink, var(--ink-faint)) 62%, transparent); background: color-mix(in srgb, var(--code-ground, var(--surface-soft)) 92%, var(--ink)); font: var(--fs-caption)/1.72 var(--font-mono); text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
