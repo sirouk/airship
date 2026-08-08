@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AIRSHIP_SH_MAX_FUNCTIONS } from "./contract";
 import { runScript } from "./harness.test-helper";
 
 type Case = Readonly<{
@@ -63,7 +64,14 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
   { name: "bang inverts a status", script: `! false; echo $?; ! true; echo $?`, stdout: "0\n1\n" },
   { name: "pipeline threads data", script: `printf 'b\\na\\nc\\n' | sort | head -n 2`, stdout: "a\nb\n" },
   { name: "pipeline status is the last stage", script: `false | true; echo $?`, stdout: "0\n" },
-  { name: "pipefail reports the first failure", script: `set -o pipefail; false | true; echo $?`, stdout: "1\n" },
+  { name: "pipefail reports a failure the last stage hid", script: `set -o pipefail; false | true; echo $?`, stdout: "1\n" },
+  /*
+   * bash and ksh define `pipefail` as the rightmost non-zero status. Reporting
+   * the leftmost let a producer's benign warning stand in for the hard failure
+   * of the stage that consumed it, so `generate | validate` answered with
+   * `generate`'s status and a `case $?` dispatch took the benign branch.
+   */
+  { name: "pipefail takes the rightmost failing stage", script: `set -o pipefail; (exit 3) | (exit 7) | true; echo $?`, stdout: "7\n" },
   { name: "if elif else", script: `if false; then echo a; elif true; then echo b; else echo c; fi`, stdout: "b\n" },
   { name: "for over a word list", script: `for i in a b c; do printf '%s.' "$i"; done; echo`, stdout: "a.b.c.\n" },
   { name: "for over positional parameters by default", script: `for i; do echo "$i"; done`, args: ["x", "y"], stdout: "x\ny\n" },
@@ -104,6 +112,23 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
   { name: "dash here-document strips leading tabs", script: "cat <<-EOF\n\tindented\n\tEOF\n", stdout: "indented\n" },
   { name: "an unterminated here-document is a parse error", script: "cat <<EOF\nbody\n", exitCode: 2, stderrMatch: /unterminated here-document/u },
   { name: "redirect target must expand to one word", script: `set -- a b; echo x > "$1"; cat a`, stdout: "x\n" },
+  /*
+   * `exec 3<>f` hardcoded fds 0 and 1, so opening a scratch descriptor
+   * installed a file sink on stdout: every later `echo` was written into the
+   * opened file and the caller received an empty stdout with exit 0.
+   */
+  { name: "read-write open uses its own descriptor and leaves stdout alone", script: `exec 3<> data.txt; echo after`, seed: { "/workspace/data.txt": "seed\n" }, stdout: "after\n", files: { "/workspace/data.txt": "seed\n" } },
+  { name: "bare read-write open feeds stdin", script: `cat <> data.txt`, seed: { "/workspace/data.txt": "seed\n" }, stdout: "seed\n" },
+  /*
+   * POSIX XCU 2.8.1 exits a non-interactive shell on a redirection error only
+   * for a special builtin. An ordinary command that cannot open its redirection
+   * used to kill the whole script, so the `||` branch, the rest of the list, and
+   * any cleanup never ran for a status the script was written to recover from.
+   */
+  { name: "a redirection error fails the command, not the script", script: `cat < missing.txt || echo defaults; echo after`, stdout: "defaults\nafter\n", stderrMatch: /missing\.txt: No such file or directory/u },
+  { name: "a redirection error on a compound command is contained too", script: `{ echo hi; } < missing.txt; echo after`, stdout: "after\n", stderrMatch: /missing\.txt: No such file or directory/u },
+  { name: "a redirection error on a special builtin still ends the script", script: `exec < missing.txt; echo after`, stdout: "", exitCode: 1, stderrMatch: /missing\.txt: No such file or directory/u },
+  { name: "an unwritable target fails only its own command", script: `echo hi > /etc/passwd; echo after`, stdout: "after\n", stderrMatch: /Read-only file system/u },
 
   // --- globbing -----------------------------------------------------------
   {
@@ -167,6 +192,13 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
   { name: "colon is a successful no-op", script: `: ; echo $?`, stdout: "0\n" },
   { name: "type reports what a name is", script: `type echo; type cd`, stdout: "echo is a shell builtin\ncd is a shell builtin\n" },
   { name: "alias substitutes a command", script: `alias ll='ls -1'; ll`, seed: { "/workspace/only": "" }, stdout: "only\n" },
+  /*
+   * The wrapper idiom every shell user writes. `command` must bypass the
+   * function table, or the function calls itself until the nesting budget ends
+   * the run with an opaque fatal error instead of any output at all.
+   */
+  { name: "command runs the utility a function of the same name shadows", script: `echo() { command echo wrapped "$@"; }; echo one; echo two`, stdout: "wrapped one\nwrapped two\n" },
+  { name: "command refuses a name that is only a function", script: `only_a_function() { echo fn; }; command only_a_function; echo $?`, stdout: "127\n", stderrMatch: /only_a_function: command not found/u },
   { name: "set rejects an unimplemented flag", script: `set -q`, exitCode: 2, stderrMatch: /unsupported option/u },
   { name: "nounset fails on an unset parameter", script: `set -u; echo "$missing"`, exitCode: 1, stderrMatch: /parameter not set/u },
   { name: "exec runs a command and ends the shell", script: `exec echo replaced; echo unreachable`, stdout: "replaced\n" },
@@ -282,6 +314,25 @@ describe("airship-sh script suite", () => {
       }
     });
   }
+
+  /*
+   * `AIRSHIP_SH_MAX_FUNCTIONS` sat in the contract beside the variable, alias,
+   * and positional caps while nothing read it, so the one axis of shell state a
+   * script can grow without an argument list was unbounded.
+   */
+  it("bounds the function table like every other axis of shell state", async () => {
+    const script = Array.from({ length: AIRSHIP_SH_MAX_FUNCTIONS + 1 }, (_, index) => `f${index}() { :; }`).join("\n");
+    const result = await runScript(script);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(`airship-sh: airship-sh exceeded ${AIRSHIP_SH_MAX_FUNCTIONS} shell functions\n`);
+  });
+
+  it("redefining one function stays free of the cap", async () => {
+    const script = Array.from({ length: AIRSHIP_SH_MAX_FUNCTIONS + 8 }, (_, index) => `f() { echo ${index}; }`).join("\n");
+    const result = await runScript(`${script}\nf`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(`${AIRSHIP_SH_MAX_FUNCTIONS + 7}\n`);
+  });
 
   it("covers every documented dimension of the grammar", () => {
     expect(CASES.length).toBeGreaterThanOrEqual(100);

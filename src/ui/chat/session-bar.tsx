@@ -151,6 +151,10 @@ export function SessionBar({
 
   async function commitRename() {
     if (renameInFlight.current) return;
+    // A refusal from the last attempt is not a verdict on this one, and while it
+    // stands `required` would report it in place of the empty field in front of
+    // the reader.
+    renameInput.current?.setCustomValidity("");
     const normalized = renameInput.current?.value.trim() ?? "";
     if (!normalized) {
       renameInput.current?.reportValidity();
@@ -164,8 +168,26 @@ export function SessionBar({
     try {
       await onRename(normalized);
       setRenaming(false);
-    } catch {
-      requestAnimationFrame(() => renameInput.current?.focus());
+    } catch (caught) {
+      /*
+       * The refusals this verb meets are whole sentences written for a person —
+       * "Wait for the current turn to finish before renaming this
+       * conversation.", a journal that is not ready yet, a quota or head-fence
+       * rejection from `journal.renameSession` — and every one of them used to
+       * be swallowed here, leaving the edit field open with the typed text and
+       * no stated cause. Pressing Enter again produced the same nothing.
+       *
+       * It goes back through the field's own validity channel, which is where
+       * this component already reports a rename that cannot proceed (the blank
+       * title above). That also keeps the promise this bar is built on: one
+       * 40px row, and `.session-bar__identity` clips anything that would make it
+       * two.
+       */
+      renameInput.current?.setCustomValidity(caught instanceof Error ? caught.message : "The conversation could not be renamed.");
+      requestAnimationFrame(() => {
+        renameInput.current?.focus();
+        renameInput.current?.reportValidity();
+      });
     } finally {
       renameInFlight.current = false;
     }

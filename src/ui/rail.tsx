@@ -190,9 +190,24 @@ function rendersOwnRoute(view: NavigationView): boolean {
  * Same test the phone band makes before describing its current control: a hint
  * is owed exactly when the stand-in's destination is not the live view.
  * `Profiles` on `#profiles` needs none; `Profiles` on `#skills` does.
+ *
+ * `expanded` is the third input, because a nested row is only *drawn* while its
+ * parent is open. Standing on `#editor` or `#terminal` with Workspace collapsed
+ * left the whole rail saying "you are here" in a single colour step on
+ * `.nav-item.has-active-child` — no `aria-current` anywhere, no row carrying the
+ * word `Editor`, and a distinction carried solely by colour on the surface that
+ * spells its blocked conversations out for exactly that reason. That is the same
+ * silence `#skills` and `#capabilities` were fixed for, on two routes the phone
+ * band already names under its Workspace control. An open parent does draw
+ * `Editor` with `aria-current="page"`, so there the hint would be a second
+ * answer to one question and is owed nothing.
  */
-export function railCurrentHint(view: NavigationView): string | undefined {
-  if (railRowFor(view) || canonicalParentForView(view) === view || !rendersOwnRoute(view)) return undefined;
+export function railCurrentHint(
+  view: NavigationView,
+  expanded: Readonly<Record<string, boolean>> = {},
+): string | undefined {
+  const row = railRowFor(view);
+  if (row?.id === view || (row && expanded[row.id]) || canonicalParentForView(view) === view || !rendersOwnRoute(view)) return undefined;
   return destinationLabel(view);
 }
 
@@ -338,8 +353,9 @@ export function Rail({
   const items = useRef(new Map<string, HTMLButtonElement>());
   const recentsTrigger = useRef<HTMLButtonElement>(null);
   // The rail's half of the phone band's "Current page: …" line. Undefined on
-  // the eleven views that have a row of their own to be marked.
-  const currentHint = railCurrentHint(view);
+  // every view the rail already draws a marked row for — which includes a
+  // nested Editor or Terminal only while `expanded` is what draws it.
+  const currentHint = railCurrentHint(view, expanded);
 
   // Props can retain the previous async read for one render while a profile
   // switches. Filtering by the row's bound profile makes that frame empty
@@ -366,7 +382,10 @@ export function Rail({
     // The collapsed state owns a closed panel. Without this guard, sessions
     // arriving in the same frame as a collapse could run this effect after the
     // state-transition effect below and throw a 320px flyout over the page.
-    if (state !== "standard" || recentsChoice.current !== undefined || visibleConversations.length === 0) return;
+    // `autoOpened` is what makes this "once" now that the effect no longer
+    // stamps the person's slot to stop itself: the rail decides its own default
+    // one time, and the height gate below owns every later correction.
+    if (state !== "standard" || autoOpened.current || recentsChoice.current !== undefined || visibleConversations.length === 0) return;
     /*
      * …and only where the rail can afford it.
      *
@@ -383,8 +402,12 @@ export function Rail({
     const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
     const room = nav?.clientHeight ?? 0;
     if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) return;
+    // `recentsChoice` is the person's slot and stays theirs: `undefined` there
+    // means nobody has chosen, which `loadRecentsPreference` documents as a
+    // different state from having chosen "closed". Writing `true` into it here
+    // signed a choice nobody made — and, because nothing persisted it, one that
+    // a reload would immediately contradict.
     autoOpened.current = true;
-    recentsChoice.current = true;
     setRecentsOpen(true);
   }, [conversationKeys, navRef, state]);
 
@@ -400,18 +423,28 @@ export function Rail({
    * Only what the rail opened by itself is closed by itself: `autoOpened` is
    * cleared the moment a person touches the disclosure, and after that the rail
    * never fights them in either direction.
+   *
+   * It is also the only place the rail's own answer is re-decided, so it has to
+   * be two-way. Gating on `recentsOpen` made it a ratchet: closing the list
+   * unsubscribed the very listener that would have re-opened it, so the same
+   * window at the same height showed the list after a reload and not after a
+   * resize down and back up. It stays subscribed while the rail owns the state
+   * and simply answers the height each time it is asked.
    */
   useEffect(() => {
-    if (!autoOpened.current || !recentsOpen) return;
+    if (!autoOpened.current || state !== "standard") return;
     const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
     const measure = () => {
       const room = nav?.clientHeight ?? 0;
-      if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) setRecentsOpen(false);
+      if (room > 0) setRecentsOpen(room >= RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT);
     };
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [navRef, recentsOpen]);
+    // `recentsOpen` is a dependency for the unsubscribe rather than the measure:
+    // a deliberate click clears `autoOpened` and changes the open state in the
+    // same gesture, and this re-run is what hands both directions back.
+  }, [navRef, recentsOpen, state]);
 
   /*
    * Collapsing the rail does not throw a panel over the page.
@@ -421,13 +454,18 @@ export function Rail({
    * and the person did not ask to open anything. The panel closes with the
    * rail and comes back with it — `recentsChoice` is untouched, so the
    * remembered preference decides the restored state, not this.
+   *
+   * Where nobody has chosen, the fallback is what the rail itself was showing:
+   * `autoOpened` restores the panel it opened rather than a hard `false`, which
+   * is what made ⌘\ flash the list open and shut once the height gate had
+   * closed it.
    */
   const previousState = useRef(state);
   useEffect(() => {
     const was = previousState.current;
     previousState.current = state;
     if (was === state) return;
-    setRecentsOpen(state === "standard" ? recentsChoice.current ?? false : false);
+    setRecentsOpen(state === "standard" ? recentsChoice.current ?? autoOpened.current : false);
   }, [state]);
 
   /*

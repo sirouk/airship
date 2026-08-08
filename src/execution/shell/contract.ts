@@ -77,7 +77,12 @@ export const AIRSHIP_SH_MAX_WORKSPACE_ERROR_CHARS = 512;
 export const AIRSHIP_SH_STATUS = Object.freeze({
   /** A word that resolved to no builtin, function, or utility. */
   commandNotFound: 127,
-  /** A resolved name that could not be run as a command. */
+  /**
+   * A resolved name that could not be run as a command. Reserved: nothing in
+   * this engine executes a file, so no dispatch path produces 126 today. It is
+   * stated here so an exec-a-file surface reports what POSIX requires rather
+   * than inventing a status.
+   */
   notExecutable: 126,
   /** Parse errors and builtin misuse. */
   usage: 2,

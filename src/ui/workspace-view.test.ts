@@ -965,7 +965,65 @@ describe("Explorer search: one field, both questions", () => {
     // The scan's own sentence — truncated, unsearched, capReachedIn — reaches
     // the reader in the same line as the file count.
     expect(source).toContain("workspaceSearchSummary(search)");
-    expect(source).toContain('scanning || !search ? "reading contents…"');
+    expect(source).toContain('scanning ? "reading contents…"');
+  });
+
+  it("settles the rail when the scan comes back as a rejection", () => {
+    /*
+     * Shipped: `search` was written only in `.then`, and the rail's whole
+     * settled/scanning decision was `search !== undefined`. So a scan that threw
+     * — an object whose key rotated, a transient IndexedDB failure — left
+     * `scanning` true for as long as the query stayed in the field: the count
+     * line said "reading contents…" and the tree stayed hidden behind
+     * "Searching file contents…" with nothing reading. The error notice at the
+     * bottom of the route was the only sign anything had happened.
+     */
+    const failure = source.match(/\.catch\(\(cause: unknown\) => \{[\s\S]*?\}\)/u)?.[0] ?? "";
+    expect(failure).toContain("setScanFailed(true)");
+    // And the previous query's result goes with it: the count line prints that
+    // result verbatim, so a stale one describes a term the reader has left.
+    expect(failure).toContain("setSearch(undefined)");
+    expect(source).toContain("const scanSettled = Boolean(query) && !searching && (search !== undefined || scanFailed);");
+    // Reset per query, in both places a query begins — the emptied field and
+    // the new term — or one failure would poison every later search.
+    expect([...source.matchAll(/setScanFailed\(false\)/gu)]).toHaveLength(2);
+    // A settled failure has no summary to print, and must not claim to be reading.
+    expect(source).toContain('"file contents could not be read"');
+  });
+});
+
+/*
+ * The rail's verbs and the workbench's transaction are one thing.
+ *
+ * `mutateSource` drops every request while `busy`, without a notice and without
+ * a throw, so a Source Control control that stays pressable through a save or a
+ * forty-file folder rename is a control that lies: it depresses, nothing
+ * stages, and the only feedback on screen is a progress notice about an
+ * unrelated operation. `Save` in the same component has always been gated on
+ * exactly this state.
+ */
+describe("Source Control during a workbench transaction", () => {
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("hands the transaction state to the rail that shares it", () => {
+    const rail = source.match(/<SourceControlRail[\s\S]*?\/>/u)?.[0] ?? "";
+    expect(rail).toContain("busy={busy}");
+    // Forwarded to both lanes, because staging and unstaging are the same
+    // transaction from opposite sides.
+    expect([...source.matchAll(/<ScmGroup[\s\S]*?\/>/gu)].filter((group) => group[0].includes("busy={busy}"))).toHaveLength(2);
+  });
+
+  it("disables every verb that a busy workbench would silently drop", () => {
+    const group = source.slice(source.indexOf("function ScmGroup("));
+    // The per-row stage/unstage toggle, the group's bulk verb, and the row's
+    // discard — the three controls that reach `mutate` from a row.
+    expect(group).toContain('aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} disabled={busy}');
+    expect(group).toContain('class="scm-group__bulk" type="button" aria-label={bulk.label} title={bulk.label} disabled={busy}');
+    expect(group).toContain("disabled={busy || !repository || !worktree || conflicted}");
+    // Commit is the fourth, and the discard confirmation is the one that has
+    // already been armed — it must not commit a decision the workbench drops.
+    expect(source).toContain("disabled={busy || !commitMessage.trim()}");
+    expect(source).toContain("confirmDisabled={busy}");
   });
 });
 

@@ -398,7 +398,24 @@ describe("editor wrap", () => {
     // sentence is exactly the one that shipped.
     expect(editorSurfaceNote({ wrap: false, binary: false, gutter: true })).toBe("UTF-8 · LF · client-side");
     expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
-    // Wrapping already explains itself; the cap does not overwrite that.
-    expect(editorSurfaceNote({ wrap: true, binary: false, gutter: false })).toBe("UTF-8 · LF · client-side · wrapped with line numbers");
+  });
+
+  it("states the cap in the wrapped mode too, which is the one every file starts in", () => {
+    /*
+     * `defaultEditorWrap` returns true unconditionally and `readTabState` seeds
+     * every restored tab from it, so wrap is the default state and the cap
+     * branch was unreachable in it: open any 5,000-line-plus lockfile or log and
+     * the strip read "wrapped with line numbers" over a column with no numbers
+     * at all. The sentence written to stop the gutter vanishing in silence was
+     * the sentence claiming it was there.
+     */
+    const wrappedCapped = editorSurfaceNote({ wrap: true, binary: false, gutter: false });
+    expect(wrappedCapped).toContain("wrapped");
+    expect(wrappedCapped).toContain("no line numbers above");
+    expect(wrappedCapped).toContain(WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US"));
+    expect(wrappedCapped).not.toContain("with line numbers");
+    // Wrapping still explains itself wherever the gutter is actually drawn.
+    expect(editorSurfaceNote({ wrap: true, binary: false, gutter: true })).toBe("UTF-8 · LF · client-side · wrapped with line numbers");
+    expect(editorSurfaceNote({ wrap: true, binary: false })).toBe("UTF-8 · LF · client-side · wrapped with line numbers");
   });
 });

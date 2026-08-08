@@ -168,6 +168,44 @@ describe("workspace endpoint-evidence persistence", () => {
     }, NOW)).rejects.toThrow("payload digest does not commit");
   });
 
+  it("refuses derived claims and published measurements that a rewritten checkpoint promoted under intact digests", async () => {
+    const store = new WorkspaceEndpointEvidencePersistence(new MemoryWorkspace(), PROFILE_ID);
+    const record = await evidenceRecord({ publishedPolicy: publishedPolicyEvaluation() });
+    await expect(store.commit({ identity: evidenceIdentity("receipt-policy", record), record }, NOW))
+      .resolves.toMatchObject({ disposition: "persisted" });
+
+    const promotedFreshness = structuredClone(record) as MutableRecord;
+    promotedFreshness.claims.nonceFreshness.state = "verified";
+    await expect(store.commit({
+      identity: evidenceIdentity("receipt-freshness", promotedFreshness),
+      record: promotedFreshness,
+    }, NOW)).rejects.toThrow("disagree with the recomputed binding disposition");
+
+    const promotedKey = structuredClone(record) as MutableRecord;
+    promotedKey.claims.endpointKey.state = "verified";
+    await expect(store.commit({
+      identity: evidenceIdentity("receipt-key", promotedKey),
+      record: promotedKey,
+    }, NOW)).rejects.toThrow("disagree with the recomputed binding disposition");
+
+    const forgedMeasurements = structuredClone(record) as MutableRecord;
+    forgedMeasurements.publishedPolicy!.quoteMeasurements.rtmr1 = "a".repeat(96);
+    await expect(store.commit({
+      identity: evidenceIdentity("receipt-measurements", forgedMeasurements),
+      record: forgedMeasurements,
+    }, NOW)).rejects.toThrow("do not match the raw TDX quote");
+
+    const unmatchedRecord = await evidenceRecord({
+      publishedPolicy: { ...publishedPolicyEvaluation(), state: "failed", matches: [] },
+    });
+    const promotedPolicy = structuredClone(unmatchedRecord) as MutableRecord;
+    promotedPolicy.publishedPolicy!.state = "matched";
+    await expect(store.commit({
+      identity: evidenceIdentity("receipt-policy-state", promotedPolicy),
+      record: promotedPolicy,
+    }, NOW)).rejects.toThrow("disagrees with its retained matches");
+  });
+
   it("keeps oversize and capacity-exceeding records page-only without truncating or evicting durable proof", async () => {
     const workspace = new MemoryWorkspace();
     const store = new WorkspaceEndpointEvidencePersistence(workspace, PROFILE_ID);
@@ -201,11 +239,38 @@ describe("workspace endpoint-evidence persistence", () => {
   });
 });
 
-type MutableRecord = {
-  -readonly [K in keyof ChutesEndpointEvidenceRecord]: K extends "evidence"
-    ? { -readonly [P in keyof ChutesEndpointEvidenceRecord["evidence"]]: ChutesEndpointEvidenceRecord["evidence"][P] }
-    : ChutesEndpointEvidenceRecord[K];
-};
+type MutableRecord = DeepMutable<ChutesEndpointEvidenceRecord>;
+
+type DeepMutable<T> = T extends readonly (infer Item)[]
+  ? DeepMutable<Item>[]
+  : T extends object
+    ? { -readonly [K in keyof T]: DeepMutable<T[K]> }
+    : T;
+
+/**
+ * The all-zero report body of the test quote: every runtime measurement the
+ * validator re-derives from it is 48 zero bytes.
+ */
+const QUOTE_MEASUREMENT = "0".repeat(96);
+
+function publishedPolicyEvaluation(): NonNullable<ChutesEndpointEvidenceRecord["publishedPolicy"]> {
+  return Object.freeze({
+    sourceUrl: "https://api.example.test/servers/tee/measurements",
+    fetchedAt: FETCHED_AT,
+    cache: "network",
+    policyDigest: `sha256:${"B".repeat(43)}`,
+    policyCount: 1,
+    quoteMeasurements: {
+      mrtd: QUOTE_MEASUREMENT,
+      rtmr0: QUOTE_MEASUREMENT,
+      rtmr1: QUOTE_MEASUREMENT,
+      rtmr2: QUOTE_MEASUREMENT,
+      rtmr3: QUOTE_MEASUREMENT,
+    },
+    state: "matched",
+    matches: [{ version: "1", name: "chutes-runtime", expectedGpus: ["BLACKWELL"], gpuCount: 1 }],
+  });
+}
 
 function scope(workspace: MemoryWorkspace, workspaceId: string, profileId: string) {
   return Object.freeze({ workspace, workspaceId, profileId });
@@ -226,6 +291,7 @@ async function evidenceRecord(options: Readonly<{
   nonce?: string;
   fetchedAt?: string;
   gpuPayloads?: readonly JsonObject[];
+  publishedPolicy?: NonNullable<ChutesEndpointEvidenceRecord["publishedPolicy"]>;
 }> = {}): Promise<ChutesEndpointEvidenceRecord> {
   const nonce = options.nonce ?? "nonce-general";
   const fetchedAt = options.fetchedAt ?? FETCHED_AT;
@@ -324,6 +390,7 @@ async function evidenceRecord(options: Readonly<{
       quotedDigestHex: expectedDigestHex,
       reportDataHex,
     },
+    ...(options.publishedPolicy ? { publishedPolicy: options.publishedPolicy } : {}),
     claims,
     warnings: ["Complete raw evidence retained for independent verification."],
   } satisfies ChutesEndpointEvidenceRecord);

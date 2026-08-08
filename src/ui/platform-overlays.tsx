@@ -226,11 +226,21 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
             onCancel={() => setResetArmed(false)}
             onConfirm={() => {
               setResetArmed(false);
-              onChange(DEFAULT_PREFERENCES);
+              // The storage destination survives the reset, because the host's
+              // `onChange` is not a state write: a `vaultBackend` that differs
+              // from the current one starts a real provider transition, which
+              // detaches the adopted Vault and re-adopts the runtime into page
+              // memory. A whole-object write of the defaults therefore made
+              // "Reset preferences" disconnect the vault the sentence below
+              // promises it will not touch — and it bypassed the Durability row,
+              // which is the surface that owns the feasibility check and the
+              // disabled-while-switching state a provider change needs.
+              onChange(Object.freeze({ ...DEFAULT_PREFERENCES, vaultBackend: value.vaultBackend }));
             }}
           >
             <>
-              Display, durability, and legacy approval preferences return to their defaults.
+              Display and legacy approval preferences return to their defaults.
+              Durability stays where you set it; change it in the Storage row above.
               Your conversations, profiles, vault, and workspaces are not touched — nothing
               outside this dialog changes.
             </>

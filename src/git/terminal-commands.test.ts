@@ -260,6 +260,45 @@ describe("terminal Git command bridge", () => {
     // destination selector, so it must not be silently consumed as a flag: the
     // failure names the missing path rather than the bridge's usage line.
     await expect(run("git restore -- --worktree")).rejects.toThrow("--worktree has no change to discard.");
+
+    // The bare separator starts with `--` but is not a mode flag. Routing on it
+    // sent `git reset -- <paths…>` to the reset-mode handler, whose refusal
+    // advised running `git reset [paths…]` — the command just typed.
+    await overwrite("staged once more\n");
+    await run("git add -- --odd.txt");
+    await run("git reset -- --odd.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "unstage", request: { paths: ["--odd.txt"] } });
+  });
+
+  it("stages an ignored path through the `-f` the ignore refusal tells the user to reach for", async () => {
+    const workspace = new MemoryWorkspace();
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { ".gitignore": "build/\n" },
+    }]));
+    const operations: GitOperation[] = [];
+    const review = async (operation: GitOperation) => {
+      operations.push(operation);
+      return "allow" as const;
+    };
+    const run = (command: string) => runTerminalGitCommand({ command, cwd: "/workspace", client, review });
+    await client.writeWorkingFile({
+      repositoryId: "airship-workspace",
+      worktreeId: "main",
+      path: "build/out.js",
+      content: "generated\n",
+      expectedWorktreeVersion: (await client.status({ repositoryId: "airship-workspace", worktreeId: "main" })).version,
+    });
+
+    await expect(run("git add build/out.js")).rejects.toThrow(/excluded by this repository's \.gitignore/u);
+    // Before the bridge consumed the flag, `-f` fell through as a pathspec and
+    // the remedy the ignore refusal names answered "-f has no unstaged change."
+    await run("git add -f build/out.js");
+    expect(operations.at(-1)).toMatchObject({ kind: "stage", request: { paths: ["build/out.js"], force: true } });
+    const staged = (await client.listRepositories())[0]!.worktrees[0]!;
+    expect(staged.status).toEqual([expect.objectContaining({ path: "build/out.js", index: { kind: "added" } })]);
   });
 
   it("refuses a clone its own page policy cannot reach before asking for approval", async () => {

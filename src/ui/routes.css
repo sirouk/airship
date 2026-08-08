@@ -2780,14 +2780,30 @@
     display: none;
   }
 
+  /*
+   * Rows 3 and 4, not 2 and 3.
+   *
+   * Both numbers were written when this grid had three tracks — topbar,
+   * content, nav band — and they were right then. `dc257d5` gave the phone its
+   * status line back by inserting the `auto` track above, which renumbered
+   * every track below it and renumbered neither of these. `.main` moved into
+   * the status line's track and `.mobile-nav` into the content track, leaving
+   * the 56px band the keyboard override below still reasons about standing
+   * empty, and putting the navigation underneath whatever the route drew.
+   *
+   * What that cost was a phone that could not be navigated: the runtime status
+   * line and the route's own content sat over the band and swallowed the taps,
+   * so `More` — and every destination reached through it — could not be
+   * opened at all. Twelve browser contracts failed on it.
+   */
   .main {
-    grid-row: 2;
+    grid-row: 3;
   }
 
   .mobile-nav {
     z-index: 30;
     display: grid;
-    grid-row: 3;
+    grid-row: 4;
     /* Five destinations, equal shares. The leading `auto` track that used to
        lead this list held the live-load reading, which read `0 · Idle` on a
        phone permanently because it counts execution-pack runs; the reading now

@@ -357,6 +357,17 @@ function ProfileScopedWorkspaceView({
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState<WorkspaceContentSearch>();
   const [searching, setSearching] = useState(false);
+  /**
+   * Whether the scan for the current query came back as a rejection.
+   *
+   * A failed scan settles the rail exactly as a successful one does. Without
+   * this the only evidence a scan had finished was `search` being defined, so a
+   * rejection — an object whose key rotated, a transient IndexedDB failure —
+   * left the count line saying "reading contents…" and the tree hidden behind
+   * "Searching file contents…" for as long as the query stayed in the field.
+   * Nothing was reading.
+   */
+  const [scanFailed, setScanFailed] = useState(false);
   const query = filter.trim();
   const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
   /**
@@ -776,15 +787,22 @@ function ProfileScopedWorkspaceView({
     if (!query) {
       setSearch(undefined);
       setSearching(false);
+      setScanFailed(false);
       return;
     }
     const controller = new AbortController();
     setSearching(true);
+    setScanFailed(false);
     const timer = setTimeout(() => {
       void searchWorkspaceContent(workspace, files, query, { signal: controller.signal })
         .then((result) => { if (!controller.signal.aborted) setSearch(result); })
         .catch((cause: unknown) => {
           if (controller.signal.aborted) return;
+          // The previous query's result describes the previous query, and the
+          // count line prints it verbatim: dropped here, a failed scan cannot
+          // report an older term's file counts as though they were this one's.
+          setSearch(undefined);
+          setScanFailed(true);
           setNotice(workbenchNotice("error", cause instanceof Error ? cause.message : "Workspace content could not be searched."));
         })
         .finally(() => { if (!controller.signal.aborted) setSearching(false); });
@@ -1587,6 +1605,9 @@ function ProfileScopedWorkspaceView({
   }
 
   async function mutateSource(operation: GitOperation): Promise<void> {
+    // The backstop, not the gate a person sees: the rail's own verbs are
+    // disabled while `busy`, because a dropped request that says nothing is
+    // indistinguishable from a control that did not work.
     if (!git || !review || busy) return;
     const decision = await review(operation, describeGitOperation(operation));
     if (decision !== "allow") { setNotice(workbenchNotice("done", "Source-control operation denied; nothing changed.")); return; }
@@ -1850,8 +1871,13 @@ function ProfileScopedWorkspaceView({
    * tree is only yielded when *neither* half found anything — and "nothing yet"
    * is never allowed to read as "nothing": while the scan is still out, the
    * rail says it is reading rather than that the query matched no file.
+   *
+   * A rejection settles the rail too. Keyed on a result alone, a scan that
+   * threw left `scanning` true forever — the tree hidden behind "Searching file
+   * contents…" with nothing reading — so `scanFailed` is the second way this
+   * query can be finished with.
    */
-  const scanSettled = Boolean(query) && !searching && search !== undefined;
+  const scanSettled = Boolean(query) && !searching && (search !== undefined || scanFailed);
   const scanning = Boolean(query) && !scanSettled;
   const emptyFilterCopy = query && rows.length === 0 && scanSettled
     ? workspaceFilterEmptyCopy(filter, filtered.total, search)
@@ -1987,7 +2013,7 @@ function ProfileScopedWorkspaceView({
                 query that fills it. */}
             <p class="workspace-filter-count" role="status">
               {query
-                ? `${String(searchMatches.length)} of ${String(filtered.total)} files · ${scanning || !search ? "reading contents…" : workspaceSearchSummary(search)}`
+                ? `${String(searchMatches.length)} of ${String(filtered.total)} files · ${scanning ? "reading contents…" : search ? workspaceSearchSummary(search) : "file contents could not be read"}`
                 : ""}
             </p>
             {/* `hidden`, not unmounted: the tree owns the scroll box the
@@ -2149,6 +2175,7 @@ function ProfileScopedWorkspaceView({
             historyMessage={historyMessage}
             upstream={upstream}
             loading={scmLoading}
+            busy={busy}
             refresh={() => void refreshSourceControl(repositoryId, worktree?.id)}
             openDiff={(document, openMode) => void openDiffDocument(document, openMode)}
             mutate={mutateSource}
@@ -2818,7 +2845,7 @@ function divergenceCount(value: number, bounded: boolean): string {
   return bounded && value >= WORKBENCH_DIVERGENCE_DEPTH ? `${String(value)}+` : String(value);
 }
 
-function SourceControlRail({ repositories, repositoryId, selectRepository, worktree, selectWorktree, history, historyMessage, upstream, loading, refresh, openDiff, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: {
+function SourceControlRail({ repositories, repositoryId, selectRepository, worktree, selectWorktree, history, historyMessage, upstream, loading, busy, refresh, openDiff, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: {
   repositories: readonly GitRepositorySnapshot[];
   repositoryId: string;
   selectRepository(id: string): void;
@@ -2828,6 +2855,15 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   historyMessage: string;
   upstream?: Readonly<{ label: string; divergence: WorkbenchBranchDivergence }>;
   loading: boolean;
+  /**
+   * Whether a workbench transaction holds the workspace right now.
+   *
+   * `mutateSource` drops every request while it is true, and it says nothing
+   * when it does: without this prop the verbs stayed pressable through a save
+   * or a forty-file folder rename and staging simply did not happen. The same
+   * gate `Save` already uses, on the rail that shares its transaction.
+   */
+  busy: boolean;
   refresh(): void;
   openDiff(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, mode: WorkbenchDocumentOpenMode): void;
   mutate(operation: GitOperation): void | Promise<void>;
@@ -2907,6 +2943,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
       worktree={worktree}
       openDiff={openDiff}
       mutate={mutate}
+      busy={busy}
       bulk={staged.length > 1 ? { label: "Unstage all visible", glyph: "−", run: () => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); } } : undefined}
     /> : null}
     {unstaged.length ? <ScmGroup
@@ -2917,6 +2954,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
       worktree={worktree}
       openDiff={openDiff}
       mutate={mutate}
+      busy={busy}
       discard={setDiscarding}
       bulk={unstaged.length > 1 ? { label: "Stage all visible", glyph: "+", run: () => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); } } : undefined}
     /> : null}
@@ -2925,6 +2963,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
       titleDetail={discarding}
       confirmLabel={discardCopy.confirm}
       destructive
+      confirmDisabled={busy}
       onCancel={() => setDiscarding(undefined)}
       onConfirm={() => {
         setDiscarding(undefined);
@@ -2932,7 +2971,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
       }}
     ><p>{discardCopy.consequence}</p></ConfirmDialog> : null}
     {truncation ? <div class="workspace-boundary attention">{truncation}</div> : null}
-    {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
+    {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={busy || !commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
     {/*
       The count is the read's bound, not the repository's total: `git.log` is
       asked for exactly WORKBENCH_HISTORY_DEPTH commits, and a bare `20` in the
@@ -2962,8 +3001,8 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   </div>;
 }
 
-function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, discard, bulk }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; discard?(path: string): void; bulk?: Readonly<{ label: string; glyph: string; run: () => void }> }) {
-  return <section class="scm-group"><header><strong>{title}</strong>{bulk ? <button class="scm-group__bulk" type="button" aria-label={bulk.label} title={bulk.label} onClick={bulk.run}>{bulk.glyph}</button> : null}<span>{entries.length}</span></header>{entries.map((entry) => {
+function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, busy, discard, bulk }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; busy: boolean; discard?(path: string): void; bulk?: Readonly<{ label: string; glyph: string; run: () => void }> }) {
+  return <section class="scm-group"><header><strong>{title}</strong>{bulk ? <button class="scm-group__bulk" type="button" aria-label={bulk.label} title={bulk.label} disabled={busy} onClick={bulk.run}>{bulk.glyph}</button> : null}<span>{entries.length}</span></header>{entries.map((entry) => {
     const delta = lane === "staged" ? entry.index : entry.worktree;
     const conflicted = delta?.kind === "conflicted";
     // Split on the raw Git path: status entries are repository-relative
@@ -3032,7 +3071,7 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
           type="button"
           aria-label={`Discard changes in ${entry.path}`}
           title={conflicted ? "Merge conflict — resolve it in Advanced source controls before discarding." : `Discard changes in ${entry.path} and return it to HEAD`}
-          disabled={!repository || !worktree || conflicted}
+          disabled={busy || !repository || !worktree || conflicted}
           onClick={() => discard(entry.path)}
         >↺</button> : null}
         {/*
@@ -3043,7 +3082,7 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
         */}
         {lane === "unstaged" && isConflicted(entry)
           ? <button type="button" aria-label={`Stage ${entry.path}`} disabled title="Merge conflict — resolve it in Advanced source controls before staging.">+</button>
-          : <button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button>}
+          : <button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} disabled={busy} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button>}
       </div>
     </div>;
   })}</section>;

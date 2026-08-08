@@ -17,6 +17,8 @@ import {
 import { materializeMessages } from "../../core/agent";
 import type {
   ApprovalPolicy,
+  InferenceRequest,
+  InferenceTransport,
   JsonValue,
   SessionContextPolicy,
   SessionManifest,
@@ -24,6 +26,7 @@ import type {
   ToolContext,
   ToolExecutionResult,
 } from "../../core/contracts";
+import type { ConversationReceipt } from "../../receipts/types";
 import { createSessionContextPolicy } from "../../core/context-policy";
 import { sha256, stableStringify } from "../../core/hash";
 import { EventJournal } from "../../core/journal";
@@ -718,7 +721,170 @@ describe("PrimeAgentSession", () => {
     expect(totals.input + totals.cacheRead + totals.cacheWrite).toBeGreaterThan(0);
     expect(totals.output).toBeGreaterThan(0);
   });
+
+  it("writes the custody notice once per journal, not once per attached authority", async () => {
+    /*
+     * `runPrimeTurn` builds a fresh authority for every turn, so "written
+     * once" has to be a fact about the journal. Two authorities over one
+     * journal is that shape, minus the runtime facade.
+     */
+    const fixture = await makeFixture();
+    fixture.registration.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")]);
+    const first = makeSession(fixture);
+    await first.prompt("hello");
+    await first.dispose("first authority done");
+
+    const second = makeSession(fixture);
+    const result = await second.prompt("again");
+    await second.dispose("second authority done");
+
+    const custody = eventsOfType(result.events, PRIME_EVENT_TYPES.customNotice)
+      .filter((event) => String(payloadRecord(event).notice ?? "").includes("took custody"));
+    expect(custody).toHaveLength(1);
+  });
+
+  it("binds provider receipts and idempotency keys to the live turn, not a per-request uuid", async () => {
+    const fixture = await makeFixture();
+    const requests: InferenceRequest[] = [];
+    const transport: InferenceTransport = {
+      id: "faux",
+      posture: "local",
+      // Mirrors src/inference/chutes/transport.ts: the receipt is minted from
+      // the identity the request arrived carrying, so a request addressed to a
+      // turn that does not exist mints a receipt the audit cannot match.
+      async *stream(request) {
+        requests.push(structuredClone(request));
+        yield { type: "text-delta", text: "bound" };
+        yield {
+          type: "completed",
+          finishReason: "stop",
+          receipt: {
+            ...blankReceipt(),
+            sessionId: request.sessionId,
+            turnId: request.turnId,
+          },
+        };
+      },
+    };
+    const session = makeSession(fixture, { transport });
+    const result = await session.prompt("hi");
+    expect(result.outcome).toBe("completed");
+
+    expect(result.receipt!.turnId).toBe(result.turnId);
+    expect(result.receipt!.sessionId).toBe(fixture.sessionId);
+    // The key the provider saw is the key the journal recorded, so a retried
+    // step asks the provider to dedup against something it has actually seen.
+    const journaledKeys = eventsOfType(result.events, "inference.started")
+      .map((event) => payloadRecord(event).idempotencyKey);
+    expect(requests.map((request) => request.idempotencyKey)).toEqual(journaledKeys);
+    expect(journaledKeys[0]).toBe(`${fixture.sessionId}:${result.turnId}:0`);
+  });
+
+  it("addresses each turn to the model the session record names now, not the manifest's", async () => {
+    /*
+     * The manifest is the thread's birth certificate. A person who opens the
+     * picker mid-conversation writes `session.model-changed`, and the prime
+     * lane used to read the record only to check it existed — so the picker
+     * appeared to work, the request kept going to the old model, and the
+     * journal named a model nobody had chosen.
+     */
+    const fixture = await makeFixture();
+    const requests: InferenceRequest[] = [];
+    const transport: InferenceTransport = {
+      id: "faux",
+      posture: "local",
+      async *stream(request) {
+        requests.push(structuredClone(request));
+        yield { type: "text-delta", text: "ok" };
+        yield { type: "completed", finishReason: "stop" };
+      },
+    };
+    const session = makeSession(fixture, { transport });
+    const before = await session.prompt("before the switch");
+    expect(before.outcome).toBe("completed");
+
+    await fixture.journal.setSessionModel(fixture.sessionId, "switched-model-v2");
+    const after = await session.prompt("after the switch");
+    expect(after.outcome).toBe("completed");
+
+    expect(requests.map((request) => request.model)).toEqual([fixture.manifest.model, "switched-model-v2"]);
+    const started = eventsOfType(after.events, "inference.started").filter((event) => event.turnId === after.turnId);
+    expect(payloadRecord(started[0]!).model).toBe("switched-model-v2");
+    expect(after.receipt!.model).toBe("switched-model-v2");
+  });
+
+  it("spends the step's tool-output budget on the ratio the boundary calibrated", async () => {
+    /*
+     * The boundary gate measures this turn's context with the tokenizer ratio
+     * it calibrated from journaled provider usage; the step ledger used to
+     * measure the same turn with the fixed 3.6 guess. A fixed 3.6 is off by
+     * 25-40% between minified JSON and English prose, so the two scales hand
+     * the step visibly different budgets for byte-identical work.
+     */
+    const budgetFor = async (seedUsage: boolean): Promise<number> => {
+      const bigRead = makeStubTool("big_read", "read", async () => ({ content: "x".repeat(50_000) }));
+      const contextPolicy = createSessionContextPolicy({
+        contextWindowTokens: 4_096,
+        source: { kind: "runtime-config", label: "test-window" },
+      });
+      const fixture = await makeFixture({ tools: [bigRead], contextPolicy });
+      if (seedUsage) {
+        /*
+         * One usage sample whose input-token count is far below the request's
+         * byte size, so calibration clamps to its 6 bytes/token ceiling — a
+         * deterministic ratio well clear of the 3.6 default. These records
+         * carry no canonical message, so the two journals materialize
+         * identically and only the ratio differs.
+         */
+        await fixture.journal.append(fixture.sessionId, [
+          { type: "inference.started", turnId: "seed-turn", operationId: "seed-op", payload: { step: 0 } },
+          { type: "inference.usage", turnId: "seed-turn", operationId: "seed-op", payload: { type: "usage", inputTokens: 1 } },
+        ]);
+      }
+      fixture.registration.setResponses([
+        fauxAssistantMessage([fauxToolCall("big_read", { value: "go" }, { id: "big-1" })], { stopReason: "toolUse" }),
+        fauxAssistantMessage("done reading"),
+      ]);
+      const session = makeSession(fixture);
+      const result = await session.prompt("read everything");
+      expect(result.outcome).toBe("completed");
+      const metadata = payloadRecord(eventsOfType(result.events, "tool.resulted")[0]!).metadata as Record<string, unknown>;
+      expect(metadata.contextBudgetTruncated).toBe(true);
+      return Number(metadata.retainedContentBytes);
+    };
+
+    const calibrated = await budgetFor(true);
+    const uncalibrated = await budgetFor(false);
+    expect(calibrated).toBeGreaterThan(uncalibrated);
+  });
 });
+
+/** A receipt carrying no claims: only its identity fields matter to these tests. */
+function blankReceipt(): ConversationReceipt {
+  const claim = { status: "unavailable" as const, summary: "not applicable" };
+  return {
+    version: 1,
+    receiptId: "urn:airship:receipt:prime-session-test",
+    sessionId: "unbound",
+    turnId: "unbound",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    proofLevel: "local",
+    posture: "local",
+    provider: "unbound",
+    claims: {
+      encryption: claim,
+      freshness: claim,
+      cpuTee: claim,
+      gpuTee: claim,
+      endpointKey: claim,
+      model: claim,
+      conversation: claim,
+      payment: claim,
+    },
+    bindings: { algorithm: "SHA-256" },
+    verifications: [],
+  };
+}
 
 /**
  * The queued turn must become *active* under contended event loops on any

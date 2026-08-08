@@ -1,7 +1,16 @@
 import type { AttachmentPart, MessagePart, TextPart } from "./message-parts";
 
+/**
+ * How many attachments one turn may carry, and the only ceiling this module owns.
+ *
+ * There was a second constant here — a 20 MiB `COMPOSER_ATTACHMENT_BYTE_LIMIT`
+ * — that nothing anywhere read, and it disagreed with the size a person is
+ * actually held to: `prepareCanonicalImageInputs` refuses any image over
+ * `MAX_CANONICAL_IMAGE_BYTES` (10 MiB) in `core/multimodal.ts`. A declared
+ * ceiling that never fires and states the wrong number is worse than none, so
+ * the byte contract is read from the module that enforces it.
+ */
 export const COMPOSER_ATTACHMENT_LIMIT = 8;
-export const COMPOSER_ATTACHMENT_BYTE_LIMIT = 20 * 1024 * 1024;
 
 export type ComposerAttachment = Readonly<{
   id: string;

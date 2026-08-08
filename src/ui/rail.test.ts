@@ -15,7 +15,10 @@ describe("the conversation disclosure's default", () => {
   const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
 
   it("opens itself in the standard rail the first time the profile turns out to have conversations", () => {
-    expect(source).toContain('if (state !== "standard" || recentsChoice.current !== undefined || visibleConversations.length === 0) return;');
+    // `autoOpened` is what keeps this to once per page. It used to be
+    // `recentsChoice.current = true` doing that job, which stopped the effect by
+    // forging the person's remembered answer.
+    expect(source).toContain('if (state !== "standard" || autoOpened.current || recentsChoice.current !== undefined || visibleConversations.length === 0) return;');
     expect(source).toContain("setRecentsOpen(true);");
   });
 
@@ -132,9 +135,29 @@ describe("the rail's you-are-here state", () => {
     for (const view of ["skills", "capabilities", "sessions"] as const) {
       expect(railCurrentHint(view), view).toBe(destinationLabel(view));
     }
-    for (const view of ["chat", "workspace", "editor", "profiles", "billing"] as const) {
+    for (const view of ["chat", "workspace", "profiles", "billing"] as const) {
       expect(railCurrentHint(view), view).toBeUndefined();
     }
+  });
+
+  it("names Editor and Terminal exactly while the Workspace row is not drawing them", () => {
+    /*
+     * A nested row only exists on screen while its parent is expanded, and the
+     * rail seeds Workspace closed from anywhere else — so arriving at `#editor`
+     * by deep link or by the command palette marked nothing with `aria-current`
+     * and said nothing to a screen reader, leaving one colour step on
+     * `.nav-item.has-active-child` as the entire "you are here". The phone band
+     * has always named both routes under its Workspace control.
+     */
+    for (const view of ["editor", "terminal"] as const) {
+      expect(railCurrentHint(view), view).toBe(destinationLabel(view));
+      // Expanded, the row itself is drawn and carries `aria-current="page"`;
+      // a hint beside it would be a second answer to the same question.
+      expect(railCurrentHint(view, { workspace: true }), view).toBeUndefined();
+    }
+    // The parent standing on its own route never needs one either way.
+    expect(railCurrentHint("workspace", { workspace: false })).toBeUndefined();
+    expect(railCurrentHint("workspace", { workspace: true })).toBeUndefined();
   });
 
   it("answers #context exactly as it answers #memory, because it renders that route", () => {
@@ -156,6 +179,42 @@ describe("the rail's you-are-here state", () => {
     expect(readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8"))
       .toContain('aria-current={current ? "page" : undefined}');
     expect(source).toContain('aria-describedby={childActive && currentHint ? CURRENT_HINT_ID : undefined}');
+    // The hint is only correct if it is asked with the expansion record the
+    // rail is actually rendering from; asked without it, a drawn Editor row and
+    // the sr-only line would both claim the page.
+    expect(source).toContain("railCurrentHint(view, expanded)");
+  });
+});
+
+/*
+ * The self-opening conversation list is the rail's decision, never a signature
+ * on the person's behalf.
+ *
+ * `loadRecentsPreference` documents `undefined` as "nobody has chosen", which is
+ * a different state from having chosen "closed". The auto-open used to stamp
+ * `true` into that slot without persisting it, which both invented a choice and
+ * jammed the height gate: once the gate closed the list, the same window at the
+ * same height showed it after a reload and not after a resize down and back up.
+ */
+describe("the rail's recents disclosure", () => {
+  const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
+
+  it("lets only the persisting path write the remembered choice", () => {
+    expect(source.match(/recentsChoice\.current = /gu)?.length).toBe(1);
+    expect(source).toContain("recentsChoice.current = open;");
+    expect(source).toContain("saveRecentsPreference(open);");
+  });
+
+  it("gives the room back in both directions for as long as the rail owns the state", () => {
+    // A one-way gate is the defect: the measure must answer the height, not
+    // only ever close, and it must stay subscribed while `autoOpened` holds.
+    expect(source).toContain('if (!autoOpened.current || state !== "standard") return;');
+    expect(source).toContain("if (room > 0) setRecentsOpen(room >= RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT);");
+    expect(source).toContain("}, [navRef, recentsOpen, state]);");
+  });
+
+  it("restores what the rail was showing rather than a fabricated closed choice", () => {
+    expect(source).toContain('setRecentsOpen(state === "standard" ? recentsChoice.current ?? autoOpened.current : false);');
   });
 });
 

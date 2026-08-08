@@ -24,9 +24,13 @@ export { runDisposableWasi } from "../execution/wasi-preview1-pack";
 
 const MAX_CODE_CHARS = 64 * 1_024;
 const MAX_WASM_BASE64_CHARS = 5_600_000;
-const MAX_SHELL_SCRIPT_CHARS = 64 * 1_024;
-/** A shell script does real multi-step work, so it gets a larger ceiling than a snippet. */
-const MAX_SHELL_TIMEOUT_MS = 30_000;
+/**
+ * A shell script does real multi-step work, so it gets a larger ceiling than a
+ * snippet. Exported because the schema the model actually reads lives in
+ * `execution-tool-proxies.ts`, and the number it publishes has to be pinned to
+ * the number this module enforces rather than transcribed alongside it.
+ */
+export const MAX_SHELL_TIMEOUT_MS = 30_000;
 const DEFAULT_SHELL_TIMEOUT_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INSTALL_TIMEOUT_MS = 30_000;
@@ -41,7 +45,13 @@ const PYODIDE_VERSION = "314.0.2";
 const PYODIDE_ASSET_PATH = "/execution-packs/pyodide/";
 const MAX_WORKSPACE_PROGRAM_CALLS = 16;
 const MAX_WORKSPACE_PROGRAM_RESULT_BYTES = 512 * 1_024;
-const WORKSPACE_PROGRAM_TOOL_EFFECTS = new Map<string, Tool["definition"]["effect"]>([
+/**
+ * The exact workspace calls a manifest-bound program may declare, and the
+ * effect each one is held to. Enforced here, published as an enum by
+ * `execution-tool-proxies.ts`; exported so a test can hold those two to each
+ * other rather than let the advertised surface drift from the enforced one.
+ */
+export const WORKSPACE_PROGRAM_TOOL_EFFECTS = new Map<string, Tool["definition"]["effect"]>([
   ["list_files", "read"],
   ["read_file", "read"],
   ["stat_path", "read"],
@@ -65,297 +75,6 @@ let clientRuntime: ClientExecutionRuntime | undefined;
 let pyodideInstall: Promise<void> | undefined;
 let nodePack: Promise<typeof import("../execution/node-webcontainer-pack")> | undefined;
 let nodePackLifecycleBound = false;
-
-export function registerExecutionTools(registry: ToolRegistry, workspace?: WorkspacePort, hostRegistry?: ToolRegistry): void {
-  const executeJavascript: Tool = {
-    definition: {
-      name: "execute_javascript",
-      description: "Run bounded JavaScript in a disposable browser worker with no workspace, DOM, storage, or network binding; return or log the result.",
-      effect: "execute",
-      inputSchema: {
-        type: "object",
-        properties: {
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
-          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
-        },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
-    async execute(argumentsValue, context) {
-      const args = objectArguments(argumentsValue);
-      const code = requiredString(args.code, "code");
-      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
-      const result = await runDisposableWorker(code, timeoutMs, context.signal, context.onOutput);
-      return {
-        content: JSON.stringify(result, null, 2),
-        metadata: {
-          timeoutMs,
-          logs: result.logs.length,
-          capabilityTier: "web-baseline",
-          authority: "browser",
-          engine: "disposable-javascript-worker",
-        },
-      };
-    },
-  };
-  registry.register(executeJavascript);
-  registry.register({
-    definition: {
-      name: "execute_workspace_program",
-      description: "Run bounded JavaScript that may invoke only exact predeclared workspace file calls in its approval-bound manifest. It exposes no ambient DOM, storage, network, shell, or undeclared tool access.",
-      effect: "write",
-      inputSchema: {
-        type: "object",
-        properties: {
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
-          calls: {
-            type: "array",
-            maxItems: MAX_WORKSPACE_PROGRAM_CALLS,
-            items: {
-              type: "object",
-              properties: {
-                id: { type: "string", minLength: 1, maxLength: 64 },
-                tool: { type: "string", enum: [...WORKSPACE_PROGRAM_TOOL_EFFECTS.keys()] },
-                arguments: { type: "object" },
-              },
-              required: ["id", "tool", "arguments"],
-              additionalProperties: false,
-            },
-          },
-          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
-        },
-        required: ["code", "calls"],
-        additionalProperties: false,
-      },
-    },
-    async execute(argumentsValue, context) {
-      if (!hostRegistry) throw new Error("Workspace-program execution has no bound Airship tool registry.");
-      const args = objectArguments(argumentsValue);
-      const code = requiredString(args.code, "code");
-      const calls = workspaceProgramCalls(args.calls, hostRegistry);
-      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
-      const result = await runDisposableWorkspaceProgram(code, calls, hostRegistry, timeoutMs, context);
-      return {
-        content: JSON.stringify(result, null, 2),
-        metadata: {
-          capabilityTier: "web-baseline",
-          authority: "browser",
-          engine: "manifest-bound-workspace-worker",
-          declaredCalls: calls.length,
-          completedCalls: result.calls.filter(({ status }) => status === "completed").length,
-        },
-        isError: result.calls.some(({ status, isError }) => status === "failed" || isError),
-      };
-    },
-  });
-  registry.register({
-    definition: {
-      name: "install_execution_runtime",
-      description: "Cold-start an optional browser runtime; it reports ready only after a real probe, then it is usable immediately in this conversation.",
-      effect: "network",
-      inputSchema: {
-        type: "object",
-        properties: {
-          runtime: { type: "string", enum: ["python-pyodide", "node-webcontainer"] },
-          timeoutMs: { type: "integer", minimum: 1_000, maximum: 30_000, description: "Bounds the whole activation, cold start included." },
-        },
-        required: ["runtime"],
-        additionalProperties: false,
-      },
-    },
-    async execute(argumentsValue, context) {
-      const args = objectArguments(argumentsValue);
-      const runtime = requiredString(args.runtime, "runtime");
-      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
-      if (runtime === "node-webcontainer") {
-        const activated = await activateNodeRuntime(context.signal, timeoutMs);
-        return activationResultForCurrentPage(activated, context);
-      }
-      if (runtime !== "python-pyodide") throw new Error(`${runtime} cannot be installed by this Airship release.`);
-      await installPyodideExecutionRuntime(timeoutMs, context.signal);
-      const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime);
-      return activationResultForCurrentPage({
-        content: JSON.stringify(capability, null, 2),
-        metadata: {
-          runtime,
-          state: capability?.state ?? "unavailable",
-          version: PYODIDE_VERSION,
-          capabilityTier: deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities()),
-        },
-      }, context);
-    },
-  });
-  registry.register({
-    definition: {
-      name: "inspect_execution_runtimes",
-      description: "Report the coding runtimes this browser can execute now, activate explicitly, or cannot provide in this release.",
-      effect: "read",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    },
-    async execute() {
-      const capabilities = getClientExecutionRuntime().capabilities();
-      return {
-        content: JSON.stringify(capabilities, null, 2),
-        metadata: {
-          capabilityTier: deriveBrowserExecutionTier(capabilities),
-          ready: capabilities.filter(({ state }) => state === "ready").map(({ id }) => id),
-        },
-      };
-    },
-  });
-  registry.register({
-    definition: {
-      name: "execute_code",
-      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) supplied as a workspace wasmPath or inline wasmBase64, with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
-      effect: "execute",
-      inputSchema: {
-        type: "object",
-        properties: {
-          runtime: { type: "string", enum: ["javascript-worker", "wasi-preview1", "python-pyodide"] },
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
-          wasmBase64: { type: "string", minLength: 12, maxLength: MAX_WASM_BASE64_CHARS },
-          wasmPath: { type: "string", minLength: 1, maxLength: 1_024 },
-          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
-          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
-          sourcePath: { type: "string", minLength: 1, maxLength: 1_024 },
-          writeBack: { type: "boolean" },
-          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000, description: "Bounds the job's own statements only. A python-pyodide cold start is bounded separately (up to 30 s) and reported as bootMs, so total wall clock can exceed this." },
-        },
-        required: ["runtime"],
-        additionalProperties: false,
-      },
-    },
-    async execute(argumentsValue, context) {
-      const args = objectArguments(argumentsValue);
-      const runtime = requiredString(args.runtime, "runtime") as ExecutionRuntimeId;
-      validateExecuteCodeArguments(runtime, args);
-      const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
-      const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
-      const wasmPath = typeof args.wasmPath === "string" ? normalizeWorkspacePath(args.wasmPath) : undefined;
-      if (sourcePath && runtime !== "python-pyodide") throw new Error("sourcePath is available only for Pyodide Python source.");
-      if ((sourcePath || args.writeBack === true) && !workspaceRoot) throw new Error("sourcePath and writeBack require a workspaceRoot.");
-      if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_code has no bound Airship workspace.");
-      if (wasmPath && !workspace) throw new Error("A wasmPath command artifact has no bound Airship workspace.");
-      if (sourcePath && args.code !== undefined) throw new Error("Use either Python code or sourcePath, not both.");
-      const request: ExecutionRequest = {
-        runtime,
-        ...(typeof args.code === "string" ? { code: args.code } : {}),
-        ...(typeof args.wasmBase64 === "string" ? { wasmBase64: args.wasmBase64 } : {}),
-        ...(wasmPath ? { wasmPath } : {}),
-        args: stringArray(args.args, "args"),
-        env: stringRecord(args.env, "env"),
-        // A wasmPath artifact needs the workspace binding even when no
-        // subtree is mounted for the command to read or write.
-        ...(workspaceRoot ? { workspaceRoot, workspace } : wasmPath ? { workspace } : {}),
-        ...(sourcePath ? { sourcePath } : {}),
-        writeBack: args.writeBack === true,
-        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS,
-        signal: context.signal,
-        onOutput: context.onOutput,
-      };
-      const result = await getClientExecutionRuntime().execute(request);
-      const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === result.runtime);
-      return {
-        content: JSON.stringify(result, null, 2),
-        metadata: {
-          runtime: result.runtime,
-          exitCode: result.exitCode,
-          isolation: capability?.isolation ?? "unknown",
-          persistence: capability?.persistence ?? "unknown",
-          commandInterface: capability?.commandInterface ?? "unavailable",
-          shell: capability?.shell ?? "unavailable",
-          workspaceAccess: capability?.workspaceAccess ?? "unavailable",
-          capabilityTier: result.provenance.capabilityTier,
-          authority: result.provenance.authority,
-          engine: result.provenance.engine,
-          ...(typeof result.bootMs === "number" ? { bootMs: result.bootMs } : {}),
-          ...(result.workspace?.workspaceError ? { workspaceError: result.workspace.workspaceError } : {}),
-          ...(result.workspace?.refusedPaths?.length ? { refusedPaths: [...result.workspace.refusedPaths] } : {}),
-        },
-        // A run whose generated files could not be collected, or whose writes
-        // the egress guard refused, is not a clean success even when the
-        // command itself exited zero.
-        isError: result.exitCode !== 0
-          || Boolean(result.workspace?.workspaceError)
-          || Boolean(result.workspace?.refusedPaths?.length),
-      };
-    },
-  });
-  registry.register({
-    definition: EXECUTE_SHELL_DEFINITION,
-    execute: (argumentsValue, context) => executeShellTool(objectArguments(argumentsValue), context, workspace),
-  });
-  registry.register({
-    definition: {
-      name: "deactivate_execution_runtime",
-      description: "Terminate an optional runtime and release its in-tab processes and memory. The Workspace Terminal shares this runtime: any live terminal session is reconciled into the workspace and then stopped, and the reconciled paths are named in the result.",
-      effect: "execute",
-      inputSchema: {
-        type: "object",
-        properties: { runtime: { type: "string", enum: ["node-webcontainer"] } },
-        required: ["runtime"],
-        additionalProperties: false,
-      },
-    },
-    execute: (argumentsValue) => deactivateExecutionRuntime(
-      requiredString(objectArguments(argumentsValue).runtime, "runtime") as ExecutionRuntimeId,
-    ),
-  });
-  registry.register({
-    definition: {
-      name: "execute_node_project",
-      description: "Spawn one finite Node/npm-family process in an activated in-browser WebContainer. Commands for the same workspace root reuse page-local dependencies, so install then build/test works in this conversation; use Workspace Terminal for a long-running dev server. node_modules is never persisted. No host Bash is involved; writeBack preflights the full source snapshot, then adopts revision-checked text changes.",
-      effect: "network",
-      inputSchema: {
-        type: "object",
-        properties: {
-          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
-          command: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
-          timeoutMs: { type: "integer", minimum: 1_000, maximum: 120_000 },
-          writeBack: { type: "boolean" },
-        },
-        required: ["workspaceRoot", "command"],
-        additionalProperties: false,
-      },
-    },
-    async execute(argumentsValue, context) {
-      if (!workspace) throw new Error("Node project execution has no workspace binding.");
-      const args = objectArguments(argumentsValue);
-      const request: ExecutionRequest = {
-        runtime: "node-webcontainer",
-        workspace,
-        workspaceRoot: normalizeWorkspacePath(requiredString(args.workspaceRoot, "workspaceRoot")),
-        command: requiredString(args.command, "command"),
-        args: stringArray(args.args, "args"),
-        env: stringRecord(args.env, "env"),
-        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : 30_000,
-        writeBack: args.writeBack === true,
-        signal: context.signal,
-        onOutput: context.onOutput,
-      };
-      const result = await getClientExecutionRuntime().execute(request);
-      return {
-        content: JSON.stringify(result, null, 2),
-        metadata: {
-          runtime: result.runtime,
-          exitCode: result.exitCode,
-          provider: "StackBlitz WebContainers",
-          capabilityTier: result.provenance.capabilityTier,
-          authority: result.provenance.authority,
-          engine: result.provenance.engine,
-          commandInterface: "direct-process",
-          shell: "none",
-          workspaceAccess: "bounded-snapshot-writeback",
-        },
-        isError: result.exitCode !== 0,
-      };
-    },
-  });
-}
 
 /** Entry point used by the lightweight schemas in the baseline tool bundle. */
 export async function executeExecutionTool(
@@ -604,44 +323,6 @@ async function deactivateExecutionRuntime(runtimeId: ExecutionRuntimeId): Promis
 export function installExecutionAdapter(adapter: ExecutionAdapter): void {
   getClientExecutionRuntime().register(adapter);
 }
-
-/**
- * The one shell surface Airship can honestly offer on every browser.
- *
- * The description names the engine and its boundary in the same sentence, so a
- * model reading the manifest cannot conclude that Bash, a subprocess, or a host
- * filesystem is reachable. `effect` is `write` because an approved run with
- * `writeBack` adopts workspace files through the ordinary revision-checked
- * path; nothing here bypasses the approval gate.
- */
-export const EXECUTE_SHELL_DEFINITION: Tool["definition"] = Object.freeze({
-  name: "execute_shell",
-  description:
-    "Run one POSIX sh script in airship-sh, Airship's own in-browser shell interpreter, over a bounded snapshot of a "
-    + "workspace directory. Real shell semantics: single/double/backslash quoting, $VAR and ${VAR:-x}/${VAR:=x}/"
-    + "${VAR:?x}/${VAR:+x}/${VAR#p}/${VAR%p}/${#VAR}, $(...) and backticks, $((...)) arithmetic, tilde and IFS field "
-    + "splitting, * ? [...] globbing against the real workspace, pipelines, ! && || ;, ( ) subshells, { } groups, "
-    + "if/for/while/until/case, functions, > >> < 2> 2>&1 >& redirection, << and <<- here-documents, and utilities "
-    + "including ls cat cp mv rm mkdir rmdir touch head tail wc grep sed sort uniq cut tr find basename dirname "
-    + "realpath xargs env date seq diff stat du. It is NOT GNU Bash and has no subprocesses: no job control or `&`, "
-    + "no signals other than trap EXIT, no arrays, no process substitution, no [[ ]], no host filesystem, no network, "
-    + "and no git/python/node commands. Unsupported syntax is a parse error and an unimplemented utility flag is an "
-    + "error, never a silent no-op. Files change only when writeBack is true and the script exits 0.",
-  effect: "write",
-  inputSchema: {
-    type: "object",
-    properties: {
-      script: { type: "string", minLength: 1, maxLength: MAX_SHELL_SCRIPT_CHARS },
-      workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
-      args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-      env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
-      writeBack: { type: "boolean" },
-      timeoutMs: { type: "integer", minimum: 50, maximum: MAX_SHELL_TIMEOUT_MS },
-    },
-    required: ["script"],
-    additionalProperties: false,
-  },
-}) as unknown as Tool["definition"];
 
 async function executeShellTool(
   args: Record<string, JsonValue>,

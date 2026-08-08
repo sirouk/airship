@@ -131,6 +131,16 @@ describe("ToolRegistry authorization boundary", () => {
     await registry.review("write_record", argumentsValue, ctx, allow);
     controller.abort(new DOMException("Stopped", "AbortError"));
     await expect(registry.executeApproved("write_record", argumentsValue, ctx)).rejects.toBeTruthy();
+    // That rejection is only the aborted signal answering for itself, and it
+    // would arrive whether or not the ticket survived. The removal is the claim
+    // under test: the same approval key, presented with a live signal, must
+    // find nothing left to spend. A ticket that outlived its cancelled turn is
+    // a decision the person made about work they then stopped.
+    const revived: ToolContext = { ...ctx, signal: new AbortController().signal };
+    await expect(registry.executeApproved("write_record", argumentsValue, revived)).rejects.toThrow(
+      "Tool execution is not bound to a live approval.",
+    );
+    expect(execute).not.toHaveBeenCalled();
 
     const unsupported = new ToolRegistry();
     expect(() => unsupported.register({

@@ -197,8 +197,20 @@ describe("redactForDisplay", () => {
     };
     const display = redactForDisplay(value) as Record<string, JsonValue>;
     expect(display.authorization).toBe("[redacted]");
-    expect(String(display.text)).toHaveLength(513);
+    // An elision that says only "…" leaves its reader unable to tell 600
+    // characters from 600 kilobytes, so it states what it kept and what existed.
+    expect(String(display.text).startsWith("x".repeat(512))).toBe(true);
+    expect(display.text).toContain("[512 of 600 characters shown]");
     expect((display.nested as Record<string, JsonValue>).password).toBe("[redacted]");
     expect(display.list).toHaveLength(33);
+  });
+
+  it("takes the string budget from its caller, because the dock and the safety reviewer are not one reader", () => {
+    const value: JsonValue = { script: "s".repeat(4_000), authorization: "Bearer sensitive" };
+    const reviewed = redactForDisplay(value, 8_192) as Record<string, JsonValue>;
+    // The reviewer adjudicates the script itself; the dock's 512 would leave it
+    // approving a preamble. Every other bound is unchanged by the wider budget.
+    expect(reviewed.script).toBe("s".repeat(4_000));
+    expect(reviewed.authorization).toBe("[redacted]");
   });
 });

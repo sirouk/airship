@@ -21,6 +21,12 @@ describe("normalizeDedupText", () => {
   it("keeps CJK text comparable across scripts without mangling", () => {
     expect(normalizeDedupText("lios docu menta nos")).toBe("lios docu menta nos");
     expect(normalizeDedupText("ACME — 42")).toBe("acme 42");
+    // The class that survives normalization is `\p{L}\p{N}`, not `a-z0-9`:
+    // Han and Kana are letters and stay, while the CJK comma and full stop
+    // fold to a space like any other punctuation. Narrow that class and every
+    // non-Latin memory normalizes to the empty string, which the exact lane
+    // would then read as one enormous group of identical facts.
+    expect(normalizeDedupText("東京は晴れ、42度。")).toBe("東京は晴れ 42度");
   });
 });
 
@@ -125,7 +131,10 @@ describe("clusters and representatives", () => {
       r("The deployment key rotates every ninety days."),
     ];
     const clusters = findDuplicateClusters(records, select);
-    expect(clusters.length).toBeLessThanOrEqual(2);
+    // Exactly two clusters, each holding its own world: a bound of "at most
+    // two" is also satisfied by finding nothing at all, which is a recall
+    // collapse rather than the separation this test is named for.
+    expect(clusters.map((cluster) => cluster.members)).toEqual([[0, 1], [2, 3]]);
     // The two worlds must never fuse into one cluster of four.
     expect(clusters.some((cluster) => cluster.members.length === 4)).toBe(false);
   });

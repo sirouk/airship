@@ -107,6 +107,22 @@ describe("provider connection component contract", () => {
     expect(source).not.toContain("const CLOUD =");
   });
 
+  it("says the configured grant is not wired into this build, beside the measurement that says it could be", () => {
+    /*
+     * OpenAI's `oauth.detail` reports a measured, product-owner-approved public
+     * PKCE client whose token endpoint answers `access-control-allow-origin: *`
+     * — all true, and all about the provider rather than about Airship. Nothing
+     * in the product calls `connectOAuth`, so the card printed a paragraph
+     * explaining that sign-in completes in the page while offering no control to
+     * do it and while the Connect route said the opposite. The build fact is
+     * added; the measured sentence is not edited, because a descriptor is the
+     * one source both surfaces read.
+     */
+    expect(source).toContain('provider.oauth.state === "configured-public-pkce"');
+    expect(source).toContain("This route connects API keys only — no account sign-in is wired into this build for {provider.label}.");
+    expect(source).toContain("provider.oauth.detail");
+  });
+
   it("requires confirmation for the active route and protects an exact return pin even when inactive", () => {
     expect(source).toContain("Confirm disconnect");
     expect(source).toContain("if (activeModel && !disconnectArmed)");

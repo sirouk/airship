@@ -22,7 +22,10 @@ on:
 
 # Read-only, and no production secrets: this workflow runs on pull requests from
 # any contributor and must not be able to publish, deploy, or reach a provider
-# account. Deployment lives in `pages.yml` behind a protected environment.
+# account. Deployment lives in `pages.yml`, which is manual-dispatch only; that
+# file's header is the record of what it does and does not enforce. Stating its
+# controls a second time here is how this comment came to claim a protected
+# environment that `pages.yml` had already withdrawn.
 permissions:
   contents: read
 

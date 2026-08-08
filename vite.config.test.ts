@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   applyLocalDevelopmentPolicy,
@@ -8,11 +9,22 @@ import {
 } from "./vite.config";
 
 describe("local development CSP", () => {
-  it("adds only the reviewed loopback S3 origins and development style exception", () => {
+  it("adds only the reviewed loopback S3 origins and leaves every other directive alone", () => {
     const source = "style-src 'self'; connect-src 'self' https://api.chutes.ai;";
     const transformed = applyLocalDevelopmentPolicy(source);
     expect(transformed).toBe(
-      "style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 https://api.chutes.ai;",
+      "style-src 'self'; connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 https://api.chutes.ai;",
+    );
+  });
+
+  it("widens the policy the application actually ships, not a synthetic one", () => {
+    // The removed style-src rewrite passed for as long as it did because the
+    // case above fed it a hand-written string. Read the real document, so a
+    // reworded directive is a red test rather than a rewrite that silently
+    // matches nothing.
+    const html = readFileSync("index.html", "utf8");
+    expect(applyLocalDevelopmentPolicy(html)).toContain(
+      "connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 https://api.chutes.ai",
     );
   });
 

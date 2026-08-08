@@ -148,7 +148,26 @@ export class PrimeKernelHost {
   }
 
   async start(): Promise<void> {
-    this.bootPromise ??= this.bootWorker();
+    /*
+     * A failed boot must not be memoized. `exec`'s recovery guard below is
+     * written to re-boot after `failed`, and it works for the crash path only
+     * because `killWorker` clears `bootPromise`; nothing clears it when the
+     * boot itself rejects (a CSP that refuses the blob worker, an environment
+     * with no `URL.createObjectURL`), so every later exec in that tab awaited
+     * the same stale rejection and replayed the original error without ever
+     * trying again. `??=` completes its assignment synchronously, so clearing
+     * the field from the catch — which runs a microtask later — reopens the
+     * next attempt without racing this one.
+     */
+    this.bootPromise ??= this.bootWorker().catch((error: unknown) => {
+      this.bootPromise = undefined;
+      // The `new Worker` throw leaves state "booting"; name the failure here
+      // so the recovery guard reads the same word on both boot failures.
+      this.state = "failed";
+      this.worker?.terminate();
+      this.worker = undefined;
+      throw error;
+    });
     await this.bootPromise;
   }
 
@@ -203,9 +222,13 @@ export class PrimeKernelHost {
   }
 
   async restart(): Promise<void> {
+    // killWorker is the single increment point for `generation`, because it is
+    // also the crash and terminate path: counting again here made one restart
+    // report two namespace resets, and a counter contractually defined as
+    // "increments exactly when the namespace was reset" is worth nothing to a
+    // caller if restarts count double.
     await this.killWorker("Kernel restarted by host policy.");
     this.bootPromise = undefined;
-    this.generation++;
     await this.start();
   }
 

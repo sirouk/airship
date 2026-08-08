@@ -131,6 +131,26 @@ describe("connect lanes", () => {
     expect(connectLaneCountSeal(connected)).toBe("verified");
   });
 
+  it("never counts the Companion, which connects no model", () => {
+    // An installed extension answering its handshake put the row into
+    // `connected`, and the chip read "Airship Companion connected" under a
+    // verified seal above five provider rows every one of which said it was not
+    // connected. The one number that exists to prove the copy may not be the
+    // thing contradicting it.
+    const answered = describeConnectLanes(input({
+      bridge: extensionBridgeObservation({
+        kind: "answered",
+        version: "1.4.0",
+        providers: ["anthropic"],
+        unavailable: [],
+        elapsedMs: 9,
+      }),
+    }));
+    expect(lane(answered, "companion").status.kind).toBe("connected");
+    expect(connectLaneCountLabel(answered)).toMatch(/^No model connected · \d+ ready to connect$/u);
+    expect(connectLaneCountSeal(answered)).toBe("none");
+  });
+
   it("keeps every other lane offerable once Chutes is connected", () => {
     const lanes = describeConnectLanes(input({ chutes: { connected: true, signInAvailable: false } }));
     expect(lanes[0]?.id).toBe("chutes");

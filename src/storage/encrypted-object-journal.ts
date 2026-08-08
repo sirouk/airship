@@ -27,6 +27,14 @@ const SEGMENT_NAMESPACE = "airship/session-events/v1";
 const MAX_SESSIONS = 10_000;
 const MAX_SEGMENTS_PER_SESSION = 100_000;
 const MAX_EVENTS_PER_SEGMENT = 4_096;
+/**
+ * The width of a post-commit segment sweep, matching the batch
+ * `vault/reclamation.ts` already offers providers. A conversation may hold up
+ * to `MAX_SEGMENTS_PER_SESSION` of them while Google Drive rejects any `trash`
+ * call naming more than a thousand keys outright, so an unbatched sweep of a
+ * long conversation would leave every one of its bodies indexed and orphaned.
+ */
+const MAX_SEGMENT_TRASH_BATCH = 500;
 
 type SegmentReference = {
   cloudKey: string;
@@ -254,8 +262,20 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     }
     // The head is gone, so the segments are unreachable whatever happens next.
     // A refusal here leaks ciphertext nobody holds a reference to rather than
-    // stranding a readable conversation, which is why this does not throw.
-    if (segments.length) await this.store.trash(segments.map((segment) => segment.cloudKey), signal);
+    // stranding a readable conversation, which is why this does not throw — and
+    // a provider that throws instead of refusing (a key-count ceiling, an
+    // exhausted CAS budget, a cancelled request) must not be able to report the
+    // already-committed deletion as a failure the caller could retry either.
+    const segmentKeys = segments.map((segment) => segment.cloudKey);
+    for (let offset = 0; offset < segmentKeys.length; offset += MAX_SEGMENT_TRASH_BATCH) {
+      try {
+        await this.store.trash(segmentKeys.slice(offset, offset + MAX_SEGMENT_TRASH_BATCH), signal);
+      } catch {
+        // Whatever stopped this batch will stop the rest. What is left behind is
+        // an untracked body, which is the one leak a later sweep can recover.
+        break;
+      }
+    }
   }
 
   private async loadHead(sessionId: string, signal?: AbortSignal): Promise<{ record: ObjectRecord; head: SessionHead } | undefined> {

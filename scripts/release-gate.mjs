@@ -169,7 +169,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // twenty-nine gzip bytes under this config-free CI artifact. 185 KiB
   // leaves under 300 bytes of headroom, below the 768-byte tripwire, so
   // gzip takes one whole-KiB step to 186.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 186 * 1024 }),
+  // Re-measured at 570,886 B raw / 190,553 B gzip after the surface-repair
+  // sweep. The named cause is correctness, not capability: the baseline grew
+  // by the guards and honest sentences eighty-four repairs put on paths that
+  // were already eager — the composer's ceiling reset, the classified failure
+  // kind reaching the turn footer, the queued-message refusals, the named
+  // transition refusal, the deferred message-parts fallback, and the several
+  // approval and registry checks that now state what they refused instead of
+  // returning silently. Nothing new was made eager and nothing deferred moved
+  // in. 186 KiB gzip would have left a negative margin against this reading,
+  // so gzip takes one whole-KiB step to 187, leaving 935 bytes — above the
+  // 768-byte tripwire. Raw is unchanged and keeps 215 KiB of its clearance.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 187 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -322,7 +333,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gained its weight on the projection side that any transcript shares. Raw
   // takes 444 KiB because 443 would sit inside minifier rename; gzip is
   // unchanged inside its existing 131 KiB.
-  deferredCapabilities: Object.freeze({ raw: 444 * 1024, gzip: 131 * 1024 }),
+  //
+  // Re-measured at 454,715 B raw / 133,743 B gzip after the surface-repair
+  // sweep, 62 bytes over the raw ceiling. The growth is deferred surfaces
+  // stating refusals they used to swallow: the Explorer, the Source Control
+  // verbs and the terminal's Restart/Interrupt now report a failure instead of
+  // discarding it, the approval dialog measures the file rather than its own
+  // redacted copy, and the session library stops offering Open on a row whose
+  // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
+  // bytes; gzip stays inside 131 KiB with 401 to spare.
+  deferredCapabilities: Object.freeze({ raw: 445 * 1024, gzip: 131 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -715,7 +735,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // handful of bytes rather than hugging the line. 2,301 KiB raw and
   // 730 KiB gzip would have left 201 / 235 B, below the aggregate's 768-byte
   // floor, so raw takes 2,302 and gzip takes 731.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2302 * 1024, gzip: 731 * 1024 }),
+  // Re-measured at 2,360,630 B raw / 748,737 B gzip after the surface-repair
+  // sweep. Everything in the delta is first-party correctness: the shell,
+  // prime, execution, storage, trust and tooling repairs listed against their
+  // own ceilings above, none of which made anything eager. 2,306 KiB raw would
+  // have left 714 B, below the aggregate's 768-byte floor, so raw takes one
+  // further whole step to 2,307 (1,738 B); gzip takes its smallest clearing
+  // step to 732, which leaves 831 B and is already above the floor.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2307 * 1024, gzip: 732 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -971,7 +998,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so raw takes one further whole step to
   // 2,981 (1,598 B). Gzip takes the smallest whole-KiB step that clears
   // the reading, so 919.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2981 * 1024, gzip: 919 * 1024 }),
+  // Re-measured at 3,056,070 B raw / 941,777 B gzip after the surface-repair
+  // sweep. This backstop tracks the first-party and prime readings above and
+  // moves for the same reason they do: eighty-four repairs that make surfaces
+  // report what they actually did. 2,985 KiB raw would have left 570 B and
+  // 920 KiB gzip would have left 303 B, both inside the aggregate's 768-byte
+  // floor, so each takes one further whole step — raw to 2,986 (1,594 B) and
+  // gzip to 921 (1,327 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2986 * 1024, gzip: 921 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -994,26 +1028,28 @@ export const RELEASE_BUDGETS = Object.freeze({
   // second-level execution-engine facade. Vite splits it because both import
   // the same worker/WASI/workspace dispatcher. It is never part of first paint.
   //
-  // Re-measured at 60,087 B raw / 17,208 B gzip after the Pass 2 dedup work.
-  // The pack grew because consolidation moved bytes INTO it: the helpers that
+  // The pack grew twice before this: once when Pass 2 consolidated helpers that
   // had been declared once per tool module (`stringArgument` in seven places,
-  // `deepFreeze` in twenty, two byte formatters, the UUID source) now live in
-  // one place, and this is the chunk that both importers share. Total shipped
-  // JavaScript did not grow — the copies elsewhere went away — so the honest
-  // budget is the new shape rather than the old number.
-  //
-  // Exact conversation return adds the journal's audited-head append to this
-  // shared implementation: selection must compare-and-set the head it replayed
-  // instead of rebasing onto a concurrent turn. The current artifact measures
-  // 60,340 B raw / 17,433 B gzip; raw still clears its 60 KiB ceiling, while
-  // 17 KiB would leave 41 B, so gzip takes 18 KiB.
+  // `deepFreeze` in twenty, two byte formatters, the UUID source) into the one
+  // chunk both importers share — total shipped JavaScript did not grow, the
+  // copies elsewhere went away — and once when exact conversation return added
+  // the journal's audited-head append, so selection compare-and-sets the head it
+  // replayed instead of rebasing onto a concurrent turn. Those readings are not
+  // restated here: they describe artifacts this build no longer produces, and a
+  // superseded figure above a live ceiling is exactly what the rule below reads
+  // as a raise nobody reviewed.
   /* Current release artifact. */
-
-  // Measured 60,340 B raw / 17,433 B gzip across the host and container
-  // release artifacts; the same graph varies by a few bytes between Node
-  // runtimes.
-  // 59 KiB raw would have left 76 bytes; retain the reviewed 60 KiB raw ceiling.
-  optionalExecutionTools: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
+  //
+  // Re-measured at 58,841 B raw / 16,883 B gzip after the surface-repair sweep,
+  // and this one went *down*. `registerExecutionTools` was a second, eager copy
+  // of every execution tool's schema that nothing called — the product registers
+  // through `registerLazyExecutionTools` — and it had already drifted: the dead
+  // copy never learned `execute_shell`. Deleting it removed the duplicate
+  // schemas rather than any capability. Both ceilings take the smallest whole-
+  // KiB step that clears the new reading, so raw falls to 58 KiB (1,251 B) and
+  // gzip to 17 KiB (525 B). A ceiling left where a shrink found it is headroom
+  // nobody reviewed.
+  optionalExecutionTools: Object.freeze({ raw: 58 * 1024, gzip: 17 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
@@ -1089,7 +1125,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Measured 52.08 KiB raw / 15.33 KiB gzip; both ceilings take the smallest
   // whole-KiB step above that reading, leaving 942 bytes raw and 686 gzip.
   // Still nothing before the first sent turn.
-  optionalAgentRuntime: Object.freeze({ raw: 53 * 1024, gzip: 16 * 1024 }),
+  // Re-measured at 54,276 B raw / 16,049 B gzip after the surface-repair sweep,
+  // four bytes over the raw ceiling. The whole delta is the turn loop learning
+  // to say what it did: a tool call whose arguments fail their schema is no
+  // longer journaled as a terminal the audit rejects, a reasoning block cut off
+  // by the final delta keeps its `truncated` marker, a provider `length` finish
+  // on a tool-call step is no longer overwritten with "tool-calls" and so still
+  // reaches the severed-reply disclosure, and a registry refusal names the tool
+  // that does not exist instead of reporting "Permission denied" for it. Raw
+  // takes one whole-KiB step to 54 KiB, leaving 1,020 bytes; gzip is unchanged
+  // and keeps 335 bytes of its own. Still nothing before the first sent turn.
+  optionalAgentRuntime: Object.freeze({ raw: 54 * 1024, gzip: 16 * 1024 }),
   /*
    * The session view's runtime-status tag — the surface that answers whose
    * engine owns a conversation, and what to do about a pin the person did
@@ -1403,8 +1449,15 @@ export const RELEASE_BUDGETS = Object.freeze({
    * Entry came back to 110.54 KiB gzip — 1.46 KiB of headroom instead of 20
    * bytes. The shell warms this chunk on idle after first paint, so the first
    * Cmd+K is not slower for it. Measured 6.23 KiB raw / 2.46 KiB gzip.
+   *
+   * Re-measured at 7,219 B raw / 2,816 B gzip after the surface-repair sweep,
+   * 51 bytes over the raw ceiling. The cause is the Preferences dialog telling
+   * the truth about Durability: its reset confirmation used to promise the
+   * vault was untouched in the same breath as resetting the vault backend the
+   * row above it sets. Raw takes one whole-KiB step to 8 KiB, leaving 973
+   * bytes; gzip is unchanged.
    */
-  optionalShellOverlays: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
+  optionalShellOverlays: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
   /*
    * The command palette's conversation verbs.
    *
@@ -1566,7 +1619,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // first paint stays fenced behind 768/160 raw/gzip as it always has; both
   // ceilings take the tightest whole-KiB step above reading while keeping the
   // 768 KiB raw free floor out.
-  optionalPrimePack: Object.freeze({ raw: 98 * 1024, gzip: 30 * 1024 }),
+  // Re-measured at 101,875 B raw / 30,789 B gzip after the surface-repair
+  // sweep. The named cause is the prime lane telling the truth about itself:
+  // the engine tag no longer greets a fresh conversation as prime while the
+  // gate routes it to airship-core, the kernel bridge binds the name every
+  // prompt and tool description already spells, a turn no longer mints and
+  // abandons a session authority (which was leaking the kernel worker and
+  // resetting the namespace it calls persistent), provider receipts bind to
+  // the turn that produced them instead of a random id, and the in-turn budget
+  // ledger keeps the calibrated bytes-per-token the compression gate just
+  // computed. All of it stays behind the capability request; first paint is
+  // untouched. 100 KiB raw would have left 525 bytes, below the 768-byte
+  // tripwire, so raw takes 101 KiB and keeps 1,549; gzip takes its tightest
+  // step to 31 KiB, leaving 955.
+  optionalPrimePack: Object.freeze({ raw: 101 * 1024, gzip: 31 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { InferenceEvent, InferenceRequest, InferenceTransport, ToolContext, ToolDefinition } from "../core/contracts";
+import type { InferenceEvent, InferenceRequest, InferenceTransport, JsonValue, ToolContext, ToolDefinition } from "../core/contracts";
 import { reviewToolActionWithModel, withholdPrivatePayloads } from "./model-reviewer";
 
 const tool: ToolDefinition = { name: "network_send", description: "Send data", effect: "network", inputSchema: {} };
@@ -77,6 +77,82 @@ describe("model approval reviewer", () => {
       command: "sh",
     });
     expect((shown as Record<string, string>).content).toContain("[withheld string:");
+  });
+
+  it("adjudicates the whole action body and reports payload sizes that exist", async () => {
+    // The reviewer used to be handed the approval dock's display copy, which
+    // elides every string at 512 characters. A destructive line sitting after a
+    // benign preamble was invisible to the only gate Auto Approve has, and a
+    // withheld payload's size was measured after that same cut.
+    const script = `${"echo staging\n".repeat(60)}rm -rf /workspace/notes\n`;
+    const transport = new FixtureTransport([
+      { type: "text-delta", text: '{"verdict":"safe","reason":"bounded write"}' },
+      { type: "completed", finishReason: "stop" },
+    ]);
+    await reviewToolActionWithModel({
+      transport,
+      model: "review-model",
+      tool,
+      argumentsValue: { script, content: "x".repeat(100_000) },
+      context,
+    });
+
+    expect(script.length).toBeGreaterThan(512);
+    expect(transport.request?.messages[0]?.content).toContain("rm -rf /workspace/notes");
+    expect(transport.request?.messages[0]?.content).toContain("[withheld string: 100000 characters]");
+  });
+
+  it("tells the reviewer when a field was too large to show it in full", async () => {
+    const transport = new FixtureTransport([
+      { type: "text-delta", text: '{"verdict":"unsafe","reason":"elided body"}' },
+      { type: "completed", finishReason: "stop" },
+    ]);
+    await reviewToolActionWithModel({
+      transport,
+      model: "review-model",
+      tool,
+      argumentsValue: { script: "a".repeat(20_000) },
+      context,
+    });
+
+    // A bare ellipsis is not a statement that anything is missing. The marker
+    // is, and the system prompt names it as grounds for refusing the verdict.
+    expect(transport.request?.messages[0]?.content).toContain("[16384 of 20000 characters shown]");
+    expect(transport.request?.systemPrompt).toContain("characters shown");
+  });
+
+  it("asks a person rather than billing one for a proposal too large to review", async () => {
+    const transport = new FixtureTransport([
+      { type: "text-delta", text: '{"verdict":"safe","reason":"bounded write"}' },
+      { type: "completed", finishReason: "stop" },
+    ]);
+    const oversized = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`field${index}`, "f".repeat(16_384)]),
+    );
+    const result = await reviewToolActionWithModel({
+      transport,
+      model: "review-model",
+      tool,
+      argumentsValue: oversized,
+      context,
+    });
+
+    // The wider per-field budget is what makes this reachable, so it comes with
+    // a ceiling on the whole proposal. `indeterminate` is the existing seam:
+    // the mode policy falls through to the human broker.
+    expect(result).toMatchObject({ verdict: "indeterminate", reason: expect.stringContaining("too large") });
+    expect(transport.request).toBeUndefined();
+    expect(result.inputTokens).toBeUndefined();
+  });
+
+  it("bounds its own walk, because the arguments it now walks are the raw ones", async () => {
+    // The display pass used to flatten everything past depth 7 before the
+    // withholding pass ran. Withholding goes first now, and tool arguments are
+    // parsed JSON, which nests deeper than the stack survives.
+    let deep: JsonValue = "leaf";
+    for (let index = 0; index < 20_000; index += 1) deep = { nested: deep };
+
+    expect(() => withholdPrivatePayloads(deep)).not.toThrow();
   });
 
   it("rejects recursive tool calls and malformed or incomplete output", async () => {

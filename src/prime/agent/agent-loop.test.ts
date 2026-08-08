@@ -2190,3 +2190,146 @@ describe("agentLoopContinue with AgentMessage", () => {
     expect(messages[0].role).toBe("assistant");
   });
 });
+
+describe("mixed-declaration batched tool lane", () => {
+  /**
+   * The batched lane reviews and executes one batch at a time, the way
+   * `core/agent.ts`'s cursor loop does. Reviewing the whole step up front
+   * looked equivalent — same order, same results — right up to an abort: the
+   * calls in the unexecuted tail had already been admitted, so the session
+   * layer had journaled `tool.approved` for effects that would now never
+   * report a result, a shape the airship engine cannot produce. It also asked
+   * the person to approve a write before the reads it was meant to follow had
+   * run.
+   */
+  function batchedFixture(controller: AbortController) {
+    const admitted: string[] = [];
+    const executed: string[] = [];
+    const makeTool = (
+      name: string,
+      executionMode: "parallel" | "sequential",
+      onExecute?: () => void,
+    ): AgentTool<Record<string, never>, Record<string, never>> => ({
+      name,
+      label: name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      executionMode,
+      execute: async () => {
+        executed.push(name);
+        onExecute?.();
+        return { content: [{ type: "text", text: `done:${name}` }], details: {} };
+      },
+    });
+    const context: AgentContext = {
+      systemPrompt: "You are helpful.",
+      messages: [],
+      tools: [
+        makeTool("read_a", "parallel", () => controller.abort()),
+        makeTool("read_b", "parallel"),
+        makeTool("write_c", "sequential"),
+        makeTool("read_d", "parallel"),
+      ],
+    };
+    const config: AgentLoopConfig = {
+      model: createModel(),
+      convertToLlm: identityConverter,
+      toolExecution: "parallel",
+      beforeToolCall: async ({ toolCall }) => {
+        admitted.push(toolCall.name);
+        return undefined;
+      },
+    };
+    const assistantMessage = createAssistantMessage(
+      [
+        { type: "toolCall", id: "call_a", name: "read_a", arguments: {} },
+        { type: "toolCall", id: "call_b", name: "read_b", arguments: {} },
+        { type: "toolCall", id: "call_c", name: "write_c", arguments: {} },
+        { type: "toolCall", id: "call_d", name: "read_d", arguments: {} },
+      ],
+      "toolUse",
+    );
+    // The tool batch once, then a terminal answer: a streamFn that keeps
+    // asking for tools never lets the loop end.
+    let step = 0;
+    const streamFn = () => {
+      const stream = new MockAssistantStream();
+      const message = step++ === 0
+        ? assistantMessage
+        : createAssistantMessage([{ type: "text", text: "done" }]);
+      queueMicrotask(() => {
+        stream.push({ type: "done", reason: step === 1 ? "toolUse" : "stop", message });
+      });
+      return stream;
+    };
+    return { admitted, executed, context, config, streamFn };
+  }
+
+  it("admits only the batches it runs, so an abort cannot strand an approved call", async () => {
+    const controller = new AbortController();
+    const fix = batchedFixture(controller);
+    const events: AgentEvent[] = [];
+
+    await runAgentLoop(
+      [createUserMessage("Hello")],
+      fix.context,
+      fix.config,
+      (event) => { events.push(event); },
+      controller.signal,
+      fix.streamFn,
+    );
+
+    // Batch 1 is the contiguous read run (a, b); the abort fires inside it, so
+    // the write barrier and the read after it are never admitted at all.
+    expect(fix.admitted).toEqual(["read_a", "read_b"]);
+    // read_a's own execute aborts, so read_b's prepared run answers on the
+    // aborted signal instead of reaching the tool. Both still report.
+    expect(fix.executed).toEqual(["read_a"]);
+    const started = events.flatMap((event) => (event.type === "tool_execution_start" ? [event.toolCallId] : []));
+    expect(started).toEqual(["call_a", "call_b"]);
+    const results = events.flatMap((event) =>
+      event.type === "message_end" && event.message.role === "toolResult" ? [event.message.toolCallId] : [],
+    );
+    // Every admitted call reported a result: the invariant the up-front review
+    // broke.
+    expect(results).toEqual(["call_a", "call_b"]);
+    expect(results).toEqual(started);
+  });
+
+  it("asks about a write only after the reads it follows have run", async () => {
+    const fix = batchedFixture(new AbortController());
+    const order: string[] = [];
+    const config: AgentLoopConfig = {
+      ...fix.config,
+      beforeToolCall: async ({ toolCall }) => {
+        order.push(`review:${toolCall.name}`);
+        return undefined;
+      },
+    };
+    const context: AgentContext = {
+      ...fix.context,
+      tools: fix.context.tools!.map((tool) => ({
+        ...tool,
+        execute: async () => {
+          order.push(`run:${tool.name}`);
+          return { content: [{ type: "text", text: "ok" }], details: {} };
+        },
+      })),
+    };
+
+    await runAgentLoop(
+      [createUserMessage("Hello")],
+      context,
+      config,
+      () => undefined,
+      undefined,
+      fix.streamFn,
+    );
+
+    expect(order).toEqual([
+      "review:read_a", "review:read_b", "run:read_a", "run:read_b",
+      "review:write_c", "run:write_c",
+      "review:read_d", "run:read_d",
+    ]);
+  });
+});

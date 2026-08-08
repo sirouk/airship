@@ -265,11 +265,23 @@ export const BUILTINS: ReadonlyMap<string, CommandHandler> = new Map<string, Com
         write(context, parsed.flags.has("V") ? `${name} is a shell ${kind.replace("-", " ")}\n` : `${name}\n`);
         return 0;
       }
-      return context.shell.invoke(parsed.operands, {
-        stdin: context.stdin,
-        stdout: context.stdout,
-        stderr: context.stderr,
-      });
+      // The entire point of `command` is to reach the builtin or utility even
+      // when a shell function shadows its name. `invoke` resolves a name the
+      // way a bare command does — functions first — so without suppression the
+      // canonical wrapper `ls() { command ls -a "$@"; }` re-enters itself until
+      // the nesting budget kills the whole run. The binding is withdrawn for
+      // exactly this one invocation and restored afterwards, throw or not.
+      const shadowed = context.shell.functions.get(name);
+      if (shadowed) context.shell.functions.delete(name);
+      try {
+        return await context.shell.invoke(parsed.operands, {
+          stdin: context.stdin,
+          stdout: context.stdout,
+          stderr: context.stderr,
+        });
+      } finally {
+        if (shadowed) context.shell.functions.set(name, shadowed);
+      }
     },
   ],
   [

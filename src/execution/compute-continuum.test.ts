@@ -61,6 +61,20 @@ describe("compute continuum placement", () => {
     })).toMatchObject({ placement: "unavailable", code: "remote-not-ready" });
   });
 
+  /*
+   * `airship-sh` is a `ContinuumRuntimeId`, so the type system promises this
+   * call is legal. The validator's own list omitted it, which made the one tier
+   * that is ready in every browser the one tier placement refused to plan.
+   */
+  it("plans the browser-native shell the runtime union admits", () => {
+    expect(planContinuumPlacement({
+      ...placementRequest(),
+      runtime: "airship-sh",
+      mode: "browser-only",
+      local: { state: "ready", detail: "airship-sh needs no pack." },
+    })).toMatchObject({ placement: "browser" });
+  });
+
   it("never falls back from remote-confidential to a ready local runtime", () => {
     expect(planContinuumPlacement({
       ...placementRequest(),

@@ -188,6 +188,35 @@ function terminalViewCode(): string {
     .replace(/(^|\s)\/\/[^\n]*/gu, "$1");
 }
 
+/*
+ * Every verb on this route ends in the footer, including the ones that fail.
+ *
+ * The footer is the only place this surface speaks, and the manager's refusals
+ * are written as sentences to a person — "The previous browser shell is still
+ * stopping", "This terminal has a writer heartbeat from another page or device",
+ * "Terminal metadata supports at most 24 retained sessions across profiles". A
+ * verb that drops one of those leaves the reader with a control that appears to
+ * do nothing, and the remedy sitting in a console they will never open.
+ */
+describe("the terminal's process verbs report their own refusals", () => {
+  it("gives Restart and Interrupt the rejection arm the auto-start beside them has", () => {
+    const source = terminalViewCode();
+    expect(source).toMatch(/manager\.restart\(session\.id, dimensions\(\)\)\s*\.catch\(\(error\) => onNotice\(/u);
+    expect(source).toContain('"Terminal could not restart."');
+    expect(source).toContain("manager.interrupt(session.id).catch((error) => onNotice(");
+    expect(source).toContain('"Interrupt was not delivered."');
+  });
+
+  it("narrates the cross-profile session cap the New buttons cannot see", () => {
+    // `disabled={sessions.length >= 8}` is fed by a profile-scoped list, so the
+    // 24-session cap across profiles is reachable with the control enabled — and
+    // the empty state's button carries no `disabled` at all.
+    const source = terminalViewCode();
+    expect(source).toMatch(/const createTab = \(\) => \{\s*try \{/u);
+    expect(source).toContain('setNotice(error instanceof Error ? error.message : "A terminal tab could not be created.");');
+  });
+});
+
 describe("terminal panel bar at phone width", () => {
   it("sheds the labels without shedding the glyph that stands in for them", () => {
     // `button span` also hid the `＋` of "New here", whose mark happens to live

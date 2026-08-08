@@ -317,6 +317,37 @@ describe("ChutesAttestationEvidenceClient", () => {
     expect(record.warnings.join(" ")).toContain("complete GPU verdict");
   });
 
+  it("does not blame the NVIDIA verifier for a batch whose binding never reached it", async () => {
+    const quote = await buildQuote(NONCE, E2E_PUBLIC_KEY);
+    const verify = vi.fn(async () => ({
+      status: "verified" as const,
+      summary: "NVIDIA signed EAT, nonce, RIM, revocation, and confidential mode passed.",
+      allDevicesVerified: true as const,
+      confidentialComputeVerified: true as const,
+      bindingVerified: true as const,
+      policyDigest: "sha256:nvidia-policy",
+    }));
+    const client = authenticatedClient({
+      fetch: vi.fn(async () => jsonResponse({
+        ...evidenceBody(quote),
+        gpu_evidence: [boundGpuEvidence("aa".repeat(32))],
+      })) as typeof fetch,
+      verifierPorts: {
+        nvidia: { id: "nvidia-signed-eat", version: "1", verify },
+      },
+    });
+
+    const record = await client.get({
+      instanceId: INSTANCE_ID,
+      e2ePublicKey: E2E_PUBLIC_KEY,
+      includePublishedPolicy: false,
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(record.claims.gpuTee.state).toBe("failed");
+    expect(record.warnings.join(" ")).not.toContain("did not return a usable result");
+  });
+
   it("rejects a quote that does not match any current published runtime policy", async () => {
     const quote = await buildQuote(NONCE, E2E_PUBLIC_KEY, MEASUREMENTS);
     const different = { ...MEASUREMENTS, rtmr3: "66".repeat(48) };

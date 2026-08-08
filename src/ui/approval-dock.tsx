@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   approvalOutcomeReason,
   type ApprovalBroker,
@@ -96,10 +96,20 @@ export function approvalSettlementAnnouncement(settlement: ApprovalSettlement, f
   return `${reason} ${tool} may now run.${summary}`;
 }
 
-/** The deadline, spoken once on open, in the words the expiry outcome uses. */
-export function approvalDeadlineSentence(request: PendingApproval): string {
-  const budget = spokenDuration(Date.parse(request.expiresAt) - Date.parse(request.requestedAt));
-  return `You have ${budget} to decide. If the clock runs out, nothing runs and no decision is recorded.`;
+/**
+ * The deadline, spoken once on open, in the words the expiry outcome uses.
+ *
+ * Measured from the deadline rather than from the budget. Defer-and-resume is
+ * this component's own designed flow — Escape files no decision and leaves the
+ * request on its original clock — so a sentence computed as
+ * `expiresAt - requestedAt` announced the full five minutes to a listener
+ * re-entering the dialog with sixty seconds left, while the countdown beside it
+ * read 01:00. The clamp keeps an already-elapsed request from reading as a
+ * window that is still open.
+ */
+export function approvalDeadlineSentence(request: PendingApproval, now = Date.now()): string {
+  const left = spokenDuration(Math.max(0, Date.parse(request.expiresAt) - now));
+  return `You have ${left} left to decide. If the clock runs out, nothing runs and no decision is recorded.`;
 }
 
 export function approvalDeadlineWarning(request: PendingApproval): string {
@@ -219,6 +229,17 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
     setWarning(approvalDeadlineWarning(live));
   }, [live?.id, clock]);
 
+  /**
+   * When this dialog came up, which is when its description is read.
+   *
+   * Not `clock`: the deadline is announced twice — in the description on open
+   * and assertively as it runs out — and never as per-second churn inside a
+   * span the dialog's `aria-describedby` points at. A resume is a new open (the
+   * request leaves `pending` and comes back), so the sentence is recomputed
+   * exactly when a listener is about to hear it again.
+   */
+  const openedAt = useMemo(() => Date.now(), [current?.id]);
+
   const facts = current ? factsFor(current) : undefined;
   // A write with no mapped consequence still renders the grid: an unrecognised
   // write must be visible as unrecognised, never as a missing section. Every
@@ -325,7 +346,7 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
                 reader needs; this is the same claim, in the form a listener
                 needs. */}
             {showFacts && facts ? <span id="approval-consequence" class="sr-only">{approvalConsequenceSummary(facts)}</span> : null}
-            <span id="approval-deadline" class="sr-only">{approvalDeadlineSentence(current)}</span>
+            <span id="approval-deadline" class="sr-only">{approvalDeadlineSentence(current, openedAt)}</span>
 
             <details class="approval-arguments">
               <summary>Arguments shown to the approval policy</summary>
@@ -358,7 +379,10 @@ function factsFor(request: PendingApproval): WriteApprovalFacts {
 /** How much of the viewport's bottom edge one blocker occupies, 0 when absent. */
 function spokenDuration(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1_000));
-  if (seconds < 90) return `${seconds} seconds`;
+  // The floor of one second is now reachable: the deadline sentence measures
+  // what is left rather than the fixed budget, so the last second of a request
+  // is spoken — and "1 seconds" is not a thing a screen reader should say.
+  if (seconds < 90) return `${seconds} second${seconds === 1 ? "" : "s"}`;
   const minutes = Math.round(seconds / 60);
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }

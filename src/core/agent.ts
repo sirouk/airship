@@ -467,7 +467,14 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         },
         (reasoningDelta) => {
           if (reasoningText.length < MAX_TURN_REASONING_CHARS) {
-            reasoningText = (reasoningText + reasoningDelta).slice(0, MAX_TURN_REASONING_CHARS);
+            // The delta that crosses the cap is the one that loses text, so it
+            // is the one that has to set the flag. Reading the flag off a
+            // *later* delta made the common shape — one long chain whose final
+            // delta overflows, then `completed` — record 200,000 characters and
+            // claim they were all of them.
+            const next = reasoningText + reasoningDelta;
+            if (next.length > MAX_TURN_REASONING_CHARS) reasoningTruncated = true;
+            reasoningText = next.slice(0, MAX_TURN_REASONING_CHARS);
           } else {
             reasoningTruncated = true;
           }
@@ -532,16 +539,56 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
                 notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
               },
             };
+            /*
+             * A name no tool answers to is refused here rather than by
+             * `review`, which collapses it into the same bare "deny" as a
+             * policy refusal and so had the model told "Permission denied" for
+             * a tool that does not exist — whereupon it reasonably asks the
+             * person to grant access to it, or repeats the call until the
+             * repeat guardrail kills the turn. The sentence is the one the
+             * registry already owns for this fact (`executeApproved`), and the
+             * approval is null because no policy was ever consulted.
+             */
+            if (!options.tools.get(call.name)) {
+              await append([
+                {
+                  type: "tool.denied",
+                  turnId,
+                  operationId: call.id,
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `Unknown tool: ${call.name}.${await noteFailedOutcome(call)}`,
+                    approval: null,
+                  },
+                },
+              ]);
+              continue;
+            }
             let decision: "allow" | "deny";
             try {
               decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
             } catch (error) {
+              /*
+               * Review throws before it has produced a decision — most often on
+               * `validate`, when the model's arguments miss the tool's schema.
+               * The refusal is journaled as the decision it is, not as a
+               * `tool.failed`: a terminal with no preceding decision is exactly
+               * what the audit rejects (TOOL_TERMINAL_INVALID), and one typo in
+               * one argument object used to mark the whole conversation invalid
+               * for the rest of its life.
+               */
               await append([
                 {
-                  type: "tool.failed",
+                  type: "tool.denied",
                   turnId,
                   operationId: call.id,
-                  payload: { callId: call.id, name: call.name, content: `${errorMessage(error)}${await noteFailedOutcome(call)}` },
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `${errorMessage(error)}${await noteFailedOutcome(call)}`,
+                    approval: null,
+                  },
                 },
               ]);
               continue;

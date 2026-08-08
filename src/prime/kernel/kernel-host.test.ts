@@ -3,6 +3,7 @@
  * lock the host-side state machine (queue serialization, bridge routing,
  * cancel, crash treatment, restart) independently of any real Worker.
  */
+import { createContext, runInContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_KERNEL_BUDGETS } from "./kernel-contract";
 import type {
@@ -137,7 +138,7 @@ describe("PrimeKernelHost (scripted worker)", () => {
     const boot = host.start();
     worker.emit({ type: "ready", engine: "javascript" });
     await boot;
-    const job = host.exec({ code: "await __pat.call('read_file', {})" });
+    const job = host.exec({ code: "await pat.call('read_file', {})" });
     await new Promise((r) => setTimeout(r, 0));
     worker.emit({ type: "bridge-request", jobId: "kernel-job-4", call: { jobId: "kernel-job-4", seq: 0, tool: "read_file", arguments: {} } });
     await new Promise((r) => setTimeout(r, 5));
@@ -184,5 +185,131 @@ describe("PrimeKernelHost (scripted worker)", () => {
     for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts", "Worker", "SharedWorker"]) {
       expect(source).toContain(`"${name}"`);
     }
+  });
+
+  it("restart() counts one namespace reset, not two", async () => {
+    const worker = makeScriptedWorker();
+    const { host } = makeHost(worker);
+    const boot = host.start();
+    worker.emit({ type: "ready", engine: "javascript" });
+    await boot;
+    expect(host.description().generation).toBe(0);
+
+    const restarted = host.restart();
+    // restart() boots a fresh worker through the same scripted double; the
+    // ready handshake has to be answered again before it settles.
+    await new Promise((r) => setTimeout(r, 0));
+    worker.emit({ type: "ready", engine: "javascript" });
+    await restarted;
+    expect(host.description().generation).toBe(1);
+  });
+
+  it("a rejected boot is not memoized: the next exec boots a new worker", async () => {
+    let boots = 0;
+    const built: ScriptedWorker[] = [];
+    const host = new PrimeKernelHost({
+      ports: {
+        bridge: { call: async () => ({ seq: 0, ok: true, content: "{}" }) },
+        workerFactory: () => {
+          boots += 1;
+          const worker = makeScriptedWorker();
+          built.push(worker);
+          // The listeners are attached synchronously right after the factory
+          // returns, so the handshake answer is queued rather than emitted.
+          const attempt = boots;
+          queueMicrotask(() => {
+            if (attempt === 1) worker.fail("blocked by content security policy");
+            else worker.emit({ type: "ready", engine: "javascript" });
+          });
+          return worker;
+        },
+      },
+    });
+
+    await expect(host.exec({ code: "true" })).rejects.toThrow("failed to boot");
+    expect(boots).toBe(1);
+    expect(built[0]!.terminated).toBe(true);
+
+    const result = await host.exec({ code: "true" });
+    expect(boots).toBe(2);
+    expect(result.outcome).toBe("completed");
+  });
+});
+
+/**
+ * The real worker source, executed. The scripted double above locks the host
+ * state machine but can never catch a contract break inside the generated
+ * text, and the identifier the toolkit is bound to is exactly such a contract:
+ * the system prompt and the execute_code description both promise the model
+ * `pat.call`, and the pyodide engine delivers it, so the javascript engine has
+ * to as well. A fresh `node:vm` realm stands in for the worker global — the
+ * source hard-removes ambient globals with `configurable: false`, which would
+ * poison the shared test process if it ran against the real one.
+ */
+describe("kernelWorkerSource (real source in a fresh realm)", () => {
+  type SandboxWorker = {
+    posted: Record<string, unknown>[];
+    send(message: unknown): void;
+  };
+
+  function bootWorkerSource(): SandboxWorker {
+    const posted: Record<string, unknown>[] = [];
+    const sandbox: Record<string, unknown> = {
+      postMessage: (message: Record<string, unknown>) => { posted.push(message); },
+      TextEncoder,
+      AbortController,
+      setTimeout,
+      clearTimeout,
+    };
+    const context = createContext(sandbox);
+    runInContext(kernelWorkerSource(DEFAULT_KERNEL_BUDGETS), context);
+    return {
+      posted,
+      send: (message: unknown) => {
+        (sandbox.onmessage as (event: { data: unknown }) => void)({ data: message });
+      },
+    };
+  }
+
+  async function waitFor<T>(read: () => T | undefined): Promise<T> {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const value = read();
+      if (value !== undefined) return value;
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    throw new Error("the worker never posted the expected message");
+  }
+
+  it("binds the tool bridge to `pat`, so the documented call reaches the host", async () => {
+    const worker = bootWorkerSource();
+    expect(worker.posted[0]).toMatchObject({ type: "ready", engine: "javascript" });
+
+    worker.send({
+      type: "exec",
+      job: {
+        jobId: "job-1",
+        code: "const reply = await pat.call('read_file', { path: '/workspace/x.md' });\nreturn reply.content;",
+      },
+    });
+
+    const request = await waitFor(() => worker.posted.find((m) => m.type === "bridge-request")) as {
+      call: { seq: number; tool: string; arguments: Record<string, unknown> };
+    };
+    expect(request.call.tool).toBe("read_file");
+    expect(request.call.arguments).toEqual({ path: "/workspace/x.md" });
+
+    worker.send({
+      type: "bridge-response",
+      jobId: "job-1",
+      call: { seq: request.call.seq, ok: true, content: "file body" },
+    });
+
+    const finished = await waitFor(() => worker.posted.find((m) => m.type === "finished")) as {
+      result: { outcome: string; valueJson?: string; error?: string; bridgeCalls: number };
+    };
+    expect(finished.result.error).toBeUndefined();
+    expect(finished.result.outcome).toBe("completed");
+    expect(finished.result.valueJson).toBe(JSON.stringify("file body"));
+    expect(finished.result.bridgeCalls).toBe(1);
   });
 });

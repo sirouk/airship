@@ -26,7 +26,7 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 function transactionDone(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const done = new Promise<void>((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), {
       once: true,
@@ -35,6 +35,17 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
       once: true,
     });
   });
+  /*
+   * Every deliberate `transaction.abort()` below returns or throws without
+   * touching this promise, and the abort event then fires a task later, on a
+   * promise nobody is holding — so the browser reports an ordinary CAS conflict
+   * or a delete of an absent session as `Uncaught (in promise) AbortError`.
+   * Claiming the rejection here rather than at each call site also covers the
+   * read paths, and costs the commit path nothing: awaiting an already-rejected
+   * promise still throws at the `await done` that cares.
+   */
+  void done.catch(() => undefined);
+  return done;
 }
 
 export class IndexedDbJournalBackend implements JournalBackend {

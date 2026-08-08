@@ -19,6 +19,7 @@ export const MIN_RECLAMATION_SAFETY_AGE_MS = 60 * 60 * 1000;
 export const MAX_RECLAMATION_SAFETY_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 const MAX_TRASH_BATCH = 500;
+/** A bounded walk, never an exhaustive one: a run that stops here says so through `truncated`. */
 const MAX_UNTRACKED_PAGES = 200;
 const MAX_UNTRACKED_TRASH_PER_RUN = 2_000;
 const MAX_RECEIPT_KEYS = 1_000;
@@ -226,19 +227,28 @@ async function sweepQueue(
 
   const reclaimed: string[] = [];
   const retained: string[] = [];
+  const notIndexed: string[] = [];
   for (let offset = 0; offset < candidates.length; offset += MAX_TRASH_BATCH) {
     const batch = candidates.slice(offset, offset + MAX_TRASH_BATCH);
     const receipt = await args.store.trash(batch, args.signal);
     reclaimed.push(...receipt.reclaimed);
     retained.push(...receipt.retained);
+    for (const outcome of receipt.outcomes) {
+      if (!outcome.reclaimed && outcome.reason === "not-indexed") notIndexed.push(outcome.key);
+    }
     args.signal?.throwIfAborted();
   }
 
   // Confirmed removals and self-correcting reconciles leave the queue together;
-  // anything else stays for the next run. The receipt below is truth regardless
-  // of this commit: it reports what the provider did, and says when the queue
-  // could not be told about it.
-  const settled = [...reclaimed, ...reconciled];
+  // anything else stays for the next run. So does a key the authority index no
+  // longer names, even though this run counts it as retained: key-addressed
+  // reclamation reaches a body only through that entry, so once it is gone every
+  // later run gets the same `not-indexed` answer forever and the queue offers a
+  // key it can never make progress on. The orphaned body is the untracked
+  // sweep's job. The receipt below is truth regardless of this commit: it
+  // reports what the provider did, and says when the queue could not be told
+  // about it.
+  const settled = [...reclaimed, ...reconciled, ...notIndexed];
   const confirmationCommitted: VaultReclamationQueueReport["confirmationCommitted"] = settled.length
     ? (await args.queue.confirmReclaimed(settled)) ? "committed" : "uncommitted"
     : "not-needed";
@@ -274,6 +284,7 @@ async function sweepUntracked(
   let retained = 0;
   let agedCandidates = 0;
   let truncated = false;
+  let enumerationCapped = false;
   let pageToken: string | undefined;
   const agedIds: string[] = [];
 
@@ -291,6 +302,10 @@ async function sweepUntracked(
       }
       if (!page.nextPageToken) break;
       pageToken = page.nextPageToken;
+      // The last page this run is allowed still handed back a cursor, so the
+      // provider has more to show than was examined. Dropping the token here
+      // silently is what made a partial enumeration report itself completed.
+      if (pages === MAX_UNTRACKED_PAGES - 1) enumerationCapped = true;
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -302,7 +317,7 @@ async function sweepUntracked(
   }
 
   const budget = Math.min(agedIds.length, MAX_UNTRACKED_TRASH_PER_RUN);
-  truncated = agedIds.length > budget;
+  truncated = enumerationCapped || agedIds.length > budget;
   for (let offset = 0; offset < budget; offset += 100) {
     const batch = agedIds.slice(offset, Math.min(offset + 100, budget));
     const receipt = await authority.trashUntrackedProviderObjects(batch, args.signal);
@@ -315,7 +330,13 @@ async function sweepUntracked(
   return Object.freeze({
     status: truncated ? "truncated" as const : "completed" as const,
     examined, agedCandidates, requested, reclaimed, retained,
-    ...(truncated ? { note: "More aged untracked bodies remain than this run's removal budget; a later sweep continues where this one stopped." } : {}),
+    ...(truncated
+      ? {
+          note: enumerationCapped
+            ? "Provider-side enumeration stopped at this run's page ceiling, so more untracked bodies exist than were examined; a later sweep continues where this one stopped."
+            : "More aged untracked bodies remain than this run's removal budget; a later sweep continues where this one stopped.",
+        }
+      : {}),
   });
 }
 

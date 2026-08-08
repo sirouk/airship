@@ -22,11 +22,13 @@
  *   - `--fix` is idempotent by construction and the CI mode proves it by diff.
  *
  * Modes:
- *   (default)  verify; non-zero exit on any failure
+ *   (default)  verify: regenerate into memory; non-zero exit on any difference
  *   --fix      regenerate the derived documents in place
- *   --check    regenerate into memory and fail if it differs from disk
+ *   --check    an accepted alias for the default, so a CI step reads as an
+ *              explicit check. It is the same path, not a second mode.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const SOURCE = "docs/audit/JOURNEY_FINDINGS.json";
 const ATLAS_MD = "docs/audit/JOURNEY_ATLAS.md";
@@ -34,7 +36,6 @@ const ROUTING_MD = "docs/audit/JOURNEY_ROUTING.md";
 
 const NARRATIVE_END = "\n## Complete findings index\n";
 const ATLAS_HEADER_END = "\n## Personas\n";
-const ROUTING_PREAMBLE_END = "\n## L";
 
 const TABLE_HEADER = "| id | severity | link | gap | evidence |";
 const TABLE_RULE = "|---|---|---|---|---|";
@@ -313,7 +314,10 @@ export function renderRouting(source) {
 export function regenerate(source, atlasOnDisk) {
   const headerEnd = atlasOnDisk.indexOf(ATLAS_HEADER_END);
   const indexStart = atlasOnDisk.indexOf(NARRATIVE_END);
-  if (headerEnd === -1) throw new Error(`${ATLAS_MD} has no "## Chain-link weakness" section to anchor the generated header.`);
+  // Quote the constant actually searched for. Naming a different heading sends
+  // the reader hunting for one the generator always emits, while the anchor
+  // that is genuinely missing is never mentioned.
+  if (headerEnd === -1) throw new Error(`${ATLAS_MD} has no "${ATLAS_HEADER_END.trim()}" section to anchor the generated header.`);
   let narrative = atlasOnDisk.slice(headerEnd, indexStart === -1 ? atlasOnDisk.length : indexStart);
 
   const byWhat = new Map(source.findings.map((finding) => [finding.what, finding.id]));
@@ -386,4 +390,24 @@ function main() {
   console.log(`Journey Atlas: ${source.findings.length} findings, ${source.personas.length} personas, ${lanes} lanes; every finding routed to exactly one lane, documents regenerate clean.`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+/*
+ * Resolved through `realpath` before comparing, the form `browser-cardinality.mjs`
+ * arrived at the hard way: a plain `file://${process.argv[1]}` check is false
+ * whenever the invoking path crosses a symlink — `/tmp` is a link to
+ * `/private/tmp` on macOS — and false again for any path needing
+ * percent-encoding, because `import.meta.url` escapes spaces and this
+ * concatenation does not. Either way the gate prints nothing and exits 0, which
+ * `npm run check` reads as the Atlas being verified. Kept conditional because
+ * `journey-atlas-gate.test.mjs` imports this module.
+ */
+const invokedDirectly = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) main();

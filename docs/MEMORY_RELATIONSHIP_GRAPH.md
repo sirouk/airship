@@ -4,7 +4,11 @@ Status: executable browser-only module, 2026-07-18.
 
 ## Renderer decision
 
-Airship uses stable Sigma.js v3.0.3 with Graphology v0.26.0 for the optional visual surface.
+Airship renders the optional visual surface with a hand-written 2D canvas component, `src/memory-graph/canvas-renderer.tsx`, and adopts no third-party graph model or rendering runtime. The derivation core already owns the graph model, so the only thing a library would have supplied is drawing, and a bounded device-local view of at most 5,000 nodes does not need a WebGL engine to draw it. The pinned runtime dependency set stays as small as it is.
+
+### Superseded evaluation history
+
+The library survey below is why no library was adopted. It is kept as the record of the decision, not as a description of what ships: neither Sigma nor Graphology is a dependency of this repository, and nothing under `src/` imports either name.
 
 - Sigma's official v3 documentation describes the intended split directly: Graphology owns the graph data model and algorithms, while Sigma owns WebGL rendering and interaction. It targets graphs with thousands of nodes and edges and is MIT licensed: <https://www.sigmajs.org/>.
 - Graphology provides a typed, in-memory property graph with explicit directed/multi-graph options and portable serialization: <https://graphology.github.io/instantiation.html> and <https://graphology.github.io/serialization.html>.
@@ -44,7 +48,7 @@ Defaults are intentionally finite:
 
 Every omitted category is reported in `graph.stats.truncated`. Positions and revisions are deterministic, so an unchanged input does not cause layout churn. The derivation/search/selection core has no third-party runtime dependency.
 
-Graphology and Sigma are loaded together through dynamic imports only after the renderer enters a 240-pixel viewport margin. No force simulation runs. On devices without a usable WebGL context, the component shows an honest unsupported state while the search and selection API remains functional.
+The canvas surface is dynamically imported only after the renderer enters a 240-pixel viewport margin. No force simulation runs. On devices where a 2D canvas context cannot be created, the component shows an honest unsupported state while the search and selection API remains functional. The probe is exactly that context creation (`supportsMemoryGraphCanvas`, src/memory-graph/renderer.tsx); `supportsMemoryGraphWebGL` survives beside it only as an alias for callers of the former WebGL renderer, and no WebGL context is ever requested.
 
 ## Public API
 

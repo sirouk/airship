@@ -50,6 +50,7 @@ import type {
   CanonicalMessage,
   InferenceTransport,
   JsonValue,
+  SessionContextPolicy,
   SessionManifest,
   TaskPlanEntry,
   Tool,
@@ -75,6 +76,7 @@ import { contextCompressionOptionsFromPolicy } from "../../core/context-policy";
 import { sha256, stableStringify, toolArgumentsDigest } from "../../core/hash";
 import { randomUuid } from "../../core/id";
 import { withInferenceRetry } from "../../core/inference-retry";
+import { effectiveSessionContextPolicy, effectiveSessionModel } from "../../core/journal";
 import type { DurableEvent, EventDraft, EventJournal } from "../../core/journal";
 import { admitPrimeForkContext, type PrimeForkAdmission } from "./fork-admission";
 import {
@@ -92,12 +94,6 @@ import type { KernelBudgets, KernelJobEvent, KernelJobResult } from "../kernel/k
 import type { KernelBridgePort, KernelWorkerLike } from "../kernel/kernel-host";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { KernelToolBridge } from "../kernel/tool-bridge";
-import {
-  PRIME_DEFAULT_SESSION_TITLE,
-  primeConversationNamingDrafts,
-  primeConversationTitleFromModel,
-  primeConversationTitleFromPrompt,
-} from "./naming";
 import { noticeDraft, PRIME_EVENT_TYPES } from "./prime-events";
 
 /** Mirrors core/agent.ts MAX_TOOL_CALLS_PER_STEP; one capped batch per assistant step. */
@@ -191,14 +187,43 @@ type ExecutionCapture =
 type ActiveTurn = {
   turnId: string;
   controller: AbortController;
+  /*
+   * The model and window this turn actually writes to, read off the durable
+   * session record at turn open. The manifest is the thread's birth
+   * certificate; a person who switched models mid-conversation wrote a
+   * `session.model-changed` record, and every model-pinning form this turn
+   * produces — the request digest, `inference.started`, usage, the
+   * summarizer, the receipt — has to name the model the request was actually
+   * addressed to. Compression lives or dies by its window, and "the person
+   * switched models" is exactly when the window moves.
+   */
+  effectiveModel: string;
+  effectiveContextPolicy?: SessionContextPolicy;
   /** Next provider-request index inside this turn; journaled as inference.started.step. */
   step: number;
   stepEventCount: number;
   requestId?: string;
   requestDigest?: string;
+  /**
+   * The key journaled with the step's `inference.started`, stashed because
+   * `prepareStepRequest` advances `turn.step` before the provider request
+   * runs — recomputing it at stream time would be off by one from the record
+   * the audit reads.
+   */
+  idempotencyKey?: string;
   /** Canonical messages the current step was digested over; built by convertToLlm. */
   canonical: CanonicalMessage[];
   turnBaselineTokens?: number;
+  /**
+   * The tokenizer ratio the boundary gate calibrated from this session's
+   * journaled provider usage, carried for the step loop's ledger. Absent
+   * where the journal reported no usage to calibrate against, which is the
+   * only case that legitimately falls back to DEFAULT_BYTES_PER_TOKEN — a
+   * fixed 3.6 is off by 25-40% between minified JSON and English prose, and
+   * measuring the boundary with one ratio and the steps with another is the
+   * two-ceilings condition core/agent.ts threads this value to avoid.
+   */
+  bytesPerToken?: number;
   remainingToolOutputBytes?: number;
   repeatCounts: Map<string, number>;
   guardrailStop?: string;
@@ -218,6 +243,13 @@ export class PrimeAgentSession {
   private readonly options: PrimeSessionOptions;
   private readonly maxStepsLimit: number;
   private readonly agentLoop: Agent;
+  /*
+   * One mutable Model object shared by the loop and the transport adapter,
+   * both of which capture it once at construction and read its fields per
+   * call. A mid-session model switch is applied here, so the request the
+   * provider receives names the same model the journal's digest does.
+   */
+  private readonly liveModel: Model<Api>;
   private readonly kernelHostValue: PrimeKernelHost;
   private readonly idleKernelBridge: KernelToolBridge;
   private activeKernelBridge?: KernelToolBridge;
@@ -230,16 +262,6 @@ export class PrimeAgentSession {
 
   private turn?: ActiveTurn;
   private lastPromptSystemPrompt?: string;
-  /*
-   * One-shot post-turn naming state: the latch makes "issue at most one paid
-   * naming request per attached session authority" a synchronous fact, the
-   * job keeps `waitForIdle` honest about work the turn result deliberately
-   * did not wait on, and the controller lets dispose drop a best-effort
-   * request instead of waiting out a provider round trip.
-   */
-  private namingIssued = false;
-  private namingJob?: Promise<void>;
-  private readonly namingController = new AbortController();
   private readonly steerQueue: QueuedTurnEntry[] = [];
   private readonly followUpQueue: QueuedTurnEntry[] = [];
   private promptQueue: QueuedTurnEntry[] = [];
@@ -276,8 +298,9 @@ export class PrimeAgentSession {
         `Session provider is pinned to ${options.manifest.providerId}; fork the session to use ${options.transport.id}.`,
       );
     }
+    this.liveModel = { ...options.model };
     this.agentLoop = new Agent({
-      initialState: { model: options.model, systemPrompt: "" },
+      initialState: { model: this.liveModel, systemPrompt: "" },
       sessionId: options.sessionId,
       getApiKey: options.getApiKey,
       /*
@@ -286,9 +309,12 @@ export class PrimeAgentSession {
        * barrier (`readEffectBatch`). The loop's batched lane now mirrors
        * that discipline from the per-tool executionMode this session
        * declares off the registry effect vocabulary, so parallel mode is
-       * the correct twin: reviews still run in strict call order during
-       * phase 1, only settlement overlaps, and journal order stays call
-       * order exactly as serialized execution produced.
+       * the correct twin: reviews run in strict call order, one batch at a
+       * time immediately before that batch executes — so an approval is
+       * never asked for work the batches ahead of it have not done, and an
+       * abort can never leave a `tool.approved` with no result — only
+       * settlement overlaps, and journal order stays call order exactly as
+       * serialized execution produced.
        */
       toolExecution: "parallel",
     });
@@ -538,9 +564,15 @@ export class PrimeAgentSession {
 
     const controller = new AbortController();
     const turnId = randomUuid();
+    // The record, not the manifest: `setSessionModel` writes the choice as a
+    // durable `session.model-changed` record and projects it onto the record's
+    // overrides, which is the only place a mid-session switch exists.
+    const effectiveContextPolicy = effectiveSessionContextPolicy(session);
     const turn: ActiveTurn = {
       turnId,
       controller,
+      effectiveModel: effectiveSessionModel(session),
+      ...(effectiveContextPolicy !== undefined ? { effectiveContextPolicy } : {}),
       step: 0,
       stepEventCount: 0,
       canonical: [],
@@ -562,6 +594,18 @@ export class PrimeAgentSession {
       const systemPrompt = await this.resolveSystemPrompt();
       this.agentLoop.state.systemPrompt = systemPrompt;
       this.agentLoop.state.tools = this.mapRegistryTools();
+      /*
+       * Per-turn, beside the other per-turn loop state: a runtime authority
+       * outlives many turns, so the model the request is addressed to has to
+       * be refreshed the same way the prompt and the tool list are. Mutating
+       * the shared object rather than replacing it is what reaches the
+       * transport adapter, which captured this model at construction.
+       */
+      this.liveModel.id = turn.effectiveModel;
+      this.liveModel.name = turn.effectiveModel;
+      if (turn.effectiveContextPolicy) {
+        this.liveModel.contextWindow = turn.effectiveContextPolicy.contextWindowTokens;
+      }
 
       /*
        * The boundary block mirrors core/agent.ts runTurn in order: the live
@@ -628,10 +672,18 @@ export class PrimeAgentSession {
      * sessions by the presence of prime.* records, so custody has to be
      * written once, beside the transcript — a plain prime turn otherwise
      * produces only airship vocabulary and looks airship-core forever.
+     *
+     * Once means once in the journal, not once per authority: `runPrimeTurn`
+     * builds a fresh session per turn, so a per-instance latch let a
+     * twenty-turn conversation accumulate twenty byte-identical custody
+     * records. Any single prime.* record pins the kind, so the record the
+     * journal already carries is the one this exists to write.
      */
-    await this.appendSideband([
-      noticeDraft(`The prime runtime took custody of session ${this.options.sessionId}.`),
-    ]);
+    if (!this.eventsCache.some((event) => event.type.startsWith("prime."))) {
+      await this.appendSideband([
+        noticeDraft(`The prime runtime took custody of session ${this.options.sessionId}.`),
+      ]);
+    }
   }
 
   /** Incremental refresh after the last sequence this session has seen. */
@@ -667,13 +719,13 @@ export class PrimeAgentSession {
     );
     turn.canonical = canonical;
 
-    if (manifest.contextPolicy) {
-      const windowTokens = contextCompressionOptionsFromPolicy(manifest.contextPolicy).contextWindowTokens;
+    if (turn.effectiveContextPolicy) {
+      const windowTokens = contextCompressionOptionsFromPolicy(turn.effectiveContextPolicy).contextWindowTokens;
       const projectedTokens = estimateInferenceTokens({
         systemPrompt: manifest.systemPrompt,
         messages: canonical,
         tools: manifest.tools,
-        bytesPerToken: DEFAULT_BYTES_PER_TOKEN,
+        ...(turn.bytesPerToken !== undefined ? { bytesPerToken: turn.bytesPerToken } : {}),
       });
       if (turn.step === 0) turn.turnBaselineTokens = projectedTokens;
       const ceilingTokens = Math.max(
@@ -690,7 +742,8 @@ export class PrimeAgentSession {
         );
       }
       turn.remainingToolOutputBytes = Math.max(0, Math.floor(
-        (ceilingTokens - RESERVED_RESPONSE_TOKENS - projectedTokens) * DEFAULT_BYTES_PER_TOKEN,
+        (ceilingTokens - RESERVED_RESPONSE_TOKENS - projectedTokens) *
+        (turn.bytesPerToken ?? DEFAULT_BYTES_PER_TOKEN),
       ));
     } else {
       turn.remainingToolOutputBytes = undefined;
@@ -705,13 +758,26 @@ export class PrimeAgentSession {
    */
   private createInstrumentedStreamFn(): StreamFn {
     let adapted: PrimeModelStreamFunction | undefined;
+    const session = this;
     if (this.options.transport) {
-      adapted = createTransportForPrimeModel(this.options.model, this.options.transport, {
+      /*
+       * The adapter is built once and used for every turn, so the request
+       * identity it stamps has to be read live, not captured. Handing it
+       * nothing let it fall back to a fresh uuid per call: the provider then
+       * minted receipts against a turn that does not exist, and auditSession
+       * reported RECEIPT_IDENTITY_MISMATCH for every genuine transport-backed
+       * prime turn — while a retried step sent a brand-new idempotency key,
+       * so provider-side dedup could not suppress the second charge. The
+       * accessors are read inside the adapter's per-call closure, and its
+       * `??` fallbacks still keep it total between turns.
+       */
+      adapted = createTransportForPrimeModel(this.liveModel, this.options.transport, {
         onReceipt: this.options.onReceipt,
+        get turnId() { return session.turn?.turnId; },
+        get idempotencyKey() { return session.turn?.idempotencyKey; },
       });
     }
     const underlying: StreamFn = this.options.streamFn ?? adapted ?? registryStreamSimple;
-    const session = this;
     const instrumented: StreamFn = Object.assign(
       async (model: Model<Api>, context: Parameters<StreamFn>[1], options?: Parameters<StreamFn>[2]) => {
         await session.prepareStepRequest();
@@ -742,7 +808,7 @@ export class PrimeAgentSession {
     const idempotencyKey = `${this.options.sessionId}:${turn.turnId}:${turn.step}`;
     const requestDigest = await sha256(
       stableStringify({
-        model: manifest.model,
+        model: turn.effectiveModel,
         systemPromptDigest: manifest.systemPromptDigest,
         messages: turn.canonical,
         tools: manifest.tools,
@@ -757,7 +823,7 @@ export class PrimeAgentSession {
         payload: {
           step: turn.step,
           providerId: manifest.providerId,
-          model: manifest.model,
+          model: turn.effectiveModel,
           posture: this.inferencePosture(),
           requestDigest,
           idempotencyKey,
@@ -766,6 +832,7 @@ export class PrimeAgentSession {
     ]);
     turn.requestId = requestId;
     turn.requestDigest = requestDigest;
+    turn.idempotencyKey = idempotencyKey;
     turn.stepEventCount = 0;
     turn.step += 1;
     this.notifySignal({ type: "status", turnId: turn.turnId, status: "thinking" });
@@ -878,8 +945,8 @@ export class PrimeAgentSession {
     contextSelection: CanonicalContextSelection | undefined,
   ): Promise<void> {
     const manifest = this.options.manifest;
-    const pinnedContextCompression = manifest.contextPolicy
-      ? contextCompressionOptionsFromPolicy(manifest.contextPolicy)
+    const pinnedContextCompression = turn.effectiveContextPolicy
+      ? contextCompressionOptionsFromPolicy(turn.effectiveContextPolicy)
       : undefined;
     if (!pinnedContextCompression) return;
     // Admission ran at this turn's open; its options are the single source.
@@ -889,7 +956,11 @@ export class PrimeAgentSession {
       tools: manifest.tools,
       materialize: (events) => materializeMessages([...events], materialization),
     });
-    const summarizerPolicy = manifest.contextPolicy!.compression.summarizer;
+    // The ratio the boundary just measured is the ratio the step loop's ledger
+    // has to spend against; leaving it a local here is how the gate and
+    // convertToLlm ended up measuring one turn's context on two scales.
+    turn.bytesPerToken = bytesPerToken;
+    const summarizerPolicy = turn.effectiveContextPolicy!.compression.summarizer;
     const contextSummary = await planContextCompression({
       events: existingEvents,
       messages: materializeMessages([...existingEvents], { injectLatestContext: false, ...materialization }),
@@ -904,7 +975,7 @@ export class PrimeAgentSession {
       ...(summarizerPolicy.mode === "inference-transport" ? {
         summarizer: createInferenceTransportContextSummarizer({
           transport: this.compressionTransport(),
-          model: manifest.model,
+          model: turn.effectiveModel,
           sessionId: this.options.sessionId,
         }),
         summarizerFailure: summarizerPolicy.onFailure === "extractive-fallback"
@@ -1222,7 +1293,7 @@ export class PrimeAgentSession {
         payload: {
           type: "usage",
           providerId: this.options.manifest.providerId,
-          model: this.options.manifest.model,
+          model: turn.effectiveModel,
           inputTokens: usage.input,
           outputTokens: usage.output,
           input: usage.input,
@@ -1376,7 +1447,7 @@ export class PrimeAgentSession {
         sessionId: this.options.sessionId,
         turnId: turn.turnId,
         provider: manifest.providerId,
-        model: manifest.model,
+        model: turn.effectiveModel,
         requestDigest,
         responseDigest,
       });

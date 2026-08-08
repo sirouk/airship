@@ -640,3 +640,26 @@ button.primary:disabled {
     min-height: var(--touch-target);
   }
 }
+
+/*
+ * The same floor for the rows a density preference sizes, on the pointer axis
+ * rather than the width axis.
+ *
+ * Compact's floor already existed, but only inside the phone query — where
+ * `.sidebar` is `display: none` and there is no rail to floor. A coarse-pointer
+ * tablet is deliberately given the full 232px rail down to 861px
+ * (`rail-state.ts`), so on an iPad at Compact every rail destination rendered a
+ * 36px row while the Expand-recents chevron beside it — floored by
+ * `shell.css`'s own `pointer: coarse` block — rendered 44px. Nothing a finger
+ * has to hit may be smaller than 44px on either axis, and the rail is the
+ * primary navigation.
+ *
+ * Added rather than moved: the width-scoped copy also floors a narrow *desktop*
+ * window, where a resized mouse-driven viewport keeps `(pointer: coarse)` false.
+ * `.nav-item--nested` is untouched — `shell.css` pins it to its own
+ * `--rail-item-height`, and whether the hierarchy signal outranks the floor is
+ * a separate decision.
+ */
+@media (pointer: coarse) {
+  :root[data-density="compact"] { --density-control: var(--touch-target); --density-row: var(--touch-target); }
+}

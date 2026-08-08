@@ -328,7 +328,12 @@ describe("release gate", () => {
       // queue and bounded sweep) re-measured the pack and the budget comment
       // pays for 131 KiB with the 130-Would-have-left-143-B sentence, so the
       // unpaid step is the one past that.
-      ["deferredCapabilities", "gzip: 131 * 1024", "gzip: 132 * 1024"],
+      // AMENDED again: the surface-repair sweep re-measured the pack at
+      // 133,743 B gzip. The ceiling did not move — 131 KiB still clears it —
+      // but the reading it is measured against did, so the second step this
+      // comment already pays for now lands on 132 and the step granted without
+      // a sentence behind it is 133.
+      ["deferredCapabilities", "gzip: 131 * 1024", "gzip: 133 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
@@ -364,7 +369,11 @@ describe("release gate", () => {
     // held to the ceiling beside it.
     const overlays = entries.find((entry) => entry.name === "optionalShellOverlays");
     expect(overlays.prose).toContain("110.54 KiB gzip");
-    expect(overlays.figures.map((figure) => figure.text)).toEqual(["6.23 KiB", "2.46 KiB"]);
+    // The entry-chunk figure this comment quotes to explain *why* the overlays
+    // were moved out stays excluded; both of this budget's own readings — the
+    // original and the surface-repair re-measurement — are counted.
+    expect(overlays.figures.map((figure) => figure.text))
+      .toEqual(["6.23 KiB", "2.46 KiB", "7,219 B", "2,816 B"]);
   });
 
   /*
@@ -444,7 +453,10 @@ describe("release gate", () => {
     expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| Service worker |", "| Initial JavaScript and module preloads | 640 KiB | 132 KiB |\n| Service worker |")))
       .toThrow(/the table row "Initial JavaScript and module preloads" names no ceiling this file exports/u);
     // Dropping a figure from a multi-class row hides whichever class it omitted.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 60 KiB |", "| 32 / 56 / 10 KiB |")))
+    // AMENDED: the execution-tools ceiling fell to 58 KiB when the dead eager
+    // registrar came out, so the row this assertion mutilates is spelled with
+    // the number it now carries.
+    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 58 KiB |", "| 32 / 56 / 10 KiB |")))
       .toThrow(/"Optional execution broker \/ engine \/ support \/ tools" raw: the table states 3 figure\(s\) for 4 ceiling\(s\)/u);
   });
 

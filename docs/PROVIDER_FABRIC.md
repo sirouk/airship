@@ -165,7 +165,11 @@ same-origin script can ask Airship to use it.
 events into Airship's `InferenceEvent` stream:
 
 - visible text deltas;
-- reasoning progress without exposing private reasoning text;
+- reasoning progress, and alongside it whatever reasoning text the provider
+  chose to stream, carried as `reasoning-delta`; `runTurn` accumulates those
+  deltas into one durable `turn.reasoning` record per request, bounded and
+  flagged when truncated, so the transcript keeps what the person was shown
+  rather than only the fact that reasoning happened;
 - bounded function-call argument assembly;
 - usage;
 - one terminal completion.

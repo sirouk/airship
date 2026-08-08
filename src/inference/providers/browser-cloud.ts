@@ -1376,7 +1376,7 @@ async function readJson(response: Response, maxBytes: number, provider: string):
       `${provider} returned a non-JSON catalog response.`,
     );
   }
-  const text = await readBoundedText(response, maxBytes);
+  const text = await readBoundedText(response, maxBytes, provider);
   try {
     return JSON.parse(text);
   } catch (error) {
@@ -1494,7 +1494,11 @@ class ProviderSseParser {
   }
 }
 
-async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+  provider = "provider",
+): Promise<string> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     void response.body?.cancel();
@@ -1513,8 +1517,12 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
         ({ done, value } = await reader.read());
       } catch (error) {
         // A bridged body fails through the stream. Keep the bridge's own cause
-        // rather than letting it surface as an unclassified read error.
-        if (error instanceof ExtensionBridgeError) throw normalizeBridgeFailure(error, "The provider");
+        // rather than letting it surface as an unclassified read error, and
+        // name the provider the way every other call site does: the sentences
+        // in `normalizeBridgeFailure` supply their own article, so a display
+        // name is the whole argument and "The provider" reads back as "the The
+        // provider request" in the one branch whose job is naming the provider.
+        if (error instanceof ExtensionBridgeError) throw normalizeBridgeFailure(error, provider);
         throw error;
       }
       if (done) break;

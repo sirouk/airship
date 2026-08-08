@@ -16,9 +16,15 @@ test("manual duplicate review merges two near-identical records", async ({ page 
   await records.waitFor();
   if (!(await records.evaluate((el: HTMLDetailsElement) => el.open))) await records.locator("summary").click();
 
+  // Asserted, not probed: `count()` does not auto-wait, so a dock that has not
+  // rendered yet reads zero and a tolerant helper walks past it. The failure
+  // that hides behind that tolerance is the one worth catching — a memory write
+  // that stops asking — so the dock has to be here, under the name it derives
+  // from the live `update_memory` definition.
   const allowOnce = async () => {
-    const allow = page.getByRole("button", { name: "Allow once" });
-    if (await allow.count() && await allow.first().isVisible()) await allow.first().click();
+    const dock = page.getByRole("dialog", { name: /Allow update_memory once/u });
+    await expect(dock).toBeVisible({ timeout: 20000 });
+    await dock.getByRole("button", { name: "Allow once" }).click();
   };
 
   const remember = async (content: string) => {

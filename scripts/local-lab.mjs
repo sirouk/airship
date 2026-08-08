@@ -185,11 +185,29 @@ async function status() {
   if (!snapshot.ui.ready || !snapshot.s3.ready || !snapshot.s3Cors.ready) process.exitCode = 1;
 }
 
+/**
+ * Stage 5 runs the Chutes API's own pytest suite from a sibling checkout, and
+ * nothing in this repository clones or fetches it. Checked with the other
+ * preconditions rather than where it is used: the four stages ahead of it are
+ * `npm run check`, two cargo suites and a live MinIO conformance run, so a
+ * missing checkout must be named before that wait rather than as a raw spawn
+ * error after it.
+ */
+export async function requireChutesApiCheckout(apiRoot) {
+  try {
+    await access(apiRoot);
+  } catch {
+    throw new Error(`Stage 5 runs the Chutes API contract tests from a \`chutes-api\` checkout beside this repository; none is present at ${apiRoot}.`);
+  }
+}
+
 async function test() {
   const snapshot = await inspectLab();
   if (!snapshot.ui.ready || !snapshot.ui.localS3Csp || !snapshot.s3.ready || !snapshot.s3Cors.ready) {
     throw new Error("Start a healthy lab with `npm run lab:start` before running the full lab suite.");
   }
+  const apiRoot = resolve(root, "..", "chutes-api");
+  await requireChutesApiCheckout(apiRoot);
 
   console.log("\n[1/5] Airship TypeScript, security, unit, build, and release gates");
   await run("npm", ["run", "check"], { cwd: root });
@@ -204,7 +222,6 @@ async function test() {
   await run("npm", ["run", "test:vault:live"], { cwd: root, env: labEnvironment() });
 
   console.log("\n[5/5] Chutes evidence authorization and ingress contracts");
-  const apiRoot = resolve(root, "..", "chutes-api");
   await mkdir(resolve(stateDirectory, "uv-cache"), { recursive: true, mode: 0o700 });
   await run(
     "uv",

@@ -98,6 +98,15 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
         additionalProperties: false,
       },
     },
+    /**
+     * The one shell surface Airship can honestly offer on every browser.
+     *
+     * The description names the engine and its boundary in the same sentence,
+     * so a model reading the manifest cannot conclude that Bash, a subprocess,
+     * or a host filesystem is reachable. `effect` is `write` because an
+     * approved run with `writeBack` adopts workspace files through the ordinary
+     * revision-checked path; nothing here bypasses the approval gate.
+     */
     {
       name: "execute_shell",
       description:
@@ -170,9 +179,4 @@ function proxy(definition: Tool["definition"], workspace: WorkspacePort | undefi
 function loadExecutionPack(): Promise<ExecutionPack> {
   executionPack ??= import("../execution/execution-runtime-pack");
   return executionPack;
-}
-
-/** Loads no optional language/provider pack; it only probes the baseline broker. */
-export async function inspectBrowserExecutionTier() {
-  return (await loadExecutionPack()).getCurrentBrowserExecutionTier();
 }

@@ -86,6 +86,8 @@ type PendingEntry = {
 };
 
 const SECRET_KEY = /(?:authorization|cookie|credential|password|passwd|secret|token|api[_-]?key|private[_-]?key|signature)/iu;
+/** How much of one string the approval dock puts in front of a person before it elides. */
+const MAX_DISPLAY_STRING_CHARS = 512;
 const DEFAULT_DECISION_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_MAX_PENDING = 16;
 /** Bounded like every other page-memory ledger here; the oldest settled outcome is dropped first. */
@@ -295,23 +297,40 @@ export function riskForEffect(effect: ToolDefinition["effect"]): ApprovalRisk {
   return effect;
 }
 
-export function redactForDisplay(value: JsonValue): JsonValue {
-  return redactValue(value, 0, "");
+/**
+ * The bounded copy of an argument value, for whoever has to read it.
+ *
+ * The string budget is a parameter because the two readers are not the same
+ * reader. The dock renders for a person who can go and open the file the
+ * argument names; the safety reviewer in Auto Approve is adjudicating the value
+ * itself, and 512 characters of a 64 KB script is not the script. Everything
+ * else — secret keys, depth, array and field caps — is identical for both,
+ * because those bounds exist for reasons the audience does not change.
+ */
+export function redactForDisplay(value: JsonValue, maxStringChars = MAX_DISPLAY_STRING_CHARS): JsonValue {
+  return redactValue(value, 0, "", maxStringChars);
 }
 
-function redactValue(value: JsonValue, depth: number, key: string): JsonValue {
+function redactValue(value: JsonValue, depth: number, key: string, maxStringChars: number): JsonValue {
   if (key && SECRET_KEY.test(key)) return "[redacted]";
   if (depth >= 7) return "[depth limit]";
-  if (typeof value === "string") return value.length <= 512 ? value : `${value.slice(0, 512)}…`;
+  // An elision states its own size. A bare ellipsis told neither the person at
+  // the dock nor the safety reviewer how much of the value was withheld from
+  // them, so both could read a preamble as if it were the whole argument.
+  if (typeof value === "string") {
+    return value.length <= maxStringChars
+      ? value
+      : `${value.slice(0, maxStringChars)}…[${maxStringChars} of ${value.length} characters shown]`;
+  }
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) {
-    const result = value.slice(0, 32).map((item) => redactValue(item, depth + 1, ""));
+    const result = value.slice(0, 32).map((item) => redactValue(item, depth + 1, "", maxStringChars));
     if (value.length > 32) result.push(`[${value.length - 32} more items]`);
     return result;
   }
   const result: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
   const entries = Object.entries(value).slice(0, 64);
-  for (const [childKey, child] of entries) result[childKey] = redactValue(child, depth + 1, childKey);
+  for (const [childKey, child] of entries) result[childKey] = redactValue(child, depth + 1, childKey, maxStringChars);
   if (Object.keys(value).length > entries.length) result["…"] = `[${Object.keys(value).length - entries.length} more fields]`;
   return result;
 }

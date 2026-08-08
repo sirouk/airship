@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   LOCAL_LAB,
@@ -7,6 +8,7 @@ import {
   inspectAirshipHtml,
   labCorsAllows,
   labEnvironment,
+  requireChutesApiCheckout,
   requiresOwnedViteRestartForOAuth,
 } from "./local-lab.mjs";
 
@@ -68,6 +70,15 @@ describe("local full-system lab contract", () => {
   it("confines the published lab endpoint and console to IPv4 loopback", () => {
     expect(new URL(LOCAL_LAB.s3Endpoint).hostname).toBe("127.0.0.1");
     expect(new URL(LOCAL_LAB.s3Console).hostname).toBe("127.0.0.1");
+  });
+
+  it("names the missing sibling checkout stage 5 needs, by path", async () => {
+    // Stage 5 used to reach `uv run pytest` in `../chutes-api` only after the
+    // four expensive stages had run, and reported the absent checkout as a
+    // spawn error rather than as the unlisted precondition it is.
+    await expect(requireChutesApiCheckout(resolve(process.cwd(), "..", "no-such-chutes-api")))
+      .rejects.toThrow(/chutes-api. checkout beside this repository/u);
+    await expect(requireChutesApiCheckout(process.cwd())).resolves.toBeUndefined();
   });
 
   it("requires the exact Airship origin and complete signed-write preflight surface", () => {

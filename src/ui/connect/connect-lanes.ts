@@ -205,8 +205,9 @@ export function describeConnectLanes(input: ConnectLaneInput): readonly ConnectL
  * did while a connection was live.
  */
 export function connectLaneCountLabel(lanes: readonly ConnectLane[]): string {
-  const connected = lanes.filter((entry) => entry.status.kind === "connected");
-  const ready = lanes.filter((entry) => entry.status.kind === "ready").length;
+  const countable = connectableLanes(lanes);
+  const connected = countable.filter((entry) => entry.status.kind === "connected");
+  const ready = countable.filter((entry) => entry.status.kind === "ready").length;
   // "5 ready" beside "No model connected" reads as five models standing by.
   // The count is of ways in, so it says so: a bare adjective with no noun is
   // the one shape this label cannot afford.
@@ -217,7 +218,22 @@ export function connectLaneCountLabel(lanes: readonly ConnectLane[]): string {
 
 /** The seal beside that count: connected is the only verified state here. */
 export function connectLaneCountSeal(lanes: readonly ConnectLane[]): SealState {
-  return lanes.some((entry) => entry.status.kind === "connected") ? "verified" : "none";
+  return connectableLanes(lanes).some((entry) => entry.status.kind === "connected") ? "verified" : "none";
+}
+
+/**
+ * The lanes a count of connections is allowed to be taken over.
+ *
+ * The Companion connects nothing — that is why `describeConnectLanes` pins it
+ * last instead of ranking it — but its status goes `connected` the moment the
+ * bridge handshake answers, and both readers above were counting it. With the
+ * extension installed and no provider set up, the chip read "Airship Companion
+ * connected · 4 more ready to connect" under a verified seal while all five
+ * provider rows below said they were not connected. One predicate rather than
+ * the id literal twice, so the number and the seal cannot drift apart.
+ */
+function connectableLanes(lanes: readonly ConnectLane[]): readonly ConnectLane[] {
+  return lanes.filter((entry) => entry.id !== "companion");
 }
 
 function lane(id: ConnectLaneId, title: string, vendor: string, copy: LaneCopy): ConnectLane {

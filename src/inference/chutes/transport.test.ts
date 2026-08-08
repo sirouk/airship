@@ -954,11 +954,19 @@ describe("ChutesInferenceTransport", () => {
 
   it("records a durable failed turn when an authenticated response stalls", async () => {
     const crypto = new MockCrypto({});
-    const fetch = sequenceFetch([
-      modelResponse(),
-      instanceResponse(["nonce-a"]),
-      new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 }),
-    ]);
+    let nonce = 0;
+    // Answered by route rather than by a fixed sequence: a stall is a carriage
+    // failure the retry wrapper may re-open the stream for, and this asserts
+    // the durable record the turn ends with however many attempts it takes.
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/models")) return modelResponse();
+      if (url.includes("/e2e/instances/")) {
+        nonce += 1;
+        return instanceResponse([`nonce-${nonce}`]);
+      }
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 });
+    });
     const transport = new ChutesInferenceTransport({
       apiKey: "key",
       fetch,
@@ -1180,6 +1188,100 @@ describe("ChutesInferenceTransport.invokeJson", () => {
     // chute must not turn into an unbounded retry storm.
     expect(invokeCalls(fetch).length).toBeLessThanOrEqual(3);
     expect(invokeCalls(fetch).length).toBeGreaterThan(1);
+  });
+
+  /*
+   * The one safe nonce retry is promised independently of the instance budget,
+   * and taking the retry off that budget is what makes the promise true. When
+   * the rejection lands on the last instance attempt the `continue` used to
+   * spend the budget instead: three invokes went out, the retry never did, and
+   * the operator was told "Chutes rejected a fresh E2EE nonce twice" about a
+   * single rejection — which sends them to debug nonce issuance rather than the
+   * instance capacity that consumed the first two attempts.
+   */
+  it("spends the safe nonce retry after the instance budget is used up on 429s", async () => {
+    let discovery = 0;
+    const invoked: string[] = [];
+    const fetch = vi.fn<FetchLike>(async (input, init) => {
+      if (String(input).includes("/e2e/instances/")) {
+        discovery += 1;
+        // Fresh nonces every round: a lease this session already spent is
+        // skipped, and the point here is the attempt budget, not the ledger.
+        return jsonResponse({
+          nonce_expires_in: 55,
+          instances: ["a", "b", "c"].map((id) => ({
+            instance_id: `instance-${id}`,
+            e2e_pubkey: `public-key-${id}`,
+            nonces: [`${id}-${discovery}`],
+          })),
+        });
+      }
+      const instanceId = header(init, "X-Instance-Id") ?? "";
+      invoked.push(instanceId);
+      if (instanceId !== "instance-c") {
+        return jsonResponse({ detail: "Instance is at maximum capacity, try again later" }, 429);
+      }
+      // The third attempt reaches an instance with room, and the gateway
+      // refuses its freshly issued nonce — the recoverable failure.
+      return invoked.filter((seen) => seen === "instance-c").length === 1
+        ? jsonResponse({ code: "NONCE_EXPIRED" }, 403)
+        : new Response(new Uint8Array([9, 9, 9]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto: new MockCrypto({}),
+      attestationMode: "optional",
+    });
+
+    await expect(transport.invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: {} }))
+      .resolves.toEqual({});
+    // Two re-routes and then the retry, which is a fourth seal by design: the
+    // budget counts instances, and the nonce retry is not one of them.
+    expect(invoked).toEqual(["instance-a", "instance-b", "instance-c", "instance-c"]);
+  });
+
+  /*
+   * Discovery answering from a cache is not a hypothetical: `/e2e/instances`
+   * re-issues a nonce pool this session has already spent, `consumeLease` skips
+   * every lease in it, and the lease loop used to answer by flying the same
+   * authenticated round trip again — for the whole five-minute request
+   * lifetime, hammering the instance endpoint on the way. A capacity dead end
+   * has to be reported, not waited out.
+   */
+  it("stops discovering instead of spinning when a chute re-issues spent nonces", async () => {
+    let discoveryCalls = 0;
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      if (String(input).includes("/e2e/instances/")) {
+        discoveryCalls += 1;
+        // Stands in for the request lifetime, which was the only thing that
+        // ended the old loop. Reaching it means the bound is gone again.
+        if (discoveryCalls > 8) throw new Error("unbounded E2EE instance discovery");
+        return instanceResponse(["nonce-a"]);
+      }
+      return new Response(new Uint8Array([9, 9, 9]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto: new MockCrypto({}),
+      attestationMode: "optional",
+    });
+
+    // The first turn spends the only nonce the chute ever issues.
+    await expect(transport.invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: {} }))
+      .resolves.toEqual({});
+    const afterFirstTurn = discoveryCalls;
+
+    const failure = await transport
+      .invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: {} })
+      .then(() => undefined, (error: unknown) => error as ChutesTransportError);
+
+    expect(failure).toMatchObject({ code: "HTTP_ERROR", status: 429, operation: "invoke" });
+    // Bounded by the per-request instance budget. Nothing was invoked at all,
+    // because no lease was ever drawn.
+    expect(discoveryCalls - afterFirstTurn).toBeLessThanOrEqual(3);
+    expect(invokeCalls(fetch)).toHaveLength(1);
   });
 
   it("frees the sealed request context when the encrypted answer is unreadable", async () => {

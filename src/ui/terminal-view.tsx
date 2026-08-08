@@ -456,9 +456,21 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   }, [manager, gitIntent?.sourceRecordId, git, reviewGit]);
 
   const active = sessions.find(({ id }) => id === activeId);
+  /*
+   * The button's `disabled` only knows the per-profile cap of 8, because the
+   * list it counts is profile-scoped. `manager.create` also refuses at 24
+   * retained sessions *across* profiles — so in a fresh profile with an empty
+   * strip the control is enabled, inviting, and throws out of the click handler,
+   * discarding the one sentence that says what to do about it. Same try/catch
+   * "New here" already wraps the identical call in.
+   */
   const createTab = () => {
-    const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
-    setActiveId(created.id);
+    try {
+      const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
+      setActiveId(created.id);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "A terminal tab could not be created.");
+    }
   };
   const sync = async () => {
     setSyncing(true);
@@ -808,7 +820,16 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
   }, [initial.id, manager, onNotice]);
 
   const dimensions = () => ({ cols: terminal.current?.cols ?? 100, rows: terminal.current?.rows ?? 30 });
-  const restart = () => void manager.restart(session.id, dimensions());
+  /*
+   * Restart is the documented recovery for an exited, failed or restart-required
+   * tab, and it is exactly there that it rejects: a previous shell still
+   * stopping, a writer lease lost to another page, a heartbeat held elsewhere.
+   * Those refusals name the remedy in a sentence, and firing this bare sent every
+   * one of them to the console as an unhandled rejection while the footer went on
+   * saying whatever it last said. Same rejection arm the auto-start above uses.
+   */
+  const restart = () => void manager.restart(session.id, dimensions())
+    .catch((error) => onNotice(error instanceof Error ? error.message : "Terminal could not restart."));
   const close = async () => {
     try {
       await manager.close(session.id);
@@ -848,7 +869,11 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
         {session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}
       </div>
       <div>
-        {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
+        {/* Interrupt writes to the PTY, so it fails the way every other write
+            here fails — "This page no longer owns the terminal writer lease" —
+            and a ⌃C that silently did nothing is indistinguishable from one the
+            process ignored. */}
+        {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id).catch((error) => onNotice(error instanceof Error ? error.message : "Interrupt was not delivered."))} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
         <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${terminalShellPath(session.cwd)}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
         {/* The word is in a span like every other control's, because the phone
             rule that sheds labels is written against `button span` — bare text

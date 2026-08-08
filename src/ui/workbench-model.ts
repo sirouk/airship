@@ -398,22 +398,29 @@ export function defaultEditorWrap(_width: number | undefined): boolean {
 /**
  * What the file strip says about the editing surface itself.
  *
- * The gutter remains visible for wrapped buffers; its rows are measured against
- * the same text box, so continuation rows stay blank while file numbers remain
- * attached to their logical line.
+ * Wrapping alone keeps the gutter: its rows are measured against the same text
+ * box, so continuation rows stay blank while file numbers remain attached to
+ * their logical line.
  *
- * Wrap is not the only suppressor. `workspaceGutterLines` withholds the gutter
- * entirely past `WORKSPACE_GUTTER_LINE_LIMIT`, and this note was written
- * against wrap alone — so on an unwrapped 6,000-line file the numbers vanished
- * with the strip still claiming the surface unchanged, which is the exact
- * silence the sentence exists to prevent. `gutter` is therefore the third
- * input: whether the gutter is actually on screen.
+ * Wrap is not the only suppressor, and the cap does not care which mode is on.
+ * `workspaceGutterLines` withholds the gutter entirely past
+ * `WORKSPACE_GUTTER_LINE_LIMIT`, so a 6,000-line file has no numbers wrapped or
+ * unwrapped. The note was written against wrap alone and answered on it first,
+ * which made the cap phrase unreachable in the state the editor actually starts
+ * in — `defaultEditorWrap` returns true for every buffer — and left the strip
+ * asserting "wrapped with line numbers" over a column that had none. `gutter` is
+ * therefore the third input: whether the gutter is actually on screen.
  */
 export function editorSurfaceNote(input: Readonly<{ wrap: boolean; binary: boolean; gutter?: boolean }>): string {
   if (input.binary) return "Binary · read-only · client-side";
-  if (input.wrap) return "UTF-8 · LF · client-side · wrapped with line numbers";
+  const capped = `no line numbers above ${WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US")} lines`;
+  if (input.wrap) {
+    return input.gutter === false
+      ? `UTF-8 · LF · client-side · wrapped · ${capped}`
+      : "UTF-8 · LF · client-side · wrapped with line numbers";
+  }
   return input.gutter === false
-    ? `UTF-8 · LF · client-side · no line numbers above ${WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US")} lines`
+    ? `UTF-8 · LF · client-side · ${capped}`
     : "UTF-8 · LF · client-side";
 }
 

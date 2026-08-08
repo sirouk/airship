@@ -449,9 +449,15 @@ export class ChutesInferenceTransport implements InferenceTransport {
           // is now wider than two so a saturated instance can be re-routed
           // around, and a nonce rejection must still get exactly one safe
           // retry — reusing `attempt` here would silently widen it too.
+          //
+          // Giving the slot back is what makes that true. Without the
+          // decrement the `continue` spends an instance attempt, so a rejection
+          // on the last one exits the loop having promised a retry it never
+          // sent; `nonceRetried` still bounds this at exactly one extra seal.
           if (!nonceRetried) {
             nonceRetried = true;
             this.leasePools.delete(poolKey);
+            attempt -= 1;
             continue;
           }
           throw new ChutesTransportError(
@@ -477,7 +483,15 @@ export class ChutesInferenceTransport implements InferenceTransport {
         throw httpError("invoke", "Chutes E2EE invoke", response.status, errorBody);
       }
 
-      throw new ChutesTransportError("NONCE_REJECTED", "Chutes rejected a fresh E2EE nonce twice.");
+      // Unreachable: every path out of the loop body returns or throws, and the
+      // one `continue` that could run at the last attempt gives its slot back
+      // above. Kept as a guard so a future edit that breaks that invariant
+      // surfaces as an error rather than as a silent `undefined` result, and
+      // it must not claim a nonce rejection it did not observe.
+      throw new ChutesTransportError(
+        "NONCE_REJECTED",
+        "Chutes E2EE invoke ended without a response or an error.",
+      );
     } finally {
       if (requestContext) safeFreeRequest(requestContext);
     }
@@ -847,6 +861,14 @@ export class ChutesInferenceTransport implements InferenceTransport {
    * round has failed to produce an unavoided lease, because at that point every
    * instance the chute has is either saturated or already tried, and spinning
    * would turn a capacity refusal into a hang.
+   *
+   * Discovery rounds are bounded even when nothing is being avoided, because
+   * that is not the only way this can fail to converge: a chute that serves
+   * `/e2e/instances` from a cache re-issues nonces this session has already
+   * spent, `consumeLease` skips every one of them, and the loop would answer by
+   * flying the same authenticated round trip again until the request lifetime
+   * expired. A few rounds are a real retry; an unbounded run is a hang that
+   * hammers the instance endpoint on the way.
    */
   private async acquireLease(
     apiKey: string,
@@ -855,7 +877,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
     signal: AbortSignal,
     avoid?: ReadonlySet<string>,
   ): Promise<InstanceLease | undefined> {
-    let discovered = false;
+    let rounds = 0;
     for (;;) {
       this.pruneNonces(poolKey);
       const lease = this.consumeLease(poolKey, avoid);
@@ -863,8 +885,12 @@ export class ChutesInferenceTransport implements InferenceTransport {
       // One discovery round is the whole budget when instances are being
       // avoided: discovery re-reads the same instance list, so a second round
       // cannot produce an instance the first did not.
-      if (discovered && avoid?.size) return undefined;
-      discovered = true;
+      if (rounds && avoid?.size) return undefined;
+      // Otherwise a second round is legitimate — more concurrent turns can
+      // share one flight than that flight pooled nonces — so the ceiling is the
+      // per-request instance budget rather than one.
+      if (rounds >= this.options.maxInstanceAttempts) return undefined;
+      rounds += 1;
 
       let flight = this.pendingDiscovery.get(poolKey);
       if (!flight) {
