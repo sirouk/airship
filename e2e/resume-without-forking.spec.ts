@@ -64,7 +64,16 @@ async function expectVaultAdopted(page: Page): Promise<void> {
      shell — so the adoption check is about *one visible carrier*, never
      about the count: the two shells exist in the DOM at every width now,
      which is what the older CARRIER-count contract measured. */
-  await expect(page.locator(".runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }).first())
+  /* `.first()` is DOM order, not visibility, and the two carriers are
+     display-exclusive: the topbar line comes first in the document and is
+     `display: none` at phone widths, so on the mobile project this resolved to
+     the hidden copy and then waited 40 s for it to become visible — which it
+     never can. The paragraph above says the check is about one *visible*
+     carrier; this is that sentence as a selector. */
+  await expect(page.locator(".runtime-line__text")
+    .filter({ hasText: /Encrypted Local Device vault active/u })
+    .filter({ visible: true })
+    .first())
     .toBeVisible({ timeout: 40_000 });
 }
 
