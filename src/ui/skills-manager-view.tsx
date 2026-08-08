@@ -48,34 +48,52 @@ function developmentChunkEntry(path: string): string | undefined {
 export type BlockBox = Readonly<{ top: number; bottom: number }>;
 
 /**
- * Whether the authoring panel has to be carried to the reader, or is already
- * somewhere they can read it.
+ * Where the authoring panel has to be scrolled to, or `undefined` when the
+ * reader can already reach the whole of it.
  *
- * The alignment below exists because Edit is normally pressed from a card
- * scrolled well past the panel, so the route's entire response to its own
- * authoring verb landed off-screen. Aligning unconditionally then made the
- * opposite mistake on wide viewports, where New skill is pressed from a toolbar
- * a few hundred pixels above a panel that is already in frame: the scroll
- * carried the route's mode tabs and — worse — the APPLIES TO scope selector,
- * which names the profile the skill being authored resolves for, off the top,
- * while the author filled the form that scope applies to.
+ * Two opposite failures meet here, and a rule that answers only one of them
+ * reintroduces the other.
  *
- * So the question is not "where is the panel" but "can the reader already reach
- * it": the panel's own top edge has to be in the scrollport, and so does the
- * first field, because a panel whose header is visible on the last two pixels of
- * the fold is a panel that still reads as nothing having happened. `firstField`
- * is optional and can only tighten the answer — while the deferred chunk is
- * still a one-line placeholder there is no field to reach, and a visible
- * placeholder is already the feedback the alignment was for.
+ * Edit is normally pressed from a card scrolled well past the panel, so the
+ * route's entire response to its own authoring verb landed off-screen and the
+ * verb read as a dead button. Aligning unconditionally then made the opposite
+ * mistake on a tall viewport, where New skill is pressed from a toolbar a few
+ * hundred pixels above a panel that is already in frame: the scroll carried the
+ * route's mode tabs and — worse — the APPLIES TO scope selector, which names the
+ * profile the skill being authored resolves for, off the top while the author
+ * filled the form that scope applies to.
+ *
+ * The gate written against that second failure asked only whether the panel's
+ * *head* was reachable, and a form is not its head. Measured on the 320, 390,
+ * 430, 768, 1024 and 1440 device classes, the panel opened with NAME in frame
+ * and `Create skill` and `Cancel` past the fold at every one of them: the gate
+ * said "already reachable" about a form whose only way out was somewhere the
+ * reader had no reason to look for it. That is worse than opening off-screen,
+ * because the reader believes they are in the form.
+ *
+ * So the question is whether the whole panel is reachable, and the answer also
+ * says where to put it:
+ *
+ * - Nothing hanging out of the scrollport: leave the page alone. This is the
+ *   1920x1080 case the previous gate was written for; it still holds, and it is
+ *   the only class where the actions were already in frame.
+ * - Hanging off the bottom and short enough to fit: `end`. That is the least
+ *   scroll that brings the actions in, so it keeps the most route chrome — at
+ *   1440x900 it moves the page 106px where `start` moves it 369px, which is the
+ *   difference between keeping the Skills heading and the scope card and losing
+ *   them along with the tabs.
+ * - Anything else — hanging off the top, or taller than the scrollport at any
+ *   scroll position: `start`. A panel that cannot be shown whole is shown from
+ *   its beginning, which is where its header, its first field and therefore the
+ *   keyboard already are.
  */
-export function editorPanelNeedsAlignment(
+export function editorPanelAlignment(
   panel: BlockBox,
-  firstField: BlockBox | undefined,
   scrollport: BlockBox,
-): boolean {
-  if (panel.top < scrollport.top || panel.top >= scrollport.bottom) return true;
-  if (!firstField) return false;
-  return firstField.top < scrollport.top || firstField.bottom > scrollport.bottom;
+): ScrollLogicalPosition | undefined {
+  if (panel.top < scrollport.top) return "start";
+  if (panel.bottom <= scrollport.bottom) return undefined;
+  return panel.bottom - panel.top <= scrollport.bottom - scrollport.top ? "end" : "start";
 }
 
 /**
@@ -151,12 +169,14 @@ export function SkillsManagerView({
    * belongs; `preventScroll` because the alignment above already chose the
    * position and focus must not re-choose it.
    *
-   * It comes only when it is not already there. `editorPanelNeedsAlignment`
-   * carries the reason: an unconditional `block: "start"` also fired for New
-   * skill on a desktop viewport, where the panel was in frame the whole time,
-   * and paid for a scroll nobody needed with the route's tab strip and scope
-   * selector. The focus still happens either way — the keyboard has to land in
-   * the form whether or not the page moved.
+   * It comes only when it is not already there, and only as far as it has to.
+   * `editorPanelAlignment` carries both reasons: an unconditional `block:
+   * "start"` also fired for New skill on a viewport where the panel was in frame
+   * the whole time, and paid for a scroll nobody needed with the route's tab
+   * strip and scope selector; a gate that watched only the panel's top edge then
+   * left `Create skill` and `Cancel` under the fold on every device class but
+   * the tallest. The focus still happens either way — the keyboard has to land
+   * in the form whether or not the page moved.
    *
    * Gated on `SkillEditorPanel` because the panel is a deferred chunk: without
    * it this would align the one-line "Loading the skill editor…" placeholder
@@ -168,14 +188,9 @@ export function SkillsManagerView({
     if (!editorTarget || !SkillEditorPanel) return;
     const panel = editorRef.current;
     if (!panel) return;
-    const field = panel.querySelector<HTMLInputElement>("input");
-    const needed = editorPanelNeedsAlignment(
-      panel.getBoundingClientRect(),
-      field?.getBoundingClientRect(),
-      scrollportBox(panel),
-    );
-    if (needed) panel.scrollIntoView({ block: "start" });
-    field?.focus({ preventScroll: true });
+    const alignment = editorPanelAlignment(panel.getBoundingClientRect(), scrollportBox(panel));
+    if (alignment) panel.scrollIntoView({ block: alignment });
+    panel.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
   }, [editorTarget, SkillEditorPanel]);
 
   useEffect(() => {
