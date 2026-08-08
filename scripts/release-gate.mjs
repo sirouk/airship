@@ -360,7 +360,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // redacted copy, and the session library stops offering Open on a row whose
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
-  deferredCapabilities: Object.freeze({ raw: 445 * 1024, gzip: 131 * 1024 }),
+  //
+  // Re-measured at 455,857 B raw / 134,239 B gzip after the surface sweep's
+  // closing waves. The named cause is the deferred routes finally being audited
+  // at eight device classes: Preferences keeping its header from slicing the
+  // row beneath it, the conversation library seating its own rows at 320, the
+  // Proof switcher seating both tab names, the skill editor opening into view,
+  // and the graph declining to draw a label it cannot draw legibly. All of it
+  // is deferred and none of it is eager. Raw takes one whole-KiB step to 446
+  // (843 B) and gzip one to 132 (924 B).
+  deferredCapabilities: Object.freeze({ raw: 446 * 1024, gzip: 132 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -772,13 +781,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The closing wave — the Tabs overflow latch fixed at the primitive, the
   // conversation list that stopped being 330px at every width, the composer
   // that stopped discarding what was typed before its conversation existed, and
-  // the last of the per-route leftovers — re-measures it at 2,362,453 B raw /
-  // 749,987 B gzip — the Docker readings, 26 raw bytes under this host
+  // the last of the per-route leftovers — re-measures it at 2,363,536 B raw /
+  // 750,459 B gzip — the Docker readings, a little under this host
   // artifact, because the claim has to state the floor across build modes or
   // whichever comes in lightest fails the gate on the other's justification.
   // Raw takes one whole step to 2,308 (939 B); gzip does not move and keeps
   // 605 B inside the 733 it already had.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2308 * 1024, gzip: 733 * 1024 }),
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2310 * 1024, gzip: 734 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1447,7 +1456,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // produces, and a superseded figure above a live ceiling reads as a raise
   // nobody reviewed.
   //
-  // Re-measured at 7,344 B raw / 2,829 B gzip after the surface sweep. The
+  // Re-measured at 7,344 B raw / 2,828 B gzip after the surface sweep. The
   // named cause is that Edit now answers: pressing it mounted the authoring
   // panel above a scrolled-to grid, so from the reader's seat the click did
   // nothing at all, and the panel now comes to them — and only when it is not

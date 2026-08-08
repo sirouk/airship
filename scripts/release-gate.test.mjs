@@ -333,7 +333,10 @@ describe("release gate", () => {
       // but the reading it is measured against did, so the second step this
       // comment already pays for now lands on 132 and the step granted without
       // a sentence behind it is 133.
-      ["deferredCapabilities", "gzip: 131 * 1024", "gzip: 133 * 1024"],
+// AMENDED again: the closing surface waves re-measured the pack at 134,239 B
+      // gzip, so the second step this comment already pays for now lands on 133
+      // and the step granted without a sentence behind it is 134.
+      ["deferredCapabilities", "gzip: 132 * 1024", "gzip: 134 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
