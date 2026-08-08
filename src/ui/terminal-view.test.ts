@@ -317,6 +317,31 @@ describe("the terminal route on a short viewport", () => {
     // an unscoped `.terminal-route` here would impose a fifth row on its four.
     expect(short).not.toMatch(/\n\s*\.terminal-route\{/u);
   });
+
+  /*
+   * Lowering that floor was half the repair. The two rows still had an
+   * automatic minimum of zero, so they still absorbed whatever the budget was
+   * short — about 16px at 932×430 — and the shipped build showed it: the
+   * disclosure lost its bottom border and `Terminal 1` was sliced through the
+   * lower third of its label. The emulator has nothing left to give, because
+   * at 8rem the panel is already on its own floor (a 44px bar, the 3rem
+   * emulator, a 32px meta row), so taking more would crush the panel and
+   * swallow the meta row under its `overflow:hidden` instead. The rows state
+   * their floors, and `min-height:min-content` on the route turns the residue
+   * into 16px of ordinary scrolling rather than a control cut in half.
+   */
+  it("floors the two rows whose overflow zeroes their minimum, so the residue scrolls instead of slicing", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+    expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__setup,");
+    expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}");
+    // The floor is the touch decision the summary and tab buttons already make,
+    // not a second opinion about it in literal pixels.
+    expect(short).not.toMatch(/\.terminal-tabs\{min-height:\d/u);
+    // And the route has to be allowed to outgrow its box, or flooring the rows
+    // clips them under a height-bound grid instead of scrolling them.
+    expect(css).toMatch(/\.terminal-route\{[^}]*min-height:min-content/u);
+  });
 });
 
 describe("the terminal body boundary", () => {

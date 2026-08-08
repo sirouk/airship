@@ -115,12 +115,35 @@ describe("route layout contract", () => {
      * `Attestation evidence` was cut to `Attestation evide…` while `Receipt &
      * journal` sat in a half it did not fill.
      *
-     * `flex: 1 1 auto` is the rule that says both things at once: grow into
-     * whatever slack the row has, and give up width in proportion to the label
-     * you are carrying when there is none. No halving on either box.
+     * `flex: 1 1 auto` was written next to say both things at once, and it said
+     * neither: measured on the shipped build the active tab came out at exactly
+     * half the strip at every phone width — 141 of 286 at 320, 176 of 356 at
+     * 390, 196 of 396 at 430 — so 430 kept the cut the rule was added to remove.
+     * A tab that grows into slack starts from its label; one that lands on a
+     * pixel-exact half started from zero.
+     *
+     * So the growth is scoped to the band that has a deficit to share. Below
+     * 400px the two labels want 387px and the strip has 286, so an equal split
+     * is the fair one; above it the strip has 396 for the same 387 and the tabs
+     * are simply their labels, both whole. What this test pins is that scoping,
+     * because the failure it replaces was a rule that looked correct in the
+     * sheet and halved the row anyway.
      */
-    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
-    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*flex: 1 1 auto/u);
+    // There are three `400px` bands in this sheet and this assertion is about
+    // one of them, so it selects by what the block contains rather than by
+    // which one happens to come first.
+    const band = (width: number, selector: string) =>
+      [...styles.matchAll(new RegExp(`@media \\(max-width: ${width}px\\) \\{(?:[^{}]|\\{[^{}]*\\})*\\}`, "gu"))]
+        .map((match) => match[0])
+        .find((block) => block.includes(selector)) ?? "";
+    const growth = band(400, ".proof-surface-tabs");
+    expect(growth, "the equal split has a width band of its own").not.toBe("");
+    expect(growth).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
+    expect(growth).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*flex: 1 1 auto/u);
+    // And it may not leak back into the band above it, or 430px pays again.
+    const phoneBand = band(760, ".proof-surface-tabs");
+    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
+    expect(phoneBand).not.toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
     expect(styles).not.toMatch(/\.proof-surface-tabs[^{]*\{[^}]*grid-template-columns/u);
     // And each tab has to be allowed to shrink below its own label, or the
     // sharing has nothing to give and the overflow returns.

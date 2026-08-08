@@ -285,14 +285,34 @@
    * `Receipt & journal` sat in a half it did not fill. An equal split is the
    * right answer only at the widths where there is nothing to split fairly.
    *
-   * So the strip stays the flex row it is everywhere else and the tabs are told
-   * to share it: `flex: 1 1 auto` grows them into whatever slack the row has and
-   * shrinks them in proportion to the label each one is carrying when there is
-   * none. Above about 400px that means no cut at all; at 320px each tab gives up
-   * a share of its own width rather than the longer label paying the whole bill,
-   * and `.tabs__label` ellipsises inside the result — the primitive already
-   * carries that rule. Either way nothing is scrolled out of the frame, so the
-   * overflow control still has nothing to report.
+   * The `flex: 1 1 auto` written next was meant to be that answer and was not.
+   * Applied to both the tab and the button it wraps, it reproduced the halving
+   * it replaced: measured on the shipped build, the active tab is 141px of a
+   * 286px strip at 320, 176px of 356px at 390 and 196px of 396px at 430 — one
+   * pixel-exact half at every width, which is what a zero basis grows to, not
+   * what a content basis shrinks from. So 430 kept paying: `Receipt & journal`
+   * needs 175px and was handed 196, while `Attestation evidence` needs 208px,
+   * was handed the same 196, and lost its last five characters. The strip has
+   * 396px and the pair wants 387 — the cut was manufactured by the split, not
+   * required by the width.
+   *
+   * So growth is scoped to the widths with a deficit big enough to be worth
+   * splitting evenly, and above them a tab is simply its label. The strip is
+   * the viewport less 34px of gutter, border and padding, and the pair wants
+   * 387px, so both labels are whole from 421px up: at 430 that leaves ~9px
+   * spare at the end of the strip, which costs nobody anything — no neighbour
+   * is squeezed to buy this, because the space was already unused. Below 400px
+   * nothing makes them both fit (387px of labels into 286px at 320), so the
+   * even split is the honest one and each tab gives up a share of its own
+   * width rather than the longer label paying the whole bill.
+   *
+   * Between the two the deficit is 20px and shrinking, and the boundary is set
+   * at 400 rather than 421 deliberately: there each tab loses about one
+   * character, where an even split would keep `Receipt & journal` whole and
+   * take four off `Attestation evidence` instead. Sharing a small shortfall is
+   * the same principle as sharing a large one. `.tabs__label` ellipsises inside
+   * whatever it is given at either size, so nothing is ever scrolled out of the
+   * frame and the overflow control still has nothing to report.
    */
   .proof-surface-tabs { width: 100%; }
 
@@ -300,8 +320,24 @@
 
   /* A flex item defaults to `min-width: auto`, so it would refuse to shrink
      below the nowrap label it contains — which is the whole reason the labels
-     overflowed the strip rather than ellipsising inside it. Shrinking is what
-     makes the sharing above possible; growing is what fills the row. */
+     overflowed the strip rather than ellipsising inside it. This is the guard
+     that lets the ellipsis happen at any width; the block below is what decides
+     whether a tab may also grow past its own label. */
+  .proof-surface-tabs .tabs__tab {
+    min-width: 0;
+  }
+
+  .proof-surface-tabs .tabs__tab-button {
+    min-width: 0;
+  }
+
+  .proof-surface-tabs button { min-height: var(--touch-target); }
+}
+
+/* The band where the shortfall is too large to share without cutting both
+   labels badly, so it is split evenly instead. Above it a tab is its label:
+   they shrink together through the low 400s and are both whole from 421px. */
+@media (max-width: 400px) {
   .proof-surface-tabs .tabs__tab {
     flex: 1 1 auto;
     min-width: 0;
@@ -315,8 +351,6 @@
     justify-content: center;
     min-width: 0;
   }
-
-  .proof-surface-tabs button { min-height: var(--touch-target); }
 }
 
 .proof-overview {
