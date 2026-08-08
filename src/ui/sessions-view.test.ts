@@ -333,6 +333,57 @@ describe("conversation library space budget", () => {
   });
 
   /*
+   * …and tuning that shrink order was never going to be enough, because the
+   * column it shrinks inside was 330px at 1024px, at 1440px and at 1920px
+   * alike. Measured at 1920px: the layout stopped at x=1655 with the list still
+   * 330px, the detail pane beside it 828px wide and empty below y=490, and the
+   * row's second line reading "Active  23 events  ge…  a…" — two facts reduced
+   * to two characters each next to several hundred pixels of unused canvas.
+   *
+   * Two rules answer it, and the pair is the point: the column grows where
+   * there is width to grow into, and the line wraps where there is not.
+   */
+  it("lets the list column grow with the canvas instead of pinning it to 330px", () => {
+    const layout = ruleBody(".session-library-layout") ?? "";
+    expect(layout).toContain("grid-template-columns: minmax(260px, clamp(330px, 38%, 430px)) minmax(0, 1fr);");
+
+    /*
+     * The floor of the clamp is what stops this from being a raid on the detail
+     * pane. 38% does not reach 330px until the container is about 868px, so the
+     * narrow two-pane widths — where the detail pane is the scarce one — keep
+     * exactly the column they have. Lowering that floor, or raising the 38%,
+     * would start taking width from the pane that has none to give.
+     */
+    expect(layout, "the growth may never drop the column below the width it has today")
+      .toMatch(/clamp\(330px,/u);
+    /*
+     * And the second track has to stay allowed to shrink, or the first one's
+     * new maximum is bought by overflowing the panel rather than by the detail
+     * pane yielding.
+     */
+    expect(layout).toContain("minmax(0, 1fr)");
+  });
+
+  /*
+   * Below that 868px container the column cannot grow, so the line has to be
+   * able to answer the deficit some other way than shrinking the model — which
+   * is the only thing `flex-wrap: nowrap` left it able to do, and the reason
+   * the model still read as one character at laptop widths after the shrink
+   * order was corrected. Flex lines are broken at content size before any item
+   * is shrunk, so the model now drops to its own line whole.
+   */
+  it("wraps the row's last line rather than grinding the model down to a character", () => {
+    const line2 = ruleBody(".session-library-card-line2") ?? "";
+    expect(line2).toContain("flex-wrap: wrap;");
+    /*
+     * `white-space: nowrap` has to survive alongside it. It governs text inside
+     * each fact, not the flex line, so it is what keeps a break falling between
+     * "23 events" and the model rather than inside either of them.
+     */
+    expect(line2).toContain("white-space: nowrap;");
+  });
+
+  /*
    * Measured at 320px: an input's min-content width is its own `size`, and
    * `min-width: 0` permits flexing below it without lowering it — so the nowrap
    * rename row demanded about 345px, the detail card grew to match, and
