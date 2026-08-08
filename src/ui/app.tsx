@@ -3438,6 +3438,30 @@ export function App() {
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
     if (!draftSessionId) return;
+    /*
+     * The first claim of the page's life is a conversation *arriving*, not a
+     * conversation being switched away from.
+     *
+     * The composer is editable from the first paint, and on a cold `#chat`
+     * boot there is no conversation behind it yet: the session is minted a
+     * beat later and its id is pushed into the address. Until this guard, the
+     * hydration that pass performed read the brand-new conversation's stored
+     * draft — necessarily empty — and set it over whatever had been typed in
+     * the meantime. Measured against `narrow-viewport-overflow`'s three
+     * paragraph specs at 320, 390 and 768: `/help` typed into the composer,
+     * then an empty composer with `Send message` permanently disabled and no
+     * word anywhere about where the text went. A person who types the instant
+     * the page paints gets the same silence.
+     *
+     * So the boot claim carries the live composer into the identity that just
+     * landed — the same thing `preserveComposerForDraftIdentity` does for a
+     * fork, and the same ordering the durable half below uses for its slower
+     * read. An empty composer still hydrates normally, which is what keeps a
+     * deep link to `#chat/<id>` restoring that conversation's own draft. Every
+     * later claim is a real switch and still replaces the composer with the
+     * arriving conversation's draft, empty included.
+     */
+    const bootClaim = draftHydrationIdentity.current === undefined;
     const hydration = claimThreadDraftHydration(
       draftHydrationIdentity,
       draftSessionId,
@@ -3449,11 +3473,12 @@ export function App() {
       return;
     }
     try {
-      setInput(readThreadDraft(draftSessionId, sessionStorage));
+      const stored = readThreadDraft(draftSessionId, sessionStorage);
+      setInput((current) => (bootClaim && current ? current : stored));
     } catch {
-      setInput("");
+      setInput((current) => (bootClaim && current ? current : ""));
     }
-    setAttachments([]);
+    setAttachments((current) => (bootClaim && current.length ? current : []));
   }, [chatRouteRequest, sessionId]);
   /*
    * The durable half of draft hydration.
