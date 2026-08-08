@@ -222,11 +222,16 @@ describe("Canvas memory graph labels", () => {
     expect(harness.drawn).toEqual(["README.md", "notes/retrieval.md"]);
   });
 
-  it("refuses to draw a label through a node that already carries one", () => {
+  it("stops a label short of the node it would have crossed instead of erasing the name", () => {
     // "docs/architecture.md" spans x=276..396 and the "General session" node it
     // crosses is a disc over x=390..410, so the two really do overlap on the
     // canvas — while the labels themselves do not touch, which is why a
     // label-only reservation reported no collision and drew it anyway.
+    //
+    // Refusing it outright was the over-correction: on phone-320 that left all
+    // three workspace files as bare squares with no name anywhere on screen. It
+    // is the CROSSING that has to stop, not the naming, so the label is cut to
+    // the room in front of the disc and keeps saying which file this is.
     const harness = labelHarness([
       node("General session", 0, 0, 10),
       node("docs/architecture.md", -136, 0, 6),
@@ -234,7 +239,44 @@ describe("Canvas memory graph labels", () => {
 
     drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
 
-    expect(harness.drawn).toEqual(["General session"]);
+    expect(harness.drawn).toEqual(["General session", "docs/architectur…"]);
+    const stub = harness.calls[1]!;
+    // Ends before the disc at x=390 — cut short of it, not printed over it.
+    expect(stub.x + stub.width).toBeLessThan(390);
+  });
+
+  it("cuts an oversized label to fit rather than condensing it into micro-type", () => {
+    // tablet-768: `fillText`'s maxWidth argument does not drop characters, it
+    // squeezes them. This 83-character preview measures 498px here and was
+    // asked to occupy 190 — 2px-wide letters at full height, a sentence-shaped
+    // smear across the graph body. The cut has to happen in the string.
+    const harness = labelHarness([
+      node("assistant: The edge runtime is ready. The workspace, editor, terminal and browser-…", 0, 0, 8),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["assistant: The edge runtime is…"]);
+    // Three arguments: no maxWidth reaches the canvas, so nothing can condense.
+    expect(harness.calls[0]!.argumentCount).toBe(3);
+    expect(harness.calls[0]!.width).toBeLessThanOrEqual(190);
+  });
+
+  it("never lets a cut-down label take room from one already placed at full width", () => {
+    // The cost of the second pass, measured rather than asserted. "term" is the
+    // lowest-priority node here and its full label lands inside the gap the
+    // refused "docs/architecture.md" would want. The full-width pass finishes
+    // first, so "term" is placed whole and the gap left for the stub is 3px —
+    // under the floor, so no stub is drawn. Recovering a name never costs one.
+    const harness = labelHarness([
+      node("General session", 0, 0, 10),
+      node("docs/architecture.md", -136, 0, 7),
+      node("term", -111, 0, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["General session", "term"]);
   });
 });
 
@@ -245,13 +287,20 @@ describe("Canvas memory graph labels", () => {
  */
 function labelHarness(nodes: readonly MemoryGraphNode[]) {
   const drawn: string[] = [];
+  // Where each label landed and how it was asked for: a fourth argument to
+  // `fillText` is the condensing one, so the count is worth keeping.
+  const calls: { text: string; x: number; width: number; argumentCount: number }[] = [];
+  const measure = (text: string) => text.length * 6;
   const context = {
     font: "",
     textBaseline: "",
     fillStyle: "",
     globalAlpha: 1,
-    measureText: (text: string) => ({ width: text.length * 6 }),
-    fillText: (text: string) => drawn.push(text),
+    measureText: (text: string) => ({ width: measure(text) }),
+    fillText: (...args: [text: string, x: number, y: number, maxWidth?: number]) => {
+      drawn.push(args[0]);
+      calls.push({ text: args[0], x: args[1], width: measure(args[0]), argumentCount: args.length });
+    },
   } as unknown as CanvasRenderingContext2D;
   const engine = {
     context,
@@ -260,7 +309,7 @@ function labelHarness(nodes: readonly MemoryGraphNode[]) {
     viewport: { centerX: 0, centerY: 0, scale: 1, width: 800, height: 600 },
     hoverId: undefined,
   } as unknown as CanvasEngine;
-  return { engine, nodes, drawn };
+  return { engine, nodes, drawn, calls };
 }
 
 /**
