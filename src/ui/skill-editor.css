@@ -118,6 +118,16 @@
 
 .skill-editor-status {
   margin: 0;
+  /*
+   * The panel scrolls this into view when a save is refused, and `nearest`
+   * stops the moment the sentence's own margin box is inside the scrollport —
+   * which without this leaves it flush against the bottom edge of the window
+   * with the panel's padding, border and the gap to the grid still below the
+   * fold, so the one sentence a person needs arrives looking like the top of
+   * something else. The two lengths are the panel's own bottom padding and its
+   * `margin-bottom` above; the refusal arrives with the panel's foot under it.
+   */
+  scroll-margin-block-end: calc(var(--sp-3) + 14px);
   color: var(--v-failed);
   font-size: var(--fs-caption);
   line-height: 1.5;

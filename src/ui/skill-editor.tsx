@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import {
   CUSTOM_SKILL_ID_PREFIX,
   type SkillRevision,
@@ -68,6 +68,12 @@ function initialFields(target: SkillEditorTarget): Fields {
   };
 }
 
+/**
+ * The refusal's id, fixed because at most one panel is ever mounted: the route
+ * holds a single `editorTarget`, so there is no second copy to collide with.
+ */
+const SAVE_STATUS_ID = "skill-editor-save-status";
+
 export function SkillEditor({ target, onSave, onClose }: SkillEditorProps) {
   /*
    * Mount-time initializer. The caller MUST give this component a key derived
@@ -79,7 +85,30 @@ export function SkillEditor({ target, onSave, onClose }: SkillEditorProps) {
   const [fields, setFields] = useState<Fields>(() => initialFields(target));
   const [status, setStatus] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const statusRef = useRef<HTMLParagraphElement>(null);
   const creating = target.mode === "new";
+
+  /*
+   * A refusal that cannot be reached says nothing.
+   *
+   * This sentence is the only account a person gets of why their save did not
+   * commit, and it renders under the actions, which are the last thing in the
+   * panel. Measured on the shipped build: at desktop-1440 `Create skill` sat at
+   * 887 in a 900px viewport and at tablet-768 at 1002 in a 1024px one, so the
+   * sentence explaining the press landed below the fold both times and the
+   * button read as simply dead. The route does not close the panel on a
+   * refusal, so nothing else moved the page either.
+   *
+   * `nearest` and not `center` or `start`: the person is looking at the button
+   * they just pressed, and the least scroll that brings the sentence in is the
+   * one that keeps that button — and the field they have to go back and fix —
+   * where they left it. When the sentence is already in frame, which is every
+   * viewport short enough that the alignment above opened the panel from its
+   * head, `nearest` moves nothing at all.
+   */
+  useEffect(() => {
+    if (status) statusRef.current?.scrollIntoView({ block: "nearest" });
+  }, [status]);
   // Proposed, never silently substituted: an empty id field with a filled name
   // saves under this, and the field shows it, so what is committed is what was
   // read. A person who types their own leaf keeps it.
@@ -195,12 +224,25 @@ export function SkillEditor({ target, onSave, onClose }: SkillEditorProps) {
         and this text reaches a model only in conversations started after it is saved.
       </p>
       <div class="skill-editor-actions">
-        <button class="small-button" type="button" disabled={saving} onClick={() => void save()}>
+        {/* The button carries the refusal as its description, so returning to it
+            restates why it did nothing instead of leaving a screen-reader user
+            to hunt for a sentence that is only ever below it. */}
+        <button
+          class="small-button"
+          type="button"
+          disabled={saving}
+          aria-describedby={status ? SAVE_STATUS_ID : undefined}
+          onClick={() => void save()}
+        >
           {saving ? "Saving…" : creating ? "Create skill" : "Save revision"}
         </button>
         <button class="small-button" type="button" disabled={saving} onClick={onClose}>Cancel</button>
       </div>
-      {status ? <p class="skill-editor-status" role="status" aria-live="polite">{status}</p> : null}
+      {/* `alert`, not `status`: everything this element can ever hold is a
+          refusal — the success path closes the panel before it could say
+          anything — and a polite live region waits for a pause that a person
+          re-reading their own form never gives it. */}
+      {status ? <p ref={statusRef} id={SAVE_STATUS_ID} class="skill-editor-status" role="alert">{status}</p> : null}
     </section>
   );
 }

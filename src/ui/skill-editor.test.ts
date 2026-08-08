@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CUSTOM_SKILL_ID_PREFIX } from "../profiles/domain";
 import { proposedSkillId } from "./skill-editor";
-import { editorPanelAlignment } from "./skills-manager-view";
+import { editorPanelAlignment, slicedBarClearance } from "./skills-manager-view";
 
 function editorSource(): string {
   return readFileSync(new URL("./skill-editor.tsx", import.meta.url), "utf8");
@@ -116,8 +116,11 @@ describe("pressing Edit produces a response the person can see", () => {
     // The alignment the helper chose, not one this call site picks for itself.
     // A literal `"start"` is the shape that threw the route's tabs and scope
     // selector away on every panel that only needed a hundred pixels.
-    expect(source).toContain("if (alignment) panel.scrollIntoView({ block: alignment });");
+    expect(source).toContain("panel.scrollIntoView({ block: alignment });");
     expect(source).not.toContain('scrollIntoView({ block: "start" })');
+    // And the frame that lands on gets settled, inside the same branch: the
+    // clearance is only owed where this route moved the page itself.
+    expect(source).toContain("      panel.scrollIntoView({ block: alignment });\n      clearSlicedBar(panel, scroller);");
     // The keyboard lands in the form whether or not the page had to move; only
     // the scroll is conditional, and `preventScroll` keeps focus from re-choosing
     // a position the branch above already decided.
@@ -180,6 +183,130 @@ describe("pressing Edit produces a response the person can see", () => {
     // The one-line "Loading the skill editor…" line has no foot below the fold
     // to rescue, and a visible placeholder is already the feedback.
     expect(editorPanelAlignment({ top: 447, bottom: 470 }, scrollport)).toBe(undefined);
+  });
+});
+
+/*
+ * The frame `end` settles on is a subtraction, and a subtraction does not care
+ * what it stops in the middle of. Measured on the shipped build it stopped
+ * inside the route's own chrome twice: the mode tab strip at tablet-768, cut so
+ * that Profiles / Skills / Capabilities showed as three pills with their tops
+ * sliced off in every editor state, and the APPLIES TO scope select at
+ * desktop-1440, cut through the x-height of `General` — the name of the profile
+ * the skill being authored resolves for. Nobody scrolled there; this route did.
+ */
+describe("the frame this route chooses is one a person can read", () => {
+  const desktop = { top: 57, bottom: 900 } as const;
+  const tablet = { top: 58, bottom: 1024 } as const;
+
+  it("clears a scope row the alignment cut through its labels", () => {
+    // desktop-1440 pressing New skill: the 36px scope row settled at 40..73,
+    // 16px of it showing under a frame that starts at 57, with the panel's head
+    // 261px below that edge. 16px of a 261px allowance buys the whole bar.
+    expect(slicedBarClearance([{ top: 40, bottom: 73 }], desktop, 261)).toBe(16);
+  });
+
+  it("clears a tab strip whose pills were sliced in every editor state", () => {
+    // tablet-768: the 56px strip settled at 46..102 under a frame starting at
+    // 58, so 44px showed and the pill tops were gone. Cleared it costs 44 of a
+    // 337px allowance, and the APPLIES TO row below it arrives whole.
+    expect(slicedBarClearance([{ top: 46, bottom: 102 }], tablet, 337)).toBe(44);
+  });
+
+  it("leaves a body alone however it was cut", () => {
+    /*
+     * The regression this rule would be if it had no height limit. At
+     * laptop-1024 the frame stops 12px into the 125px scope/effective-set
+     * toolbar; clearing it costs 113px and takes Profile scope, Effective set
+     * and New conversation with this set off the page — nine tenths of a panel
+     * that was in frame, spent to tidy the tenth that was not.
+     */
+    expect(slicedBarClearance([{ top: 45, bottom: 170 }], { top: 57, bottom: 768 }, 122)).toBe(0);
+  });
+
+  it("never buys a bar with the panel's own head", () => {
+    // The same tablet strip against a `start` alignment, which leaves no gap
+    // between the panel's head and the frame's top. Every viewport whose
+    // scrollport is shorter than the panel is this case — phone-320, phone-390,
+    // phone-430 and landscape-932 — and none of them moves.
+    expect(slicedBarClearance([{ top: 46, bottom: 102 }], tablet, 0)).toBe(0);
+    // Nor with most of it: an allowance that cannot cover the bar is not spent
+    // part-way, which would leave the bar sliced and the panel lower as well.
+    expect(slicedBarClearance([{ top: 46, bottom: 102 }], tablet, 43)).toBe(0);
+  });
+
+  it("stays still when the frame stops between blocks", () => {
+    // A bar wholly above the edge is already gone, and one wholly below it is
+    // whole. Sub-pixel layout is neither.
+    expect(slicedBarClearance([{ top: 4, bottom: 40 }, { top: 70, bottom: 106 }], desktop, 400)).toBe(0);
+    expect(slicedBarClearance([{ top: 21, bottom: 57.4 }], desktop, 400)).toBe(0);
+  });
+
+  it("clears the lowest foot it cut, not the first one it found", () => {
+    /*
+     * Blocks that merely stack can only ever have one of them across a given
+     * edge, so this is about the ones that do not: a negative margin, an
+     * overlapping absolutely-positioned sibling, two nesting levels reported at
+     * once. Clearing to the higher foot would stop inside the lower block, so
+     * the frame has to pass both, and the order they arrive in is the DOM's.
+     */
+    expect(slicedBarClearance([{ top: 30, bottom: 90 }, { top: 40, bottom: 96 }], { top: 59, bottom: 1024 }, 200))
+      .toBe(37);
+  });
+
+  it("reads the blocks off the panel's own ancestry rather than a selector list", () => {
+    /*
+     * The tab strip and the scope row are written by `app.tsx`, above this view
+     * entirely; the route header and the toolbar are written by this one. A
+     * selector list here would be a fourth copy of that arrangement and would
+     * go quietly wrong the first time any of the four moved.
+     */
+    const source = skillsSource();
+    expect(source).toContain("for (let sibling = node.previousElementSibling; sibling; sibling = sibling.previousElementSibling)");
+    expect(source).toContain("node && node !== scroller");
+    expect(source).not.toMatch(/querySelector(All)?\(["'`][^"'`]*profile-hub/u);
+  });
+});
+
+describe("a save that was refused says so where the person is looking", () => {
+  /*
+   * The sentence renders under the actions, and the actions are the last thing
+   * in the panel: at desktop-1440 `Create skill` sat at 887 in a 900px viewport
+   * and at tablet-768 at 1002 in a 1024px one, so the only account of why the
+   * save did not commit was below the fold at both, and the button read as
+   * dead. Nothing else moves the page — the route keeps the panel open on a
+   * refusal, deliberately, so the draft survives.
+   */
+  it("brings the refusal into the frame with the least scroll that does it", () => {
+    const source = editorSource();
+    expect(source).toContain('statusRef.current?.scrollIntoView({ block: "nearest" });');
+    expect(source).toContain("}, [status]);");
+    // `nearest`, so a refusal already in frame moves nothing and the field the
+    // person has to go back and fix stays where they left it.
+    expect(source).not.toContain('scrollIntoView({ block: "center" })');
+    expect(source).not.toContain('scrollIntoView({ block: "start" })');
+  });
+
+  it("announces it and hangs it off the button that produced it", () => {
+    const source = editorSource();
+    // Everything this element can hold is a refusal — the success path closes
+    // the panel first — so a polite region is the wrong instrument.
+    expect(source).toContain('id={SAVE_STATUS_ID} class="skill-editor-status" role="alert"');
+    expect(source).not.toContain('class="skill-editor-status" role="status"');
+    expect(source).toContain("aria-describedby={status ? SAVE_STATUS_ID : undefined}");
+  });
+
+  it("gives the scrolled-to sentence the panel's foot instead of the window's edge", () => {
+    const sheet = readFileSync(new URL("./skill-editor.css", import.meta.url), "utf8");
+    const status = /\n\.skill-editor-status \{([\s\S]*?)\n\}/u.exec(sheet)?.[1] ?? "";
+    // `nearest` stops as soon as the margin box is inside the scrollport, which
+    // bare would leave the panel's padding, border and the gap to the grid
+    // below the fold — the one sentence that matters arriving flush against the
+    // bottom edge, looking like the top of something else.
+    expect(status).toContain("scroll-margin-block-end: calc(var(--sp-3) + 14px);");
+    // The two lengths are the panel's own, so the pairing is checkable here.
+    expect(/\n\.skill-editor \{([\s\S]*?)\n\}/u.exec(sheet)?.[1] ?? "").toContain("margin-bottom: 14px;");
+    expect(/\n\.skill-editor \{([\s\S]*?)\n\}/u.exec(sheet)?.[1] ?? "").toContain("padding: var(--sp-3);");
   });
 });
 
