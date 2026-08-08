@@ -37,14 +37,10 @@ describe("a profile name stays inside its own card", () => {
     expect(routes).toContain(".profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis;");
   });
 
-  it("clamps the wrap at three lines, so one name cannot set the height of the whole row", () => {
+  it("clamps the wrap, on the inner display the clamp actually needs", () => {
     /*
-     * Wrapping alone only moved the cost: the same 49-character name took seven
-     * lines at landscape-932 and ten in the phone column, and since the cards
-     * share a row it dictated every sibling's height — the catalog went ragged,
-     * and in the narrow layout the other profiles were pushed most of a screen
-     * down by a name. Three lines is one more than the description a sibling
-     * card already carries, and around 120 characters of prefix at this size.
+     * Wrapping alone only moved the cost: the same name took seven lines at
+     * landscape-932 and ten in the phone column.
      *
      * `-webkit-box` is not a legacy accident: the clamp only takes effect on
      * that inner display, so it has to win over the `display: block` the shared
@@ -54,10 +50,51 @@ describe("a profile name stays inside its own card", () => {
     const name = rule(".profile-card strong");
     expect(name).toContain("display: -webkit-box");
     expect(name).toContain("-webkit-box-orient: vertical");
-    expect(name).toContain("-webkit-line-clamp: 3");
-    expect(name).toContain("line-clamp: 3");
     expect(name).toContain("overflow: hidden");
     expect(routes.indexOf(".profile-card strong {")).toBeGreaterThan(routes.indexOf(".profile-card strong,\n.profile-card small {"));
+  });
+
+  it("spends the clamp where cards share a flex line, and relaxes it where they do not", () => {
+    /*
+     * The number is not one number, because the coupling it answers exists in
+     * one band only.
+     *
+     * In the narrow band `.profile-card-list` is `display: flex; flex-wrap:
+     * wrap`, and a flex line stretches every item to its tallest — so at
+     * landscape-932, where three cards fit a line, one long name sets the height
+     * of Research and Developer too, on the layout with the least height to
+     * spend. Three lines is the floor that buys that back.
+     *
+     * Everywhere else the catalog is the stacked one-column grid, where a card's
+     * height is nobody's business but its own and the panel scrolls with the
+     * page. Clamping at three there bought nothing and cost the tail of the
+     * name: measured at laptop-1024 it saved 38px on one card of a panel that
+     * ended 46px above a fold the page scrolls past anyway, and spent the last
+     * 27 characters of the name to do it. Five renders the 119-character name
+     * this was written against whole at laptop-1024 and desktop-1440, and still
+     * bounds the narrowest stacked column, tablet-768, at five lines of ten.
+     */
+    expect(rule(".profile-card strong")).toContain("-webkit-line-clamp: 5");
+    expect(rule(".profile-card strong")).toContain("line-clamp: 5");
+
+    /*
+     * The override rides with the `display: flex` that creates the coupling, so
+     * a future change to one is read beside the other. Both live in the band
+     * whose landscape arm — 950px wide by 500px tall — is landscape-932 itself,
+     * the viewport the three-line floor is really for; a rule keyed on width
+     * alone would miss it and leave that card unclamped.
+     */
+    const band = "@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {";
+    expect(routes).toContain(band);
+    const narrow = routes.slice(
+      routes.indexOf(band),
+      routes.indexOf(".profile-card .posture-chip { display: none; }"),
+    );
+    const coupling = narrow.slice(narrow.lastIndexOf("  .profile-card-list {"));
+    expect(coupling).toContain("display: flex");
+    expect(coupling).toContain("flex-wrap: wrap");
+    expect(coupling).toContain("-webkit-line-clamp: 3");
+    expect(coupling).toContain("line-clamp: 3");
   });
 
   it("keeps the clamped remainder recoverable without selecting the card", () => {

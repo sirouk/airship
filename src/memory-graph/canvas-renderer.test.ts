@@ -239,10 +239,21 @@ describe("Canvas memory graph labels", () => {
 
     drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
 
-    expect(harness.drawn).toEqual(["General session", "docs/architectur…"]);
+    expect(harness.drawn).toEqual(["General session", "docs/architecture…"]);
     const stub = harness.calls[1]!;
-    // Ends before the disc at x=390 — cut short of it, not printed over it.
-    expect(stub.x + stub.width).toBeLessThan(390);
+    /*
+     * Ends at 384: the disc's own left edge at 390, less the 6px gutter a label
+     * already keeps from its own node, so it stops clear of the circle rather
+     * than resting against it.
+     *
+     * Asserted as the exact edge because this is also where the horizontal half
+     * of the lattice slop shows. While a cell was a flag rather than a
+     * rectangle, the room was rounded back to the start of the 20px column the
+     * disc began in — 378 here, and up to 19px short in general, which on a
+     * `MIN_LABEL_WIDTH` floor is the difference between a name and an anonymous
+     * node. A drift back to a column boundary fails this number.
+     */
+    expect(stub.x + stub.width).toBe(384);
   });
 
   it("cuts an oversized label to fit rather than condensing it into micro-type", () => {
@@ -260,6 +271,39 @@ describe("Canvas memory graph labels", () => {
     // Three arguments: no maxWidth reaches the canvas, so nothing can condense.
     expect(harness.calls[0]!.argumentCount).toBe(3);
     expect(harness.calls[0]!.width).toBeLessThanOrEqual(190);
+  });
+
+  it("keeps a label its neighbour does not touch, wherever the pair falls on the lattice", () => {
+    /*
+     * #memory at landscape-932: "Evidence first" and "Concise handoff" were not
+     * drawn while the labels they sit between were, and neither overlaps
+     * anything. The cause was the collision grid answering with its cells
+     * instead of with its rectangles — a reservation was filed in every cell its
+     * edges fell in, and both edges round outward, so the grid enforced the
+     * declared band grown to the lattice.
+     *
+     * Two 11px labels have disjoint ink from a 12px gap, where their ±6 bands
+     * meet without overlapping. Before the rectangles were compared this asked
+     * for 14, 15, 16 or 17 depending on nothing but where the pair sat relative
+     * to the lattice — which is why the losses looked like force-graph jitter
+     * rather than like a rule, and why the sweep runs every phase rather than
+     * one convenient alignment.
+     */
+    for (const phase of [0, 1, 2, 3]) {
+      const kept = (gap: number): number => {
+        const harness = labelHarness([
+          node("Source reviewer", 0, phase, 7),
+          node("Evidence first", 0, phase + gap, 7),
+        ]);
+        drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+        return harness.drawn.length;
+      };
+      // Bands meeting edge to edge is adjacent lines of text, which is what
+      // every paragraph is: kept.
+      expect(kept(12), `phase ${phase}: 12px apart, ink disjoint`).toBe(2);
+      // One pixel closer and the ink really does share a row: dropped.
+      expect(kept(11), `phase ${phase}: 11px apart, ink overlaps`).toBe(1);
+    }
   });
 
   it("never lets a cut-down label take room from one already placed at full width", () => {
