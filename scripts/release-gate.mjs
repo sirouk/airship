@@ -1040,14 +1040,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // as a raise nobody reviewed.
   /* Current release artifact. */
   //
-  // Re-measured at 58,841 B raw / 16,883 B gzip after the surface-repair sweep,
+  // Re-measured at 58,841 B raw / 16,881 B gzip after the surface-repair sweep,
   // and this one went *down*. `registerExecutionTools` was a second, eager copy
   // of every execution tool's schema that nothing called — the product registers
   // through `registerLazyExecutionTools` — and it had already drifted: the dead
   // copy never learned `execute_shell`. Deleting it removed the duplicate
   // schemas rather than any capability. Both ceilings take the smallest whole-
-  // KiB step that clears the new reading, so raw falls to 58 KiB (1,251 B) and
-  // gzip to 17 KiB (525 B). A ceiling left where a shrink found it is headroom
+  // KiB step that clears the new reading, so raw falls to 58 KiB (551 B) and
+  // gzip to 17 KiB (527 B). A ceiling left where a shrink found it is headroom
   // nobody reviewed.
   optionalExecutionTools: Object.freeze({ raw: 58 * 1024, gzip: 17 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
