@@ -11211,7 +11211,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         same semantics; only the place it stands changes. The two are
         display-exclusives, so a reader never gets it twice.
       */}
-      <div class="runtime-line runtime-line--phone" role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
+      {/*
+        `data-empty` collapses the band without unmounting it. The element has
+        to stay in the accessibility tree for `aria-live` to announce the
+        sentence when one arrives — `display: none` would take it out and the
+        announcement with it — but a phone should not spend 34px of its shortest
+        dimension on a status that says nothing. It reads as a stripe of dead
+        `--ground` under the topbar, which is exactly what the nav band's own
+        keyboard rule two blocks down exists to prevent for the same reason.
+      */}
+      <div class="runtime-line runtime-line--phone" data-empty={runtimeStatus ? undefined : "true"} role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
 
       <Rail
         view={view}

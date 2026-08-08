@@ -2689,6 +2689,18 @@
     border-bottom: 1px solid var(--line);
   }
 
+  /* Nothing to say, no band to say it in. The element stays mounted so the
+     live region survives; only its box goes away. */
+  .runtime-line--phone[data-empty] {
+    min-height: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .runtime-line--phone[data-empty] > * {
+    display: none;
+  }
+
   /* A phone shell never borrows its columns from content lengths: the
      file's connected journey proved this exact reason — a long runtime
      sentence set the whole shell's auto-minimum off the right edge of a
@@ -3994,9 +4006,23 @@
    vertical budget. Keep the full mobile information architecture, then
    collapse only redundant chat chrome so the transcript remains usable. */
 @media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {
+  /*
+   * Four tracks, matching the portrait block: topbar, runtime status line,
+   * conversation, nav band. This template was written when the shell had
+   * three, and `dc257d5` added the status line to the portrait template only —
+   * so a rotated phone put `.main` on the nav's track (44px of conversation)
+   * and pushed the band into an implicit row, while the status line took the
+   * whole `1fr` and painted over the transcript and anything opening inside
+   * it. The approval policy's own popover was landing underneath it.
+   *
+   * The band is `auto` here for the same reason it is there: it collapses to
+   * nothing when there is no status to show, which on a 430px-tall landscape
+   * is the difference between a usable transcript and a stripe.
+   */
   .app-shell {
     grid-template-rows:
       calc(var(--touch-target) + env(safe-area-inset-top))
+      auto
       minmax(0, 1fr)
       calc(var(--touch-target) + env(safe-area-inset-bottom));
   }
