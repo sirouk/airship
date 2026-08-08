@@ -311,8 +311,8 @@ describe("the terminal route on a short viewport", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const short = css.slice(css.indexOf("@media(max-height:500px)"));
     expect(short).toContain(".terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto");
-    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(3rem,1fr) auto}");
-    expect(short).toContain(".terminal-emulator{min-height:3rem}");
+    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}");
+    expect(short).toContain(".terminal-emulator{min-height:2.5rem;padding:6px}");
     // The dock declares its own rows and is clamped against a measured parent;
     // an unscoped `.terminal-route` here would impose a fifth row on its four.
     expect(short).not.toMatch(/\n\s*\.terminal-route\{/u);
@@ -327,8 +327,8 @@ describe("the terminal route on a short viewport", () => {
    * at 8rem the panel is already on its own floor (a 44px bar, the 3rem
    * emulator, a 32px meta row), so taking more would crush the panel and
    * swallow the meta row under its `overflow:hidden` instead. The rows state
-   * their floors, and `min-height:min-content` on the route turns the residue
-   * into 16px of ordinary scrolling rather than a control cut in half.
+   * their floors, and `min-height:min-content` on the route lets the residue
+   * leave as scrolling rather than as a control cut in half.
    */
   it("floors the two rows whose overflow zeroes their minimum, so the residue scrolls instead of slicing", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
@@ -341,6 +341,54 @@ describe("the terminal route on a short viewport", () => {
     // And the route has to be allowed to outgrow its box, or flooring the rows
     // clips them under a height-bound grid instead of scrolling them.
     expect(css).toMatch(/\.terminal-route\{[^}]*min-height:min-content/u);
+  });
+
+  /*
+   * Flooring those two rows did not pay for them. Measured at 932×430: `main`
+   * is 342px between a 44px topbar and the 44px navigation band, `.route-layout`
+   * spends 14px and 20px of it, and the route's rows want 349px of the 308px
+   * left — so 41px overflowed, and it overflowed into the last row. That row is
+   * `.terminal-route__footer`, `role="status"`: the band painted through the
+   * middle of its first line and its second line was not painted at all, which
+   * is the live region this route announces renames and write failures through.
+   *
+   * The 41px is found inside the route, not taken from a neighbour, and these
+   * are the three places it comes from. Each is air: a gap between bordered
+   * surfaces, a margin above one, and the emulator's own gutter.
+   */
+  it("pays for those floors out of the route's own air rather than out of the status line", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+    expect(short).toContain("minmax(8rem,1fr) auto;gap:4px}");
+    expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}");
+    // The emulator's box measured 51px, above its own floor, so neither
+    // declaration collects the 8px alone: lowering the floor moves nothing
+    // while the gutter holds the box up, and trimming the gutter moves nothing
+    // while the floor does. Both, or the repair is arithmetic on paper only.
+    expect(short).toMatch(/\.terminal-emulator\{min-height:2\.5rem;padding:6px\}/u);
+    expect(short).toContain("minmax(2.5rem,1fr)");
+  });
+
+  /*
+   * The three floors this height budget is spent to protect. A repair that
+   * balanced by shaving one of them would be the trade this whole wave exists
+   * to stop — the shortfall would simply move to whichever control was cheapest
+   * to cut, which is how the emulator's 14rem floor crushed the disclosure in
+   * the first place.
+   */
+  it("balances the budget without narrowing a control or shrinking a touch target", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+    // The 44px bar and the 32px meta row are a touch target and a fact; the
+    // panel's height comes off its middle row or it does not come off at all.
+    expect(short).not.toMatch(/\.terminal-panel__bar/u);
+    expect(short).not.toMatch(/\.terminal-panel__meta/u);
+    // The status line is the row being repaired. Clamping, ellipsising or
+    // pinning it would answer the overflow by deleting the sentence instead.
+    expect(short).not.toMatch(/\.terminal-route__footer/u);
+    // Nothing here touches the inline axis: this is a short viewport, not a
+    // narrow one, and the emulator's gutter is the one padding that changes.
+    expect(short).not.toMatch(/width|flex|display:none/u);
   });
 });
 

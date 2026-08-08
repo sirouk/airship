@@ -304,26 +304,65 @@
    through the lower third of its label, in 01-rest, 02-setup-open and
    06-second-tab-open alike.
 
-   There is no more room to take from the emulator. At 8rem the panel is
-   already sitting on its own floor — a 44px bar, the 3rem emulator this block
-   grants below, and a 32px meta row come to 124px inside a 128px track — so
-   cutting the route track further would not shrink the emulator, it would
-   crush the panel and swallow the meta row under its `overflow:hidden`, which
-   is the failure the paragraph above was written against.
+   So the two rows state their floors instead of inheriting a zero. The floors
+   are written against `--touch-target` rather than a literal because they are
+   the same 44px decision the summary and the tab buttons already make, plus
+   the 1px borders and the strip's 2px padding that sit outside it.
 
-   So the two rows state their floors instead of inheriting a zero, and the
-   ~16px that no longer fits leaves through the door the route already has:
-   `.terminal-route` carries `min-height:min-content`, so it grows to its own
-   floors and `main` scrolls those last pixels. A reader scrolls 16px to reach
-   the end of the footer sentence; nobody reads a control that has been sliced
-   in half. The floors are written against `--touch-target` rather than a
-   literal because they are the same 44px decision the summary and the tab
-   buttons already make, plus the 1px borders and the strip's 2px padding that
-   sit outside it. */
+   What flooring them did not do was pay for them, and the paragraph that used
+   to stand here said it did. It claimed the residue was "about 16px" and that
+   it left "through the door the route already has" — `min-height:min-content`
+   on `.terminal-route`, with `main` scrolling the last pixels — so that "a
+   reader scrolls 16px to reach the end of the footer sentence". Both halves
+   were wrong, and the row that paid is the one that could least afford to.
+
+   Measured off the shipped 932x430 frame, top edge down: `main` is 342px tall
+   between a 44px topbar and the 44px navigation band, and `.route-layout`
+   spends 14px above and 20px below, so this route is laid out in 308px. Its
+   rows took 47 (header) + 2 (that header's margin) + 46 + 46 + 136 (the panel,
+   sitting on its own content floor rather than the 8rem track floor) + 40 (the
+   footer's two lines) + 32 of gaps = 349px. The overflow is 41px, not 16px,
+   and it lands in the last row: `.terminal-route__footer`, whose first line is
+   painted through the middle of its glyphs by the navigation band at y=386 and
+   whose second line is not painted at all. That row is `role="status"` — the
+   live region this route announces renames, restarts and write failures
+   through — so the residue was being charged to the one row a reader is never
+   looking for and never told to scroll to, and overlay scrollbars paint
+   nothing at rest to tell them otherwise.
+
+   The 41px is found inside this route's own box rather than taken from a
+   neighbour, and each piece is measured:
+
+   - `gap:4px` instead of 8px, across four gaps: 16px. This is air between four
+     already-bordered surfaces, and it is the cheapest height in the route at
+     the one viewport height where height is what is scarce. The dock reaches
+     the same number on a phone for the same reason.
+   - the header's 2px margin, which is skyline above a bordered disclosure: 2px.
+   - the emulator gives back 8px, and it takes both declarations below to
+     collect. Its box measured 51px — above the 3rem floor, so lowering the
+     floor alone moves nothing, and trimming the 10px gutter alone leaves the
+     floor holding the box at 48. `2.5rem` with a 6px gutter (the padding the
+     phone block already spends here) lands the box at 43px. The emulator is
+     still the row nominated to yield, for the reason stated above: it scrolls
+     its own scrollback, and the 8px comes out of its gutter, not its text.
+     Nothing else in the panel moves — the 44px bar and the 32px meta row are a
+     touch target and a fact — so the panel now measures 44+43+37+2 = 126px
+     inside the unchanged 8rem track, the same 2px of clearance it had before.
+     The gutter also travels the other way on the inline axis: 8px wider.
+
+   That is 26px of the 41. The footer's last line now ends at y=381, five
+   pixels clear of the band, and what still scrolls is the 15px of `main`'s own
+   bottom gutter — air, with no sentence in it. Nothing here narrows a control,
+   and no touch target shrinks: the floors above are untouched and every pixel
+   comes from a gap, a margin or a gutter.
+
+   Nothing outside a ≤500px-tall viewport can see any of it, which is the whole
+   of the cost at the other seven device classes. */
 @media(max-height:500px){
-  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto;gap:8px}
+  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto;gap:4px}
+  .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__setup,
   .terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}
-  .terminal-panel{grid-template-rows:auto minmax(3rem,1fr) auto}
-  .terminal-emulator{min-height:3rem}
+  .terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}
+  .terminal-emulator{min-height:2.5rem;padding:6px}
 }
