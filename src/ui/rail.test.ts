@@ -315,58 +315,94 @@ describe("the rail's collapse control", () => {
 
   /*
    * The handle is centred on the seam, so half of whatever it *paints* lands
-   * inside the rail — and this rule has now been wrong in three directions.
+   * inside the rail — and this rule has now been wrong in four directions.
    *
    * Painted 44px in an 84px rail, that half was 22px of a `z-index: 1` control
    * lying across the nav column: measured at 768 it washed out the final `n` of
    * `Connection` — in a rail whose 84px is itself measured to hold exactly that
    * word — and the right end of that row collapsed the rail instead of opening
-   * the destination. Narrowing the paint to 24px cleared the label and left a
-   * 44×24 control: WCAG 2.5.8's floor, but under this product's own, which
-   * tokens.css states on both axes because "a target's smaller dimension is the
-   * one a finger has to find". Widening the rail by half a touch target to hold
-   * a 44px paint kept both and charged every route 22px of content column, the
-   * seam moving x=83 → x=105 with the icons still centred on x=41.
+   * the destination. Narrowing the paint to 24px left a 44×24 control: WCAG
+   * 2.5.8's floor, but under this product's own, which tokens.css states on both
+   * axes because "a target's smaller dimension is the one a finger has to find".
+   * Widening the rail by half a touch target to hold a 44px paint kept both and
+   * charged every route 22px of content column, the seam moving x=83 → x=105
+   * with the icons still centred on x=41.
    *
-   * So the paint and the target stop being the same box. The body stays the
-   * 24px that was measured to clear the nav column, at the width it was
-   * measured at, and the floor is met by a transparent extension hanging off
-   * the outer edge into the route gutter. These three tests pin that split:
-   * the body's number, the extension's arithmetic, and the fact that no rail
-   * width anywhere adds anything for the seam.
+   * The fourth split the paint from the target, which was right and is kept —
+   * but it left the body at 24px, the number from when the body *was* the
+   * target. Centred on the seam that still reached 12px inward, and measured at
+   * tablet-768 the paint ran x=71..95 against `Connection`'s ink ending at
+   * x=72: the handle drawn over the word's last letter, reported by five route
+   * audits as the grip sitting flush against, colliding with, or re-overlapping
+   * that label. The original defect, at 1px instead of 22px.
+   *
+   * So the paint is no longer widened for a finger at all — it is the 13px the
+   * base rule draws at every pointer type — and the floor is met entirely by a
+   * transparent extension. These tests pin that: that the coarse block never
+   * takes the paint back, that the extension's four terms still sum to
+   * `--touch-target` once `border-box` sizing is paid for, that the box clears
+   * the label inward and the routes' controls outward, and that no rail width
+   * anywhere adds anything for the seam.
    */
-  const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf("--grip-body")));
+  const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf(".rail-collapse::after")));
+  const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
+  /** A `--name: <n>px` declaration, read as a number. */
+  const tokenPx = (sheet: string, name: string): number => {
+    const hit = new RegExp(`${name}:\\s*(-?[\\d.]+)px`, "u").exec(sheet);
+    expect(hit, `${name} should be declared once, in px`).not.toBeNull();
+    return Number(hit![1]);
+  };
 
-  it("keeps the coarse-pointer grip's paint clear of the nav column", () => {
-    const body = coarseGripBlock.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
-
-    // 24px is the measured number, not a taste: 12px of it lands inside the
-    // rail, which stops at `.primary-nav`'s padding instead of on the word.
-    expect(body).toContain("--grip-body: 24px");
-    expect(body).toContain("width: var(--grip-body)");
+  it("paints the grip at one width for every pointer type", () => {
+    // One paint, named once in the base rule and read by the extension below.
+    const [paint] = rulesDeclaring("--grip-body: 13px", "width: var(--grip-body)");
+    expect(paint).toEqual([".rail-collapse"]);
+    // The coarse block must carry the extension and nothing else. A
+    // `.rail-collapse` rule reappearing here is precisely how 24px outlived the
+    // law it was copied from and put the handle back on top of `Connection`.
+    expect(coarseGripBlock).not.toMatch(/\.rail-collapse \{/u);
     // The seam is still the position; nothing about the finger moves the grip.
-    expect(body).not.toContain("translate:");
+    expect(coarseGripBlock).not.toContain("translate:");
   });
 
-  it("meets the touch floor in overhang, and hangs the whole of it outward", () => {
+  it("meets the touch floor in overhang, and pays for its own borders", () => {
     const extension = coarseGripBlock.match(/\.rail-collapse::after \{([^}]+)\}/u)?.[1] ?? "";
 
-    // The remainder of the floor, never a second literal: `--grip-body` plus
-    // this is `--touch-target` by construction, so a 44px-looking grip cannot
-    // acquire a 38px hit box the way a hand-written number would let it.
-    expect(extension).toContain("right: calc(var(--grip-body) - var(--touch-target))");
-    // Anchored to the body's inner edge and grown outward only. `left: 0` is
-    // what keeps the extra room out of the rail: an extension that split the
-    // difference would put it straight back over `Connection`.
-    expect(extension).toContain("left: 0");
+    // Derived terms only. `--grip-edge` appears because `box-sizing` is
+    // `border-box` product-wide: `width` is the outer box, these offsets
+    // resolve against the padding box inside it, and the version that ignored
+    // that summed to 42px while every comment about it claimed 44.
+    expect(extension).toContain("inset-block: calc(-1 * var(--grip-edge))");
+    expect(extension).toContain("left: calc(-1 * (var(--sp-1) + var(--grip-edge)))");
+    expect(extension).toContain("right: calc(var(--sp-1) + var(--grip-body) - var(--touch-target) - var(--grip-edge))");
     expect(extension).not.toContain("right: 0");
     // Room, not a shape. Anything painted here would be the 44px body again.
-    for (const paint of ["background", "border", "opacity"]) expect(extension).not.toContain(paint);
+    for (const paint of ["background", "opacity"]) expect(extension).not.toContain(paint);
+
+    // The law those terms encode: beyond the paint the box reaches one `--sp-1`
+    // inward — the gutter the collapsed rail insets `.primary-nav` by — and the
+    // whole remainder outward, and the three add up to the floor.
+    const body = tokenPx(css, "--grip-body");
+    const target = tokenPx(tokens, "--touch-target");
+    const inward = tokenPx(tokens, "--sp-1");
+    const outward = target - body - inward;
+    expect(inward + body + outward).toBe(target);
+
+    // Measured at tablet-768, the only viewport with both a rail and a coarse
+    // pointer: the seam is x=83, `Connection`'s ink ends at x=72, and the
+    // nearest control in any of the fourteen route captures is the `profiles`
+    // avatar whose left edge is x=121. Both edges are pinned because this
+    // control has been over one of them or the other in three of its four
+    // lives, and there is no viewport where it can have room from both.
+    const seam = 83;
+    expect(seam - body / 2 - inward).toBeGreaterThan(72);
+    expect(seam + body / 2 + outward).toBeLessThan(121);
+    // And the paint — which is what the audits actually saw — clears that same
+    // ink by 4.5px, where at 24px it overlapped it.
+    expect(seam - body / 2).toBeGreaterThan(76);
   });
 
   it("charges no rail width, in any state, for the grip on its seam", () => {
-    const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
-
     // The regression this replaces: half a touch target added to every painted
     // rail state moved the seam 22px right on a coarse pointer, and with it
     // every route's content column and the topbar track the posture chip lives

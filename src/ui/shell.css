@@ -1523,10 +1523,18 @@
   right: 0;
   display: grid;
   place-items: center;
-  width: 13px;
+  /* The painted width, and the border that thickens it, each named once and
+     read again by the touch extension in the coarse block below. Both matter
+     to that arithmetic: `box-sizing` is `border-box` product-wide, so `width`
+     is the *outer* box and the extension's offsets resolve against the padding
+     box two `--grip-edge`s inside it. Leaving that pair of pixels out is how
+     the extension used to sum to 42px while every comment about it said 44. */
+  --grip-body: 13px;
+  --grip-edge: 1px;
+  width: var(--grip-body);
   height: 46px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: var(--grip-edge) solid var(--line);
   border-radius: var(--radius-chip);
   color: var(--ink-faint);
   background: var(--surface-soft);
@@ -1546,84 +1554,115 @@
 .rail-collapse:focus-visible { color: var(--ink); border-color: var(--line-strong); opacity: 1; }
 
 @media (pointer: coarse) {
-  /* A 13px grip is not a target. On a coarse pointer it widens on the same
-     seam, in the same place — the shape changes, the gesture and the position
-     do not.
+  /* A 13px grip is not a target. On a coarse pointer the room a finger needs is
+     hung off it as a transparent extension — the gesture, the position and now
+     the paint are all exactly what a fine pointer gets.
 
-     This rule has been three things, and each one charged a different
-     neighbour for the same 44px.
+     This rule has been four things, and the first three each charged a
+     different neighbour for the same 44px.
 
      Painted 44px wide, it is centred on the seam, so 22px of a `z-index: 1`
      control lies across the nav column: measured at 768 it sat over the tail
      of `Connection` — in a rail whose 84px is itself measured to hold exactly
      that word — washing the final `n` out, and the right end of that row
      collapsed the rail instead of opening the destination. That charged the
-     labels. Narrowing the paint to 24px cleared them and left a 44×24 control,
-     which is WCAG 2.5.8's floor but under this product's own: tokens.css
-     states `--touch-target` on both axes because "a target's smaller dimension
-     is the one a finger has to find". That charged the finger. Widening the
-     rail by half a touch target so the inner half landed in reserved gutter
-     kept the label and the target and charged everything else — the seam went
-     from x=83 to x=105 with the nav icons still centred on x=41, every route's
-     content column shifted 22px at tablet-768, and because `.topbar` shares
+     labels. Narrowing the paint to 24px left a 44×24 control, which is WCAG
+     2.5.8's floor but under this product's own: tokens.css states
+     `--touch-target` on both axes because "a target's smaller dimension is the
+     one a finger has to find". That charged the finger. Widening the rail by
+     half a touch target so the inner half landed in reserved gutter kept the
+     label and the target and charged everything else — the seam went from x=83
+     to x=105 with the nav icons still centred on x=41, every route's content
+     column shifted 22px at tablet-768, and because `.topbar` shares
      `--rail-width` the brand track grew with it and the posture chip lost 13px
      at every touch width, truncating the runtime name a character or three
      earlier on twelve routes.
 
-     What all three have in common is treating the grip as something that has
-     to fit *between* the rail and the route. It does not: it is a floating
-     grip on a seam, and the only reason its width was ever anyone else's
-     problem is that the painted body and the pressable box were the same box.
+     The fourth separated the painted body from the pressable box, which was
+     right and is kept: paint is paint, room is room, and room hung off an edge
+     costs no track. But it left the body at 24px — a number measured back when
+     the body *was* the target, and carried forward once the target moved off
+     it. Nothing re-derived it, and 24px centred on the seam still reaches 12px
+     inward, into a collapsed rail whose rows are inset by `--sp-1`. Measured on
+     that build at tablet-768: seam x=83, grip painted x=71..95, and the ink of
+     `Connection` ending at x=72 — the handle drawn over the word's last letter,
+     which is the original defect at 1px instead of 22px. Five route audits
+     reported it, as the handle sitting flush against (#memory, #chat), being
+     clipped by the seam and colliding with (#connection), re-overlapping
+     (#preferences), and tightening clearance against (#capabilities) that
+     label. The extension's `left: 0` then put a further 7px of pressable
+     control over the row's right end, so the tap that was meant to open
+     `Connection` still collapsed the rail.
 
-     They are not, here. The painted body stays the 24px that was measured to
-     clear the nav column, in exactly the place it was measured, so nothing in
-     the rail and nothing in any route moves by a pixel from the sheet before
-     the reserve. The 44px a finger has to find is a transparent extension hung
-     off the grip's outer edge, over the route's own left gutter.
+     So the body stops being widened for a coarse pointer at all. It is the
+     13px the design draws everywhere, centred on the seam as specified, and
+     6.5px is all that lands inside the rail — clear of every destination row's
+     ink at the narrowest rail this product paints. That is not a new geometry
+     to be afraid of: it is the geometry every fine-pointer width has shipped
+     with since the handle moved to the seam, and no audit has ever reported it.
 
-     The cost, measured and not asserted. The pressable box reaches 32px past
-     the seam where the 24px grip reached 12px, in a 46px band at the seam's
-     vertical centre. `.main` begins at the seam in every rail state, so that
-     band is always the route's own first 32px, whatever the rail is doing:
-     read off the thirteen route captures at tablet-768, where it is x=84..115,
-     what lives there is a card's border or, on Vault, a card's accent stripe,
-     and not one control on any of them. The same 20px is added to the strip in
-     which a touch-drag finds the grip instead of the route's scroller. Inward,
-     nothing changes at all: the body is where it was, 12px into a rail whose
-     rows stop 10px short of the seam in both painted states. And nothing here
-     applies to a fine pointer, so every desktop, laptop and wide capture is
-     byte-identical. No route loses layout width at any viewport, which is the
-     entire point of paying in overhang rather than in track.
+     The cost, measured and not asserted, at tablet-768 — the only viewport that
+     has both a rail and a coarse pointer, because `.sidebar` is `display: none`
+     under `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`,
+     which is all three phones and landscape-932, where navigation is the bottom
+     tab bar and no grip is drawn at all.
+
+     Inward, every pixel is given back. The paint retreats x=71 → x=76.5, so
+     the 1px overlap with `Connection`'s ink becomes 4.5px of clearance, and it
+     is clearance no label can ever eat: `Connection` is the longest
+     destination name and 84px is the width measured to hold it. The pressable
+     box retreats x=72 → x=72.5.
+
+     Outward, the paint also retreats, x=95 → x=89.5. Only the invisible box
+     grows, x=114 → x=116.5 — and it grows because it was never 44px in the
+     first place: `border-box` sizing put the two 1px borders inside `width`,
+     so the old extension summed to 42. Two of those 2.5px are the floor being
+     met rather than territory being taken. Read off all fourteen route captures
+     in the grip's band (y=518..563), x=114..117 holds a card's background or
+     the first glyph of body text on every one of them and a control on none;
+     the nearest control in any route is the profile avatar on `profiles`, whose
+     left edge is x=121 and which stays 4.5px clear. The same 2.5px is added to
+     the strip in which a touch-drag finds the grip instead of the route's
+     scroller.
+
+     Nothing here applies to a fine pointer — the base rule is untouched and the
+     coarse block no longer overrides the paint — so every laptop, desktop and
+     wide capture is byte-identical. No route loses layout width at any
+     viewport, which is the entire point of paying in overhang rather than in
+     track.
 
      `touch-target-floor.spec.ts` cannot check this one, and never could: it is
      a coarse-pointer rule, its only coarse project is a phone, and `.sidebar`
-     is `display: none` below 640px, so the grip measures 0×0 there and is
-     skipped. It also measures the element's own border box, which a pseudo's
-     room does not enter — so if a coarse tablet project is ever added, expect
-     that spec to read 24×46 here and read this before excepting anything. The
-     arithmetic below is what actually holds the floor, and rail.test.ts is
-     what holds the arithmetic. */
-  .rail-collapse {
-    /* Named once, because the extension below is defined as the remainder of
-       `--touch-target` rather than as a second number. Two literals is how a
-       44px-looking grip ends up with a 38px hit box that nothing on screen
-       reports — and this rule's own history is a literal outliving the law it
-       was copied from. */
-    --grip-body: 24px;
-    width: var(--grip-body);
-  }
+     is `display: none` there, so the grip measures 0×0 and is skipped. It also
+     measures the element's own border box, which a pseudo's room does not
+     enter — so if a coarse tablet project is ever added, expect that spec to
+     read 13×46 here and read this before excepting anything. The arithmetic
+     below is what actually holds the floor, and rail.test.ts is what holds the
+     arithmetic. */
 
-  /* The room, without the width. `inset-block: 0` takes the grip's own 46px on
-     the axis that is already over floor, and the negative `right` puts the
-     whole difference outward: the box ends `--touch-target` from the body's
-     inner edge, so it never grows back across a destination row — which is the
-     defect the 44px paint was retired for in the first place. */
+  /* The room, without the width, and with no literal that can drift: the four
+     terms sum to `--touch-target` by construction.
+
+     `inset-block` pulls out by one `--grip-edge` so the room is the grip's
+     whole 46px border box rather than the 44px padding box inside it; that axis
+     is over floor either way, but deriving it means a future change to `height`
+     cannot quietly take it under.
+
+     Horizontally the box reaches inward by one `--sp-1` — the gutter
+     `.primary-nav` is inset by in the collapsed rail, so the extension stops
+     inside the destination row's own padding and never under its label — and
+     spends the entire remainder outward, over the route's left gutter, which is
+     the one direction the captures show holds no control. Splitting it evenly
+     would put it straight back across `Connection`; hanging all of it outward,
+     now that the paint absorbs 13px instead of 24px, would reach x=121.5 and
+     take the `profiles` avatar instead. Inward as far as the row's padding and
+     no further is the only split that charges neither. */
   .rail-collapse::after {
     content: "";
     position: absolute;
-    inset-block: 0;
-    left: 0;
-    right: calc(var(--grip-body) - var(--touch-target));
+    inset-block: calc(-1 * var(--grip-edge));
+    left: calc(-1 * (var(--sp-1) + var(--grip-edge)));
+    right: calc(var(--sp-1) + var(--grip-body) - var(--touch-target) - var(--grip-edge));
   }
 
   .chat-nav-disclosure,
