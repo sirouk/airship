@@ -1256,7 +1256,20 @@ function fitComposerTextarea(element: HTMLTextAreaElement): void {
   );
   element.style.height = `${minimum}px`;
   element.style.maxHeight = `${maximum}px`;
-  const natural = element.scrollHeight;
+  /*
+   * An empty box is the one height that is known rather than measured.
+   *
+   * Growth still asks the element how tall its text wants to be. Emptiness
+   * does not have to ask, and asking is what kept the composer open: measured
+   * on this build at 320, 390, 430, 768, 1024, 1440 and 1920, clearing a draft
+   * left the textarea sitting at exactly the cap — 180px of nothing above the
+   * footer, with the transcript's one sentence pushed off a 320px phone —
+   * because `scrollHeight` answered with the extent the box had grown to and
+   * not with the extent an empty value needs, and every later refit measured
+   * the same stuck answer. Blurring the composer did not release it either, so
+   * it was not a focus affordance — it was 136px the person could not get back.
+   */
+  const natural = element.value ? element.scrollHeight : minimum;
   element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
   element.style.overflowY = natural > maximum ? "auto" : "hidden";
   markComposerScroll(element);
