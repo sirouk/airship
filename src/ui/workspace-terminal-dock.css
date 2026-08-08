@@ -45,6 +45,30 @@
   .workspace-terminal-dock__resize::after {
     top: 11px;
   }
+
+  /*
+   * The closed bar's controls, floored on the axis a fingertip has to find.
+   *
+   * The phone block below already does this, and it stops at 760px — which
+   * leaves the two touch devices that report a wider viewport, a 932x430
+   * landscape phone and a 768x1024 tablet, with 34px controls inside a 42px
+   * bar. That was survivable while the closed bar was a thing you passed
+   * through on the way to an open dock. It is not now: a panel too short to
+   * hold a terminal renders this bar and nothing else, so on a landscape phone
+   * these two buttons are the whole of the dock, and "Open the full Terminal
+   * view" is the only way to the transcript at all.
+   *
+   * The bar grows with them rather than the buttons overhanging it, which is
+   * the same choice the separator above makes and for the same reason. It costs
+   * the workbench 6px at exactly those two viewports — a 932x430 panel that has
+   * 279px for a 156px editor floor, and a 768x1024 panel with 924px.
+   */
+  .workspace-terminal-dock[data-open=false], .workspace-terminal-dock__collapsed { height: 48px; }
+
+  .workspace-terminal-dock__collapsed button {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 }
 
 @media(max-width:760px){

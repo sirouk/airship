@@ -8,6 +8,7 @@ import {
   TERMINAL_DOCK_MIN_HEIGHT,
   TERMINAL_DOCK_RESIZE_STEP,
   readTerminalDockState,
+  terminalDockFitsPanel,
   terminalDockHeight,
   terminalDockMaximum,
   terminalDockMinimum,
@@ -49,6 +50,16 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
   const scopedOpenRequest = terminalOpenRequestForAuthority(props.openRequest, props.workspaceIdentity, props.profileId);
   const [TerminalSurface, setTerminalSurface] = useState<TerminalComponent>();
   const [loadError, setLoadError] = useState<string>();
+  /*
+   * The measured panel, held in state rather than only read off the DOM during
+   * render, because whether the dock may open at all now depends on it. The
+   * resize observer below used to commit only when the clamped HEIGHT changed,
+   * and a panel can cross the fitness threshold without moving the height by a
+   * pixel — a landscape phone whose panel goes 380px to 327px leaves a dock
+   * already at 220px exactly where it was. Nothing re-rendered, and the dock
+   * stayed open in a box that could not hold it.
+   */
+  const [panelHeight, setPanelHeight] = useState<number>();
   const [state, setState] = useState<TerminalDockState>(() => readTerminalDockState(
     browserSessionStorage(),
     props.workspaceIdentity,
@@ -61,13 +72,45 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
     setState(next);
   };
 
+  const available = panelHeight ?? availableDockHeight(root.current);
+  const maximum = terminalDockMaximum(available);
+  /*
+   * Home goes to the shortest the dock may be made, which is the shortest it
+   * may be at all. A separator that reports `aria-valuemin` above its own
+   * `aria-valuemax` describes a range that does not exist to the one reader who
+   * cannot see the split; on every panel that renders a separator the maximum
+   * is now at least this number, so that cannot be stated.
+   */
+  const minimum = terminalDockMinimum();
+  /*
+   * The reader asked for a terminal and this panel has no terminal to give:
+   * see `terminalDockFitsPanel` for the two viewports and the 246px of dock
+   * chrome that measurement is. `state.open` is deliberately left alone — the
+   * request outlives the rotation that cannot honour it, so turning a landscape
+   * phone upright restores the dock exactly as it was left.
+   *
+   * Gated on the OBSERVED panel and not on `available`, whose unseen-viewport
+   * fallback is a guess from `innerHeight`. A guess is the right shape of
+   * answer for a clamp, which only has to pick a height, and the wrong shape
+   * for this, which decides whether a surface exists: a window whose fallback
+   * came out short would close a dock for one frame and open it again the
+   * moment the observer spoke. Until the panel has actually been measured this
+   * is `undefined`, which `terminalDockFitsPanel` reads as "believe the
+   * reader" — and in a runtime with no `ResizeObserver` it stays undefined, so
+   * the dock behaves exactly as it did before this gate existed.
+   */
+  const open = state.open && terminalDockFitsPanel(panelHeight);
+
   useEffect(() => {
     if (scopedOpenRequest) commit({ open: true });
     else if (props.openRequest) props.onOpenRequestHandled?.(props.openRequest.id);
   }, [props.openRequest?.id, scopedOpenRequest, props.onOpenRequestHandled]);
 
   useEffect(() => {
-    if (!state.open || TerminalSurface || loadError) return;
+    // Gated on `open`, not on `state.open`: a dock that will render its closed
+    // bar has nothing to do with the terminal chunk, and fetching it there
+    // spends a phone's bandwidth on a surface it is not going to show.
+    if (!open || TerminalSurface || loadError) return;
     let current = true;
     setLoadError(undefined);
     void import("./terminal-view").then((module) => {
@@ -76,7 +119,7 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
       if (current) setLoadError("The browser terminal could not be loaded. Existing manager-owned sessions were not closed.");
     });
     return () => { current = false; };
-  }, [state.open, TerminalSurface, loadError]);
+  }, [open, TerminalSurface, loadError]);
 
   useEffect(() => {
     const parent = root.current?.parentElement;
@@ -84,6 +127,7 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
     let resizeFrame: number | undefined;
     const measure = () => {
       resizeFrame = undefined;
+      setPanelHeight(parent.clientHeight);
       const nextHeight = terminalDockHeight(state.height, parent.clientHeight);
       if (nextHeight !== state.height) commit({ height: nextHeight }, parent.clientHeight);
     };
@@ -97,16 +141,6 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
     };
   }, [state.height, props.workspaceIdentity, props.profileId]);
 
-  const available = availableDockHeight(root.current);
-  const maximum = terminalDockMaximum(available);
-  /*
-   * Home goes to the shortest the dock may actually be made, not to the
-   * comfortable 220px opening height. On a panel too small to hold both
-   * surfaces the clamp returns less than that, and a separator that reports
-   * `aria-valuemin` above its own `aria-valuemax` is describing a range that
-   * does not exist to the one reader who cannot see the split.
-   */
-  const minimum = terminalDockMinimum(available);
   const resize = (height: number) => commit({ height }, availableDockHeight(root.current));
   const handleResizeKey = (event: KeyboardEvent) => {
     if (event.key === "ArrowUp") { event.preventDefault(); resize(state.height + TERMINAL_DOCK_RESIZE_STEP); }
@@ -118,11 +152,11 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
   return <section
     ref={root}
     class="workspace-terminal-dock"
-    data-open={state.open ? "true" : "false"}
+    data-open={open ? "true" : "false"}
     style={{ "--terminal-dock-height": `${String(state.height)}px` }}
     aria-label="Workspace terminal dock"
   >
-    {state.open ? <div
+    {open ? <div
       class="workspace-terminal-dock__resize"
       role="separator"
       aria-label="Terminal dock height"
@@ -143,7 +177,7 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
       onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
     /> : null}
 
-    {state.open ? TerminalSurface ? <TerminalSurface
+    {open ? TerminalSurface ? <TerminalSurface
       workspace={props.workspace}
       workspaceIdentity={props.workspaceIdentity}
       profileId={props.profileId}
@@ -165,6 +199,29 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
       {loadError ? <button type="button" onClick={() => { setLoadError(undefined); setTerminalSurface(undefined); }}>Retry</button> : null}
       <button type="button" onClick={props.onOpenFullView}>Open full Terminal view</button>
       <button type="button" onClick={() => commit({ open: false })}>Collapse terminal dock</button>
+    </div> : state.open ? <div class="workspace-terminal-dock__collapsed" data-reason="no-room">
+      {/*
+        * The dock the reader asked for, in a panel that cannot hold one, saying
+        * so. What it replaced was not a smaller terminal: at 932x430 it was a
+        * 17px transcript under a process card whose bottom border ran off the
+        * screen, and at 320x568 an 8px one with the card's thread line drawn
+        * across its own divider. The wide control leads with the surface that
+        * does have the room, because "expand" here would be a button that
+        * cannot do what it says; Collapse stays so the reader can put the dock
+        * away for good rather than have it reappear on the next rotation.
+        *
+        * The action rides the `span` and not the `small`, because `small` is
+        * the field this bar drops below 760px — which is where two of the three
+        * panels that reach this state live, and the last place a reader should
+        * be told there is nowhere else to read their output.
+        */}
+      <button type="button" onClick={props.onOpenFullView}>
+        <Icon name="terminal" size={16} />
+        <strong>Terminal</strong>
+        <span>No room for output — open full view</span>
+        <small>Page-local processes keep running</small>
+      </button>
+      <button type="button" onClick={() => commit({ open: false })} aria-label="Collapse terminal dock">⌄ <span>Collapse</span></button>
     </div> : <div class="workspace-terminal-dock__collapsed">
       <button type="button" aria-expanded="false" onClick={() => commit({ open: true })}>
         <Icon name="terminal" size={16} />
