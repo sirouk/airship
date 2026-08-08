@@ -2857,6 +2857,19 @@
       clip-path: inset(50%);
       white-space: nowrap;
     }
+
+    /*
+     * Taking the words out took the width with them. The paragraph above says
+     * the chip "keeps its whole 44px target", and without this it did not: the
+     * ring plus the button's own padding measured 34x44, which
+     * `touch-target-floor` caught on every route at once — the product's own
+     * 44px law, doing exactly what it is for. The floor is restored explicitly
+     * rather than left to whatever the glyph happens to measure.
+     */
+    .topbar-posture-chip {
+      min-width: var(--touch-target);
+      justify-content: center;
+    }
   }
 
   /*
