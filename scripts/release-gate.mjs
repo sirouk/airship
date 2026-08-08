@@ -768,7 +768,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // thirty-eight of them across the shell's stylesheets and four views, plus
   // the panel that now scrolls itself to the reader. All of it is first-party
   // and none of it is eager. Gzip takes one whole-KiB step to 733.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2307 * 1024, gzip: 733 * 1024 }),
+  //
+  // The closing wave — the Tabs overflow latch fixed at the primitive, the
+  // conversation list that stopped being 330px at every width, the composer
+  // that stopped discarding what was typed before its conversation existed, and
+  // the last of the per-route leftovers — re-measures it at 2,362,453 B raw /
+  // 749,987 B gzip — the Docker readings, 26 raw bytes under this host
+  // artifact, because the claim has to state the floor across build modes or
+  // whichever comes in lightest fails the gate on the other's justification.
+  // Raw takes one whole step to 2,308 (939 B); gzip does not move and keeps
+  // 605 B inside the 733 it already had.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2308 * 1024, gzip: 733 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1033,7 +1043,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 920 KiB gzip would have left 303 B, both inside the aggregate's 768-byte
   // floor, so each takes one further whole step — raw to 2,986 (1,774 B) and
   // gzip to 921 (1,414 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2986 * 1024, gzip: 921 * 1024 }),
+  //
+  // Re-measured at 3,057,924 B raw / 943,029 B gzip after the closing surface
+  // wave, again the Docker floor. This backstop tracks the first-party reading
+  // above and moves for the same reason. 2,987 KiB raw would have left 764 B
+  // and 921 KiB gzip would have left 75 B, both inside the aggregate's
+  // 768-byte floor, so each takes one further whole step — raw to 2,988
+  // (1,788 B) and gzip to 922 (1,099 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2988 * 1024, gzip: 922 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1430,12 +1447,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // produces, and a superseded figure above a live ceiling reads as a raise
   // nobody reviewed.
   //
-  // Re-measured at 7,353 B raw / 2,829 B gzip after the surface sweep. The
+  // Re-measured at 7,353 B raw / 2,826 B gzip after the surface sweep. The
   // named cause is that Edit now answers: pressing it mounted the authoring
   // panel above a scrolled-to grid, so from the reader's seat the click did
   // nothing at all, and the panel now comes to them — and only when it is not
   // already on screen, which is the part that costs the bytes. Raw takes one
-  // whole-KiB step to 8 KiB, leaving 839 B; gzip stays inside 3 KiB with 243.
+  // whole-KiB step to 8 KiB, leaving 839 B; gzip stays inside 3 KiB with 246.
   optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
