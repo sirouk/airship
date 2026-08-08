@@ -450,6 +450,69 @@ describe("conversation library space budget", () => {
   });
 
   /*
+   * The field is focused by an effect, so the browser picks the scroll offset,
+   * and unaided it picks flush. Measured at 932x430 on the shipped build, where
+   * `.main` ends at the mobile tab bar: the field's top ring is a 2px band at
+   * y=364-365 above its border at y=367, and below its border at y=385 there is
+   * one partial row and then the bar — the matching band is off screen. The one
+   * control the reader was just sent to is drawn half off the viewport.
+   *
+   * The answer belongs in `scroll-margin`, not in a shorter row or a taller
+   * pane: it is read only while something scrolls this field into view, so it
+   * moves no box at any viewport and takes width and height from nothing.
+   */
+  it("stops the rename field from being scrolled flush against the fold", () => {
+    const shorthand = styles.indexOf(".session-library-rename input { flex: 1 1 22em;");
+    const field = styles.slice(shorthand, styles.indexOf("}", shorthand));
+
+    expect(field).toContain("scroll-margin-block-end:");
+    /*
+     * Sized to the verbs, not to the ring. The field wraps and `Save rename`
+     * sits on the line beneath it, at the 44px coarse-pointer floor; stopping
+     * the scroll 3px early clears the outline and still leaves the control that
+     * commits the rename below the fold.
+     */
+    expect(field).toContain("calc(var(--touch-target, 44px) + var(--sp-5, 24px))");
+  });
+
+  /*
+   * `Active` was printed twice in one row band, and the duplicate was paid for
+   * by the two facts beside it. `.session-library-card-active` renders only
+   * when `active` is true, which is exactly when `.session-library-open` — ten
+   * pixels to its right — is disabled and reads `Active` in a bordered pill.
+   *
+   * Measured on the shipped build at rest: the card's text lane is 124px at
+   * 320x568, and the copy plus its gap is 45px of it. The line's content and
+   * the 4ch floors overran the lane, so `.session-library-card-line2` clipped
+   * the tail — the profile came out as a bare `g` with its own ellipsis cut
+   * off, and `airship/demo-v1` did not render at all. At 932x430 the same line
+   * read `Active  23 events  ge…  a…`.
+   */
+  it("prints the row's active word once, and keeps it in the accessible name", () => {
+    expect(source).toContain('<em class="session-library-card-active">Active</em>');
+    expect(source).toContain('>{active ? "Active" : "Open"}</button>');
+
+    /*
+     * Hidden by the route's one visually-hidden recipe, so the word survives
+     * for a reader who cannot see the pill. Absolute positioning is also what
+     * makes this free: an absolutely positioned child is not a flex item, so it
+     * contributes neither a box nor a `gap` to the line it was starving.
+     */
+    const recipe = styles.indexOf(".session-library-visually-hidden,\n.session-library-card-active {");
+    expect(recipe, "the active word has to share the visually-hidden recipe, not a copy of it")
+      .toBeGreaterThan(0);
+    expect(styles.slice(recipe, styles.indexOf("}", recipe))).toContain("position: absolute !important;");
+
+    /*
+     * And that recipe is the class's only rule in the sheet. A second one is
+     * how this regresses: the copy carried `flex: 0 0 auto` and a `--signal`
+     * colour before, and either of those written again gives it a box on the
+     * line and takes the 45px back off the facts.
+     */
+    expect([...styles.matchAll(/^\.session-library-card-active\b/gmu)]).toHaveLength(1);
+  });
+
+  /*
    * Measured at 932x430, a phone held sideways: every media query in the sheet
    * asks about width, so none of them fired, and the pane laid itself out with
    * a desktop's vertical room. The action row — Rename, Proof, Fork, Delete —

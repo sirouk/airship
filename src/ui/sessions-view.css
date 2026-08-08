@@ -566,19 +566,6 @@
   }
 }
 
-.session-library-card-active,
-.session-library-card-lineage {
-  font-style: normal;
-}
-
-.session-library-card-active {
-  flex: 0 0 auto;
-}
-
-.session-library-card-active {
-  color: var(--signal, #67a39a);
-}
-
 .session-library-card-lineage {
   /* Lineage yields before the model id does: the parent's name is recoverable
      from the row's own title and from the jump control beside it, whereas the
@@ -587,6 +574,7 @@
   min-width: 4ch;
   overflow: hidden;
   color: var(--ink-muted, #9fa5a3);
+  font-style: normal;
   text-overflow: ellipsis;
 }
 
@@ -1422,7 +1410,36 @@
   background: color-mix(in srgb, var(--accent, #c19a58) 30%, transparent);
 }
 
-.session-library-visually-hidden {
+/*
+ * Said once, on the row that says it twice.
+ *
+ * `.session-library-card-active` renders the word `Active` on the row's second
+ * line, and it renders only when `active` is true — which is exactly when
+ * `.session-library-open`, ten pixels to its right in the same band, is
+ * disabled and reads `Active` in a bordered pill. So the row printed one word
+ * twice and paid for the duplicate out of the two facts beside it.
+ *
+ * Measured on the shipped build, the active conversation at rest: the card's
+ * text lane is 124px at 320x568 and 170px at 932x430, and the copy costs 37px
+ * plus its 8px gap. At 320 the line's content plus the 4ch floors on the
+ * lineage and the profile overran the lane, so `.session-library-card-line2`
+ * clipped the tail: the profile rendered as a bare `g` with its own ellipsis
+ * cut off and `airship/demo-v1` did not render at all — the row's one
+ * discriminating fact, gone with no mark to say it had been. At 932 the same
+ * line read `Active  23 events  ge…  a…`. Reclaiming the 45px lets the line
+ * resolve inside the lane at both, so every fact that abbreviates does it
+ * behind a visible ellipsis.
+ *
+ * Hidden visually, not deleted: the word stays in the card button's accessible
+ * name, so nothing is taken from a reader who cannot see the pill, and the
+ * green `.session-library-card-mark` still ships with a word in its own row —
+ * a 44px pill rather than an 11px gloss. This takes no width or height from
+ * anything: an absolutely positioned child is not a flex item, so it
+ * contributes neither its own box nor a `gap`, and every other track on the
+ * row is where it was.
+ */
+.session-library-visually-hidden,
+.session-library-card-active {
   position: absolute !important;
   width: 1px !important;
   height: 1px !important;
@@ -1790,7 +1807,29 @@
    fit takes a second line instead of setting a min-content width the detail
    column has no choice but to honour. */
 .session-library-rename { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); align-items: center; margin: var(--sp-2, 8px) 0; }
-.session-library-rename input { flex: 1 1 22em; min-width: 0; padding: 0 var(--sp-3, 12px); }
+/*
+ * The field is focused by an effect, so it is the browser that decides where
+ * the route stops scrolling — and left to itself it stops flush.
+ *
+ * `useEffect(() => { if (renaming) renameInput.current?.focus(); })` fires a
+ * scroll-into-view, which aligns the field's bottom margin edge to the bottom
+ * of `.main`. At 932x430 `.main` ends where the mobile tab bar begins, so the
+ * ring the focus just painted is sliced by the fold: measured on the shipped
+ * build, the field's top ring is a 2px band at y=364-365 above its border at
+ * y=367, and at the bottom the border at y=385 is followed by one partial row
+ * at y=386 and then the bar at y=387 — the matching 2px band is not on screen.
+ * The one control the reader was just sent to is the one drawn half off it.
+ *
+ * `scroll-margin-block-end` moves nothing: it is read only while something
+ * scrolls this element into view, and it changes where that scroll stops. The
+ * value is one `--touch-target` plus `--sp-5`, which covers the row of verbs
+ * the field wraps onto beneath it — `Save rename` and `Cancel`, at their 44px
+ * coarse-pointer floor — and the 8px form margin and 3px ring on top of it,
+ * because a rename field whose Save is below the fold is the same defect one
+ * control further along. Nothing gives up width or height for it at any
+ * viewport, and the reader can still scroll anywhere they could before.
+ */
+.session-library-rename input { flex: 1 1 22em; min-width: 0; padding: 0 var(--sp-3, 12px); scroll-margin-block-end: calc(var(--touch-target, 44px) + var(--sp-5, 24px)); }
 
 /*
  * On a phone the field takes its own line, and the two verbs sit beneath it.
