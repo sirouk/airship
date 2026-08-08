@@ -315,29 +315,68 @@ describe("the rail's collapse control", () => {
 
   /*
    * The handle is centred on the seam, so half of whatever it measures lands
-   * inside the rail. At 44px that half was 22px of a `z-index: 1` control lying
+   * inside the rail — and this rule has now been wrong in both directions.
+   *
+   * At 44px in an 84px rail that half was 22px of a `z-index: 1` control lying
    * across the nav column: measured at 768 it washed out the final `n` of
    * `Connection` — in a rail whose 84px is itself measured to hold exactly that
    * word — and the right end of that row collapsed the rail instead of opening
-   * the destination. A touch target that eats a neighbouring touch target is
-   * not a target; the grip stays inside the 10px of nav padding it has.
+   * the destination. The repair narrowed the grip to 24px, which cleared the
+   * label by giving a finger a 44×24 control: WCAG 2.5.8's floor, but under
+   * this product's own, which tokens.css states on both axes because "a
+   * target's smaller dimension is the one a finger has to find".
+   *
+   * Neither neighbour yields. The rail reserves half a touch target on its
+   * right and `--rail-width` grows by the same amount, so the grip is the full
+   * floor, its inner half lands in room nobody else was using, and the nav
+   * column is still exactly the 84px `Connection` was measured into.
    */
-  it("keeps the coarse-pointer grip clear of the nav labels it is centred beside", () => {
-    // The sheet has three coarse blocks; this is the one that widens the grip.
-    const coarse = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf(".rail-collapse { width")));
-    const width = coarse.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
-    const declared = Number(width.match(/width: (\d+)px/u)?.[1]);
-    // Between the rail's padding edge and a nav label: `.primary-nav` pads 10px
-    // and the rail-state `.nav-item` a further 4px. Half the handle lives in
-    // there, so the whole handle may be twice it and no more.
-    const clearance = (10 + 4) * 2;
+  const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf(".rail-collapse { width")));
 
-    expect(declared).toBeLessThanOrEqual(clearance);
-    // …and it is still a target. 24px is WCAG 2.5.8's minimum and the base
-    // 13px grip fails it, which is the whole reason this block exists.
-    expect(declared).toBeGreaterThanOrEqual(24);
+  it("gives the coarse-pointer grip the product's own floor, not the standard's", () => {
+    const width = coarseGripBlock.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
+
+    // Named, not numbered: if the floor ever moves, the grip moves with it —
+    // and a literal here is how 24px survived a sweep that was raising three
+    // other controls to 44px in the same commit range.
+    expect(width).toContain("width: var(--touch-target)");
     // The seam is still the position; only the grip's width answers the finger.
     expect(width).not.toContain("translate:");
+  });
+
+  it("pays for the wider grip out of the seam's own reserve and not out of a neighbour", () => {
+    // Exactly the half that lands inside the rail, so the reserve and the
+    // intrusion are the same measurement and cannot drift apart.
+    expect(coarseGripBlock).toContain(":root { --rail-seam-reserve: calc(var(--touch-target) / 2); }");
+    // The reserve is padding on `.rail`, whose right edge the handle is
+    // centred on — inset the contents, do not move the seam relative to them.
+    const [reserved] = rulesDeclaring("padding-right: var(--rail-seam-reserve, 0px)");
+    expect(reserved).toEqual([".rail"]);
+    // …and the grid track grows by the same amount at every width that paints
+    // a rail, so insetting the contents costs the contents nothing. Without
+    // this the reserve would be carved out of the labels it protects — and
+    // `standard` is in the list because its rows run the rail's full width, so
+    // a 44px grip on its seam overlaps the last 12px of every destination row.
+    expect(css).toContain(":root[data-rail=\"rail\"] { --rail-width: calc(84px + var(--rail-seam-reserve, 0px)); }");
+    const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
+    for (const width of ["calc(60px + var(--rail-seam-reserve, 0px))", "calc(var(--density-sidebar) + var(--rail-seam-reserve, 0px))"]) {
+      expect(tokens).toContain(width);
+    }
+  });
+
+  it("keeps the topbar's mark over the rail's contents and not over its track", () => {
+    // `.topbar` shares `--rail-width` with `.app-shell` so the brand tracks the
+    // rail exactly; the reserve is track the rail's contents do not occupy, so
+    // a brand centred in the raw track sits 11px right of the icon column it is
+    // drawn above — the one visible seam this repair could have opened.
+    expect(css).toContain(':root[data-rail="rail"] .brand { justify-content: center; padding: 0 var(--rail-seam-reserve, 0px) 0 0; }');
+  });
+
+  it("releases the reserve in the one state whose seam has no label near it", () => {
+    // The peek is 268px of panel opened so full destination names read; 22px
+    // held back for a grip that is nowhere near them would be 22px of name.
+    const [released] = rulesDeclaring("width: 268px", "--rail-seam-reserve: 0px");
+    expect(released?.every((selector) => selector.includes(":has(:focus-visible)"))).toBe(true);
   });
 
   it("never widens the rail because a pointer crossed it", () => {
