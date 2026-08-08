@@ -23,6 +23,15 @@ export const POPOVER_SHEET_MAX_WIDTH = 640;
 /** Minimum distance an anchored panel keeps from the viewport edge. */
 export const POPOVER_EDGE_GUTTER = 12;
 export const POPOVER_DEFAULT_WIDTH = 320;
+/**
+ * The shortest an anchored panel is allowed to be told it is.
+ *
+ * A chip sitting a few pixels above the fold would otherwise be handed a
+ * two-line panel: a scroll viewport small enough that reading it is worse than
+ * letting it overhang. Below this the measurement stops being useful and the
+ * panel keeps its own height instead.
+ */
+export const POPOVER_MIN_ROOM = 180;
 
 export type PopoverMode = "anchored" | "sheet";
 
@@ -52,6 +61,50 @@ export function popoverPlacement(input: Readonly<{
   });
 }
 
+/**
+ * How tall an anchored panel may grow before its body has to start scrolling.
+ *
+ * `60vh` was standing in for this and is not the same number. An anchored panel
+ * does not start at the top of the viewport and the viewport is not where it
+ * ends: on the landscape phone the ⓘ sits ~110px down a `.main` pane that stops
+ * above a fixed navigation band, so a body capped at 60vh of a 430px screen
+ * (258px) laid its last paragraph out *underneath* the band. The panel was
+ * scrollable the whole time and it did not matter — the bottom of its own
+ * scroll viewport, where the scrollbar and the remaining text live, was the
+ * part behind the navigation.
+ *
+ * Kept free of the DOM for the same reason `popoverPlacement` is: whether a
+ * panel is allowed to overhang the box that clips it is a correctness question,
+ * not a rendering detail.
+ */
+export function popoverRoom(input: Readonly<{
+  /** Viewport-relative bottom edge of the trigger the panel hangs from. */
+  anchorBottom: number;
+  /** Viewport-relative bottom edge of the nearest box that clips the panel. */
+  clipBottom: number;
+}>): number {
+  return Math.max(POPOVER_MIN_ROOM, input.clipBottom - input.anchorBottom - POPOVER_EDGE_GUTTER);
+}
+
+/**
+ * The bottom edge of the box that will actually clip this panel.
+ *
+ * `.main` is `overflow: auto`, so it — not the window — is what an anchored
+ * panel is really allowed to occupy, and on the editor route it is
+ * `overflow: hidden` and clips outright. Any ancestor whose `overflow-y` has
+ * computed to something other than `visible` is such a box; the nearest one
+ * wins, which is what taking the running minimum means here.
+ */
+function clippingBottom(host: HTMLElement): number {
+  let bottom = document.documentElement.clientHeight;
+  for (let node = host.parentElement; node; node = node.parentElement) {
+    if (getComputedStyle(node).overflowY !== "visible") {
+      bottom = Math.min(bottom, node.getBoundingClientRect().bottom);
+    }
+  }
+  return bottom;
+}
+
 export type PopoverProps = Readonly<{
   /** Accessible name of the disclosure control. */
   label: string;
@@ -78,6 +131,8 @@ export function Popover({
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<PopoverPlacement>(() =>
     Object.freeze({ mode: "anchored", align: "start" } as const));
+  /** `null` until the panel has been measured, and for sheets, which size themselves. */
+  const [room, setRoom] = useState<number | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -94,11 +149,21 @@ export function Popover({
     if (!open) return;
     const host = hostRef.current;
     if (host) {
-      setPlacement(popoverPlacement({
-        anchorLeft: host.getBoundingClientRect().left,
+      const anchor = host.getBoundingClientRect();
+      const next = popoverPlacement({
+        anchorLeft: anchor.left,
         popoverWidth: width,
         viewportWidth: window.innerWidth,
-      }));
+      });
+      setPlacement(next);
+      // A sheet is pinned to the viewport's own bottom edge by its insets and
+      // sizes itself from there; only the anchored panel hangs off a chip
+      // partway down a scrolling pane and has to be told where that pane ends.
+      // Measured once at open, like the edge flip beside it: both are answers
+      // about where the trigger was when it was pressed.
+      setRoom(next.mode === "anchored"
+        ? popoverRoom({ anchorBottom: anchor.bottom, clipBottom: clippingBottom(host) })
+        : null);
     }
 
     function onPointerDown(event: PointerEvent) {
@@ -187,7 +252,13 @@ export function Popover({
          */
         data-open={open ? "true" : "false"}
         inert={!open}
-        style={{ "--popover-width": `${width}px` }}
+        style={{
+          "--popover-width": `${width}px`,
+          // Absent rather than a guess when the panel is a sheet or has not
+          // been measured yet; `popover.css` falls back to the viewport, which
+          // is the only honest answer before the trigger has a rectangle.
+          ...(room === null ? null : { "--popover-room": `${room}px` }),
+        }}
       >
         <div class="popover__header">
           <strong>{heading}</strong>

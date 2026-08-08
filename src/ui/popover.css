@@ -85,10 +85,34 @@
   /* One column, floored at zero. The panel's own width — 320px anchored, the
      viewport when it is a sheet — has to be the width its rows lay out in, and
      an `auto` track instead takes its floor from the widest row's min-content.
-     That floor is how the nowrap header below used to size this entire panel. */
+     That floor is how the header below sized this entire panel for as long as
+     its heading was `white-space: nowrap`; the heading wraps now, so its
+     min-content is a word rather than the whole title, and this track keeps the
+     guarantee for every other row. */
   grid-template-columns: minmax(0, 1fr);
+  /* Header, then body. The body is the row with a floor of zero, so when the
+     bound below bites it is the scrollable region that yields and the header —
+     which carries Done — is never the part that gets compressed away. */
+  grid-template-rows: auto minmax(0, 1fr);
   width: var(--popover-width, 320px);
   max-width: calc(100vw - (2 * var(--sp-3)));
+  /*
+   * The panel may not be taller than the box it opens inside.
+   *
+   * `popover.tsx` measures the room between the trigger and the bottom of the
+   * nearest clipping ancestor — `.main`, which is `overflow: auto` — and
+   * publishes it here; the `var(--sp-2)` subtracted is the gap `top` above
+   * already spent getting clear of the trigger. Without this the only ceiling
+   * was the body's `60vh`, which on a 430px landscape phone is 258px of a pane
+   * that ends 276px below the chip and then hands the rest to a navigation
+   * band: the panel scrolled, but the bottom of its scroll viewport — the
+   * scrollbar, and every line still to read — sat underneath the band.
+   *
+   * The viewport fallback is for the frame before the measurement lands and
+   * for the sheet, which is pinned to the screen's own bottom edge and takes
+   * its height from `56vh` on the body instead.
+   */
+  max-height: calc(var(--popover-room, 100vh) - var(--sp-2));
   border: 1px solid var(--line-control);
   border-radius: var(--radius-panel);
   background: var(--surface-raised);
@@ -143,8 +167,10 @@
  * and were guillotined by the same edge, and the 44px Done target sat entirely
  * off-screen, leaving a touch reader with no visible way to dismiss the sheet.
  *
- * Zero is what gives the heading's `text-overflow: ellipsis` below a box narrow
- * enough to act in, and what brings Done back inside the panel it dismisses.
+ * Zero is what brings Done back inside the panel it dismisses, and the wrapping
+ * heading below is what stops the header's min-content being 490px in the first
+ * place — a rule that never has to be overridden is better than a floor that
+ * has to fight it.
  */
 .popover__header {
   display: flex;
@@ -157,10 +183,32 @@
   border-bottom: 1px solid var(--line);
 }
 
+/*
+ * The heading wraps rather than ellipsising, at every width.
+ *
+ * Bounding the header to the panel was right; spending the title to do it was
+ * the part that was wrong. `nowrap` plus `text-overflow: ellipsis` fitted the
+ * heading by deleting it — `ACCOUNT STANDING · CHUTES TELEMETRY AND PROVIDER
+ * INVENTORY` read as `ACCOUNT STANDING · CHUTES T…` on a 1920px display, and
+ * `PROVENANCE · ARCHITECTURE.MD` lost the extension of the file it names on a
+ * tablet. There is no wider state to open, so the missing half was unreachable
+ * from anywhere.
+ *
+ * Wrapping contains the header *more* strictly than the ellipsis did, which is
+ * why this is not a trade. A nowrap heading's min-content is the whole string —
+ * the 490px that used to size this entire panel — while a wrapping one's is a
+ * single word, and `anywhere` drops even that to a character. The panel's width
+ * is now beyond the header's reach by construction rather than by a floor.
+ *
+ * The cost is vertical and it is small: these headings are mono `--fs-micro` at
+ * 1.2, so the longest of them takes three lines inside the header's existing
+ * 44px minimum and the header does not grow at all. Where a longer one does
+ * grow it, the panel's `max-height` above takes it out of the body, which
+ * scrolls — the one place in this panel where losing room is recoverable.
+ */
 .popover__header > strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .popover__done {
@@ -178,12 +226,35 @@
   color: var(--ink);
 }
 
+/*
+ * The row that yields, and the one place in the panel that says so.
+ *
+ * `min(420px, 60vh)` is the reading cap — the height past which a disclosure
+ * has stopped being a disclosure — and it is no longer also standing in for
+ * "how much room is there"; the panel's own `max-height` answers that, and
+ * whichever of the two is smaller wins.
+ *
+ * The shadows are the missing half of the containment fix. A bounded body that
+ * scrolls and a bounded body that has simply ended look identical at rest,
+ * which is how a reader concludes there is no fourth paragraph: the pointer
+ * platforms here paint overlay scrollbars that appear only during a scroll
+ * nobody has a reason to start. The two `local` layers scroll with the content
+ * and so cover the two `scroll` layers exactly while that edge is the end of
+ * the text — the shadow is visible if and only if there is more.
+ */
 .popover__body {
   display: grid;
   gap: var(--sp-2);
   max-height: min(420px, 60vh);
   overflow: auto;
   padding: var(--sp-3);
+  background:
+    linear-gradient(var(--surface-raised), transparent) local top / 100% 14px no-repeat,
+    linear-gradient(transparent, var(--surface-raised)) local bottom / 100% 14px no-repeat,
+    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--ink) 13%, transparent), transparent)
+      scroll top / 100% 8px no-repeat,
+    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--ink) 13%, transparent), transparent)
+      scroll bottom / 100% 8px no-repeat;
   font-size: var(--fs-caption);
   line-height: 1.5;
 }
