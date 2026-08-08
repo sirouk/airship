@@ -121,7 +121,15 @@ test("real browser UI adopts and recovers the encrypted Google Drive vault throu
   // the one in Airship's failure grammar. Both branches now render the Local
   // Device wording, so this journey clicks the same control by its one name.
   await page.getByRole("button", { name: "Switch to ephemeral · keep a page copy" }).click();
-  await expect(page.locator(".runtime-line__text")).toHaveText(
+  /*
+   * The visible carrier, not "the one carrier". `dc257d5` gave the phone shell
+   * its own runtime line and left both in the DOM at every width, so this
+   * locator has resolved to two elements ever since — and `toHaveText` with a
+   * string is strict, so it failed on the count before it ever read the text.
+   * The two are display-exclusive; filtering on visibility asks the question
+   * this assertion was always asking.
+   */
+  await expect(page.locator(".runtime-line__text").filter({ visible: true }).first()).toHaveText(
     "Vault disconnected · active workspace continues in page memory",
     { timeout: 60_000 },
   );
