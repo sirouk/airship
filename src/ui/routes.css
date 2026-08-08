@@ -291,28 +291,53 @@
    * 286px strip at 320, 176px of 356px at 390 and 196px of 396px at 430 — one
    * pixel-exact half at every width, which is what a zero basis grows to, not
    * what a content basis shrinks from. So 430 kept paying: `Receipt & journal`
-   * needs 175px and was handed 196, while `Attestation evidence` needs 208px,
+   * needs 175px and was handed 196, while `Attestation evidence` needs 207px,
    * was handed the same 196, and lost its last five characters. The strip has
-   * 396px and the pair wants 387 — the cut was manufactured by the split, not
+   * 396px and the pair wants 386 — the cut was manufactured by the split, not
    * required by the width.
    *
-   * So growth is scoped to the widths with a deficit big enough to be worth
-   * splitting evenly, and above them a tab is simply its label. The strip is
-   * the viewport less 34px of gutter, border and padding, and the pair wants
-   * 387px, so both labels are whole from 421px up: at 430 that leaves ~9px
-   * spare at the end of the strip, which costs nobody anything — no neighbour
-   * is squeezed to buy this, because the space was already unused. Below 400px
-   * nothing makes them both fit (387px of labels into 286px at 320), so the
-   * even split is the honest one and each tab gives up a share of its own
-   * width rather than the longer label paying the whole bill.
+   * Scoping that growth to ≤400px removed 430's cut and sent the bill to 390,
+   * because an even split is only fair while both tabs are equally worth
+   * reading, and they never are. The strip is the viewport less 34px of gutter,
+   * border and padding — measured 286px at 320, 356 at 390, 396 at 430 — and
+   * the pair wants 386 (175 for `Receipt & journal`, 207 for `Attestation
+   * evidence`, 4 of gap). At 390 the split handed the selected tab 176 of 356
+   * and it fitted its 175px label by one pixel on one machine's fonts; below
+   * 400 the split proper handed it 161 and `Receipt & journal` rendered as
+   * `Receipt & jou…` while it was the tab being read. The same split cut
+   * `Attestation evidence` at both 320 and 390 whenever *it* was the selected
+   * one, which the 390 frame had been showing since before either wave.
    *
-   * Between the two the deficit is 20px and shrinking, and the boundary is set
-   * at 400 rather than 421 deliberately: there each tab loses about one
-   * character, where an even split would keep `Receipt & journal` whole and
-   * take four off `Attestation evidence` instead. Sharing a small shortfall is
-   * the same principle as sharing a large one. `.tabs__label` ellipsises inside
-   * whatever it is given at either size, so nothing is ever scrolled out of the
-   * frame and the overflow control still has nothing to report.
+   * A tab that cannot say its own name while it is the one you are looking at
+   * is the worst outcome available here, and it is the only truncation with no
+   * way out: there is no gesture that reveals it, because you are already on
+   * it. So the shortfall is charged to the tab you are not reading. The
+   * selected tab does not shrink; the other absorbs all of it and ellipsises,
+   * and that cut is self-healing — tap it and it becomes the selected tab,
+   * whole, and the label you just left takes the cut in its place. Whichever
+   * tab you are on, the strip can say where you are.
+   *
+   * What this costs, per width, entirely inside the strip:
+   *
+   *   430  396px for a pair wanting 386. Nobody shrinks and nobody is capped,
+   *        so this band renders identically to the build before this rule —
+   *        which is what keeps 430's repair intact rather than re-paying it.
+   *   390  selected 175 whole; the other tab holds 177px, against the 176 the
+   *        even split gave it and the 191 the proportional shrink did. It
+   *        loses about one character to buy a complete selected label.
+   *   320  selected 175 whole; the other tab holds 107px where the even split
+   *        gave it 141. This is the one real cost — roughly four characters of
+   *        a label that is one tap from being complete.
+   *
+   * Nothing outside the strip pays: this control is `width: 100%` inside this
+   * query and `fit-content` above it, both untouched, so the row that wraps it
+   * and the panel beneath it are the same size and in the same place at every
+   * width. The redistribution is strictly between the two tabs.
+   *
+   * `flex-wrap: wrap` would seat both labels whole at 320 and is still
+   * deliberately absent, for the reason recorded on the block above: a lone
+   * item on a wrapped line stops stretching to the line height and the overflow
+   * trigger drops under the 44px touch floor.
    */
   .proof-surface-tabs { width: 100%; }
 
@@ -321,36 +346,35 @@
   /* A flex item defaults to `min-width: auto`, so it would refuse to shrink
      below the nowrap label it contains — which is the whole reason the labels
      overflowed the strip rather than ellipsising inside it. This is the guard
-     that lets the ellipsis happen at any width; the block below is what decides
-     whether a tab may also grow past its own label. */
+     that lets the ellipsis happen at any width; the rule below is what decides
+     which tab is asked to use it. */
   .proof-surface-tabs .tabs__tab {
     min-width: 0;
   }
 
   .proof-surface-tabs .tabs__tab-button {
     min-width: 0;
+  }
+
+  .proof-surface-tabs .tabs__tab[data-active="true"] {
+    /*
+     * Any shrink at all truncates this tab, so the weighting that would make it
+     * "shrink less" is not an option: at 390 the deficit is 30px and a tab that
+     * pays even a twentieth of it loses its last character. It pays none.
+     *
+     * The cap is the floor under that refusal. A tab that never shrinks would,
+     * at a larger `--type-scale`, grow until its neighbour was a bare ellipsis
+     * and then push the strip into the `⌄ n` chevron this switcher has twice
+     * been rescued from. Reserving one touch target plus the gap keeps the
+     * unselected tab a control a finger can still hit after its label is gone.
+     * At the shipped type scale the reserve never binds: the narrowest case
+     * leaves the other tab 107px where this guarantees it 44.
+     */
+    flex-shrink: 0;
+    max-width: calc(100% - var(--touch-target) - var(--sp-1));
   }
 
   .proof-surface-tabs button { min-height: var(--touch-target); }
-}
-
-/* The band where the shortfall is too large to share without cutting both
-   labels badly, so it is split evenly instead. Above it a tab is its label:
-   they shrink together through the low 400s and are both whole from 421px. */
-@media (max-width: 400px) {
-  .proof-surface-tabs .tabs__tab {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .proof-surface-tabs .tabs__tab-button {
-    /* Fills the share it was given, and shrinks below its own label to do it.
-       A pill narrower than its tab reads as a button that has come loose from
-       the control it belongs to. */
-    flex: 1 1 auto;
-    justify-content: center;
-    min-width: 0;
-  }
 }
 
 .proof-overview {

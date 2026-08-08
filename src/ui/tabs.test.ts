@@ -229,7 +229,14 @@ describe("middle truncation", () => {
 
 describe("one tab grammar", () => {
   it("encodes 'you are here' once: a 2px brass underline and a lift to --ink", () => {
-    const active = routeStyles.match(/\.tabs__tab\[data-active="true"\] \{([^}]+)\}/u)?.[1] ?? "";
+    // Anchored to the start of a line for the same reason the label-step
+    // assertion below is: unanchored, this read whichever scoped override came
+    // first in the sheet, and the Proof switcher's phone rule for its selected
+    // tab — which sets flex behaviour and says nothing about colour — sits
+    // thousands of lines above the primitive. The primitive would then have
+    // been free to drop the underline entirely while this test went on passing
+    // against a route's private rule.
+    const active = routeStyles.match(/\n\.tabs__tab\[data-active="true"\] \{([^}]+)\}/u)?.[1] ?? "";
     expect(active).toContain("border-bottom-color: var(--accent)");
     // The retired encodings: a solid brass fill and a brass wash. Brass means
     // "you are here" as a 2px rule, never as a 1156px block behind a passive
