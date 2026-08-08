@@ -301,94 +301,111 @@ describe("the terminal panel's directory chip on a tablet row", () => {
 });
 
 describe("the terminal route on a short viewport", () => {
-  /*
-   * At 932×430 the runtime disclosure and the tab strip were crushed to a 2px
-   * stripe: both carry non-visible overflow, so their automatic minimum size
-   * is zero and the emulator's 14rem floor took the entire height budget. The
-   * emulator is the row that yields, because it scrolls its own scrollback.
-   */
-  it("lowers the emulator's floor so the disclosure and tabs survive", () => {
+  const shortBlock = () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    const short = css.slice(css.indexOf("@media(max-height:500px)"));
-    expect(short).toContain(".terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto");
-    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}");
-    expect(short).toContain(".terminal-emulator{min-height:2.5rem;padding:6px}");
+    return css.slice(css.indexOf("@media(max-height:500px)"));
+  };
+
+  /*
+   * 932×430 does not hold this route, and two passes spent themselves proving
+   * it. Measured: `main` is 342px between a 44px topbar and a 44px navigation
+   * band, `.route-layout` spends 14px and 20px of it, so the route is laid out
+   * in 308px — against a 47px header, a 46px disclosure, a 46px tab strip, a
+   * 44px status bar, a 37px meta row, a two-line 40px status sentence and the
+   * gaps between them. Nominating the emulator as the row that yields ended
+   * where it had to: a 45px emulator box, 33px of content inside its gutter,
+   * and a 22px cell — ONE row of shell output.
+   *
+   * So the route stops being height-bound and scrolls, which is the same pair
+   * of declarations the phone block reaches at 390×844 for the same reason.
+   * This is the assertion that keeps a future height budget from being balanced
+   * against the terminal again.
+   */
+  it("lets the route outgrow a viewport that cannot hold it instead of slicing its own content", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const short = shortBlock();
+    expect(short).toContain("gap:4px;height:auto;min-height:100%}");
+    // Only here. The base route stays height-bound so the 1fr emulator absorbs
+    // the slack on every viewport that has slack to absorb.
+    expect(css).toMatch(/\.terminal-route\{[^}]*height:100%;min-height:min-content/u);
     // The dock declares its own rows and is clamped against a measured parent;
     // an unscoped `.terminal-route` here would impose a fifth row on its four.
     expect(short).not.toMatch(/\n\s*\.terminal-route\{/u);
   });
 
   /*
-   * Lowering that floor was half the repair. The two rows still had an
-   * automatic minimum of zero, so they still absorbed whatever the budget was
-   * short — about 16px at 932×430 — and the shipped build showed it: the
-   * disclosure lost its bottom border and `Terminal 1` was sliced through the
-   * lower third of its label. The emulator has nothing left to give, because
-   * at 8rem the panel is already on its own floor (a 44px bar, the 3rem
-   * emulator, a 32px meta row), so taking more would crush the panel and
-   * swallow the meta row under its `overflow:hidden` instead. The rows state
-   * their floors, and `min-height:min-content` on the route lets the residue
-   * leave as scrolling rather than as a control cut in half.
+   * What the scroll buys. `16rem` makes the panel 256px: a 44px bar, a 173px
+   * emulator box and a 32px meta row inside two borders, so the emulator's
+   * content box is 161px — seven 22px rows where there was one. The panel plus
+   * the 40px status line and their gap is 300px, so both still fit the 308px
+   * viewport once the chrome above has scrolled away, which is the property
+   * that makes the scroll worth taking rather than merely honest.
    */
-  it("floors the two rows whose overflow zeroes their minimum, so the residue scrolls instead of slicing", () => {
-    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+  it("gives the emulator a terminal's worth of rows at the one viewport that had none", () => {
+    const short = shortBlock();
+    expect(short).toContain(".terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto");
+    // The panel's own 14rem floor wants 307px inside that 256px box and
+    // `overflow:hidden` would answer by swallowing the meta row, so the middle
+    // track yields and the bar and meta row take what they need first.
+    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}");
+    // The gutter is the phone's 6px, and it is now the only thing the emulator
+    // rule says: at a 22px cell the 8px saved against the base 10px is most of
+    // a row, so it is spent on output. The 2.5rem squeeze that used to stand
+    // here was the one-row terminal, stated as a floor.
+    expect(short).toContain(".terminal-emulator{padding:6px}");
+    expect(short).not.toMatch(/\.terminal-emulator\{[^}]*min-height/u);
+  });
+
+  /*
+   * `.terminal-route__setup` and `.terminal-tabs` are the only two rows in this
+   * grid whose automatic minimum size is zero — both carry non-visible overflow
+   * — so they are the rows that absorb a shortfall in silence rather than
+   * overflowing where a reader can see it, which is how they became a 2px
+   * stripe. They are no longer squeezed; these floors are what keeps that true
+   * if the route is ever height-clamped again.
+   */
+  it("keeps the floors under the two rows whose overflow zeroes their minimum", () => {
+    const short = shortBlock();
     expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__setup,");
     expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}");
     // The floor is the touch decision the summary and tab buttons already make,
     // not a second opinion about it in literal pixels.
     expect(short).not.toMatch(/\.terminal-tabs\{min-height:\d/u);
-    // And the route has to be allowed to outgrow its box, or flooring the rows
-    // clips them under a height-bound grid instead of scrolling them.
-    expect(css).toMatch(/\.terminal-route\{[^}]*min-height:min-content/u);
-  });
-
-  /*
-   * Flooring those two rows did not pay for them. Measured at 932×430: `main`
-   * is 342px between a 44px topbar and the 44px navigation band, `.route-layout`
-   * spends 14px and 20px of it, and the route's rows want 349px of the 308px
-   * left — so 41px overflowed, and it overflowed into the last row. That row is
-   * `.terminal-route__footer`, `role="status"`: the band painted through the
-   * middle of its first line and its second line was not painted at all, which
-   * is the live region this route announces renames and write failures through.
-   *
-   * The 41px is found inside the route, not taken from a neighbour, and these
-   * are the three places it comes from. Each is air: a gap between bordered
-   * surfaces, a margin above one, and the emulator's own gutter.
-   */
-  it("pays for those floors out of the route's own air rather than out of the status line", () => {
-    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    const short = css.slice(css.indexOf("@media(max-height:500px)"));
-    expect(short).toContain("minmax(8rem,1fr) auto;gap:4px}");
     expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}");
-    // The emulator's box measured 51px, above its own floor, so neither
-    // declaration collects the 8px alone: lowering the floor moves nothing
-    // while the gutter holds the box up, and trimming the gutter moves nothing
-    // while the floor does. Both, or the repair is arithmetic on paper only.
-    expect(short).toMatch(/\.terminal-emulator\{min-height:2\.5rem;padding:6px\}/u);
-    expect(short).toContain("minmax(2.5rem,1fr)");
   });
 
   /*
-   * The three floors this height budget is spent to protect. A repair that
-   * balanced by shaving one of them would be the trade this whole wave exists
-   * to stop — the shortfall would simply move to whichever control was cheapest
-   * to cut, which is how the emulator's 14rem floor crushed the disclosure in
-   * the first place.
+   * The floors this block exists to protect. A repair that balanced by shaving
+   * one of them would be the trade this whole wave exists to stop — the
+   * shortfall would simply move to whichever control was cheapest to cut, which
+   * is how the emulator's 14rem floor crushed the disclosure in the first
+   * place, and how the emulator itself ended at one row.
    */
   it("balances the budget without narrowing a control or shrinking a touch target", () => {
-    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    const short = css.slice(css.indexOf("@media(max-height:500px)"));
+    const short = shortBlock();
     // The 44px bar and the 32px meta row are a touch target and a fact; the
     // panel's height comes off its middle row or it does not come off at all.
     expect(short).not.toMatch(/\.terminal-panel__bar/u);
     expect(short).not.toMatch(/\.terminal-panel__meta/u);
-    // The status line is the row being repaired. Clamping, ellipsising or
-    // pinning it would answer the overflow by deleting the sentence instead.
-    expect(short).not.toMatch(/\.terminal-route__footer/u);
+    // The status line is a live region. Clamping, ellipsising or pinning it
+    // would answer the overflow by deleting the sentence instead.
+    expect(short).not.toMatch(/\.terminal-route__footer\{/u);
     // Nothing here touches the inline axis: this is a short viewport, not a
     // narrow one, and the emulator's gutter is the one padding that changes.
     expect(short).not.toMatch(/width|flex|display:none/u);
+  });
+
+  /*
+   * Neither unscoped declaration in this block may reach the Workspace dock,
+   * which is height-clamped in JavaScript against its measured parent and would
+   * be handed a 256px panel it has no room for. Nothing in the media query says
+   * so; the two-class dock rules outrank the one-class rules on specificity,
+   * which is only true while the dock keeps declaring both of them.
+   */
+  it("leaves the dock's own smaller floors outranking the two unscoped rules", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    expect(css).toContain(".terminal-route--dock .terminal-panel{grid-template-rows:auto minmax(5rem,1fr) auto");
+    expect(css).toMatch(/\.terminal-route--dock \.terminal-emulator\{[^}]*padding:6px 8px/u);
   });
 });
 
@@ -396,6 +413,40 @@ describe("the terminal body boundary", () => {
   it("clips xterm paint to its grid cell instead of the panel's next row", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.terminal-emulator\{[^}]*overflow:hidden/u);
+  });
+
+  /*
+   * `xterm.css` hardcodes `background-color:#000` on the viewport, and no
+   * `theme` option reaches it: `theme.background` goes to the renderer, which
+   * paints the canvas over the rows it has, and the viewport is what shows
+   * wherever the canvas does not. Measured at 932×430 on `11-tab-keyboard-focus`
+   * — a hard `#000000` block filling the emulator's whole content box against
+   * the panel's `#0b0e0f` around it, because a tab opened into a one-row box
+   * had no canvas painted yet. The colour has to be restated in this sheet or
+   * it cannot be reached at all, and it has to be the panel's own or the card
+   * stops being one surface.
+   */
+  it("gives xterm's viewport the card's colour, because its own stylesheet hardcodes black", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const panel = css.match(/\n\.terminal-panel\{([^}]+)\}/u)?.[1] ?? "";
+    const viewport = css.match(/\.terminal-emulator \.xterm-viewport\{([^}]+)\}/u)?.[1] ?? "";
+
+    expect(panel).toContain("background:#0b0e0f");
+    expect(viewport).toContain("background-color:#0b0e0f");
+    // The scrollbar track was already told the same colour; the surface behind
+    // it was the half that was never said.
+    expect(viewport).toContain("scrollbar-color:#515b5f #0b0e0f");
+  });
+
+  /*
+   * And the emulator's own theme still names that colour to the renderer, so
+   * the canvas and the viewport under it agree. Asserted against the source
+   * because a theme that drifted from the stylesheet would show up exactly
+   * where the bug above did: at the edges the canvas does not cover.
+   */
+  it("hands the renderer the same background the stylesheet paints behind it", () => {
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/theme:\s*\{\s*background:\s*"#0b0e0f"/u);
   });
 });
 

@@ -104,7 +104,19 @@
 .terminal-panel__starting{padding:0 5px;color:#9ba6aa;white-space:nowrap}
 .terminal-emulator{min-width:0;min-height:9rem;padding:10px;overflow:hidden}
 .terminal-emulator .xterm{height:100%}
-.terminal-emulator .xterm-viewport{scrollbar-color:#515b5f #0b0e0f}
+/* The card is one surface, including the parts xterm paints for itself.
+   `xterm.css` hardcodes `background-color:#000` on the viewport and no `theme`
+   option reaches it — `theme.background` is handed to the renderer, which
+   paints the canvas over the rows it has, and the viewport is what shows
+   wherever the canvas does not. That was invisible while the emulator was tall
+   and full, and at 932x430 it was the whole card: `11-tab-keyboard-focus`
+   measured a hard `#000000` block filling the emulator's entire content box
+   against the panel's `#0b0e0f` around it, because a tab opened into a
+   one-row box had no canvas painted yet. The colour is the panel's own, so
+   once the canvas does paint nothing changes; what changes is that an
+   unpainted or under-filled emulator now reads as an empty terminal rather
+   than as a black bar someone left inside the card. */
+.terminal-emulator .xterm-viewport{background-color:#0b0e0f;scrollbar-color:#515b5f #0b0e0f}
 
 .terminal-panel__meta{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:32px;padding:5px 11px;border-top:1px solid #32383b;background:#15191b;color:#9ba6aa;font-size:var(--fs-micro)}
 .terminal-panel__meta>span{min-width:0}
@@ -282,87 +294,109 @@
 }
 
 /* A rotated phone reports a tablet-like width and about 430px of height, and
-   the route is height-bound, so one of its five rows has to give. The wrong
+   the route was height-bound, so one of its five rows had to give. The wrong
    ones did: `.terminal-route__setup` and `.terminal-tabs` both carry
    non-visible overflow, which zeroes a grid item's automatic minimum size, so
    the 14rem emulator floor took the whole budget and both rows were crushed to
    a 2px stripe at 932x430 — the runtime disclosure is the only place the route
    says this is not a host shell, and it was neither readable nor openable,
    with the tab strip gone beside it. The panel's own 14rem floor overflowed
-   the same way and swallowed the meta row under `overflow:hidden`. The
-   emulator is the row that can afford to yield: it scrolls its own scrollback,
-   and every other row here is a fact or a control that does not.
+   the same way and swallowed the meta row under `overflow:hidden`.
+
+   Two passes then treated the emulator as the row that could afford to yield,
+   on the grounds that it scrolls its own scrollback while every other row here
+   is a fact or a control that does not. That reasoning is sound about which row
+   should shrink FIRST and says nothing about how far, and taken to its end it
+   left a one-row terminal. The block below stops treating "height-bound" as a
+   premise; the paragraph in front of it is the measurement that made that
+   necessary.
 
    Scoped off the dock, which declares its own rows and its own smaller floors
    and is height-clamped in JavaScript against its measured parent. */
-/* Lowering the emulator floor to 8rem was half the repair, and the half that
-   could not finish the job. It bought back enough for both rows to be legible
-   again, but they are still the only two rows in this grid whose automatic
-   minimum size is zero, so they are still the rows that pay whatever is left
-   over — and at 932x430 about 16px is left over. Measured on the shipped
-   build: the disclosure loses its bottom border and `Terminal 1` is sliced
-   through the lower third of its label, in 01-rest, 02-setup-open and
-   06-second-tab-open alike.
-
-   So the two rows state their floors instead of inheriting a zero. The floors
-   are written against `--touch-target` rather than a literal because they are
-   the same 44px decision the summary and the tab buttons already make, plus
-   the 1px borders and the strip's 2px padding that sit outside it.
-
-   What flooring them did not do was pay for them, and the paragraph that used
-   to stand here said it did. It claimed the residue was "about 16px" and that
-   it left "through the door the route already has" — `min-height:min-content`
-   on `.terminal-route`, with `main` scrolling the last pixels — so that "a
-   reader scrolls 16px to reach the end of the footer sentence". Both halves
-   were wrong, and the row that paid is the one that could least afford to.
+/* Lowering that floor to 8rem, and then buying the two crushed rows back out
+   of this route's own gaps, were both attempts to make the route fit 308px.
+   It does not fit, and each attempt sent the bill somewhere worse.
 
    Measured off the shipped 932x430 frame, top edge down: `main` is 342px tall
    between a 44px topbar and the 44px navigation band, and `.route-layout`
    spends 14px above and 20px below, so this route is laid out in 308px. Its
-   rows took 47 (header) + 2 (that header's margin) + 46 + 46 + 136 (the panel,
-   sitting on its own content floor rather than the 8rem track floor) + 40 (the
-   footer's two lines) + 32 of gaps = 349px. The overflow is 41px, not 16px,
-   and it lands in the last row: `.terminal-route__footer`, whose first line is
-   painted through the middle of its glyphs by the navigation band at y=386 and
-   whose second line is not painted at all. That row is `role="status"` — the
-   live region this route announces renames, restarts and write failures
-   through — so the residue was being charged to the one row a reader is never
-   looking for and never told to scroll to, and overlay scrollbars paint
-   nothing at rest to tell them otherwise.
+   rows want 47 (header) + 46 (the disclosure summary and its borders) + 46
+   (the tab strip) + 128 (the 8rem panel track) + 40 (the footer's two lines) +
+   16 of gaps = 323px. Inside that 128px panel sits a 44px bar, a 37px meta row
+   and 2px of borders, which leaves a 45px emulator box and, inside its 6px
+   gutter, 33px of content. The cell measures 22px at `comfortable`, which is
+   the shipped density and the largest of the three `terminalTypography`
+   offers, so every row count here is a floor rather than a best case. 33px of
+   content is ONE row: the whole of what a `jsh` session could show of itself
+   was the line the cursor happened to be on. Every other row in the grid is a
+   control at its own floor or a fact, so there was nothing left to take, and
+   the previous pass took 8px out of the emulator's gutter anyway — which
+   bought the footer its clearance and bought the shell nothing, because 31px
+   and 33px of content are both one 22px row.
 
-   The 41px is found inside this route's own box rather than taken from a
-   neighbour, and each piece is measured:
+   A terminal that can show one row is not a terminal, and no redistribution of
+   308px produces one, because the shortfall is not 41px of air; it is about
+   150px of screen that does not exist. So the route stops pretending to fit
+   and scrolls. That is the decision the phone block above already reached at
+   390x844, for the same reason and in the same two declarations — `height:auto`
+   with `min-height:100%` — and `main` carries it, because `main` has always had
+   `overflow:auto`. What was wrong here was not the scrolling; it was scrolling
+   15px of residue nobody can see while the content that overflowed was a live
+   region and a shell.
 
-   - `gap:4px` instead of 8px, across four gaps: 16px. This is air between four
-     already-bordered surfaces, and it is the cheapest height in the route at
-     the one viewport height where height is what is scarce. The dock reaches
-     the same number on a phone for the same reason.
-   - the header's 2px margin, which is skyline above a bordered disclosure: 2px.
-   - the emulator gives back 8px, and it takes both declarations below to
-     collect. Its box measured 51px — above the 3rem floor, so lowering the
-     floor alone moves nothing, and trimming the 10px gutter alone leaves the
-     floor holding the box at 48. `2.5rem` with a 6px gutter (the padding the
-     phone block already spends here) lands the box at 43px. The emulator is
-     still the row nominated to yield, for the reason stated above: it scrolls
-     its own scrollback, and the 8px comes out of its gutter, not its text.
-     Nothing else in the panel moves — the 44px bar and the 32px meta row are a
-     touch target and a fact — so the panel now measures 44+43+37+2 = 126px
-     inside the unchanged 8rem track, the same 2px of clearance it had before.
-     The gutter also travels the other way on the inline axis: 8px wider.
+   What remains is deciding how much of the screen the terminal is worth, and
+   that is written as one number: the panel's track floor. `16rem` makes the
+   panel 256px — a 44px bar, a 173px emulator box and a 32px meta row inside two
+   borders — so the emulator's content box is 161px, or seven 22px rows where
+   there was one. 256px is also chosen so the panel still fits the 308px
+   viewport with the 40px status line and their 4px gap underneath it (300px),
+   which is what makes the scroll worth taking: one scroll past the 151px of
+   header, disclosure and tab strip puts the entire terminal and the sentence it
+   reports through on screen together. The route measures 451px in a 308px port,
+   and the 143px that scrolls away is exactly that chrome. Nothing is sliced,
+   and the overflow is now large enough to be its own affordance — the panel is
+   visibly cut mid-card at rest, where 15px of residue said nothing and overlay
+   scrollbars paint nothing at rest to say it for them.
 
-   That is 26px of the 41. The footer's last line now ends at y=381, five
-   pixels clear of the band, and what still scrolls is the 15px of `main`'s own
-   bottom gutter — air, with no sentence in it. Nothing here narrows a control,
-   and no touch target shrinks: the floors above are untouched and every pixel
-   comes from a gap, a margin or a gutter.
+   The rest of this block is what lands those 256px where they are worth most:
 
-   Nothing outside a ≤500px-tall viewport can see any of it, which is the whole
-   of the cost at the other seven device classes. */
+   - The panel restates its middle track at `2.5rem`, because its own 14rem
+     floor wants 44+224+37+2 = 307px inside a 256px box and `overflow:hidden`
+     would answer that by swallowing the meta row. The track's `1fr` then hands
+     the emulator whatever the bar and the meta row do not use, which is the
+     only distribution here that cannot clip a fact.
+   - The emulator keeps the 6px gutter the phone block already spends. Against
+     the base 10px it saves 8px, and inside a 173px box that is exactly what
+     separates six rows from seven — the same 8px that bought nothing at the old
+     size, spent where the floor function can act on it. It travels the same 8px
+     the other way on the inline axis.
+   - The two floored rows stay. Both carry non-visible overflow, which zeroes a
+     grid item's automatic minimum size, so they are the rows that silently
+     absorb any shortfall rather than overflowing where a reader can see it —
+     which is how a 2px stripe happened in the first place. They are no longer
+     being squeezed, and the floors are what keeps that true if this route is
+     ever height-clamped again. The floors are written against `--touch-target`
+     rather than a literal because they are the same 44px decision the summary
+     and the tab buttons already make, plus the 1px borders and the strip's 2px
+     padding that sit outside it.
+   - `gap:4px` and the zeroed header margin stay. They no longer pay for
+     anything the layout depends on, but they are air between bordered surfaces
+     at the one viewport height where height is the scarce axis, and giving them
+     back would only lengthen the scroll.
+
+   The cost is that scroll, and it is paid inside this route's own box. No
+   neighbour gives up width or height for it: every declaration is scoped to
+   this route, its panel and its emulator, inside a media query no viewport
+   over 500px tall can match, so the other seven device classes see none of it.
+   Nothing on the inline axis moves and no touch target shrinks. The dock is
+   excluded by name from the route rule, and its own `.terminal-route--dock`
+   declarations outrank the two unscoped ones on specificity, so the workspace
+   pane keeps the smaller floors it is clamped against in JavaScript. */
 @media(max-height:500px){
-  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto;gap:4px}
+  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:auto;min-height:100%}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__setup,
   .terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}
   .terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}
-  .terminal-emulator{min-height:2.5rem;padding:6px}
+  .terminal-emulator{padding:6px}
 }
