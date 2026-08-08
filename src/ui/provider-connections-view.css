@@ -441,6 +441,28 @@
   line-height: 1.5;
 }
 
+/*
+ * The gap the flex row used to provide, given back to the one glyph that still
+ * needs it.
+ *
+ * Taking this paragraph out of the `.provider-fabric__notice` group was right —
+ * flex made every `<strong>` and `<code>` in a sentence an unwrappable flex
+ * item — but the group's `gap: 9px` was the only thing separating the lock from
+ * the sentence, and prose has no gap. The lock has been welded to the "A" of
+ * "Airship connects only to the loopback origins" at every width since, which
+ * reads as a font that failed to load rather than as an icon.
+ *
+ * Margin rather than a return to flex: it separates the glyph without making
+ * the sentence's inline elements into flex items again, which is the failure
+ * the comment above this block exists to record. `text-bottom` sits the 15px
+ * lock on the first line's baseline box instead of letting it ride high enough
+ * to open a ragged gap above the paragraph.
+ */
+.provider-fabric__local-requirements p > svg {
+  margin-right: 6px;
+  vertical-align: text-bottom;
+}
+
 .provider-fabric__empty {
   margin: 0;
   padding: 14px;

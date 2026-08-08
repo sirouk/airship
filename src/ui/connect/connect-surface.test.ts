@@ -173,3 +173,46 @@ describe("one name per fact inside a lane", () => {
     expect(source).toContain("The key is held only in this page’s memory and is released when the connection is cleared or the page closes.");
   });
 });
+
+describe("the method tab's sub-label", () => {
+  /*
+   * The strip is shared: `access-view.tsx` builds its own `.connect-method__switch`
+   * for the Chutes lane and puts "Unavailable in this build" in the `small`,
+   * which is longer than anything in `METHOD_SUBLABELS`. `overflow-wrap: anywhere`
+   * split it down the middle — "Unavai/lable in" at 320px — and a word broken
+   * mid-syllable reads as a rendering fault rather than as a status.
+   */
+  it("breaks a sub-label between words, not through one", () => {
+    const rule = /\.connect-method__switch small\s*\{([^}]+)\}/u.exec(declarations)?.[1] ?? "";
+    expect(rule).toContain("overflow-wrap: break-word");
+    // `anywhere` is what split the word; an ellipsis is what `anywhere` was
+    // chosen over. Neither may come back.
+    expect(rule).not.toContain("overflow-wrap: anywhere");
+    expect(rule).not.toContain("text-overflow: ellipsis");
+  });
+
+  it("gives the sub-label the whole tab below the label once the row is too narrow to share", () => {
+    /*
+     * At 320px the `auto 1fr` split leaves the status ~60px — about nine mono
+     * characters at `--fs-micro`, which "Unavailable" alone overruns, so no
+     * wrap mode can rescue it and the column has to change instead. Stacking
+     * costs height, not width: both tabs stay `1fr` inside a strip that is
+     * already `max-width: none` here, so nothing beside it is squeezed.
+     */
+    const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
+    const button = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
+    expect(button).toContain("grid-template-columns: minmax(0, 1fr)");
+    // Right-aligned text under a full-width column would ragged-edge against
+    // the label above it.
+    expect(/\.connect-method__switch small\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "").toContain("text-align: left");
+    // The touch floor the header already holds is not spent to buy the stack.
+    expect(narrow).toContain("min-height: 44px");
+  });
+
+  it("keeps the wide layout sharing one row, which is the only width that has room to", () => {
+    const wide = declarations.slice(0, declarations.indexOf("@media (max-width: 640px)"));
+    const base = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(wide)?.[1] ?? "";
+    expect(base).toContain("grid-template-columns: auto 1fr");
+    expect(/\.connect-method__switch small\s*\{([^}]+)\}/u.exec(wide)?.[1] ?? "").toContain("text-align: right");
+  });
+});

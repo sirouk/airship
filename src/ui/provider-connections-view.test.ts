@@ -270,6 +270,32 @@ describe("provider connection component contract", () => {
   });
 });
 
+describe("the lock beside the loopback sentence", () => {
+  it("keeps a gap between the glyph and the word it sits against", () => {
+    /*
+     * This paragraph was deliberately taken out of the `.provider-fabric__notice`
+     * flex group, because flex made every `<strong>` and `<code>` in the
+     * sentence an unwrappable flex item. That was right, but the group's
+     * `gap: 9px` was also the only thing separating the lock from the text, and
+     * prose has no gap — so the icon has been welded to the "A" of "Airship
+     * connects only to the loopback origins" at every width since.
+     */
+    const rule = /\.provider-fabric__local-requirements p > svg\s*\{([^}]+)\}/u.exec(declarations)?.[1] ?? "";
+    expect(rule).toContain("margin-right: 6px");
+    expect(rule).toContain("vertical-align: text-bottom");
+  });
+
+  it("does not buy the gap by making the sentence a flex row again", () => {
+    // The regression this paragraph's own comment exists to record: 455px of
+    // unwrappable row inside a 294px column at 320px.
+    const paragraph = [...declarations.matchAll(/\.provider-fabric__local-requirements p\s*\{([^}]+)\}/gu)]
+      .map((match) => match[1] ?? "");
+    expect(paragraph.length).toBeGreaterThan(0);
+    for (const rule of paragraph) expect(rule).not.toContain("display: flex");
+    expect(source).toContain('<p><Icon name="lock" size={15} />Airship connects only to the loopback origins');
+  });
+});
+
 function fixtureModel(
   capabilities: InferenceModelDescriptor["capabilities"],
   id = "model-1",
