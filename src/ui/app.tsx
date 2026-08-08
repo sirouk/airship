@@ -14698,7 +14698,12 @@ function ProfileManagerView({
               <p class="profile-boundary-note">{PROFILE_BOUNDARY_NOTE}</p>
             </details>
             <div class="revision-strip">
-              <span><small>Runtime</small>{selected.providerId} · {selected.model}</span>
+              {/* Every cell in this strip is `nowrap` with an ellipsis, and a
+                  quarter of the strip is not enough for a provider and a model
+                  name: "airship-demo · airship…" truncated at 1920px, with no
+                  hover recovery anywhere. The `title` is the same recovery the
+                  terminal's shell path already uses for the same reason. */}
+              <span title={`${selected.providerId} · ${selected.model}`}><small>Runtime</small>{selected.providerId} · {selected.model}</span>
               <span><PostureChip posture={selected.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
               <span><small>Skills resolved</small>{effectiveSkillIds(selected, catalog).length}</span>
               <span><small>Parent</small>{selected.parentRevision?.slice(-8) ?? "origin"}</span>

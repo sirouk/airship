@@ -69,6 +69,20 @@ describe("theme preview cancel scope", () => {
   });
 });
 
+/*
+ * Every cell of the revision strip is a quarter of the strip, `nowrap`, and
+ * ellipsised. A provider and a model do not fit in a quarter at any viewport —
+ * "airship-demo · airship…" was measured truncated at 1920px — so the cell that
+ * carries two names carries the hover recovery the terminal's shell path
+ * already uses for the same reason.
+ */
+describe("the revision strip's runtime cell", () => {
+  it("can be read in full when its quarter of the strip cuts it short", () => {
+    const strip = app.slice(app.indexOf('<div class="revision-strip">'), app.indexOf('<div class="profile-actions">'));
+    expect(strip).toContain("<span title={`${selected.providerId} · ${selected.model}`}>");
+  });
+});
+
 /** The "Cancel preview" button's handler, from its onClick through its closing tag. */
 function cancelPreview(source: string): string {
   const label = source.indexOf(">Cancel preview</button>");

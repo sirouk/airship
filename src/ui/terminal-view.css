@@ -57,8 +57,20 @@
    where nothing could scroll them back. Measured at 390x844. */
 .terminal-panel{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(14rem,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
 .terminal-panel__bar{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:var(--touch-target);padding:4px 10px;border-bottom:1px solid #32383b;background:#15191b;color:#d9d3c7;font-size:var(--fs-caption)}
-.terminal-panel__bar>div:first-child{min-width:0}
-.terminal-panel__bar>div:last-child{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:thin}
+/* The process controls are never the half that shrinks. As `flex:0 1 auto`
+   over an `overflow-x:auto` viewport this group was a strip that clipped in
+   silence — overlay scrollbars paint nothing at rest — and at 768 the row
+   ended mid-glyph on "× C": Close, which ends a live process, was neither
+   visible nor reachable, with no scrollbar, fade or chevron to say a control
+   existed past the edge. The phone block below reached that conclusion for
+   390px and the tablet fell 8px outside it; the decision belongs at every
+   width, because the shrink has somewhere better to go. `overflow:hidden` on
+   the state group is what makes that true: the path ellipsises (its full text
+   is the `code`'s title and the row's sr-only address sentence), and the group
+   clips itself rather than spilling over the buttons it just stopped
+   squeezing. */
+.terminal-panel__bar>div:first-child{min-width:0;overflow:hidden}
+.terminal-panel__bar>div:last-child{flex:0 0 auto;min-width:0}
 /* `min-width:0` is what makes the ellipsis reachable. A flex item defaults to
    `min-width:auto`, so this element could not shrink below the width of the
    path inside it and `text-overflow` never had a narrower box to act in — the
@@ -165,15 +177,16 @@
   .terminal-assurance{flex-wrap:wrap;gap:6px}
   .terminal-assurance>span{flex:0 1 auto;min-height:26px;padding:2px 8px;border:1px solid var(--line);border-radius:999px}
   .terminal-panel{grid-template-rows:auto minmax(9rem,1fr) auto}
-  /* The controls stop being the thing that gets clipped. The action group was
-     `flex:0 1 auto` over an `overflow-x:auto` viewport, so on a 390px screen it
-     collapsed to 110px for four 44px controls: "Restart" sat at 352..396 and
-     "Close terminal tab" at 400..444 — ending a live process was a gesture you
-     had to find by scrubbing a strip with no scrollbar. Four squares and their
-     gaps are 188px, which fits; the path beside them already ellipsises, so the
-     shrink belongs there and the buttons keep their size. */
+  /* The controls stop being the thing that gets clipped. Measured on a 390px
+     screen the action group collapsed to 110px for four 44px controls:
+     "Restart" sat at 352..396 and "Close terminal tab" at 400..444 — ending a
+     live process was a gesture you had to find by scrubbing a strip with no
+     scrollbar. Four squares and their gaps are 188px, which fits. The base
+     rule now states that decision for every width; what stays phone-specific
+     is undoing the full-row `flex` two rules above and tightening the gap so
+     the four squares clear a 320px bar. */
   .terminal-panel__bar>div:first-child{display:flex;flex:1 1 auto;min-width:0}
-  .terminal-panel__bar>div:last-child{flex:0 0 auto;gap:4px;overflow-x:visible}
+  .terminal-panel__bar>div:last-child{flex:0 0 auto;gap:4px}
   /* 362px of bar cannot hold four 44px controls, the shell path and the
      `= /workspace` mirror on one line, and the route's grid is height-locked
      so a second line is taken out of the emulator rather than added (measured:
@@ -215,4 +228,24 @@
   .terminal-dock__actions button>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .terminal-route--dock .terminal-panel__bar{padding-inline:5px}
   .terminal-route--dock .terminal-panel__meta{grid-template-columns:minmax(0,1fr);padding-inline:7px}
+}
+
+/* A rotated phone reports a tablet-like width and about 430px of height, and
+   the route is height-bound, so one of its five rows has to give. The wrong
+   ones did: `.terminal-route__setup` and `.terminal-tabs` both carry
+   non-visible overflow, which zeroes a grid item's automatic minimum size, so
+   the 14rem emulator floor took the whole budget and both rows were crushed to
+   a 2px stripe at 932x430 — the runtime disclosure is the only place the route
+   says this is not a host shell, and it was neither readable nor openable,
+   with the tab strip gone beside it. The panel's own 14rem floor overflowed
+   the same way and swallowed the meta row under `overflow:hidden`. The
+   emulator is the row that can afford to yield: it scrolls its own scrollback,
+   and every other row here is a fact or a control that does not.
+
+   Scoped off the dock, which declares its own rows and its own smaller floors
+   and is height-clamped in JavaScript against its measured parent. */
+@media(max-height:500px){
+  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto;gap:8px}
+  .terminal-panel{grid-template-rows:auto minmax(3rem,1fr) auto}
+  .terminal-emulator{min-height:3rem}
 }
