@@ -195,13 +195,24 @@ describe("the method tab's sub-label", () => {
     /*
      * At 320px the `auto 1fr` split leaves the status ~60px — about nine mono
      * characters at `--fs-micro`, which "Unavailable" alone overruns, so no
-     * wrap mode can rescue it and the column has to change instead. Stacking
-     * costs height, not width: both tabs stay `1fr` inside a strip that is
-     * already `max-width: none` here, so nothing beside it is squeezed.
+     * wrap mode can rescue it and the column has to change instead.
+     *
+     * The drop is a flex line break rather than a second grid row, because it
+     * has to be conditional: the first shipping of this rule stacked the whole
+     * `<= 640px` band, and 390 and 430 have room to share the row — 154px and
+     * 174px of tab against a ~37px label — so they were charged the stack's
+     * extra 18px of tab height for a failure that only happens at 320. `wrap`
+     * plus the basis below asks the layout the question instead of asking a
+     * breakpoint. Nothing pays width for it either way: both tabs stay
+     * `minmax(0, 1fr)` in a strip that is already `max-width: none` here.
      */
     const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
     const button = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
-    expect(button).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(button).toContain("flex-wrap: wrap");
+    // `.connect-surface button` centres its content in this same block, which on
+    // a flex tab would centre the shared row away from the label's own edge.
+    expect(button).toContain("justify-content: flex-start");
+    expect(button).not.toContain("grid-template-columns");
     // Right-aligned text under a full-width column would ragged-edge against
     // the label above it — which is only true because the button below now
     // states the same edge for the label; on its own this rule produced the two
@@ -209,6 +220,63 @@ describe("the method tab's sub-label", () => {
     expect(/\.connect-method__switch small\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "").toContain("text-align: left");
     // The touch floor the header already holds is not spent to buy the stack.
     expect(narrow).toContain("min-height: 44px");
+  });
+
+  /*
+   * The basis is a measurement, not a taste.
+   *
+   * Flex drops the sub-label onto its own row exactly when its basis will not
+   * fit the space the label left, so the basis has to be the width of the
+   * longest word any sub-label can contain — below that a word splits mid-
+   * syllable on the shared row, which is the defect `break-word` above exists to
+   * prevent, and above it the tab stacks at widths that had room to share.
+   *
+   * `ch` is the unit because it is the only one that stays correct: the strip's
+   * `small` is `--font-mono`, where `ch` is exactly one character, and it is
+   * sized by `--fs-micro`, which the phone ramp raises, `data-density="compact"`
+   * raises again, and the reader's own Type scale preference multiplies on top.
+   * A px basis would be right at one of those settings and wrong at the others.
+   *
+   * This reads both writers of the strip. `access-view.tsx` builds its own
+   * `.connect-method__switch` for the Chutes lane, and its "Unavailable in this
+   * build" is longer than anything in `METHOD_SUBLABELS` — the string that made
+   * the original assumption false. Adding a longer word to either file fails
+   * here rather than at 390px on somebody's phone.
+   */
+  it("sizes the wrap threshold to the longest word either writer of the strip can put in a sub-label", () => {
+    const accessView = readFileSync(new URL("../access-view.tsx", import.meta.url), "utf8");
+    // `<small>` is used elsewhere in that file for prose; only the strip's own
+    // tablist counts, so the slice ends at the first panel it controls.
+    const stripStart = accessView.indexOf('<div class="connect-method__switch"');
+    const strip = accessView.slice(stripStart, accessView.indexOf('role="tabpanel"', stripStart));
+    expect(stripStart).toBeGreaterThan(-1);
+    expect(strip).toContain("<small>");
+
+    // A `<small>` here is either literal text or an expression choosing between
+    // string literals; in the second case only the literals reach the screen, so
+    // the identifiers around them must not be measured as if they did.
+    const rendered = (content: string) => content.includes("{")
+      ? [...content.matchAll(/"([^"]+)"/gu)].map((match) => match[1] ?? "")
+      : [content];
+    const sublabels = [
+      ...[...(/const METHOD_SUBLABELS[^;]+;/u.exec(source)?.[0] ?? "").matchAll(/:\s*"([^"]+)"/gu)]
+        .map((match) => match[1] ?? ""),
+      ...[...strip.matchAll(/<small>([\s\S]*?)<\/small>/gu)].flatMap((match) => rendered(match[1] ?? "")),
+    ].join(" ");
+    const longestWord = Math.max(...sublabels.split(/[^A-Za-z]+/u).map((word) => word.length));
+
+    expect(sublabels).toContain("Unavailable in this build");
+    expect(sublabels).toContain("Needs the extension");
+
+    expect(longestWord).toBe("Unavailable".length);
+
+    const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
+    const small = /\.connect-method__switch small\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
+    const basis = Number(/flex:\s*1 1 (\d+)ch/u.exec(small)?.[1]);
+
+    // One character of slack over the longest word, against sub-pixel rounding
+    // deciding a line break the arithmetic says fits exactly.
+    expect(basis).toBe(longestWord + 1);
   });
 
   it("stacks the two rows down one edge rather than one centred and one flush left", () => {
@@ -230,7 +298,10 @@ describe("the method tab's sub-label", () => {
     expect(button).toContain("text-align: left");
   });
 
-  it("keeps the wide layout sharing one row, which is the only width that has room to", () => {
+  it("keeps the wide layout on the grid split, where the strip's 420px cap already guarantees the room", () => {
+    // Above 640px the strip is capped at 420px, so every tab has ~185px to
+    // divide and the shared row can never be in doubt; the flex line break is
+    // scoped to the band below, where the answer varies by viewport.
     const wide = declarations.slice(0, declarations.indexOf("@media (max-width: 640px)"));
     const base = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(wide)?.[1] ?? "";
     expect(base).toContain("grid-template-columns: auto 1fr");
