@@ -274,6 +274,115 @@ describe("conversation library below the full-width toolbar", () => {
 });
 
 /*
+ * What a row and a pane are allowed to spend their width and height on.
+ *
+ * Every case below was measured on a screenshot of the running route, and every
+ * one of them is a rule that reserved space for something the reader could not
+ * use — a hidden control, a floor taller than the viewport, a field's own
+ * min-content — and took it out of the one thing on that line they were reading.
+ */
+describe("conversation library space budget", () => {
+  /*
+   * Measured at 1440px: the same conversation read "Investigate th…" in RECENT
+   * and "Inv…" under FAVORITES, in a card of identical width, with a band of
+   * empty row between the Active verb and the star. `opacity: 0` hides a
+   * control; it does not stop it holding 66px of a 330px panel.
+   */
+  it("collapses the hidden reorder cluster instead of reserving its width", () => {
+    const rest = ruleBody(".session-library-favorite-order");
+    expect(rest).toContain("width: 0;");
+    expect(rest).toContain("opacity: 0;");
+    expect(rest).toContain("overflow: hidden;");
+
+    const revealed = styles.slice(styles.indexOf(".session-library-row:hover .session-library-favorite-order,"));
+    expect(revealed.slice(0, revealed.indexOf("}"))).toContain("width: auto;");
+
+    /*
+     * And a pointer with no hover has to be given the box back. A collapse the
+     * coarse-pointer rule does not undo turns a control that was merely
+     * invisible into one with nothing to press — a worse failure than the
+     * starved title this collapse exists to fix.
+     */
+    const coarse = styles.slice(styles.lastIndexOf("@media (pointer: coarse)"));
+    const reopened = coarse.slice(coarse.indexOf(".session-library-favorite-order {"));
+    expect(reopened).toContain("width: auto;");
+    expect(reopened.slice(0, reopened.indexOf("}"))).toContain("opacity: 1;");
+  });
+
+  /*
+   * Measured at 1440px and 1920px alike: the second line read
+   * "Active · 23 events · general · a" and stopped. The model was squeezed to
+   * about 18px, which is narrower than its own ellipsis, so the row lost its
+   * last discriminating fact and read as a rendering fault rather than as an
+   * abbreviation.
+   */
+  it("spends the row's last line on the model, not on the scope the toolbar already names", () => {
+    const profile = ruleBody(".session-library-card-profile");
+    expect(profile).toContain("min-width: 4ch;");
+    expect(profile).toContain("overflow: hidden;");
+    expect(profile).toContain("text-overflow: ellipsis;");
+
+    /*
+     * The model stays the item that absorbs what is left, with no floor of its
+     * own on purpose: a `min-width` here can exceed what the other three facts
+     * leave on a 260px panel, and `.session-library-card-line2` clips — taking
+     * the ellipsis with it and restoring the one-bare-letter reading.
+     */
+    expect(ruleBody(".session-library-card-model")).toContain("min-width: 0;");
+    expect(ruleBody(".session-library-card-line2")).toContain("overflow: hidden;");
+  });
+
+  /*
+   * Measured at 320px: an input's min-content width is its own `size`, and
+   * `min-width: 0` permits flexing below it without lowering it — so the nowrap
+   * rename row demanded about 345px, the detail card grew to match, and
+   * `Cancel` was sliced to "Ca" against the right edge of a viewport with no
+   * horizontal scroller.
+   */
+  it("wraps the rename row rather than letting its field set the detail column's width", () => {
+    const base = styles.slice(styles.indexOf(".session-library-rename { display: flex;"));
+    expect(base.slice(0, base.indexOf("}"))).toContain("flex-wrap: wrap;");
+
+    const shorthand = styles.indexOf(".session-library-rename input { flex: 1 1 22em;");
+    expect(shorthand).toBeGreaterThan(0);
+    const field = styles.slice(styles.indexOf(".session-library-rename input {", shorthand + 1));
+    expect(field.slice(0, field.indexOf("}"))).toContain("flex-basis: 100%;");
+
+    /*
+     * And it has to be stated after that shorthand. Both selectors weigh
+     * (0,1,1), a media query adds nothing, and `flex` resets `flex-basis` — so
+     * the same declaration written beside the route's other 560px rules is
+     * inert, and inert in the silent way that reads as fixed.
+     */
+    expect(styles.lastIndexOf("flex-basis: 100%;")).toBeGreaterThan(shorthand);
+  });
+
+  /*
+   * Measured at 932x430, a phone held sideways: every media query in the sheet
+   * asks about width, so none of them fired, and the pane laid itself out with
+   * a desktop's vertical room. The action row — Rename, Proof, Fork, Delete —
+   * ended up below the fold showing about 8px of each button's top corner.
+   */
+  it("stops asking a 430px-tall viewport for 420px of pane and a stacked heading", () => {
+    const short = styles.slice(styles.indexOf("@media (max-height: 560px) {"));
+    const guard = short.slice(0, short.indexOf("@media (prefers-reduced-motion"));
+
+    expect(guard).toContain(".session-library-detail {");
+    expect(guard).toContain("min-height: 0;");
+
+    /*
+     * The heading returns to a row only where width is not the scarce axis.
+     * Below 861px the route is already one column, and stacking the actions
+     * under the title is what is right there — this guard has to know the
+     * difference, or it undoes the 1180px rule on a phone in portrait.
+     */
+    expect(guard).toContain("@media (max-height: 560px) and (min-width: 861px) {");
+    expect(guard).toContain(".session-library-detail-heading {");
+    expect(guard).toContain("display: flex;");
+  });
+});
+
+/*
  * The list and its own heading must agree about how much is on screen.
  *
  * Measured: `limit: 200` with no `offset` anywhere in the file, beneath a
