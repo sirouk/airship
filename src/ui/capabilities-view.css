@@ -4,6 +4,20 @@
 .capabilities-refresh, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
 .capability-summary { display: flex; gap: .8rem; align-items: center; justify-content: space-between; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
 .capability-summary > span { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+/* This Seal's label is a claim plus the instant it was observed — "3/6 runtimes
+   ready · observed Aug 8, 3:12 AM PDT" — and `.seal__label`'s shared
+   `white-space: nowrap` gave it only one way to lose: at 320px it read
+   "observed A…" and at 768px the zone was gone, on the one panel whose subject
+   is how fresh its own reading is, with no hover to recover the rest on touch.
+   A wrapping label is already sanctioned grammar here (the hero density's is,
+   and `.trust-sheet` releases the chip's the same way), so the pill takes a
+   second line rather than dropping the fact. Scoped to this one Seal: the
+   runtime and device cards beside it are laid out around single-line chips. */
+.capability-summary > .seal[data-density="chip"] .seal__label { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.3; }
+/* The chip recipe sets `/1` and no block padding because one line in a 24px
+   pill wants neither; a pill that is now allowed a second line wants both, or
+   the two lines sit on each other and on its border. */
+.capability-summary > .seal[data-density="chip"] { padding-block: .2rem; }
 .capability-error { display: flex; gap: .55rem; align-items: center; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--line)); border-radius: var(--radius-control); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 /* Live counts sit above the capacity probe, in the same strip recipe, so the
    reader sees what is running before what could run. */
@@ -24,7 +38,13 @@
 .capability-signal-strip > div { min-width: 0; padding: .55rem .65rem; border-inline-end: 1px solid var(--line); }
 .capability-signal-strip > div:last-child { border-inline-end: 0; }
 .capability-signal-strip dt { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
-.capability-signal-strip dd { overflow: hidden; margin: .18rem 0 0; color: var(--ink); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+/* These tiles hold sentences as well as numbers — `0 B` shares the strip with
+   `Not measurable in this browser` — and a one-line tile in a 2-up phone strip
+   or a 4-up tablet one printed the sentence as `Not measurable i…`, which is a
+   reading the panel is unable to state anywhere else. The value wraps and the
+   row takes the height its tallest tile needs; `overflow-wrap` keeps a single
+   unbreakable token (a long origin) inside the tile rather than through it. */
+.capability-signal-strip dd { overflow: hidden; margin: .18rem 0 0; color: var(--ink); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .capability-device-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
 .capability-device-card { min-width: 0; padding: .65rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
 .capability-device-card.available { border-color: color-mix(in srgb, var(--v-verified) 24%, var(--line)); }

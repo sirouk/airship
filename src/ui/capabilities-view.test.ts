@@ -231,6 +231,25 @@ describe("live load surface", () => {
     // The card's own remediation control is a button and is sized with them.
     expect(mobile).toContain(".capability-probe-action { min-height: 44px; }");
   });
+
+  /*
+   * The panel's subject is how fresh its own reading is, and both of the facts
+   * that say so were being clipped by presentation rather than by the code that
+   * builds them. At 320 the summary pill read `3/6 runtimes ready · observed
+   * A…` — the timestamp entirely gone — and the PAGE MEMORY tile read `Not
+   * measurable i…`; at 768 the pill lost the zone and the tile still clipped
+   * mid-word. Neither has a hover to recover it on touch, so a fact that does
+   * not fit has to wrap, not truncate.
+   */
+  it("wraps the observed-at claim and the stat-tile sentence rather than truncating either", () => {
+    const seal = styles.slice(styles.indexOf('.capability-summary > .seal[data-density="chip"] .seal__label'));
+    expect(seal.slice(0, seal.indexOf("}"))).toContain("white-space: normal");
+    const tile = styles.slice(styles.indexOf(".capability-signal-strip dd"));
+    const declarations = tile.slice(0, tile.indexOf("}"));
+    expect(declarations).not.toContain("white-space: nowrap");
+    expect(declarations).not.toContain("text-overflow: ellipsis");
+    expect(declarations).toContain("overflow-wrap: anywhere");
+  });
 });
 
 describe("extension capability surface", () => {

@@ -642,13 +642,21 @@
   .vault-provider-selector { grid-template-columns: 1fr; }
   .vault-provider-selector .menu-select-trigger { width: 100%; }
   /* A six-by-four matrix cannot be read at 430px. The same rows become one
-     block per provider, with every value kept. */
+     block per provider, with every value kept.
+
+     `caption` is in this list for a reason it took a phone to see: left at
+     `display: table-caption` it stays bound to a table whose own boxes are no
+     longer table boxes, so it shrink-wrapped to the collapsed table's intrinsic
+     width and printed the sentence that tells you how to read the comparison —
+     "Every provider answers the same six questions" — one word per line down a
+     90px column, with two thirds of the row beside it empty. */
   .vault-provider-compare table,
   .vault-provider-compare thead,
   .vault-provider-compare tbody,
   .vault-provider-compare tr,
   .vault-provider-compare th,
-  .vault-provider-compare td { display: block; }
+  .vault-provider-compare td,
+  .vault-provider-compare caption { display: block; }
   .vault-provider-compare thead { display: none; }
   .vault-provider-compare tbody tr {
     margin-bottom: var(--sp-3);
