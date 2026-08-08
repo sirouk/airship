@@ -47,6 +47,25 @@ describe("destructive confirmation", () => {
     expect(primitive).toContain('destructive ? "danger" : "primary"');
   });
 
+  /*
+   * A gate that takes the keyboard has to give it back. Measured on Preferences:
+   * `Reset preferences` opens this dialog, Cancel unmounts it, and with no
+   * restoration focus fell to `<body>` — outside the element that carries the
+   * *parent* dialog's `Tab`/`trapFocus` handler, so the next Tab was the
+   * browser's and walked into the shell behind the scrim. That is an escaped
+   * trap, not merely a lost one, and it is invisible to a pointer user.
+   *
+   * `useOpenerRestore` is asserted absent on purpose: it skips openers inside
+   * OVERLAY_ROOTS, and every opener of this primitive is a control inside the
+   * surface still open behind it, so it would send focus out of that surface.
+   */
+  it("hands the keyboard back to whoever asked the question", async () => {
+    const primitive = await readFile(new URL("./confirm-dialog.tsx", import.meta.url), "utf8");
+    expect(primitive).toContain("const active = document.activeElement;");
+    expect(primitive).toContain("target?.isConnected) target.focus({ preventScroll: true })");
+    expect(primitive).not.toContain("useOpenerRestore(");
+  });
+
   it("has every gated surface import that one primitive rather than rebuild it", async () => {
     for (const file of ["workspace-view.tsx", "sources-view.tsx", "terminal-view.tsx"]) {
       const source = await readFile(new URL(`./${file}`, import.meta.url), "utf8");

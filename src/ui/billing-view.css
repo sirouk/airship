@@ -452,6 +452,30 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The disconnected preview nests its metric strip inside the gate's own
+ * padding, so its cells are narrower than the strip's own rule assumes. Give
+ * those labels the room already available in the card, and `SUBSCRIPTION` stays
+ * one readable word.
+ *
+ * The band is 900px, not the 640px this repair first shipped at. Below 640 the
+ * strip is two columns and the word had already stopped breaking; between 641
+ * and 900 it is still five columns of ~88px of text against a label that is
+ * `overflow-wrap: anywhere`, which is the width at which the tablet printed
+ * `SUBSCRIPTI / ON` beside four neighbours that broke at real word boundaries.
+ * A repair scoped under the width it was measured at is a repair that misses
+ * the widths in between.
+ */
+@media (max-width: 900px) {
+  .billing-gate-preview .metric-strip__cell {
+    padding-inline: var(--sp-2, 8px);
+  }
+
+  .billing-gate-preview .metric-strip__label {
+    letter-spacing: 0.07em;
+  }
+}
+
 @media (max-width: 640px) {
   /*
    * Two rows of two, not a four-column carousel — and now stated once, in the
@@ -486,17 +510,6 @@
 
   .billing-view .billing-gate {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* The disconnected preview nests a two-column metric strip inside the
-     gate's own padding. Give those cells' labels the room already available in
-     the card so `SUBSCRIPTION` stays one readable word at 320px. */
-  .billing-gate-preview .metric-strip__cell {
-    padding-inline: var(--sp-2, 8px);
-  }
-
-  .billing-gate-preview .metric-strip__label {
-    letter-spacing: 0.07em;
   }
 
   .usage-chart {

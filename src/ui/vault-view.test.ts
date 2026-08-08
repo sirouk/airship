@@ -280,6 +280,23 @@ describe("provider comparison", () => {
     expect(lab?.note.split(". ")[0]).toBe("On a loopback lab endpoint nothing is cloud-synchronized");
   });
 
+  /*
+   * The sentence that tells you how to read the comparison has to survive the
+   * layout that makes the comparison readable. Under 680px the matrix stops
+   * being a table and becomes one block per provider; `caption` was left out of
+   * that list, so it kept `display: table-caption`, shrink-wrapped to the
+   * collapsed table's intrinsic width, and printed one word per line down a
+   * 90px column at 390 — on the screen where a person chooses who holds their
+   * data, with two thirds of the row beside it empty.
+   */
+  it("lets the caption use the full width the stacked layout gives everything else", () => {
+    const styles = readFileSync(new URL("./vault-view.css", import.meta.url), "utf8");
+    const stacked = styles.slice(styles.indexOf("@media (max-width: 680px)"));
+    const rule = stacked.slice(0, stacked.indexOf("display: block;"));
+
+    expect(rule).toContain(".vault-provider-compare caption");
+  });
+
   it("states plainly that the ephemeral option keeps nothing", () => {
     const ephemeral = PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
 

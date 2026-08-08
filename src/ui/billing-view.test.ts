@@ -425,6 +425,26 @@ describe("billing provider responsive contract", () => {
     expect(styles).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.billing-account-identity dl,[\s\S]*?\.billing-provider-data\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/u);
     expect(styles).toMatch(/@media \(pointer: coarse\)[\s\S]*?\.billing-provider-tab,[\s\S]*?min-height:\s*44px/u);
   });
+
+  /*
+   * `SUBSCRIPTION` is a word this file has already been edited once to keep
+   * whole, and the first repair was scoped to the width it was measured at. The
+   * tablet is where the strip is still five columns of ~88px of text against a
+   * label that is `overflow-wrap: anywhere`, and it printed `SUBSCRIPTI / ON`
+   * beside four neighbours breaking at real word boundaries. The band, not the
+   * declarations, is what this pins: a phone-only guard is why the defect
+   * survived its own fix.
+   */
+  it("gives the gate preview's labels their room at every width the strip is still five columns", () => {
+    const band = styles.slice(styles.indexOf("@media (max-width: 900px)"), styles.indexOf("@media (max-width: 640px)"));
+
+    expect(band).toContain(".billing-gate-preview .metric-strip__cell");
+    expect(band).toContain("padding-inline: var(--sp-2, 8px)");
+    expect(band).toContain(".billing-gate-preview .metric-strip__label");
+    expect(band).toContain("letter-spacing: 0.07em");
+    // And nowhere else: two copies of one repair is how the bands drift apart.
+    expect([...styles.matchAll(/letter-spacing: 0\.07em/gu)]).toHaveLength(1);
+  });
 });
 
 function snapshot(account: NonNullable<ChutesAccountSnapshot["account"]>): ChutesAccountSnapshot {

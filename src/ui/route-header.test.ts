@@ -110,6 +110,22 @@ describe("route header geometry", () => {
     expect(title).not.toContain("clamp(");
   });
 
+  /*
+   * The three truncation declarations are inert without this one. `.route-title`
+   * is a flex item of `.route-header__bar`, a flex item's default `min-width:
+   * auto` resolves to its min-content width, and a `nowrap` heading's
+   * min-content width is the whole string — so at 320px "Repositories &
+   * worktrees" laid out at full width and was cut flush by the screen edge,
+   * mid-word, with the ellipsis this rule declares never getting a box narrow
+   * enough to fire in.
+   */
+  it("lets the title's own ellipsis fire by allowing the flex item to shrink", () => {
+    const title = routeStyles.match(/\.route-title \{([^}]+)\}/u)?.[1] ?? "";
+    expect(title).toContain("min-width: 0");
+    expect(title).toContain("text-overflow: ellipsis");
+    expect(title).toContain("white-space: nowrap");
+  });
+
   it("keeps the eyebrow off brass, which encodes location and action only", () => {
     const eyebrow = routeStyles.match(/\.route-header__eyebrow \{([^}]+)\}/u)?.[1] ?? "";
     expect(eyebrow).toContain("color: var(--ink-muted)");

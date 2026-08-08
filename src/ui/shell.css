@@ -1537,10 +1537,22 @@
 .rail-collapse:focus-visible { color: var(--ink); border-color: var(--line-strong); opacity: 1; }
 
 @media (pointer: coarse) {
-  /* A 13px grip is not a target. On a coarse pointer it becomes a 44px round
-     handle on the same seam, in the same place — the shape changes, the
-     gesture and the position do not. */
-  .rail-collapse { width: 44px; }
+  /* A 13px grip is not a target. On a coarse pointer it widens on the same
+     seam, in the same place — the shape changes, the gesture and the position
+     do not.
+
+     24px, not the 44px this first asked for, because the handle is centred on
+     the seam and half of whatever it measures lands inside the rail. At 44 that
+     half was 22px of a z-index:1 control lying across the nav column: measured
+     at 768 it sat over the tail of `Connection` — washing the final `n` out —
+     in a rail whose 84px is itself measured to hold exactly that word, and the
+     right end of that row collapsed the rail instead of opening the
+     destination. 24 is WCAG 2.5.8's target minimum and the widest grip whose
+     halves clear both neighbours: 12px inward stops at the nav column's
+     padding, 12px outward stops inside the route gutter. Widening it further
+     means taking a target from one side or the other, which is what this
+     rule's own history is. */
+  .rail-collapse { width: 24px; }
   .chat-nav-disclosure,
   .rail-expander,
   .chat-nav-new { min-height: 44px; min-width: 44px; }

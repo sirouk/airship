@@ -4259,6 +4259,16 @@
  */
 .route-title {
   margin: 0;
+  /* The ellipsis below is the whole point of the `nowrap`, and without this it
+     never fired once. `.route-header__bar` is a flex row, a flex item's default
+     `min-width: auto` is its min-content width, and a nowrap heading's
+     min-content width is the entire string — so "Repositories & worktrees" laid
+     out at its full width inside a 320px phone and was cut flush by the screen
+     edge, mid-word and with no ellipsis to say so. Declared here rather than as
+     `.route-header__bar > *` because only this child has a truncation rule to
+     fall back on: the actions cluster would shrink its buttons below their
+     labels with nothing to show for it. */
+  min-width: 0;
   overflow: hidden;
   color: var(--ink);
   font: var(--fw-title) var(--fs-display)/1.15 var(--font-display);
