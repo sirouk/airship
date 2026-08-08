@@ -4460,6 +4460,10 @@
  * The `> * >` chain is load-bearing: it matches the route's own bar and only
  * that. A `<RouteHeader>` nested inside a panel — `.git-sources-header` in the
  * editor's Sources pane — is not a page edge and keeps the primitive's inset.
+ * The one exception is a panel that already pads itself: the advanced
+ * source-controls sheet gives `.git-sources` a 16px inline gutter of its own,
+ * so `sources-view.css` zeroes this inset there rather than let the primitive
+ * stack a second edge on the first.
  */
 .route-layout > * > .route-header {
   padding-inline: 0;

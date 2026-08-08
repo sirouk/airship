@@ -23,6 +23,55 @@
   padding: 0 var(--sp-4) var(--sp-4);
 }
 
+/*
+ * The heading is what made this sheet wider than the phone it opens on.
+ *
+ * `<RouteHeader>` is a grid, and with no explicit column it gets one implicit
+ * `auto` track whose base size is the widest min-content contribution of its
+ * children. `.route-title` is `white-space: nowrap`, so its min-content
+ * contribution is the entire string: "Repositories & worktrees" measures 378px
+ * and floored the track at 378px inside a 256px content box. The bar inherited
+ * that width, the heading was handed all of it, and the `text-overflow:
+ * ellipsis` that `.route-title` already carries never fired once — the box it
+ * was asked to truncate into was never too small. At 320px the reader got
+ * "Repositories & wor" cut flush by the screen edge with no ellipsis to say so,
+ * `.git-sources`' own `overflow: auto` silently absorbing the missing 122px,
+ * and the ⓘ/Import/Refresh row — laid out in that same over-wide track —
+ * overhanging the header's own bottom rule by 13px.
+ *
+ * A `minmax(0, 1fr)` column cannot be inflated by a nowrap child: it is exactly
+ * the sheet's width, so the ellipsis finally has a box to fire in. Declared on
+ * this header rather than on `.route-header` because the primitive is shared by
+ * ten routes and this is the one that mounts it inside a panel narrow enough to
+ * prove the difference.
+ */
+.git-sources-header.route-header {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * The second page edge `routes.css` warns about, in the one place it happens.
+ *
+ * `.route-layout > * > .route-header` zeroes the primitive's inset for routes
+ * whose shell already supplies a gutter, and its comment deliberately exempts a
+ * `<RouteHeader>` nested in a panel — "not a page edge" — naming this very
+ * header. That holds for the Sources pane, where `.git-sources` has no padding
+ * of its own. It stops holding the moment the panel becomes the advanced sheet:
+ * `.git-sources--embedded` pads 16px inline, so the primitive's 16px was a
+ * second gutter stacked on the first. The heading and its verbs started 32px in
+ * while every card below them started at 16px, and the 32px went missing from
+ * the width the title had to truncate into.
+ *
+ * Giving it back is what makes the clamp above free: at 320px the actions
+ * cluster is 209px and the ⓘ beside it is 49px, which fits 288px and does not
+ * fit 256px, so without this the header would have wrapped Import and Refresh
+ * onto a third row to pay for the ellipsis. Nothing gives anything up here —
+ * the cards below are untouched and keep the sheet's one gutter.
+ */
+.git-sources--embedded .git-sources-header.route-header {
+  padding-inline: 0;
+}
+
 .git-sources-header .route-header__actions button {
   min-height: 44px;
 }
