@@ -279,6 +279,16 @@ export function findDuplicatePairs<T>(
     const byNormalized = new Map<string, number[]>();
     for (const { index } of partition) {
       const normalized = prepared[index]!.normalized;
+      /*
+       * Text that normalizes away is not text two records have in common.
+       * Punctuation-only or emoji-only notes all reduce to the empty string,
+       * and keying on it put every one of them in a single group that the loop
+       * below then reported as exact duplicates at similarity 1 — the strongest
+       * claim this module can make, on the least evidence it can hold. The
+       * fuzzy lane below already declines the same records for the same reason
+       * (`if (!signature) continue`); this is that guard, one lane earlier.
+       */
+      if (!normalized) continue;
       const group = byNormalized.get(normalized);
       if (group) group.push(index);
       else byNormalized.set(normalized, [index]);

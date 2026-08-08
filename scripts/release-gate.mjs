@@ -169,7 +169,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // twenty-nine gzip bytes under this config-free CI artifact. 185 KiB
   // leaves under 300 bytes of headroom, below the 768-byte tripwire, so
   // gzip takes one whole-KiB step to 186.
-  // Re-measured at 570,886 B raw / 190,553 B gzip after the surface-repair
+  // Re-measured at 570,886 B raw / 190,542 B gzip after the surface-repair
   // sweep. The named cause is correctness, not capability: the baseline grew
   // by the guards and honest sentences eighty-four repairs put on paths that
   // were already eager — the composer's ceiling reset, the classified failure
@@ -178,7 +178,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // approval and registry checks that now state what they refused instead of
   // returning silently. Nothing new was made eager and nothing deferred moved
   // in. 186 KiB gzip would have left a negative margin against this reading,
-  // so gzip takes one whole-KiB step to 187, leaving 935 bytes — above the
+  // so gzip takes one whole-KiB step to 187, leaving 946 bytes — above the
   // 768-byte tripwire. Raw is unchanged and keeps 215 KiB of its clearance.
   allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 187 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
@@ -735,13 +735,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // handful of bytes rather than hugging the line. 2,301 KiB raw and
   // 730 KiB gzip would have left 201 / 235 B, below the aggregate's 768-byte
   // floor, so raw takes 2,302 and gzip takes 731.
-  // Re-measured at 2,360,630 B raw / 748,737 B gzip after the surface-repair
+  // Re-measured at 2,360,450 B raw / 748,651 B gzip after the surface-repair
   // sweep. Everything in the delta is first-party correctness: the shell,
   // prime, execution, storage, trust and tooling repairs listed against their
   // own ceilings above, none of which made anything eager. 2,306 KiB raw would
   // have left 714 B, below the aggregate's 768-byte floor, so raw takes one
-  // further whole step to 2,307 (1,738 B); gzip takes its smallest clearing
-  // step to 732, which leaves 831 B and is already above the floor.
+  // further whole step to 2,307 (1,918 B); gzip takes its smallest clearing
+  // step to 732, which leaves 917 B and is already above the floor.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2307 * 1024, gzip: 732 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -998,13 +998,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so raw takes one further whole step to
   // 2,981 (1,598 B). Gzip takes the smallest whole-KiB step that clears
   // the reading, so 919.
-  // Re-measured at 3,056,070 B raw / 941,777 B gzip after the surface-repair
+  // Re-measured at 3,055,890 B raw / 941,690 B gzip after the surface-repair
   // sweep. This backstop tracks the first-party and prime readings above and
   // moves for the same reason they do: eighty-four repairs that make surfaces
   // report what they actually did. 2,985 KiB raw would have left 570 B and
   // 920 KiB gzip would have left 303 B, both inside the aggregate's 768-byte
-  // floor, so each takes one further whole step — raw to 2,986 (1,594 B) and
-  // gzip to 921 (1,327 B).
+  // floor, so each takes one further whole step — raw to 2,986 (1,774 B) and
+  // gzip to 921 (1,414 B).
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2986 * 1024, gzip: 921 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.

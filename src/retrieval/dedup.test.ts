@@ -60,6 +60,21 @@ describe("findDuplicatePairs", () => {
     expect(pairs.some((pair) => !pair.exact && pair.similarity > 0.87)).toBe(true);
   });
 
+  it("NEVER merges records whose text normalizes away to nothing", () => {
+    /*
+     * The hazard the CJK test above names in prose: anything that reduces to
+     * the empty string — punctuation-only notes, an emoji, a lone arrow —
+     * shared one group key, and the exact lane reported every pair of them at
+     * similarity 1. That is the strongest claim this module makes, resting on
+     * no surviving content at all. Two records with nothing in common are not
+     * duplicates because normalization left them both empty.
+     */
+    expect(normalizeDedupText("!!! ---")).toBe("");
+    expect(normalizeDedupText("→→→")).toBe("");
+    const pairs = findDuplicatePairs([r("!!! ---"), r("→→→"), r("?? ...")], select);
+    expect(pairs).toHaveLength(0);
+  });
+
   it("NEVER merges same-frame different-fact records (Berlin vs Paris)", () => {
     const pairs = findDuplicatePairs([
       r("The owner lives in Berlin."),

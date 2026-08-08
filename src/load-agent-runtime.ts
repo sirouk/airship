@@ -33,8 +33,9 @@ export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRu
 /**
  * The gate. `runtime` is an explicit caller override and is allowed only
  * against compatible journal evidence (fork semantics); omitted lets the
- * ordering work: prime by default for fresh sessions, evidence-preserving
- * for anything with history.
+ * ordering work: airship-core for a fresh session that carries a transport
+ * (which is every one the app starts, `transport` being required), prime for
+ * a fresh session without one, evidence-preserving for anything with history.
  */
 export async function runTurn(options: RunTurnOptions & { runtime?: AgentRuntimeKind }): Promise<TurnResult> {
   /*

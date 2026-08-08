@@ -424,7 +424,12 @@ function printSnapshot(snapshot) {
 }
 
 function printVaultSetup() {
-  console.log("\nVault → Storage provider → S3-compatible / MinIO → Configure vault");
+  // "Configure vault" is not a control the Vault route has; the operator who
+  // followed this line was hunting for a button that does not exist. The route
+  // opens its chooser ("Choose a durable provider"), the S3 lane is titled
+  // "S3-compatible / MinIO", and the verb that commits the fields below is
+  // "Run live probe".
+  console.log("\nVault → Choose a durable provider → S3-compatible / MinIO, then Run live probe");
   console.log(`  Endpoint    ${LOCAL_LAB.s3Endpoint}`);
   console.log(`  Region      ${LOCAL_LAB.region}`);
   console.log(`  Bucket      ${LOCAL_LAB.bucket}`);

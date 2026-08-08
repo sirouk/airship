@@ -1,5 +1,5 @@
 import type { JsonValue, SecurityPosture } from "../core/contracts";
-import { sha256 } from "../core/hash";
+import { sha256, stableStringify } from "../core/hash";
 import type {
   ClaimKey,
   ConversationReceipt,
@@ -296,7 +296,7 @@ export function exportPortableReceipt(receipt: ConversationReceipt): Conversatio
 
 export function serializePortableReceipt(receipt: ConversationReceipt): string {
   const portable = exportPortableReceipt(receipt);
-  return stableJsonStringify(portable as unknown as JsonValue);
+  return stableStringify(portable as unknown as JsonValue);
 }
 
 async function requireInvocationEndpointBinding(
@@ -829,7 +829,7 @@ function redactCredentialShapes(value: JsonValue): JsonValue {
 }
 
 async function digestJson(value: JsonValue): Promise<string> {
-  const digestBytes = hexToBytes(await sha256Hex(stableJsonStringify(value)));
+  const digestBytes = hexToBytes(await sha256Hex(stableStringify(value)));
   const base64Url = bytesToBase64(digestBytes)
     .replaceAll("+", "-")
     .replaceAll("/", "_")
@@ -837,11 +837,3 @@ async function digestJson(value: JsonValue): Promise<string> {
   return `sha256:${base64Url}`;
 }
 
-function stableJsonStringify(value: JsonValue): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJsonStringify).join(",")}]`;
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableJsonStringify(item)}`)
-    .join(",")}}`;
-}
