@@ -156,9 +156,33 @@ async function copy(context: CommandContext): Promise<number> {
     context.shell.charge();
     const from = fs.resolve(source);
     const to = intoDirectory ? joinPath(target, baseName(from)) : target;
+    refuseSelfDirectedCopy("cp", fs, from, to);
     copyPath(context, from, to, recursive);
   }
   return 0;
+}
+
+/**
+ * The two ways a copy can consume itself, refused before anything is written.
+ *
+ * `cp a a` read `a` and wrote it straight back; `mv a a` did the same and then
+ * removed the source, so a script that renamed a file to the name it already
+ * had deleted it and exited 0. Copying a directory into its own subtree was
+ * worse than wrong — `copyPath` walked the children it had just created and
+ * recursed until the step budget stopped it, leaving a partial tree behind and
+ * still reporting success.
+ *
+ * Both are errors in POSIX and in every shell this engine is measured against,
+ * and this one states its refusal rather than performing a mangled version of
+ * what was asked, which is the contract `execute_shell` advertises.
+ */
+function refuseSelfDirectedCopy(utility: "cp" | "mv", fs: ShellFileSystem, from: string, to: string): void {
+  if (from === to) throw new ShellCommandError(`${utility}: ${from} and ${to} are the same file`);
+  if (fs.isDirectory(from) && to.startsWith(`${from}/`)) {
+    throw new ShellCommandError(utility === "cp"
+      ? `cp: cannot copy a directory, ${from}, into itself, ${to}`
+      : `mv: cannot move ${from} to a subdirectory of itself, ${to}`);
+  }
 }
 
 function copyPath(context: CommandContext, from: string, to: string, recursive: boolean): void {
@@ -188,6 +212,7 @@ async function move(context: CommandContext): Promise<number> {
     const from = fs.resolve(source);
     const to = intoDirectory ? joinPath(target, baseName(from)) : target;
     if (parsed.flags.has("n") && fs.exists(to)) continue;
+    refuseSelfDirectedCopy("mv", fs, from, to);
     copyPath(context, from, to, true);
     fs.removeTree(from);
   }

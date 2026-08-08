@@ -1601,10 +1601,21 @@ export function AccessView({
                           the blocked panel first. The recovery verb and the
                           field it serves are one motion.
                         */}
-                        <button type="button" onClick={(event) => {
+                        {/*
+                          The panel to focus is the one this button switches
+                          *to*, which is a sibling — so `closest()` was the
+                          wrong direction even before the attribute it looked
+                          for turned out to exist nowhere in the tree, leaving
+                          `panel` null and the focus move silently dead. The
+                          key lane already has a stable id, and this button's
+                          own tab already names it through `aria-controls`.
+                        */}
+                        <button type="button" onClick={() => {
                           setChutesMethod("api-key");
-                          const panel = event.currentTarget.closest("[data-connect-method]");
-                          requestAnimationFrame(() => panel?.querySelector<HTMLInputElement>('input[type="password"], input[type="text"]')?.focus());
+                          requestAnimationFrame(() => document
+                            .getElementById("chutes-method-panel-api-key")
+                            ?.querySelector<HTMLInputElement>('input[type="password"], input[type="text"]')
+                            ?.focus());
                         }}>Use an API key</button>
                           </div>
                         ) : null}

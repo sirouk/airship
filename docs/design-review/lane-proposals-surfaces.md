@@ -778,7 +778,7 @@ Acceptance checks to write as e2e assertions in `e2e/`:
 
 ## Tool-call rendering — the rollup that swallows the next message
 
-**Diagnosis.** I ran two real connected turns against `zai-org/GLM-5.2-TEE` at 1440x900 and 430x932 and measured the DOM (scripts: `/Users/chrisk/chutes-jumpmaster/airship/.aesthetic/lane-tools.mjs`, `lane-tools2.mjs`; shots: `/Users/chrisk/chutes-jumpmaster/airship/.aesthetic/shots/tools/`).
+**Diagnosis.** I ran two real connected turns against `zai-org/GLM-5.2-TEE` at 1440x900 and 430x932 and measured the DOM (scripts: `.aesthetic/lane-tools.mjs`, `lane-tools2.mjs`; shots: `.aesthetic/shots/tools/`).
 
 "Swallows" is four separate, measurable failures.
 

@@ -2,7 +2,7 @@
 
 **Version:** 1.0 · 2026-07-27 · Design Director
 **Scope:** all ten routes, shipped-code-accurate. Supersedes the seven lane reviews where they conflict.
-**Repo:** `/Users/chrisk/chutes-jumpmaster/airship`
+**Repo:** this repository; every path below is repository-relative.
 
 ---
 

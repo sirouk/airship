@@ -384,7 +384,7 @@ Timeline and click count:
 
 **Information fate.** Nothing is dropped. The verified-1 fact survives as "Uncapped: 1 verified"; the verified-0 fact survives as "After ceiling: 0 verified"; the reason, today visible only as the trailing fragment "· receipt unauthenticated" repeated on eight tiles, becomes one stated sentence and is still kept per-claim in the expanded detail table.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/attestations-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/claim-stack-model.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/trust-language.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-02-inspect-endpoint.png
+**Files.** src/ui/attestations-view.tsx, src/ui/claim-stack-model.ts, src/ui/trust-language.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-02-inspect-endpoint.png
 
 ### [blocker] "Established" means both "proven" and "merely recorded" within 460px
 
@@ -396,7 +396,7 @@ Timeline and click count:
 
 **Information fate.** The 7/1 split survives as "1 verified · 6 recorded · 1 no evidence", which is strictly more precise since it now separates the verified one; "Not established" becomes "None for this turn" and keeps "compatibility mode" as its sub-line; "Turn receipt only" survives as the explicit "not bound to this turn" clause.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/trust-language.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/proof-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/claim-stack-model.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-04-receipt-chip-click.png
+**Files.** src/ui/trust-language.ts, src/ui/proof-view.tsx, src/ui/claim-stack-model.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-04-receipt-chip-click.png
 
 ### [blocker] One turn, six phrasings of one fact, four glyph families, zero definitions
 
@@ -408,7 +408,7 @@ Timeline and click count:
 
 **Information fate.** Every current string keeps a home: the four pills become the four rows of the trust sheet (runtime, vault, provider, evidence) with today's hover-only tooltips promoted to visible descriptions; "E2EE · evidence recorded" becomes the provider row's description "Payloads are end-to-end encrypted; endpoint evidence is fetched after each turn"; "Evidence not pulled" becomes the evidence row's "○ No evidence for this turn"; "no required endpoint-proof gate" moves from the composer caption into that same row as "This connection does not fail closed on missing proof."
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/seal.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/trust-language.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png
+**Files.** src/ui/seal.tsx, src/ui/trust-language.ts, src/ui/app.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png
 
 ### [major] The green check is nondeterministic, and the trust pill mutates while you watch it
 
@@ -420,7 +420,7 @@ Timeline and click count:
 
 **Information fate.** No claim is removed: the late endpoint record keeps its full card and detail, labelled with arrival time and explicitly marked non-retroactive; the existing "Checked N seconds ago" field is promoted from a detail row to the state line itself.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/attestations-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-03-att-1.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-03-att-2.png
+**Files.** src/ui/app.tsx, src/ui/attestations-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-03-att-1.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-03-att-2.png
 
 ### [blocker] The deepest evidence view renders visibly broken strings and a 30px column
 
@@ -432,7 +432,7 @@ Timeline and click count:
 
 **Information fate.** Every truncated string is restored rather than removed: record kind, model, timestamp and both status words become one readable row plus a detail line; "receipt unauthenticated" survives as the explicit "capped to Recorded because this receipt is unsigned"; the clipped "Records are not merged. Endpoint evidence cannot silently upgrade a conversation receipt, or vice versa." moves to a full-width note under the list where it is fully readable.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/attestations-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/attestations-view.css, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r5-02-tabB-attestation.png
+**Files.** src/ui/attestations-view.tsx, src/ui/attestations-view.css, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r5-02-tabB-attestation.png
 
 ### [major] Seven rows that all say "Asserted · Turn receipt", beside the collapse pattern you already built
 
@@ -444,7 +444,7 @@ Timeline and click count:
 
 **Information fate.** All six claim names remain visible at rest inside the summary row; each claim's status, source ("Turn receipt"), issuer, subject, scope, verifier, version, checked, expires and verifier note remain one chevron away, byte-for-byte as today, on keyboard-focusable <summary> elements exactly as now.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/claim-stack-model.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f03-settled.png
+**Files.** src/ui/claim-stack-model.ts, src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f03-settled.png
 
 ### [major] The only anomaly in the integrity report is hidden behind a disclosure and named SESSION_TITLE_SNAPSHOT_MISMATCH
 
@@ -456,7 +456,7 @@ Timeline and click count:
 
 **Information fate.** All six check names and their Passed/consistent states remain, named in the summary line and unchanged one chevron away; the machine code remains, in parentheses after the human sentence; the "A valid hash chain is not proof of authorship" caveat stays exactly where it is.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-07-att-scroll-2.png
+**Files.** src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-07-att-scroll-2.png
 
 ### [major] Reload destroys the session, the receipts and the connection — announced as a footnote with a raw UUID
 
@@ -468,7 +468,7 @@ Timeline and click count:
 
 **Information fate.** The session id survives, shortened to the head-8 form used elsewhere ("session b517b005") with the full UUID on the card's copy action; the "deterministic local demo" disclosure stays in the greeting; the "Connect a model" banner stays, moved below the reload notice.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat-route.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-08-after-reload.png
+**Files.** src/ui/app.tsx, src/ui/chat-route.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-08-after-reload.png
 
 ### [major] 246px of chat chrome before the first message, spent restating the topbar — and the composer clipped below it
 
@@ -480,7 +480,7 @@ Timeline and click count:
 
 **Information fate.** Nothing is deleted: the model name and its picker move into the status line's model segment ("CHUTES · SESSION MODEL" becomes the picker's own header); "E2EE · evidence recorded" becomes the trust sheet's provider description; "Last turn completed" and "N recorded steps · #session" move to the right end of the same 32px line; "type / for tools and session commands" becomes the header of the / command menu where it is actionable; "credential in memory" survives verbatim as a trust-sheet row ("Credential · held in page memory only, never written to disk").
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m04-turn.png
+**Files.** src/ui/app.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r3-01-claim-expanded.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m04-turn.png
 
 ### [major] #access: 872px before the control I came for, 220px of it an extension I do not have
 
@@ -492,7 +492,7 @@ Timeline and click count:
 
 **Information fate.** Nothing is dropped: the Companion's three states (Provider relay: Not observed, Encrypted cache: Not active, Background compute: Not active) stay behind the row's chevron with identical wording; the duplicated lane subtitle is replaced by the description sentence that already exists one line lower, so no fact is lost; "verification remains unverified" becomes "not verified in this browser", which says more, not less.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/access-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/j01-access-landing.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/j04-after-discovery.png
+**Files.** src/ui/access-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/j01-access-landing.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/j04-after-discovery.png
 
 ### [major] #vault shows "Google Drive" in a filled control directly above "No vault claim"
 
@@ -504,7 +504,7 @@ Timeline and click count:
 
 **Information fate.** All three denial strings survive, merged into one canonical sentence with "No endpoint, credential authority, or workspace key is attached." kept as the state card's detail line; the "Disconnected" badge is replaced by the same ○ No vault state so badge and body cannot disagree; the topbar tooltip reuses the identical sentence.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f06-v1-vault.png
+**Files.** src/ui/vault-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f06-v1-vault.png
 
 ### [major] #account calls a working API key "Verified" — the word's fourth meaning — and duplicates an empty state side by side
 
@@ -516,7 +516,7 @@ Timeline and click count:
 
 **Information fate.** Both card titles and their sub-labels are preserved inside the merged sentence and return as full detail rows whenever a subscription exists; the "Verified" timestamp survives verbatim as "accepted this key at 10:14 AM"; balance, charges, tokens, rate limits and the quota-unknown caveat are untouched.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/billing-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/trust-language.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f06-a1-account.png
+**Files.** src/ui/billing-view.tsx, src/ui/trust-language.ts, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/f06-a1-account.png
 
 ### [major] Identifiers truncate head-8 in one place and tail-8 in another, and screen readers get them unspaced
 
@@ -528,7 +528,7 @@ Timeline and click count:
 
 **Information fate.** No identifier is shortened further or hidden: the full urn already appears in Technical receipt details and stays; the chip gains a copy action returning the complete value; the tooltip sentences are not deleted — they move from the accessible name to a described-by relationship and become visible trust-sheet rows, so they stop being hover-only.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-04-receipt-chip-click.png
+**Files.** src/ui/app.tsx, src/ui/proof-view.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r2-04-receipt-chip-click.png
 
 ### [major] The one screen that explains the model exists only on phones — and desktop never says it
 
@@ -540,7 +540,7 @@ Timeline and click count:
 
 **Information fate.** Every desktop tooltip sentence is preserved as that row's visible description instead of hover-only text; the four pills' individual states survive as the four rows; "this provider/acquisition state is not a TEE verdict" survives in plainer words as "an acquisition state, not a hardware verdict"; the numeric badge keeps its count and gains the label it lacked.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/seal.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m05-trust-sheet.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m06-proof.png
+**Files.** src/ui/app.tsx, src/ui/seal.tsx, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m05-trust-sheet.png, /private/var/folders/v2/2ppjynxs689dkprm2gnhf1dh0000gn/T/aud/shots/r4-m06-proof.png
 
 
 ---
@@ -758,7 +758,7 @@ Dismissal is per-load, never sticky; the collapsed chip stays under the session 
 
 **Information fate.** Nothing removed. The exact exception string "Unknown session: <uuid>" moves from the 11.7px caption into the "Technical detail" disclosure with a copy affordance, so it stays reachable and becomes quotable in a bug report. "This conversation link is not available in the current runtime" is superseded by the plainer, strictly more informative "Nothing came back. This tab was ephemeral." plus the four rows. The step count 207 and receipt id #7b8df9c2, currently destroyed silently, are newly surfaced in the body copy. The "Ephemeral · this page only" status pill and topbar "Ephemeral" chip stay exactly where they are — they now have a card that explains their consequence rather than merely their name.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/core/memory-journal.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/turn-recovery.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css
+**Files.** src/ui/app.tsx, src/core/memory-journal.ts, src/ui/chat/turn-recovery.ts, src/ui/styles.css
 
 ### [blocker] Vault adoption fails, the app silently downgrades to Ephemeral and renders the first-run screen while #vault shows "Contract verified"
 
@@ -778,7 +778,7 @@ Buttons: `Retry adoption` (primary) · `Open history read-only` (opens All conve
 
 **Information fate.** Nothing removed. "Browser storage contract passed / Vault contract verified for this browser origin; synchronization has not been evaluated" and the whole LIVE EVIDENCE conformance table stay verbatim on #vault under the "Storage contract" heading — they are true and hard-won. The exception "Event e358c30c-… has no valid turn identity" is promoted from a truncated topbar slot to a copyable row on two routes. "Local vault adoption failed" keeps its exact verb. What is added, not removed, is the second fact the product currently has and does not state: adoption is a separate outcome from contract verification, and the session silently downgraded.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-provider-transition.ts, /Users/chrisk/chutes-jumpmaster/airship/src/storage/encrypted-object-journal.ts
+**Files.** src/ui/app.tsx, src/ui/vault-view.tsx, src/ui/vault-provider-transition.ts, src/storage/encrypted-object-journal.ts
 
 ### [blocker] Vault-backed reload restores your history, then drops you into the wrong conversation and labels it "Encrypted state synced"
 
@@ -796,7 +796,7 @@ Move "Resumed <title> from the encrypted Vault" out of the assistant bubble enti
 
 **Information fate.** Nothing removed. "Resumed General · encrypted vault from the encrypted Vault" survives verbatim in intent, relocated from the assistant bubble to the card's provenance line where it is correctly attributed and correctly targeted. The onboarding sentence "The edge runtime is ready… deterministic local demo" stays as the empty-state copy for genuinely new conversations. "Encrypted state synced" is not deleted, it is disambiguated into "Vault writes committed" — the claim it can actually support — and "Fork required" gains its subject in the card body and in the All-conversations RUNTIME DECISION block where it already appears.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/durability-indicator.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/turn-recovery.ts
+**Files.** src/ui/app.tsx, src/ui/durability-indicator.tsx, src/ui/chat/turn-recovery.ts
 
 ### [blocker] Five amber mismatch rows diagnose one problem perfectly and offer zero buttons that fix it
 
@@ -818,7 +818,7 @@ When the mismatch set is exactly {provider, model, inference connection} — i.e
 
 **Information fate.** Nothing removed. All five mismatch strings survive character-for-character inside the disclosure, and the three that carry concrete ids (provider, model, posture) are additionally promoted into a pinned/active table where the ids are easier to compare than in prose. "Fork = new identity · empty transcript · source untouched" stays on the fork button. "Fork required" is retained as the RUNTIME DECISION value and gains a co-equal, higher-ranked alternative that did not exist before. Nothing that was assertable before becomes unassertable.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/connection-continuity.test.ts, /Users/chrisk/chutes-jumpmaster/airship/src/sessions/library.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/access-route.tsx
+**Files.** src/ui/sessions-view.tsx, src/ui/connection-continuity.test.ts, src/sessions/library.ts, src/ui/access-route.tsx
 
 ### [blocker] "Credentials are page-memory only" is never stated as a stance — you discover it by talking to a stub that answers in character
 
@@ -833,7 +833,7 @@ When the mismatch set is exactly {provider, model, inference connection} — i.e
 
 **Information fate.** Nothing removed. "local demo · page memory" survives verbatim as the composer chip on desktop and is newly made visible on phone. The demo model's own reply — "Airship is running this turn entirely on your device with the deterministic demo provider" — stays exactly as written; it is simply no longer the first place the user learns it. The claim rail's "Not established 7 / Future or unavailable claims" stays untouched. The new copy adds the one fact the product currently owns and never states: that key non-persistence is intentional.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/composer-state.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/durability-indicator.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css
+**Files.** src/ui/app.tsx, src/ui/chat/composer-state.ts, src/ui/durability-indicator.tsx, src/ui/styles.css
 
 ### [major] The terminal restarts its process and says nothing; the only hint is static ambient copy that reads identically before and after
 
@@ -848,7 +848,7 @@ Change the tab chip from `Terminal 1 / Running` to `Terminal 1 / Restarted 10:16
 
 **Information fate.** Nothing removed. "Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend." stays as the route description. "Processes stay hot while this page lives" stays. "Reload requires process restart" becomes strictly more informative rather than disappearing — it is restated as a timestamped event in the scrollback and as a live thread-lifetime token, and the retired thread id, currently thrown away, is newly retained in the disclosure. "Command history · 0" and "Tab metadata is stored through the active encrypted workspace. Process memory remains page-local." are untouched.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/terminal
+**Files.** src/ui/terminal-view.tsx, src/ui/terminal-view.css, src/terminal
 
 ### [major] The Editor after a reload is pixel-indistinguishable from a restored one, because the seed files re-create themselves
 
@@ -864,7 +864,7 @@ When a file present before an ephemeral reload is absent after it, keep a dimmed
 
 **Information fate.** Nothing removed. The "Ephemeral · this page only" lozenge stays exactly where it is. "Files, version-fenced editing, and browser-native source control share one workspace." and "Open a file from Explorer / Nothing is downloaded until you select it." are untouched. Sizes and the Source Control count are untouched. The additions surface facts the runtime already holds and currently discards: which files are restored versus seeded, and which approved writes did not survive. The tombstone row is additive — it re-presents an approval record that today has no representation anywhere.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/workspace-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/editor-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/workspace-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/workspace
+**Files.** src/ui/workspace-view.tsx, src/ui/editor-view.tsx, src/ui/workspace-view.css, src/workspace
 
 ### [major] At 25 conversations every rail row and every history card is the same three lines; the list is unusable and search cannot see message text
 
@@ -881,7 +881,7 @@ When a file present before an ephemeral reload is absent after it, keep a dimmed
 
 **Information fate.** Nothing removed. Every field on today's 150px card — provider id, model id, absolute date/time, event count, profile tag, star, ACTIVE badge — survives in the row's expanded/hover state and in the detail pane, which already carries all of it plus SESSION id, MODEL PIN, RECEIPT CHAIN, JOURNAL HEAD and RUNTIME DECISION. "General conversation" is not deleted as a concept: it remains the fallback title for conversations with no user message, and the previous title stays in the rename history. "METADATA ONLY" is re-worded to state exactly the scope it was gesturing at, and the four filter dropdowns stay.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/sessions/library.ts
+**Files.** src/ui/sessions-view.tsx, src/ui/sessions-view.css, src/ui/app.tsx, src/sessions/library.ts
 
 ### [major] The rail's conversation list is clipped at 250px and hides its own "All conversations" escape hatch behind the clip
 
@@ -893,7 +893,7 @@ When a file present before an ephemeral reload is absent after it, keep a dimmed
 
 **Information fate.** Nothing removed. Every conversation currently reachable by scrolling inside the clip stays reachable by scrolling inside the clip; the count `5 of 25` newly states how many are hidden, which today is unstated. "All conversations" moves from behind the clip to a pinned position, gaining a count. The Trust nav items keep their labels and order.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/navigation-model.ts
+**Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/navigation-model.ts
 
 ### [major] The All-conversations detail pane does not follow the list: filter to zero results and it keeps a live "Fork to continue" button for a conversation the list says does not match
 
@@ -905,7 +905,7 @@ When a file present before an ephemeral reload is absent after it, keep a dimmed
 
 **Information fate.** Nothing removed. The full detail pane — session id, journal structure result, event counts, model pin, receipt chain, journal head, all five mismatch rows, the runtime record — stays rendered and readable; only its action buttons are disabled, and the reason is stated inline. "Clear or widen the current filters." survives, augmented with what was searched and how many were searched.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/session-pins.ts
+**Files.** src/ui/sessions-view.tsx, src/ui/session-pins.ts
 
 ### [major] Forking is the product's only offered continuation and it is defined as an empty transcript — leaving no way to read the work you came back for
 
@@ -920,7 +920,7 @@ When a file present before an ephemeral reload is absent after it, keep a dimmed
 
 **Information fate.** Nothing removed. "Fork = new identity · empty transcript · source untouched. The new manifest records the source head as immutable lineage." retains every clause, reordered so the preservation claim leads. "HISTORY INCOMPLETE" is retained as a label and given a numeric condition so it stops firing on complete sessions — the underlying "fork before continuing" recommendation stays, attached to the mismatch reason that actually triggers it. "Structural linkage only · digests not recomputed · authenticity not proven" is untouched. The bounded transcript materialization is not moved out of the runtime record, it is additionally given a direct entry point.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/sessions/library.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat-route.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/attestation-history.ts
+**Files.** src/ui/sessions-view.tsx, src/sessions/library.ts, src/ui/chat-route.ts, src/ui/attestation-history.ts
 
 ### [major] The topbar's right-hand slot is a single 367px truncated sentence doing four incompatible jobs, and it is the only place the product ever says "resumed"
 
@@ -937,7 +937,7 @@ Per-conversation verdicts like "Fork required" leave the topbar entirely and liv
 
 **Information fate.** Nothing removed. All four strings survive verbatim; three of them move to surfaces wide enough to render them completely, which is a net increase in visible information — "local context fallback" and "has no valid turn identity" are currently rendered but unreadable. The tooltip duplicate is retained for the truncated steady-state string. "Fork required" keeps its exact wording, relocated next to the conversation it describes.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/connectivity.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/posture-chip.tsx
+**Files.** src/ui/platform-shell.tsx, src/ui/platform-shell.css, src/ui/connectivity.ts, src/ui/posture-chip.tsx
 
 ### [major] The composer placeholder is measurably clipped on both platforms, and the phone composer silently drops the durability chip
 
@@ -949,7 +949,7 @@ Per-conversation verdicts like "Fork required" leave the topbar entirely and liv
 
 **Information fate.** Nothing removed. "for tools and session commands" is not deleted — it becomes the header of the slash menu it describes, where it is read at the moment it matters instead of being permanently half-visible. "Attach image", "local demo · page memory" and "Ask First" all appear on phone for the first time, in the 44px strip. The desktop chip row is unchanged. The caption "Encrypted inference through zai-org/GLM-5.2-TEE; this compatibility connection has no required endpoint-proof gate." keeps its position below the composer.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/composer-state.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/durability-indicator.tsx
+**Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/chat/composer-state.ts, src/ui/durability-indicator.tsx
 
 ### [minor] #vault spends 285px re-rendering the left rail's own Trust navigation before the first control, and mobile's filter row overflows with no affordance
 
@@ -961,7 +961,7 @@ Per-conversation verdicts like "Fork required" leave the topbar entirely and liv
 
 **Information fate.** Nothing removed. Proof / Vault / Connection / Account remain reachable from the left rail at desktop and from the tab row at narrow widths, so no destination loses a route. "PRIVATE OBJECT-STORE STATE" and the two-line description survive verbatim on one line and two lines respectively. All four filter dropdowns and all their options survive inside the mobile sheet, with their current values now stated on the trigger, which today requires opening each one to learn.
 
-**Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sessions-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/mobile-navigation.tsx
+**Files.** src/ui/vault-view.tsx, src/ui/vault-view.css, src/ui/sessions-view.css, src/ui/mobile-navigation.tsx
 
 
 ---

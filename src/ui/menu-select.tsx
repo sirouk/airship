@@ -35,10 +35,25 @@ export function MenuSelect({
   const popover = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = useId();
-  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  /*
+   * Two indices, because opening and displaying ask different questions.
+   *
+   * Where to open is a navigation question and has an answer even when nothing
+   * matches: start at the top. What to display is a claim about state, and when
+   * `value` matches no option the honest answer is that nothing is selected.
+   * Clamping the miss to 0 for both answered the second question with the first
+   * one, so a control whose `value` was empty, stale, or not yet in a freshly
+   * fetched list rendered `options[0]` as chosen — a model picker asserting a
+   * model the session had not pinned. `aria-selected` and the check mark below
+   * both compare against `value` directly and were already right; only the
+   * trigger's own label was lying, and the `?? "Choose"` fallback written for
+   * exactly this case could never fire.
+   */
+  const matchedIndex = options.findIndex((option) => option.value === value);
+  const selectedIndex = Math.max(0, matchedIndex);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(selectedIndex);
-  const selected = options[selectedIndex];
+  const selected = matchedIndex < 0 ? undefined : options[matchedIndex];
 
   const close = (restoreFocus: boolean) => {
     setOpen(false);

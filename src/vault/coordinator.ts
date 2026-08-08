@@ -241,13 +241,22 @@ export class VaultCoordinator {
    * prefix listing under the configuration's namespace. Reading this is a
    * read-only list call against the already-verified store: it cannot mutate
    * anything, and a refusal returns `undefined` rather than a guessed number.
+   *
+   * The prefix is empty because the store is *already* confined to the
+   * namespace — `S3ObjectStore` is constructed with `prefix: config.namespace`
+   * and prepends it to every logical key, and the Drive store's keys are
+   * logical for the same reason. Naming the namespace again asked for
+   * `namespace/namespace/`, which matches nothing, so this reported an empty
+   * Vault however full it was. Every other caller already passes a
+   * namespace-relative prefix: the conformance probe passes `probePrefix`, and
+   * the Local Device wipe passes `""`.
    */
   async collectStorageStats(signal?: AbortSignal): Promise<VaultStorageStats | undefined> {
     const store = this.store;
     const config = this.config;
     if (!store || !config || this.current.phase !== "ready") return undefined;
     try {
-      const objects = await store.list(`${config.namespace}/`, signal);
+      const objects = await store.list("", signal);
       let totalBytes = 0;
       for (const object of objects) totalBytes += object.size;
       return Object.freeze({
@@ -272,13 +281,19 @@ export class VaultCoordinator {
    * every follow-on obligation — detaching the adopted runtime, resetting
    * caches, reloading the page — this verb stays where it belongs: the
    * storage boundary.
+   *
+   * The prefix is empty for the reason given on `collectStorageStats`, and the
+   * stakes here are higher: a namespace named twice listed nothing, so the
+   * purge trashed nothing, and an empty `retained` then read as total success.
+   * "Wiped 0 vault objects" followed by a reload is exactly the falsehood this
+   * method's own docblock says the Vault overlay was written against.
    */
   async purgeStoredObjects(signal?: AbortSignal): Promise<Readonly<{ objectCount: number }> | undefined> {
     const store = this.store;
     const config = this.config;
     if (!store || !config || this.current.phase !== "ready") return undefined;
     if (!isReclaimableObjectStore(store)) return undefined;
-    const objects = await store.list(`${config.namespace}/`, signal);
+    const objects = await store.list("", signal);
     const keys = objects.map((object) => object.key);
     const receipt = await store.trash(keys, signal);
     if (receipt.retained.length > 0) return undefined;

@@ -18,7 +18,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Collapse the 614px Source Control preamble into one 44px repo bar
 
 - impact **transformative** · effort **medium** · reclaims ~570px desktop (614→44), ~740px iPad, ~530px iPhone plus the fold moves from 92% to ~10%
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-presentation.test.ts
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css, src/ui/sources-presentation.test.ts
 
 **Problem.** At 1440x900 the heading block (158px), Import band (59px) and trust band (212px) plus gaps consume 614px — 73% of the 842px main viewport — before `.git-sources-layout` begins; the first changed-file row is at y=773 (92% down). On iPad the trust band alone is 361px with ~500px of vertical void in cells 1 and 3. On iPhone the heading is 286px (45% of a 632px viewport) and 'Ephemeral · this page only' is printed twice, adjacently, under 'Workspace files' and 'Git index & refs'.
 
@@ -29,7 +29,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Give Source Control a History pane wired to the log/show/tag/stash/merge/restore/reset verbs that already exist
 
 - impact **transformative** · effort **large** · reclaims n/a — adds the missing half of the surface into space reclaimed by proposals 1 and 5
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/git/client.ts, /Users/chrisk/chutes-jumpmaster/airship/src/git/operations.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.test.ts
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css, src/git/client.ts, src/git/operations.ts, src/ui/sources-view.test.ts
 
 **Problem.** `BrowserGitClient` implements log, show, createTag, deleteTag, stash, merge, restore and reset, and `src/git/terminal-commands.ts` routes all of them — I ran `git log --oneline` through the Terminal's Shared Git box and got `964d257 Initial browser workspace` back live. But `execute()` in sources-view.tsx throws `not-a-source-control-mutation` for every one of those kinds, and a text scan of the populated Source Control screen returns log:false, stash:false, merge:false, reset:false, restore:false. After I committed, the commit was invisible; after I created `feature/aesthetic`, the branch appeared nowhere except inside a closed 'Switch branch' select. The only route to Git history in the product is a text input on a different screen.
 
@@ -40,7 +40,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Reclaim the terminal: make the explanation band collapsible on desktop and stop the route scrolling
 
 - impact **high** · effort **small** · reclaims 183px desktop, and the route drops 991→808px so the page stops scrolling; emulator share rises from 65% toward 88%
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css
+- **Files.** src/ui/terminal-view.tsx, src/ui/terminal-view.css
 
 **Problem.** `.terminal-route__setup > summary { display: none }` applies at every width above 760px while `setupOpen` initialises to `true`, so on desktop the 183px band is permanently open and its own disclosure control is invisible. Chrome above the terminal panel measures 324px of an 842px viewport (38%); the route totals 991px so the entire page scrolls behind the terminal's own scrollback. Setting `details.open = false` in the console drops the route to 808px — under the viewport — and lifts the panel top from y=406 to y=223. The band also states one fact three times: the paragraph says 'runs inside this page's WebContainer', the assurance chip says 'Browser Node shell', the hidden summary says 'Browser Node shell'.
 
@@ -51,7 +51,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Split the change list into Staged / Not staged groups with 44px per-row stage toggles
 
 - impact **high** · effort **medium** · reclaims 41px of legend; every row and control reaches 44px; staged/unstaged becomes readable at a glance instead of at 0.7rem
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.test.ts
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css, src/ui/sources-view.test.ts
 
 **Problem.** After I staged two of three paths the header still read '3 changed paths'; staged-ness was carried only by a 0.7rem sub-label ('staged · modified') and a filled-vs-outlined letter badge that needs a permanent 41px legend row to decode. Checkboxes are 18x18 against the 44px rule, `Working diff` is 91x36, and change rows have tabIndex -1 with no arrow-key navigation. A row showing both scopes renders two buttons totalling 182px inside a 669px column.
 
@@ -62,7 +62,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Fix the diff gutter and doubled +/− markers, and make the diff the largest thing on the route
 
 - impact **high** · effort **medium** · reclaims diff area 160px → ~430px at rest (4 lines → ~22), and ~474px of empty list box returned to the diff
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.test.ts
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css, src/ui/sources-view.test.ts
 
 **Problem.** `.git-diff-lines` renders `<span>{index + 1}</span>`, the patch array index, so the gutter labels `--- a/README.md`, `+++ b/README.md` and `@@ -1,3 +1,12 @@` as lines 1, 2, 3 — no reader can map a hunk to a file line. Because `<b>` prints a sign and `<code>` prints the unstripped line, the screen literally shows `+ +# Airship workspace` and `− -# Private workspace`. Longest line measured 261 characters with `white-space: pre` and Wrap off by default, so long lines clip. At rest the diff panel is 160px with 91px of code — about 4 of a 19-line patch — while the change list holds 736px for ~262px of content, 474px (64%) empty. The header prints the raw scope enum: `worktree · README.md`.
 
@@ -73,7 +73,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Demote the rail's 513px form wall into a branch menu and put the remote essay behind a disclosure
 
 - impact **high** · effort **medium** · reclaims ~510px from the left rail and ~330px from the right rail on desktop; on iPhone it removes an 816px rail from in front of the change list, moving the first file from scroll 1658 to about 400
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/menu-select.tsx
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css, src/ui/menu-select.tsx
 
 **Problem.** `.git-branch-controls` is 513px tall inside a 188px column and holds 8 always-visible controls — Switch branch select, Switch checkout, New branch input, Create branch, Worktree branch input, Workspace path input, Create worktree, Remove selected worktree (which wraps to two lines). Above it, with one worktree, the rail carries ~225px of void. The right `.git-action-rail` is 172 words; its 'Remote boundary' section alone is 1030 characters of always-on prose, and the word 'remote' appears 11 times on the screen.
 
@@ -84,7 +84,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Present the runtimes as a choice and surface airship-sh in the terminal
 
 - impact **transformative** · effort **large** · reclaims n/a — turns a hidden first-party capability into the default working shell and explains the jsh failures a person actually hits
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/terminal/manager.ts, /Users/chrisk/chutes-jumpmaster/airship/src/terminal/contracts.ts, /Users/chrisk/chutes-jumpmaster/airship/src/execution/shell/adapter.ts, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css
+- **Files.** src/ui/terminal-view.tsx, src/terminal/manager.ts, src/terminal/contracts.ts, src/execution/shell/adapter.ts, src/ui/terminal-view.css
 
 **Problem.** `BrowserTerminalManager` is hardcoded to `activateNodeWebContainerHost`, and the route's text never contains 'airship-sh' or 'POSIX'. Live in the terminal, `for i in 1 2 3; do echo $i; done` returned `jsh: unsupported shell syntax` and `seq 1 400` returned `jsh: command not found: seq` — while Airship ships its own POSIX shell at `state: "ready"`, `tier: "web-baseline"`, with control flow, functions, here-documents, globbing, traps and `cancellation: "abort-interpreter"`, needing no download, no cross-origin isolation and no third-party delivery. WebContainer is `state: "installable"`, `tier: "web-enhanced"`, and depends on StackBlitz delivery plus npm egress. The person choosing a terminal is told none of this and is given no choice.
 
@@ -95,7 +95,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Fold the terminal route heading into the tab strip
 
 - impact **medium** · effort **small** · reclaims 66px desktop (54 + gap), 109px iPhone; combined with proposal 7 the emulator goes from 548px (65%) to ~790px (94%) of the desktop main viewport
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css
+- **Files.** src/ui/terminal-view.tsx, src/ui/terminal-view.css
 
 **Problem.** `.terminal-route__heading` is 54px on desktop and 97px on iPhone for a mono eyebrow 'WORKSPACE · BROWSER PROCESS ROOM' plus a serif H1 'Terminal' naming a route the sidebar already shows as selected, alongside two buttons. On iPhone that block plus the action row pushes the emulator to y=372 of a 632px viewport.
 
@@ -106,7 +106,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Move Shared Git inside the terminal and mark its output as a different authority
 
 - impact **medium** · effort **medium** · reclaims 79px from above the terminal; the bridge stops competing with the prompt for 'which box do I type in'
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/terminal/manager.ts, /Users/chrisk/chutes-jumpmaster/airship/src/git/terminal-commands.ts
+- **Files.** src/ui/terminal-view.tsx, src/ui/terminal-view.css, src/terminal/manager.ts, src/git/terminal-commands.ts
 
 **Problem.** `.terminal-git-bridge` is a 79px full-width form with its own monospace input pre-filled `git status` and a Run button, sitting above a terminal that cannot run git at all. Its output is written into the xterm buffer prefixed `$ ` — I saw `$ git log --oneline` then `964d257 Initial browser workspace` — while the real jsh prompt is `❯`. A reader sees two command lines, one of which appears to have been typed into the other. The deterministic command set is discoverable only by typing `git help`.
 
@@ -117,7 +117,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### One 44px terminal panel bar, with the meta strip pulled above the fold and a touch key row
 
 - impact **medium** · effort **small** · reclaims bar 47→44px desktop, 77→44px iPhone; the 28px meta strip leaves the layout entirely, adding ~40px to the emulator and lifting two facts above the fold
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/terminal-view.css
+- **Files.** src/ui/terminal-view.tsx, src/ui/terminal-view.css
 
 **Problem.** `⌃C Interrupt` is 95x30, `Restart` 80x30 and `× Close` 65x30 — all below the 44px rule, and Close is destructive. On iPhone 14 Pro Max the bar wraps to 77px over three lines (Running / /workspace / thread 63b1c59…6e5c9) with three icon-only buttons and no label. `session.detail` and `Command history · N` sit in a 28px strip measured at y=1002 against a clientH of 842 — permanently below the desktop fold. On touch there is no Tab, Esc, arrow or Ctrl affordance beyond the ⌃C button.
 
@@ -128,7 +128,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Rebuild the Source Control empty and clean states as designed panels rather than leftovers
 
 - impact **medium** · effort **small** · reclaims ~640px of dead middle column on the clean state converted into visible history and diff
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.css
+- **Files.** src/ui/sources-view.tsx, src/ui/sources-view.css
 
 **Problem.** After I committed, the middle column showed ~640px of empty dark space between a one-row change list and a 160px 'Diff inspector' reading 'Choose a staged or working diff' — the most common resting state of a healthy repo is the emptiest screen on the route. The no-repository state (`.git-sources-empty`) offers 'Check available browser sources' and a single `small` line about clone availability, while the real primary action (Import public GitHub snapshot) is a separate collapsed band 300px above it.
 
@@ -139,7 +139,7 @@ TERMINAL. 324px (38%) of the desktop viewport is chrome above the terminal panel
 ### Make the Sources tab strip a real 44px surface switch and remember which pane you were in
 
 - impact **medium** · effort **small** · reclaims ~55px by merging the 43px strip and its gap into the repo bar; targets reach 44px on desktop
-- **Files.** /Users/chrisk/chutes-jumpmaster/airship/src/ui/editor-view.tsx, /Users/chrisk/chutes-jumpmaster/airship/src/ui/editor-view.css, /Users/chrisk/chutes-jumpmaster/airship/src/ui/navigation-model.ts
+- **Files.** src/ui/editor-view.tsx, src/ui/editor-view.css, src/ui/navigation-model.ts
 
 **Problem.** `.editor-route__tabs button` is 34px tall on desktop (44px only under 760px), the strip is `width: fit-content` at 228px floating above a full-width panel, and `mode` is component state that resets to `files` on every remount — so navigating away from Source Control and back always drops you into the editor. There is also no route hash for it, so Source Control cannot be linked or bookmarked.
 
@@ -341,7 +341,7 @@ Second, be explicit about the phone posture. When the pane is < 480px wide and t
 
 **Diagnosis.**
 
-Measured live at 1440x900 (main scroll viewport = 842px), iPad Pro 11 (834x1194, main = 1136px) and iPhone 14 Pro Max (430x740, main = 632px). Screenshots in /Users/chrisk/chutes-jumpmaster/airship/.aesthetic/shots/vault/.
+Measured live at 1440x900 (main scroll viewport = 842px), iPad Pro 11 (834x1194, main = 1136px) and iPhone 14 Pro Max (430x740, main = 632px). Screenshots in .aesthetic/shots/vault/.
 
 THE ROUTE SAYS EVERYTHING TWICE. #vault renders two independent components stacked — VaultView (src/ui/vault-view.tsx) and a provider setup panel (local-device-vault-setup / local-lab-setup / google-drive-setup) — and neither knows the other exists. Each has its own brass monospace eyebrow, its own big heading, its own one-line prose summary and its own status pill. Local Device empty state, desktop: eyebrow "PRIVATE DEVICE STATE" + H1 "Vault" (34px) + "Encrypted journal and workspace state remain in browser-managed storage on this device and work offline." + pill "Disconnected" + truth card "Local Device setup required" + empty card "Complete the crash-safe recovery ceremony below…" + eyebrow "DEVICE-OWNED DURABILITY" + H2 "Local Device Vault" + "Encrypted, offline, and private to this browser profile." + pill "Not opened". That is FOUR restatements of "not connected" and THREE of "encrypted/offline/device" in 606px, before the first real control. On desktop the first non-decoy control ("Open existing") sits at y=664 = 72% down the 842px scroll viewport; on iPad it is at 58%; on iPhone (632px window) the entire Local Device Vault panel is below the fold — 596px of 632 (94%) is spent restating that nothing is connected.
 
@@ -550,7 +550,7 @@ Also, while here: replace the three UA <legend> notches ('Loopback object store'
 
 **Diagnosis.**
 
-MEASURED, NOT INFERRED. Captures and geometry in /Users/chrisk/chutes-jumpmaster/airship/.aesthetic/memory/ (measure.mjs, populate2.mjs, wsq.mjs, audit.mjs). Populated with a real connected Chutes turn (GLM-5.2-TEE) that wrote a profile memory and read two workspace files, then searched "retrieval" and "workspace".
+MEASURED, NOT INFERRED. Captures and geometry in .aesthetic/memory/ (measure.mjs, populate2.mjs, wsq.mjs, audit.mjs). Populated with a real connected Chutes turn (GLM-5.2-TEE) that wrote a profile memory and read two workspace files, then searched "retrieval" and "workspace".
 
 VERTICAL BUDGET. Desktop 1440x900: topbar 58px, route content region 842px. `.memory-hero` is 220px (page-heading 128 + query block 156 + jump nav 44, overlapping in a 2-col grid), then `.memory-federated > header` adds another 104px. The first result pixel is at y=430 — 372px, 44% of the content region and 48% of the raw viewport, is chrome before any recall. iPad Pro 11: 418/1136 = 37%. iPhone 14 Pro Max: 510/632 = 81% — a phone user scrolls ~1.3 viewports to reach the first result. Whole route with the Index open is 3051–3349px = 3.6–4.0 desktop viewports, 4.11 phone viewports.
 

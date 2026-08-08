@@ -176,6 +176,17 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
   { name: "ls -a shows dotfiles", script: `ls -a`, seed: { "/workspace/.env": "", "/workspace/keep": "" }, stdout: ".env\nkeep\n" },
   { name: "cat numbers lines with -n", script: `cat -n f`, seed: { "/workspace/f": "x\ny\n" }, stdout: "     1\tx\n     2\ty\n" },
   { name: "cp and mv move real bytes", script: `cp a b; mv b c; cat c; ls`, seed: { "/workspace/a": "payload\n" }, stdout: "payload\na\nc\n" },
+  /*
+   * A copy that consumes itself. `mv a a` copied `a` onto `a` and then removed
+   * the source, so renaming a file to the name it already had deleted it and
+   * exited 0 — the one outcome a `mv` may never produce. The directory forms
+   * recursed through the children they were creating until the step budget
+   * stopped them, leaving a partial tree and still reporting success.
+   */
+  { name: "mv onto the same name refuses instead of deleting the file", script: `mv a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderrMatch: /are the same file/u, files: { "/workspace/a": "payload\n" } },
+  { name: "cp onto the same name refuses", script: `cp a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderrMatch: /are the same file/u, files: { "/workspace/a": "payload\n" } },
+  { name: "cp -r refuses a directory into its own subtree", script: `mkdir -p d/inner; cp -r d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderrMatch: /cannot copy a directory, \/workspace\/d, into itself/u },
+  { name: "mv refuses a directory into its own subtree", script: `mkdir -p d/inner; mv d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderrMatch: /cannot move \/workspace\/d to a subdirectory of itself/u },
   { name: "rm -r removes a tree", script: `rm -r d; ls`, seed: { "/workspace/d/x": "", "/workspace/keep": "" }, stdout: "keep\n" },
   { name: "mkdir -p creates parents", script: `mkdir -p a/b/c; [ -d a/b/c ] && echo made`, stdout: "made\n" },
   { name: "head and tail select lines", script: `seq 1 5 | head -n 2; seq 1 5 | tail -n 2`, stdout: "1\n2\n4\n5\n" },

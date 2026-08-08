@@ -60,6 +60,7 @@ The split in this repository is exact, and it is the thing to preserve:
 | `VITE_AIRSHIP_PUBLIC_ORIGIN` | build arg | inlined; OAuth redirects are compared against it |
 | `VITE_GOOGLE_CLIENT_ID` | build arg | inlined; also selects the default vault at build time |
 | `VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID` | build arg | inlined |
+| `VITE_AIRSHIP_EXTENSION_INSTALL_URL` | build arg | inlined; empty falls back to the extension this build ships |
 | `CADDY_DOMAIN` | runtime env | read by Caddy, which is a real process |
 | `CADDY_PORT` | runtime env | read by Caddy |
 | `CADDY_TLS` | runtime env | read by `caddy-entrypoint.sh` |
@@ -320,6 +321,7 @@ VITE_AIRSHIP_PUBLIC_ORIGIN=https://airship.example.com
 
 VITE_GOOGLE_CLIENT_ID=
 VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=
+VITE_AIRSHIP_EXTENSION_INSTALL_URL=
 ```
 
 `VITE_AIRSHIP_PUBLIC_ORIGIN` **must match `CADDY_DOMAIN` exactly, scheme

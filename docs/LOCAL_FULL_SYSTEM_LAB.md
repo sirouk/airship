@@ -13,7 +13,7 @@ Requirements: Node.js 22.13+, Rust, `uv`, Docker with Compose, and the repositor
 dependencies installed.
 
 ```sh
-cd ~/chutes-jumpmaster/airship
+cd /path/to/airship
 npm install
 npm run lab:start
 npm run lab:status

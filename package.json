@@ -25,6 +25,7 @@
     "test:e2e:google-drive": "playwright test --config=playwright.google-drive.config.ts",
     "test:vault:live": "AIRSHIP_LIVE_LOCAL_S3=1 vitest run src/vault/local-lab-live.test.ts src/core/agent-vault-context.live.test.ts --reporter=verbose",
     "test:chutes:live": "AIRSHIP_CHUTES_LIVE=1 vitest run src/inference/chutes/transport.live.test.ts src/core/airship-agent.live.test.ts --reporter=verbose",
+    "test:pyodide:live": "PRIME_PYODIDE_LIVE=1 vitest run src/prime/kernel/pyodide-engine.test.ts --reporter=verbose",
     "test:watch": "vitest --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
     "lab:start": "node scripts/local-lab.mjs start",
     "lab:storage": "node scripts/local-lab.mjs storage",
