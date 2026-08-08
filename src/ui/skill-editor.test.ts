@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CUSTOM_SKILL_ID_PREFIX } from "../profiles/domain";
 import { proposedSkillId } from "./skill-editor";
-import { editorPanelNeedsAlignment } from "./skills-manager-view";
+import { editorPanelAlignment } from "./skills-manager-view";
 
 function editorSource(): string {
   return readFileSync(new URL("./skill-editor.tsx", import.meta.url), "utf8");
@@ -103,20 +103,25 @@ describe("pressing Edit produces a response the person can see", () => {
    * button. The panel is a deferred chunk, so the alignment has to wait for the
    * component rather than fire on the "Loading…" line that stands in for it.
    *
-   * And it has to be an alignment only when there is something to align: firing
-   * it for New skill on a desktop viewport, where the panel was in frame all
-   * along, scrolled the route's own mode tabs and APPLIES TO scope selector off
-   * the top of a page nobody had asked to move.
+   * And it has to be an alignment only when there is something to align, and
+   * only as far as it has to go. Firing it for New skill on a viewport where the
+   * panel was in frame all along scrolled the route's own mode tabs and APPLIES
+   * TO scope selector off the top of a page nobody had asked to move; asking
+   * only whether the panel's top edge was in frame then left `Create skill` and
+   * `Cancel` under the fold at every device class but 1920x1080.
    */
   it("aligns the mounted panel and hands it the keyboard", () => {
     const source = skillsSource();
     expect(source).toContain("if (!editorTarget || !SkillEditorPanel) return;");
-    expect(source).toContain("if (needed) panel.scrollIntoView({ block: \"start\" });");
+    // The alignment the helper chose, not one this call site picks for itself.
+    // A literal `"start"` is the shape that threw the route's tabs and scope
+    // selector away on every panel that only needed a hundred pixels.
+    expect(source).toContain("if (alignment) panel.scrollIntoView({ block: alignment });");
+    expect(source).not.toContain('scrollIntoView({ block: "start" })');
     // The keyboard lands in the form whether or not the page had to move; only
     // the scroll is conditional, and `preventScroll` keeps focus from re-choosing
     // a position the branch above already decided.
-    expect(source).toContain('const field = panel.querySelector<HTMLInputElement>("input");');
-    expect(source).toContain("field?.focus({ preventScroll: true });");
+    expect(source).toContain('panel.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });');
     expect(source).toContain("}, [editorTarget, SkillEditorPanel]);");
     // The element the alignment reads. `SkillEditor` is a plain function
     // component, so a ref handed to it would not reach the panel's own node.
@@ -124,37 +129,57 @@ describe("pressing Edit produces a response the person can see", () => {
   });
 
   /*
-   * The four cases the two regressions between them describe. `scrollport`
-   * is the box the reader actually sees the panel through — the shell's
-   * scrolling `.main`, not the window, because the route chrome that got
-   * carried away lives inside it.
+   * The cases the three regressions between them describe. `scrollport` is the
+   * box the reader actually sees the panel through — the shell's scrolling
+   * `.main`, not the window, because the route chrome that got carried away
+   * lives inside it. 57..900 is the desktop-1440 class, measured.
    */
   const scrollport = { top: 57, bottom: 900 } as const;
 
   it("carries the panel to the reader when Edit was pressed from a card below it", () => {
     // The panel is above the fold entirely: this is the dead-button case.
-    expect(editorPanelNeedsAlignment({ top: -400, bottom: -120 }, { top: -350, bottom: -320 }, scrollport)).toBe(true);
-    // And the case where it is below: a short catalog on a tall screen.
-    expect(editorPanelNeedsAlignment({ top: 1200, bottom: 1900 }, { top: 1260, bottom: 1290 }, scrollport)).toBe(true);
+    expect(editorPanelAlignment({ top: -400, bottom: -120 }, scrollport)).toBe("start");
+    // And the case where it is below: a short catalog on a tall screen. It fits,
+    // so the least scroll that shows all of it is the one that gets used.
+    expect(editorPanelAlignment({ top: 1200, bottom: 1900 }, scrollport)).toBe("end");
   });
 
-  it("leaves the page alone when the panel and its first field are already in frame", () => {
-    // desktop-1440 pressing New skill: the panel header sat at y=447 with the
-    // mode tabs, APPLIES TO and the scope card above it. Nothing needed moving,
-    // and moving it cost the author the scope the skill resolves for.
-    expect(editorPanelNeedsAlignment({ top: 447, bottom: 1600 }, { top: 515, bottom: 545 }, scrollport)).toBe(false);
+  it("leaves the page alone only when the whole panel is in frame", () => {
+    // wide-1920 pressing New skill, measured: the panel opened at y=428 and
+    // ended at y=1006 inside a scrollport ending at 1080, actions included.
+    // Nothing needed moving, and moving it cost the author the scope the skill
+    // resolves for.
+    expect(editorPanelAlignment({ top: 428, bottom: 1006 }, { top: 58, bottom: 1080 })).toBe(undefined);
   });
 
-  it("still aligns when only the panel's header made it onto the fold", () => {
-    // A header on the last few pixels of the scrollport reads as nothing having
-    // happened, which is the failure the alignment exists for.
-    expect(editorPanelNeedsAlignment({ top: 880, bottom: 2000 }, { top: 948, bottom: 978 }, scrollport)).toBe(true);
+  /*
+   * The regression this rule was rewritten for, measured off the 1440x900
+   * capture: the panel opened at y=428 and ran 577px to y=1005, so its NAME
+   * field sat at 513..546 — head in frame, and the gate that asked only about
+   * the head left the page alone — while `Create skill` and `Cancel` sat at
+   * 972..998, under a fold at 899. A form whose submit cannot be reached is
+   * worse than one that opens off-screen, because the reader believes they are
+   * already in it.
+   */
+  it("brings the actions in when the panel's head is in frame and its foot is not", () => {
+    expect(editorPanelAlignment({ top: 428, bottom: 1005 }, scrollport)).toBe("end");
   });
 
-  it("asks nothing of a field that is not mounted yet", () => {
-    // The deferred chunk's one-line "Loading the skill editor…" placeholder has
-    // no input, and a visible placeholder is already the feedback.
-    expect(editorPanelNeedsAlignment({ top: 447, bottom: 470 }, undefined, scrollport)).toBe(false);
+  it("shows a panel taller than the scrollport from its beginning", () => {
+    // phone-320: the panel opened at y=347 and its single-column form was still
+    // unfinished at the clip 164px later, inside a scrollport only 454px tall,
+    // so no scroll position holds all of it. The choice is which end to lose,
+    // and `end` would lose the header, the first field and the keyboard with it.
+    expect(editorPanelAlignment({ top: 347, bottom: 1128 }, { top: 57, bottom: 511 })).toBe("start");
+    // Same shape one class up, editing a skill with a long instruction: a header
+    // on the last pixels of the fold reads as nothing having happened.
+    expect(editorPanelAlignment({ top: 880, bottom: 2000 }, scrollport)).toBe("start");
+  });
+
+  it("asks nothing of the placeholder the deferred chunk stands behind", () => {
+    // The one-line "Loading the skill editor…" line has no foot below the fold
+    // to rescue, and a visible placeholder is already the feedback.
+    expect(editorPanelAlignment({ top: 447, bottom: 470 }, scrollport)).toBe(undefined);
   });
 });
 
