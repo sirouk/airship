@@ -246,6 +246,60 @@ describe("the terminal panel's process controls", () => {
   });
 });
 
+describe("the terminal panel's directory chip on a tablet row", () => {
+  /*
+   * The cost side of the rule above. Landing the whole shrink on the state
+   * group landed all of it on the one field inside that group with
+   * `min-width:0`: at 768 with four controls present the directory rendered as
+   * a bare "/" in the workspace dock and "/…" in the route, while the
+   * `= /workspace` mirror and the thread chip beside it kept full width. The
+   * contract is that the path is floored and the two chips that identify least
+   * per pixel are the ones that yield — and that neither the buttons nor the
+   * mirror is paid for it, because those were the previous two repairs.
+   */
+  const tabletBand = (): string => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const start = css.indexOf("@media(min-width:761px) and (max-width:1024px){");
+    expect(start).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("\n}", start));
+  };
+
+  it("floors the path and breaks the line before the chips beside it", () => {
+    const band = tabletBand();
+    // The basis decides where the flex line breaks — line filling reads
+    // hypothetical sizes, so an `auto` basis would carry the whole path into
+    // that decision — and the floor is what the path can never fall under.
+    expect(band).toContain(".terminal-panel__bar code{flex:1 1 8rem;min-width:5rem}");
+    expect(band).toMatch(/\.terminal-panel__bar>div:first-child\{[^}]*flex-wrap:wrap/u);
+  });
+
+  it("makes the thread chip the field that yields, on one line rather than three", () => {
+    const band = tabletBand();
+    expect(band).toContain(".terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+    // The rule needs a chip to select; the compact id is the only span in the
+    // state group that was left unclassed.
+    expect(terminalViewCode()).toContain('<span class="terminal-panel__thread" title={session.threadId}>thread {compactId(session.threadId)}</span>');
+  });
+
+  it("takes the room from neither the controls nor the mirror, which are the two repairs before this one", () => {
+    const band = tabletBand();
+    // Restart and Close ran off a 768px tablet; they are not the source of
+    // this row's slack and nothing here may narrow, hide or unpin them.
+    expect(band).not.toMatch(/div:last-child/u);
+    expect(band).not.toMatch(/\.terminal-panel__bar button/u);
+    // Dropping "= /workspace" is the phone's trade, taken on the phone's own
+    // stated grounds. On a tablet the chip moves to a second line instead.
+    expect(band).not.toMatch(/\.terminal-panel__mirror/u);
+  });
+
+  it("leaves the phone's own measured floor alone", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const phone = css.slice(css.indexOf("@media(max-width:760px)"), css.indexOf("@media(min-width:761px)"));
+    expect(phone).toContain(".terminal-panel__bar code{flex:1 1 auto;min-width:2.5rem}");
+    expect(phone).toContain(".terminal-panel__mirror{display:none}");
+  });
+});
+
 describe("the terminal route on a short viewport", () => {
   /*
    * At 932×430 the runtime disclosure and the tab strip were crushed to a 2px

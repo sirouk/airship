@@ -866,7 +866,10 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
         <code aria-hidden="true" title={workspaceAddressNote(session.cwd)}>{terminalShellPath(session.cwd)}</code>
         <span class="terminal-panel__mirror" aria-hidden="true">= {session.cwd}</span>
         <span class="sr-only">{workspaceAddressNote(session.cwd)}</span>
-        {session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}
+        {/* Classed so the stylesheet can name the field that yields first when
+            the row is short: the compact id identifies least per pixel here,
+            and the full id is already this chip's `title`. */}
+        {session.threadId ? <span class="terminal-panel__thread" title={session.threadId}>thread {compactId(session.threadId)}</span> : null}
       </div>
       <div>
         {/* Interrupt writes to the PTY, so it fails the way every other write

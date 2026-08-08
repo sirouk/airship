@@ -68,7 +68,16 @@
    the state group is what makes that true: the path ellipsises (its full text
    is the `code`'s title and the row's sr-only address sentence), and the group
    clips itself rather than spilling over the buttons it just stopped
-   squeezing. */
+   squeezing.
+
+   What that trade did not say was how far the path may ellipsise, and the
+   answer it gave in practice was: all the way. `code` is the only field in
+   this group carrying `min-width:0`, so with four controls present at 768 it
+   absorbed the entire deficit and came out as a bare `/` in the dock and `/…`
+   in the route, beside a mirror and a thread chip still at full width. The
+   tablet block below keeps this decision and finishes it — the shrink still
+   lands here, still lands inside the group, and now stops at a width that can
+   still name a directory. */
 .terminal-panel__bar>div:first-child{min-width:0;overflow:hidden}
 .terminal-panel__bar>div:last-child{flex:0 0 auto;min-width:0}
 /* `min-width:0` is what makes the ellipsis reachable. A flex item defaults to
@@ -82,8 +91,9 @@
    shell path may ellipsize (its full text is the code's title and the row's
    accessible sentence), but dropping "= /workspace" would restore exactly the
    contradiction this pair was added to end — everywhere the row has the width
-   for it. The phone block below is the one exception, and states its own
-   reason. */
+   for it. Two blocks below say what happens where it does not: the tablet band
+   moves this chip to a second line of the same group rather than shrink it,
+   and only the phone drops it outright, on its own stated reason. */
 .terminal-panel__mirror{flex:0 0 auto;color:#9ba6aa}
 .terminal-panel__bar .seal{color:#9ba6aa}
 .terminal-panel__bar .seal[data-state=verified]{color:var(--v-verified)}
@@ -228,6 +238,47 @@
   .terminal-dock__actions button>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .terminal-route--dock .terminal-panel__bar{padding-inline:5px}
   .terminal-route--dock .terminal-panel__meta{grid-template-columns:minmax(0,1fr);padding-inline:7px}
+}
+
+/* Between the phone block and a desktop row, five state fields are asked to
+   share one line that cannot hold them, and every pixel of the shortfall was
+   charged to the path. Measured at 768: the state group had 257px, of which
+   the status word took 52, the `= /workspace` mirror 78 and the thread chip
+   58 — all three immovable — leaving the directory 19px, which is one slash
+   and an ellipsis. The buttons are not the problem and do not move; they were
+   restored deliberately and the rule above says why.
+
+   The row is not short of space, it was distributing it by accident. The two
+   fields that identify least per pixel take a second line of the same group,
+   and the path keeps the first line and grows into what the status word leaves
+   — about 175px, or `/home/airship-node…` where there was `/`. The `8rem`
+   basis is what makes the break fall there: flex fills lines from hypothetical
+   sizes, not from shrunk ones, so a `flex-basis:auto` path would carry its
+   full ~300px into that calculation and claim a line of its own with the
+   status word stranded on the line above it.
+
+   This costs no height. The thread chip's compact id was already stacking into
+   three text lines inside one flex line — the bar measured 55px in the route
+   and 50px in the dock — and two clean lines at a 2px row gap come in under
+   both, so the emulator gains rather than pays.
+
+   The band is where the scarcity is. Above 1024 the row seats all five fields
+   on one line and the base rules render the path in full; below 761 the bar
+   itself wraps, the mirror is already gone, and the 2.5rem floor there is a
+   measured decision this must not overwrite. */
+@media(min-width:761px) and (max-width:1024px){
+  .terminal-panel__bar>div:first-child{flex:1 1 auto;flex-wrap:wrap;row-gap:2px}
+  /* A floor as well as a basis: the basis decides where the line breaks, the
+     floor is what the path can never be squeezed under if it ever shares a
+     line with something after all. 5rem still spells a directory. */
+  .terminal-panel__bar code{flex:1 1 8rem;min-width:5rem}
+  /* The least identifying field yields first, and on a line of its own that
+     costs almost nothing. As `flex:0 1 auto` with an automatic minimum size
+     the chip could not shrink below its longest token, so it stacked
+     "thread" / "f93b132…" / "a4181" into a three-line tower rather than give
+     back a pixel; one ellipsised line says as much, and the full id is the
+     chip's `title`. */
+  .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 
 /* A rotated phone reports a tablet-like width and about 430px of height, and
