@@ -203,10 +203,31 @@ describe("the method tab's sub-label", () => {
     const button = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
     expect(button).toContain("grid-template-columns: minmax(0, 1fr)");
     // Right-aligned text under a full-width column would ragged-edge against
-    // the label above it.
+    // the label above it — which is only true because the button below now
+    // states the same edge for the label; on its own this rule produced the two
+    // axes the next test is written against.
     expect(/\.connect-method__switch small\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "").toContain("text-align: left");
     // The touch floor the header already holds is not spent to buy the stack.
     expect(narrow).toContain("min-height: 44px");
+  });
+
+  it("stacks the two rows down one edge rather than one centred and one flush left", () => {
+    /*
+     * The stack landed without saying what it stacks against, and the browser
+     * answered: a `<span>` in a `<button>` inherits the UA's `text-align:
+     * center`, so on the Connect Chutes sheet at 320, 390 and 430 a centred
+     * "OAuth" sat over an "Unavailable in this build" flush to the tab's inner
+     * edge — two lines of one control on two axes, which reads as a collision
+     * rather than as a label and its status.
+     *
+     * The button declares the axis so the `small` above is restating it, not
+     * carrying it alone. Left rather than centre, because the sub-label is mono
+     * and wraps to two and three lines here and a centred ragged block gives the
+     * eye no edge to return to.
+     */
+    const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
+    const button = /\.connect-method__switch > button\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
+    expect(button).toContain("text-align: left");
   });
 
   it("keeps the wide layout sharing one row, which is the only width that has room to", () => {

@@ -1050,6 +1050,37 @@
    */
   .tabs.workbench-mobile-switch .tabs__tab,
   .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }
+  /*
+   * And the deficit is charged to the one label that can pay it, exactly as the
+   * desktop strip charges it — the rule above removed the latch and left the
+   * bill to be split by flex's default weighting, which is the wrong split.
+   *
+   * Shrink is weighted by content width, so every cell loses characters in
+   * proportion to how many it had. Measured off the phone-320 shots, ink runs on
+   * the strip's own scanline: the three labels want 72px, 51px and 144px (that
+   * last including its count) and the row has about 49px less than that, so the
+   * split took 21px off "Explorer", 16px off "Editor" and 23px off "Source
+   * Control" — and rendered "Expl…", "Ed…", "Source Co…". "Ed…" names nothing,
+   * and it was the *active* tab that was cut to four characters. A switch whose
+   * current destination cannot be read is not a switch.
+   *
+   * "Explorer" and "Editor" are this strip's short words and they have nothing
+   * in them to spend; "Source Control" is the long one and it is still named by
+   * its first word after a cut. So the first two do not yield and the third
+   * absorbs the whole deficit — the same sentence `:first-child` states for the
+   * desktop pair at :135, for the same reason.
+   *
+   * The cost, measured rather than asserted, is one more character off the third
+   * label at phone-320 alone: its ~131px of label ink takes the full ~49px
+   * instead of its proportional 23px, so "Source Co…" becomes about "Source C…"
+   * while Explorer and Editor render whole. With documents open the Editor cell
+   * also carries a count, ~14px more that the third label now pays too, giving
+   * "Source…" at 320 — with the change count still beside it, because the rule
+   * below pins it. Nothing else on the route is touched: the strip's own width
+   * is unchanged, and 390 and 430 have slack, so at every other device class
+   * this rule never fires and the row is byte-identical.
+   */
+  .tabs.workbench-mobile-switch .tabs__tab:not(:last-child) { flex-shrink: 0; }
   /* The label gives way and the count does not, the same way round as the
      desktop strip: a switch that drops the number of changes to keep the word
      "Control" has hidden the reading the reader was steering by. */
