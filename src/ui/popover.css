@@ -1,10 +1,19 @@
 /*
  * The one anchored disclosure.
  *
- * Rung L1 of the ladder: a chip, one gesture, the full claim. Below 640px it
- * becomes a bottom sheet rather than a narrower popover, because an anchored
- * panel on a phone either overflows the viewport or shrinks the very text it
- * exists to show in full.
+ * Rung L1 of the ladder: a chip, one gesture, the full claim. In the compact
+ * shell — narrow, or wide-but-short — it becomes a bottom sheet rather than a
+ * narrower popover, because an anchored panel there either overflows the
+ * viewport or shrinks the very text it exists to show in full.
+ *
+ * "Compact shell" is `(max-width: 640px), (max-width: 950px) and
+ * (max-height: 500px)`, the pair this product has used since `tokens.css:471`.
+ * The second arm is the phone held sideways, and it is why a landscape 932×430
+ * gets a sheet: it is wider than any upright-phone threshold and shorter than
+ * all of them, so a width test alone hands it an anchored panel with no
+ * vertical room to open into. `popover.tsx` decides the mode; every rule below
+ * that is scoped by width must carry the same pair, or the JS and the CSS
+ * disagree about what a sheet is and the panel is positioned by neither.
  */
 .popover {
   position: relative;
@@ -104,10 +113,16 @@
    * nearest clipping ancestor — `.main`, which is `overflow: auto` — and
    * publishes it here; the `var(--sp-2)` subtracted is the gap `top` above
    * already spent getting clear of the trigger. Without this the only ceiling
-   * was the body's `60vh`, which on a 430px landscape phone is 258px of a pane
-   * that ends 276px below the chip and then hands the rest to a navigation
-   * band: the panel scrolled, but the bottom of its scroll viewport — the
-   * scrollbar, and every line still to read — sat underneath the band.
+   * was the body's `60vh` — a fraction of the *screen*, which says nothing
+   * about how much of the screen this panel is actually allowed to occupy. A
+   * chip low in a scrolling pane, or any pane that stops short of the window,
+   * left the panel scrolling correctly and pointlessly: the bottom of its own
+   * scroll viewport — the scrollbar, and every line still to read — sat outside
+   * the box that clips it.
+   *
+   * The landscape phone that first produced this ceiling is no longer one of
+   * its cases; it opens as a sheet now and is sized by the block at the foot of
+   * this sheet instead. This still governs every anchored panel that is left.
    *
    * The viewport fallback is for the frame before the measurement lands and
    * for the sheet, which is pinned to the screen's own bottom edge and takes
@@ -328,8 +343,8 @@
  * is the height of the panel rather than four pixels, and a long travel run at a
  * short duration reads as a jump-cut.
  *
- * The `sheet` mode is only ever set below 640px, so this rule is scoped by its
- * own data attribute rather than by a second media query.
+ * `sheet` mode is only ever set inside the compact shell, so this rule is
+ * scoped by its own data attribute rather than by repeating that query.
  */
 .popover[data-mode="sheet"] .popover__panel {
   --popover-lift: translateY(100%);
@@ -337,7 +352,11 @@
   transition: opacity 120ms ease, transform 180ms cubic-bezier(.2, .8, .2, 1), display 180ms allow-discrete;
 }
 
-@media (max-width: 640px) {
+/* Both arms of the compact shell, because `popover.tsx` sets `sheet` on both.
+   With only the width arm here, a landscape 932×430 was told it was a sheet by
+   the JS and then left `position: absolute` under the trigger by the CSS —
+   which is the one state neither mode is designed for. */
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
   .popover[data-mode="sheet"] .popover__panel {
     position: fixed;
     z-index: 120;
@@ -379,6 +398,38 @@
   .popover[data-mode="sheet"] .popover__body {
     max-height: 56vh;
     padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom));
+  }
+}
+
+/*
+ * The landscape sheet's measure — this is the bill for the arm added above.
+ *
+ * A sheet spans the bottom edge, and on an upright phone that edge is 320–430px
+ * so the span *is* the measure. At 932×430 the same rule sets a claim's `small`
+ * detail sentence — which is `grid-area: 2 / 1 / 3 / -1`, the full row — to a
+ * ~900px line. That is roughly 150 characters, twice any measure this product
+ * uses anywhere else, and it would have been a legibility defect introduced by
+ * the repair rather than one found by it.
+ *
+ * The column is capped and centred rather than the panel, deliberately. The
+ * panel keeps its full-bleed geometry — the edge it is pinned to, the travel it
+ * slides along, the sticky header, the `--popover-lift` that is purely
+ * `translateY` — so nothing about how the sheet arrives or dismisses is
+ * re-derived here. Only the body's single grid track is bounded, and its
+ * children stretch to it as before. The two scroll shadows are the body's own
+ * backgrounds and still span the panel, which is correct: the scroller is the
+ * full width even where its content is not.
+ *
+ * 640px is `POPOVER_SHEET_MAX_WIDTH` read as a measure rather than as a
+ * breakpoint — the widest this product ever lets a sheet's content get before
+ * it stops calling the viewport compact. The query floors at 641px so the cap
+ * can never bind below its own value; inside this band the viewport is at least
+ * 641px, so the column is only ever narrowed, never stretched.
+ */
+@media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {
+  .popover[data-mode="sheet"] .popover__body {
+    grid-template-columns: minmax(0, 640px);
+    justify-content: center;
   }
 }
 

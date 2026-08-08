@@ -311,67 +311,75 @@
    * A tab that cannot say its own name while it is the one you are looking at
    * is the worst outcome available here, and it is the only truncation with no
    * way out: there is no gesture that reveals it, because you are already on
-   * it. So the shortfall is charged to the tab you are not reading. The
-   * selected tab does not shrink; the other absorbs all of it and ellipsises,
-   * and that cut is self-healing — tap it and it becomes the selected tab,
-   * whole, and the label you just left takes the cut in its place. Whichever
-   * tab you are on, the strip can say where you are.
+   * it. So the shortfall was charged to the tab you are not reading — the
+   * selected tab did not shrink, the other absorbed all of it and ellipsised,
+   * and that cut is self-healing, since tapping it makes it the selected tab
+   * and hands the cut back. That reasoning is sound and it still overshot,
+   * because it was costed in only one of the two directions it applies to.
    *
-   * What this costs, per width, entirely inside the strip:
+   * The note it shipped with recorded 320 as "the other tab holds 107px", which
+   * is what is left of a 286px strip after `Receipt & journal` takes its 175.
+   * Select the other tab and the subtraction changes: `Attestation evidence`
+   * needs 207, the remainder is 286 − 207 − 4 = 75px, and the strip rendered
+   * `Rec…`. Three characters is not a label a reader recognises and chooses, it
+   * is a stub — the rule was measured in the state where it was cheap and
+   * shipped in the state where it was not.
    *
-   *   430  396px for a pair wanting 386. Nobody shrinks and nobody is capped,
-   *        so this band renders identically to the build before this rule —
-   *        which is what keeps 430's repair intact rather than re-paying it.
-   *   390  selected 175 whole; the other tab holds 177px, against the 176 the
-   *        even split gave it and the 191 the proportional shrink did. It
-   *        loses about one character to buy a complete selected label.
-   *   320  selected 175 whole; the other tab holds 107px where the even split
-   *        gave it 141. This is the one real cost — roughly four characters of
-   *        a label that is one tap from being complete.
+   * So the trade is withdrawn rather than re-balanced. Its whole premise was
+   * that someone must absorb an unavoidable cut, and the cut is avoidable: at
+   * 320 there is no split of 286px that seats 386px of *nowrap* label, but the
+   * pair only wants 386px of line because the button forbids a second one.
+   * `white-space: normal` lifts that, both tabs then shrink normally in
+   * proportion to their content, and both stay whole:
    *
-   * Nothing outside the strip pays: this control is `width: 100%` inside this
-   * query and `fit-content` above it, both untouched, so the row that wraps it
-   * and the panel beneath it are the same size and in the same place at every
-   * width. The redistribution is strictly between the two tabs.
+   *   320  strip 286, deficit 100 → `Receipt & journal` 129px, `Attestation
+   *        evidence` 153px. Each wraps to two lines. Neither is cut.
+   *   390  strip 356, deficit 30 → 161px and 191px. Both wrap, both whole,
+   *        recovering the ~one character 390 used to lose.
+   *   430  strip 396 for a pair wanting 386. No shrink, no wrap, one line each
+   *        — byte-identical to the build before this rule, which is what keeps
+   *        430's earlier repair intact rather than re-paying for it.
    *
-   * `flex-wrap: wrap` would seat both labels whole at 320 and is still
-   * deliberately absent, for the reason recorded on the block above: a lone
-   * item on a wrapped line stops stretching to the line height and the overflow
-   * trigger drops under the 44px touch floor.
+   * THE COST, and it is vertical and it is inside the strip. Two lines at
+   * `--fs-lead`/1.2 is ~40.5px against the 44px touch floor these buttons
+   * already hold, so a wrapped label almost fits the box it is in for free —
+   * and "almost" is how the popover header ended up with 2px between a glyph
+   * and a border. The `padding-block` below declares that air rather than
+   * borrowing it, making the button ~48.5px where it wraps: the strip grows
+   * about 4.5px at 320 and 390, and nothing at 430 and above, where no wrap
+   * occurs and the padding stays inside the 44px floor. That height comes out
+   * of the panel below, which scrolls. Nothing horizontal moves at any width —
+   * this control is `width: 100%` inside this query and `fit-content` above it,
+   * both untouched — and the query does not reach landscape-932 at all, so the
+   * viewport with no height to spare pays none of it.
+   *
+   * `min-width: 0` on the tab and its button is gone with the ellipsis it
+   * existed to enable. Restoring the flex default — `min-width: auto`, the
+   * min-content floor — is what keeps the wrap from ever becoming a clip: a tab
+   * cannot be shrunk below its longest word (~126px for `Attestation`, ~89px
+   * for `Receipt`; 219px for the pair against 286px of strip, and that margin
+   * only widens as labels wrap further). Should a large enough `--type-scale`
+   * exceed it, the strip overflows into `.tabs`'s own `⌄ n` control, which
+   * lists every tab with its full label — the component's designed fallback,
+   * and the one the block above already defers to.
+   *
+   * `flex-wrap: wrap` on the *strip* remains deliberately absent, for the
+   * reason recorded on that block: a lone item on a wrapped line stops
+   * stretching to the line height and the overflow trigger drops under the 44px
+   * touch floor. Wrapping text inside a button is a different thing and touches
+   * neither the strip's line count nor the trigger's height.
    */
   .proof-surface-tabs { width: 100%; }
 
   .proof-surface-tabs .tabs__strip { flex: 1 1 auto; }
 
-  /* A flex item defaults to `min-width: auto`, so it would refuse to shrink
-     below the nowrap label it contains — which is the whole reason the labels
-     overflowed the strip rather than ellipsising inside it. This is the guard
-     that lets the ellipsis happen at any width; the rule below is what decides
-     which tab is asked to use it. */
-  .proof-surface-tabs .tabs__tab {
-    min-width: 0;
-  }
-
   .proof-surface-tabs .tabs__tab-button {
-    min-width: 0;
-  }
-
-  .proof-surface-tabs .tabs__tab[data-active="true"] {
-    /*
-     * Any shrink at all truncates this tab, so the weighting that would make it
-     * "shrink less" is not an option: at 390 the deficit is 30px and a tab that
-     * pays even a twentieth of it loses its last character. It pays none.
-     *
-     * The cap is the floor under that refusal. A tab that never shrinks would,
-     * at a larger `--type-scale`, grow until its neighbour was a bare ellipsis
-     * and then push the strip into the `⌄ n` chevron this switcher has twice
-     * been rescued from. Reserving one touch target plus the gap keeps the
-     * unselected tab a control a finger can still hit after its label is gone.
-     * At the shipped type scale the reserve never binds: the narrowest case
-     * leaves the other tab 107px where this guarantees it 44.
-     */
-    flex-shrink: 0;
-    max-width: calc(100% - var(--touch-target) - var(--sp-1));
+    /* The base rule sets `font: … /1 …`, and two lines set solid at a unitless
+       1 collide. The leading is restated here beside the wrap that makes it
+       matter rather than left to be discovered. */
+    white-space: normal;
+    line-height: 1.2;
+    padding-block: var(--sp-1);
   }
 
   .proof-surface-tabs button { min-height: var(--touch-target); }
