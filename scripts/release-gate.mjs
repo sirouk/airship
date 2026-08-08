@@ -361,7 +361,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
   //
-  // Re-measured at 455,857 B raw / 134,239 B gzip after the surface sweep's
+  // Re-measured at 455,857 B raw / 134,237 B gzip after the surface sweep's
   // closing waves. The named cause is the deferred routes finally being audited
   // at eight device classes: Preferences keeping its header from slicing the
   // row beneath it, the conversation library seating its own rows at 320, the
@@ -1053,13 +1053,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // floor, so each takes one further whole step — raw to 2,986 (1,774 B) and
   // gzip to 921 (1,414 B).
   //
-  // Re-measured at 3,057,924 B raw / 943,029 B gzip after the closing surface
+  // Re-measured at 3,060,521 B raw / 944,084 B gzip after the closing surface
   // wave, again the Docker floor. This backstop tracks the first-party reading
   // above and moves for the same reason. 2,987 KiB raw would have left 764 B
   // and 921 KiB gzip would have left 75 B, both inside the aggregate's
   // 768-byte floor, so each takes one further whole step — raw to 2,988
   // (1,788 B) and gzip to 922 (1,099 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2988 * 1024, gzip: 922 * 1024 }),
+  //
+  // The landing wave — the popover header's air moved inside the 44px floor it
+  // was being added on top of, the landscape panel that spends its abundant
+  // axis to save its scarce one, the terminal route that scrolls rather than
+  // slicing itself at 430px, and the readable save refusal in the skill editor
+  // — takes raw one further whole step to 2,990.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2990 * 1024, gzip: 923 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1776,7 +1782,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the entry already ships. Raw takes one whole-KiB step to 176 KiB, leaving
   // 672 B; gzip does not move and is still not close, 29.65 KiB inside 32,
   // because this is the same vocabulary at more sizes rather than new families.
-  entryCss: Object.freeze({ raw: 176 * 1024, gzip: 32 * 1024 }),
+  //
+  // The landing wave adds the last of it — the popover header's air moved onto
+  // the heading inside its own floor, the terminal route scrolling rather than
+  // slicing itself at 430px, the vault's recovery banner paid for from inside
+  // its own box — and raw takes one whole step to 177 KiB. Gzip still does not
+  // move: same families, more sizes.
+  entryCss: Object.freeze({ raw: 177 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
