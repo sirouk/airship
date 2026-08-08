@@ -349,9 +349,21 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   profiles: "more",
   capabilities: "more",
   skills: "more",
-  vault: "trust",
-  billing: "trust",
-  access: "trust",
+  /*
+   * The three global routes belong to More, not to Trust. Trust's destination
+   * is #proof, which does not contain Vault, Connection or Account and offers
+   * no way back to any of them; `PARENT_BY_VIEW` below gives each of the three
+   * its own canonical parent rather than `proof`; and all three are rows in
+   * `MOBILE_MORE_ENTRIES`, which marks itself current when you stand on one. So
+   * a phone on #account lit Trust in gold under an <h1> reading "Account" while
+   * More — the control that actually holds the route, and the one its sibling
+   * global routes light — read inactive. The description a current control
+   * carries still names the route, so nothing is lost by moving the highlight
+   * to the control that can be followed back.
+   */
+  vault: "more",
+  billing: "more",
+  access: "more",
 });
 
 const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> = Object.freeze({

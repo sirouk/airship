@@ -94,6 +94,57 @@ describe("the authoring panel stays off the first-paint path", () => {
   });
 });
 
+describe("pressing Edit produces a response the person can see", () => {
+  /*
+   * The panel renders above the grid, so on a catalog long enough to scroll —
+   * which is every catalog with an authored skill in it — clicking Edit changed
+   * nothing inside the viewport and the primary authoring verb read as a dead
+   * button. The panel is a deferred chunk, so the alignment has to wait for the
+   * component rather than fire on the "Loading…" line that stands in for it.
+   */
+  it("aligns the mounted panel and hands it the keyboard", () => {
+    const source = skillsSource();
+    expect(source).toContain("if (!editorTarget || !SkillEditorPanel) return;");
+    expect(source).toContain('editorRef.current?.scrollIntoView({ block: "start" });');
+    expect(source).toContain('editorRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });');
+    expect(source).toContain("}, [editorTarget, SkillEditorPanel]);");
+    // The element the alignment reads. `SkillEditor` is a plain function
+    // component, so a ref handed to it would not reach the panel's own node.
+    expect(source).toContain("<div ref={editorRef}>");
+  });
+});
+
+describe("the panel fits the narrowest phone whatever the skill is called", () => {
+  const sheet = readFileSync(new URL("./skill-editor.css", import.meta.url), "utf8");
+
+  function rule(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(`\\n${escaped} \\{([^}]+)\\}`, "u").exec(sheet)?.[1] ?? "";
+  }
+
+  /*
+   * The header's `<code>` is `white-space: nowrap`, so a long name makes the
+   * proposed skill ID one unbreakable run. A grid item's automatic minimum size
+   * is its min-content, so that run floored the panel's track and the whole
+   * panel rendered wider than a 390px viewport: no right border, the Skill ID
+   * placeholder off-screen, and the Name input's left edge scrolled out of
+   * view. The `min-width: 0` the `<code>` already carried could never fire
+   * until the header itself was allowed to shrink.
+   */
+  it("lets the header shrink so the skill ID ellipsises instead of widening the panel", () => {
+    expect(rule(".skill-editor > header")).toContain("min-width: 0");
+    expect(rule(".skill-editor > header code")).toContain("min-width: 0");
+    expect(rule(".skill-editor > header code")).toContain("text-overflow: ellipsis");
+  });
+
+  it("gives the title wrapper the same allowance and the heading a break rule", () => {
+    // A name typed as one long word offers the h2 no break opportunity, so the
+    // wrapper needs both halves: permission to shrink, and somewhere to break.
+    expect(rule(".skill-editor > header > div")).toContain("min-width: 0");
+    expect(rule(".skill-editor > header h2")).toContain("overflow-wrap: anywhere");
+  });
+});
+
 describe("an explicit inherit is never stored", () => {
   /*
    * The defect both refuters found: `skillModes: { ...profile.skillModes,

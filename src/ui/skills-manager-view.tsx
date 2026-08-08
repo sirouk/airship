@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   managedProfileRevisions,
   skillReferences,
@@ -84,6 +84,28 @@ export function SkillsManagerView({
   const [editorTarget, setEditorTarget] = useState<SkillEditorTarget>();
   const [SkillEditorPanel, setSkillEditorPanel] = useState<SkillEditorComponent>();
   const [editorError, setEditorError] = useState<string>();
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * The authoring panel mounts above the grid, and Edit is pressed from a card
+   * that is normally scrolled well below it — so on a catalog of any length the
+   * entire response to the route's primary authoring verb landed outside the
+   * viewport and the button read as dead. The panel comes to the reader and the
+   * Name field takes the keyboard, which is also where a keyboard arrival
+   * belongs; `preventScroll` because the alignment above already chose the
+   * position and focus must not re-choose it.
+   *
+   * Gated on `SkillEditorPanel` because the panel is a deferred chunk: without
+   * it this would align the one-line "Loading the skill editor…" placeholder
+   * and then leave the panel to appear wherever the reflow put it. Keyed on
+   * `editorTarget` by identity, so pressing Edit again on the skill already
+   * open re-aligns rather than concluding that nothing changed.
+   */
+  useEffect(() => {
+    if (!editorTarget || !SkillEditorPanel) return;
+    editorRef.current?.scrollIntoView({ block: "start" });
+    editorRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+  }, [editorTarget, SkillEditorPanel]);
 
   useEffect(() => {
     setProfileSwitchFailure(undefined);
@@ -200,14 +222,17 @@ export function SkillsManagerView({
         >{conversationStartStatus}</p> : null}
         {profileSwitchFailure ? <p id="skill-profile-switch-failure" class="profile-switch-failure" role="alert">{profileSwitchFailure}</p> : null}
       </div>
-      {editorTarget ? SkillEditorPanel ? (
+      {/* The wrapper exists only so the effect above has something to align to:
+          `SkillEditor` is a plain function component, so a ref on it would not
+          reach the panel's own element. */}
+      {editorTarget ? <div ref={editorRef}>{SkillEditorPanel ? (
         <SkillEditorPanel
           key={`${editorTarget.mode}:${editorTarget.mode === "new" ? "" : editorTarget.source.skillId}`}
           target={editorTarget}
           onSave={onSaveSkill}
           onClose={() => setEditorTarget(undefined)}
         />
-      ) : editorError ? <p class="skill-editor-status" role="status" aria-live="polite">{editorError}</p> : <p role="status" aria-live="polite">Loading the skill editor…</p> : null}
+      ) : editorError ? <p class="skill-editor-status" role="status" aria-live="polite">{editorError}</p> : <p role="status" aria-live="polite">Loading the skill editor…</p>}</div> : null}
       <div class="skill-grid">
         {catalog.skills.map((skill) => {
           const { mode, globallyEnabled: globalEnabled, enabled } = decisionBySkillId.get(skill.skillId)!;

@@ -20,10 +20,31 @@
   gap: var(--sp-2);
   align-items: baseline;
   justify-content: space-between;
+  /*
+   * The `min-width: 0` below on the `<code>` was never reachable. A grid item's
+   * automatic minimum size is its min-content, and this header's min-content is
+   * the code's — the proposed skill ID is `white-space: nowrap`, so a long name
+   * makes it one unbreakable run — so the panel's auto track was floored at the
+   * whole ID string and the panel rendered wider than a 390px phone: no right
+   * border, the Skill ID placeholder off-screen, and the Name input's own left
+   * edge scrolled out of view. Floor the header at 0 and the track resolves to
+   * the container, which is the width the code then ellipsises against.
+   */
+  min-width: 0;
+}
+
+/*
+ * The header's own two flex items, for the same reason one level down: the
+ * title wrapper is the item that never got the allowance, and a name typed as
+ * one long word has no break opportunity for the h2 to wrap at.
+ */
+.skill-editor > header > div {
+  min-width: 0;
 }
 
 .skill-editor > header h2 {
   margin: 4px 0 0;
+  overflow-wrap: anywhere;
   font: var(--fw-strong) var(--fs-lead)/1.25 var(--font-display);
 }
 
