@@ -1447,12 +1447,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // produces, and a superseded figure above a live ceiling reads as a raise
   // nobody reviewed.
   //
-  // Re-measured at 7,353 B raw / 2,826 B gzip after the surface sweep. The
+  // Re-measured at 7,344 B raw / 2,829 B gzip after the surface sweep. The
   // named cause is that Edit now answers: pressing it mounted the authoring
   // panel above a scrolled-to grid, so from the reader's seat the click did
   // nothing at all, and the panel now comes to them — and only when it is not
   // already on screen, which is the part that costs the bytes. Raw takes one
-  // whole-KiB step to 8 KiB, leaving 839 B; gzip stays inside 3 KiB with 246.
+  // whole-KiB step to 8 KiB, leaving 848 B; gzip stays inside 3 KiB with 243 — the Docker floor, one byte under this host.
   optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
