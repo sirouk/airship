@@ -94,9 +94,20 @@
   padding: var(--sp-1);
 }
 
+/*
+ * `flex: 1 1 0` is what makes the pair read as one switch instead of two
+ * buttons of unequal weight, but on its own it splits the rail into halves
+ * neither label asked for. Measured at 1024: both cells are 119px, "Explorer"
+ * uses 81px of its 93px content box and leaves the other 12 unspent, and
+ * "Source Control 0" — which wants 139px — is cut to "Sourc… 0" beside it.
+ * `max-width: max-content` caps a cell at the width its own label needs, so
+ * the flex algorithm freezes Explorer there and redistributes the surplus to
+ * the neighbour that is still clipping.
+ */
 .tabs.workbench-mode-tabs .tabs__tab {
   flex: 1 1 0;
   min-width: 0;
+  max-width: max-content;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
 }
@@ -110,8 +121,9 @@
  * behind a `⌄ 1` chevron hides the change count that is the whole reason this
  * strip steps down a type rung. `min-width: 0` is what lets a flex item shrink
  * below its content at all; the count is pinned beside it so the label is what
- * gives way. Measured on an iPad's 240px rail: "Source Contr… 3" rather than a
- * tab the reader has to open a menu to find.
+ * gives way. What a narrow rail costs is characters off a destination that is
+ * still named, still glyphed and still counted — not a tab the reader has to
+ * open a menu to find.
  */
 .tabs.workbench-mode-tabs .tabs__tab,
 .tabs.workbench-mode-tabs .tabs__tab-button {
@@ -450,8 +462,21 @@
  * file state twice. Nothing here is ever `display: none`: the revision hash and
  * the byte size that the old `.editor-toolbar small` rule deleted below 760px
  * wrap onto a second line instead of disappearing.
+ *
+ * It also has to outrank the sheet it describes. `.code-editor` and the layer
+ * painted behind it are positioned at `z-index: 1` and `0`, and an unpositioned
+ * strip paints below both of them — background included — so any code pixel
+ * that reaches this band lands on top of the chrome rather than behind it.
+ * Measured at 320x568: the wrapped continuation of line 1 painted in code ink
+ * at y=337–341, across the "Saved" chip and the file path, with neither the
+ * glyphs nor the strip legible and no scroll position that clears them.
+ * `position: relative` puts the strip in the same layer the code is in and
+ * `z-index: 2` puts it above, which is the rule the terminal dock beneath it
+ * already states for itself at `z-index: 20`.
  */
 .editor-strip {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;

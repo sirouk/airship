@@ -1121,6 +1121,61 @@ describe("Explorer chrome above the tree", () => {
   });
 });
 
+/*
+ * The file strip is chrome about the sheet, and chrome the sheet can paint
+ * through costs the reader both things at once: the file state is unreadable
+ * and so is the line of the file that covered it.
+ *
+ * Nothing about the failure shows in a diff. The strip has an opaque
+ * background and reads correctly in its own rule; what breaks it is a
+ * paint-order fact held between two rules ninety lines apart, where the
+ * positioned code layers outrank an unpositioned sibling that comes after them
+ * in the document. Seen at 320x568 with the editor pane open: the wrapped
+ * continuation of line 1 of `notes/retrieval.md` painted in code ink at
+ * y=337–341, on the strip's own background, across the "Saved" chip and the
+ * file path, with no scroll position that clears it.
+ */
+describe("the file strip and the sheet it describes", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const rule = (selector: string) => styles.match(new RegExp(`\\n${selector} \\{([^}]+)\\}`, "u"))?.[1] ?? "";
+
+  it("puts the strip in a layer above the code surface it describes", () => {
+    const strip = rule("\\.editor-strip");
+    expect(strip).toContain("position: relative;");
+    expect(strip).toContain("z-index: 2;");
+  });
+
+  it("keeps the code layers the strip has to outrank below it", () => {
+    // The assertion above only means anything while these are the numbers it
+    // beats: the textarea paints at 1, the highlight twin behind it at 0. If a
+    // later change raises either, the strip stops winning and says nothing.
+    expect(rule("\\.code-editor")).toContain("z-index: 1;");
+    expect(styles).toMatch(/:is\(\.code-highlight, \.code-wrap-measure\) \{[^}]*z-index: 0;/u);
+  });
+});
+
+/*
+ * Two labels, one rail, and only one of them can be shortened.
+ *
+ * `flex: 1 1 0` splits the strip into halves, which spends width on the label
+ * that already fits: measured at 1024, "Explorer" left 12px of its cell unused
+ * while "Source Control 0" was cut to five characters in the cell beside it.
+ * `max-width: max-content` is what lets the flex algorithm freeze the short
+ * cell at its own content width and give the rest to its neighbour, and it has
+ * to sit with `min-width: 0` — the declaration that allows any of this to
+ * ellipsise rather than overflow the rail.
+ */
+describe("the workbench's two-way activity switch", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+
+  it("caps a cell at the label it holds instead of at half the rail", () => {
+    const tab = styles.match(/\n\.tabs\.workbench-mode-tabs \.tabs__tab \{([^}]+)\}/u)?.[1] ?? "";
+    expect(tab).toContain("flex: 1 1 0;");
+    expect(tab).toContain("min-width: 0;");
+    expect(tab).toContain("max-width: max-content;");
+  });
+});
+
 describe("one byte vocabulary", () => {
   it("formats workspace sizes through the shared module, not a local copy", () => {
     const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
