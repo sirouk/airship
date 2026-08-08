@@ -179,7 +179,12 @@ describe("one tab grammar", () => {
   });
 
   it("sets every tab label at the one tab step", () => {
-    const button = routeStyles.match(/\.tabs__tab-button \{([^}]+)\}/u)?.[1] ?? "";
+    // Anchored to the start of a line so this reads the primitive's own rule.
+    // Unanchored it matched whichever scoped override happened to come first in
+    // the sheet — a strip that narrows the button on a phone would then be the
+    // thing asserted to carry the type step, and the primitive could lose it
+    // silently.
+    const button = routeStyles.match(/\n\.tabs__tab-button \{([^}]+)\}/u)?.[1] ?? "";
     expect(button).toContain("var(--fs-lead)");
     // The height is asserted as the token, not as 40px: the product shipped
     // three tab heights (40 here, 44 on the Trust hub, 39 on the

@@ -62,3 +62,45 @@ describe("the one anchored disclosure", () => {
     expect(keydown.match(/contains\(document\.activeElement\)/gu)).toHaveLength(1);
   });
 });
+
+const sheet = readFileSync(new URL("./popover.css", import.meta.url), "utf8");
+
+describe("the panel is the width of the box it is pinned to", () => {
+  it("stops the nowrap header from sizing the panel it sits in", () => {
+    /*
+     * Seen at 320 and 390: the header read `MEMORY INDEX · REVISION-BOUND LOCA`
+     * straight into the screen edge with no ellipsis, every body line was cut
+     * mid-word, and the 44px Done button — the only visible way a touch reader
+     * has to dismiss a sheet — was laid out entirely off-screen. Seen at 1440
+     * too, where the same header and body ran outside the panel's own opaque
+     * background and interleaved with the page beneath it.
+     *
+     * One cause for all of it: the panel is a grid, the header's min-content is
+     * a nowrap heading plus Done, and an `auto` track takes its floor from
+     * exactly that — so the panel laid its rows out at ~490px whatever width the
+     * panel itself had been given.
+     */
+    const panel = block(sheet, ".popover__panel");
+    const header = block(sheet, ".popover__header");
+
+    expect(panel).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(header).toContain("min-width: 0");
+    // The floor is half the contract. The heading still has to have somewhere
+    // to put the characters that a narrower box costs it.
+    expect(sheet).toMatch(/\.popover__header > strong \{[^}]*text-overflow: ellipsis/u);
+  });
+
+  it("keeps the sheet's dismissal control at the touch floor inside that width", () => {
+    // Done is what makes the header worth bounding: a sheet whose only visible
+    // exit is off-screen is dismissible solely by a gesture nobody is told about.
+    expect(sheet).toMatch(/\.popover\[data-mode="sheet"\] \.popover__done \{[^}]*min-height: 44px/u);
+  });
+});
+
+/** The declarations of the first rule with exactly this selector. */
+function block(source: string, selector: string): string {
+  const start = source.indexOf(`\n${selector} {`);
+  expect(start, `missing ${selector}`).toBeGreaterThanOrEqual(0);
+  const bodyStart = source.indexOf("{", start) + 1;
+  return source.slice(bodyStart, source.indexOf("}", bodyStart));
+}

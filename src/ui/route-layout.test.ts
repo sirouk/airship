@@ -98,6 +98,27 @@ describe("route layout contract", () => {
     expect(cssRule(styles, ".profile-scope-contract")).toContain("width: min(1320px, 100%)");
     expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
   });
+
+  it("halves the Proof switcher across its two tabs, not across the strip and its chevron", () => {
+    /*
+     * `1fr 1fr` is one column per tab, and it was written on `.tabs` — whose two
+     * children are the scrolling strip and the `⌄ n` overflow control. So at
+     * 320px the strip got half the screen, both labels still laid out at their
+     * nowrap widths inside it, and `Receipt & journal` rendered as an 8px sliver
+     * of glyph beside a permanent overflow badge: a two-item switcher reading as
+     * a rendering fault on the one route whose content depends on knowing which
+     * view you are in.
+     */
+    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__strip \{[^}]*grid-template-columns: 1fr 1fr/u);
+    // The root may never carry the halving again: it is a claim about how many
+    // children there are, and there are two only while the chevron exists.
+    expect(styles).not.toMatch(/\.proof-surface-tabs \{[^}]*grid-template-columns/u);
+    // And each tab has to be allowed to shrink below its own label, or the
+    // halving just moves the overflow one box inwards.
+    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
+    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
+    expect(styles).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis/u);
+  });
 });
 
 function cssRule(source: string, selector: string): string {
