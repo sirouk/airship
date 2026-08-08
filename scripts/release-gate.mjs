@@ -763,7 +763,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // have left 714 B, below the aggregate's 768-byte floor, so raw takes one
   // further whole step to 2,307 (1,918 B); gzip takes its smallest clearing
   // step to 732, which leaves 917 B and is already above the floor.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2307 * 1024, gzip: 732 * 1024 }),
+  //
+  // The surface sweep then added the repairs fourteen route audits earned —
+  // thirty-eight of them across the shell's stylesheets and four views, plus
+  // the panel that now scrolls itself to the reader. All of it is first-party
+  // and none of it is eager. Gzip takes one whole-KiB step to 733.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2307 * 1024, gzip: 733 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1360,7 +1365,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // navigation; none of it enters first paint.
   /* Current release artifact. */
 
-  // Measured 12401 B raw / 4215 B gzip.
+  // Measured 12401 B raw / 4,214 B gzip.
   optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 4 * 1024 + 512 }),
   // Hardware/browser feature detection is requested after the shell starts so
   // it can select the strongest runtime without inflating the HTML preload set.
@@ -1420,9 +1425,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch
   // refusal. It is fetched only for `#skills`; the authoring form remains the
-  // second-level `optionalSkillEditor` chunk below. Measured 6,291 B raw /
-  // 2,395 B gzip. The ceilings are the tightest whole-KiB steps above it.
-  optionalSkillsManagerView: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
+  // second-level `optionalSkillEditor` chunk below. The earlier reading of this
+  // pack is not restated: it described an artifact this build no longer
+  // produces, and a superseded figure above a live ceiling reads as a raise
+  // nobody reviewed.
+  //
+  // Re-measured at 7,353 B raw / 2,829 B gzip after the surface sweep. The
+  // named cause is that Edit now answers: pressing it mounted the authoring
+  // panel above a scrolled-to grid, so from the reader's seat the click did
+  // nothing at all, and the panel now comes to them — and only when it is not
+  // already on screen, which is the part that costs the bytes. Raw takes one
+  // whole-KiB step to 8 KiB, leaving 839 B; gzip stays inside 3 KiB with 243.
+  optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
   // far more often than they write, and the six built-ins cannot be edited at
@@ -1726,7 +1740,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // / 30,120 B gzip. Gzip still does not move and is still not close:
   // 29.41 KiB inside 32 KiB, because none of this is new vocabulary — it is
   // the existing families used in one more state.
-  entryCss: Object.freeze({ raw: 175 * 1024, gzip: 32 * 1024 }),
+  //
+  // Re-measured at 179,552 B raw / 30,365 B gzip after the surface sweep. This
+  // is where most of that pass landed: fourteen route audits at eight device
+  // classes found popovers laid out at their header's min-content, a rescue
+  // rule that fired one pixel too narrow for a 768px tablet, a landscape phone
+  // whose action rows sat under the tab bar, and long strings with no
+  // `min-width: 0` — and nearly every repair is a declaration in a stylesheet
+  // the entry already ships. Raw takes one whole-KiB step to 176 KiB, leaving
+  // 672 B; gzip does not move and is still not close, 29.65 KiB inside 32,
+  // because this is the same vocabulary at more sizes rather than new families.
+  entryCss: Object.freeze({ raw: 176 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });

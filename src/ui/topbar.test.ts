@@ -104,14 +104,23 @@ describe("the topbar speaks for the browser tab", () => {
      * count already clipped out below to pay for it. That is
      * `Browser / Edge runtime` spent down to one letter, which is precisely the
      * defect the comment above the `<Seal>` says the band collapse exists to
-     * remove. A legible glyph beats a legible fragment, so past 400px the label
-     * leaves the layout rather than being chewed by it.
+     * remove. A legible glyph beats a legible fragment, so past that width the
+     * label leaves the layout rather than being chewed by it.
+     *
+     * 360, not the 400 this first pinned. 400 was borrowed from the tier the
+     * session bar's chips yield at, and it was measured against the wrong
+     * screen: at 390 the chip reads `Browser / Ed…`, truncated and still naming
+     * the runtime, so clipping there gave up a legible label to fix an
+     * illegible one two sizes down. Thirteen route audits compared before and
+     * after and reported that loss independently. One width for "no room for
+     * words" is right; it is simply not the session bar's width, because these
+     * labels are not the same length.
      */
     const yielded = styles.slice(styles.indexOf(".topbar-posture-chip .seal__label"));
     expect(yielded).toMatch(/\.topbar-posture-chip \.seal__label \{[^}]*clip-path: inset\(50%\)/u);
-    // Under a width, never unconditionally: between 400 and 640 there is still
+    // Under a width, never unconditionally: between 360 and 640 there is still
     // room for a word, and the ellipsis rule above is the one that should win.
-    expect(yielded.slice(0, yielded.indexOf("clip-path"))).toContain("@media (max-width: 400px)");
+    expect(yielded.slice(0, yielded.indexOf("clip-path"))).toContain("@media (max-width: 360px)");
     // Clipped out of the layout, never removed. The whole sentence is still the
     // control's accessible name, and the sheet still renders every claim.
     expect(topbar).toContain("Runtime trust for this browser tab. Weakest claim:");
