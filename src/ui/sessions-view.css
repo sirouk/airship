@@ -281,9 +281,31 @@
   color: var(--ink, #e1d9c8);
 }
 
+/*
+ * The list column grows with the canvas; it used to be 330px at every width.
+ *
+ * A hard 330px cap is why the row's second line reads the same at 1024px as it
+ * does at 1920px. Measured: 330px of panel is 312px of row, and the row spends
+ * 100px of that on the opener and the star, leaving the card 212px, the card's
+ * own padding 188px and the second line — after the 24px it is indented to sit
+ * under the title — about 164px for four facts that want 254px. The model, the
+ * one fact that discriminates rows whose titles are all alike, is last in the
+ * shrink order and so absorbed the whole deficit: one character and an ellipsis
+ * clipped away with it.
+ *
+ * What pays for the extra 100px is the detail pane, and it can: at 1440px it
+ * goes from 828px to 725px, where its widest content is the 552px action
+ * cluster that already carries `flex-wrap: wrap` and already spills Delete onto
+ * a second row at 828px, and the two full-width bands below it (the integrity
+ * chips and RUNTIME RECORD) end 365px short of their own right edge today. The
+ * clamp is what keeps that honest at the narrow end: the percentage does not
+ * reach 330px until the container is about 868px, so every two-pane width below
+ * a laptop keeps exactly the column it has, and the detail pane there — where
+ * it really is the scarce one — gives up nothing.
+ */
 .session-library-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, clamp(330px, 38%, 430px)) minmax(0, 1fr);
   min-height: 0;
   border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
   border-radius: var(--radius-panel, 10px);
@@ -334,15 +356,16 @@
 }
 
 /*
- * The two-line row.
+ * The ranked row: identity on the first line, size and binding below it.
  *
  * The 148px card carried seven data points, of which seven were identical row
  * to row in a library built in one sitting — so the row was 148px of chrome for
- * zero discrimination. Two lines carry the same facts ranked: what the thread
- * is and when it moved on line one; how big it is, whose profile it runs and
- * what model it is pinned to on line two. Provider and the absolute timestamp
- * move into the row's `title` and the detail pane's Runtime record, where they
- * are the point.
+ * zero discrimination. The lines carry the same facts ranked: what the thread
+ * is and when it moved first; how big it is, whose profile it runs and what
+ * model it is pinned to after. Provider and the absolute timestamp move into
+ * the row's `title` and the detail pane's Runtime record, where they are the
+ * point. The second line is normally one line and wraps only when the panel is
+ * too narrow to hold it — see `.session-library-card-line2`.
  *
  * The pin is a sibling, not a child: it used to be a `role="button"` span
  * nested inside a `<button>`, which is two controls occupying one accessible
@@ -460,8 +483,32 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Wrapping is what the line does when there is no width left to take.
+ *
+ * The panel above buys about 100px at laptop widths and up, which is enough for
+ * all four facts at 1440px and 1920px. It is not enough everywhere: below about
+ * an 868px container the column stays 330px on purpose, because there the
+ * detail pane is the scarce one and taking from it would only move the defect.
+ * With `flex-wrap: nowrap` the line had exactly one way to answer a deficit —
+ * shrink the last item — and the last item is the model, so the narrow widths
+ * kept the "one bare letter" reading no matter how the shrink order was tuned.
+ *
+ * Flex places items on lines at their content size before it shrinks any of
+ * them, so wrapping is what happens first now: the model drops to its own line
+ * whole rather than being ground down to a character. `white-space: nowrap`
+ * stays and still inherits, so each fact is one unbroken run and only the line
+ * between facts may break. The ellipsis rules below stay too, for the case a
+ * single fact is wider than a 260px panel's line.
+ *
+ * The cost is height, and it is real: a wrapped row is about 16px taller, so a
+ * 720px list shows roughly nine rows instead of eleven at the widths that wrap.
+ * A row that is one row shorter still says which conversation it is; a row that
+ * cannot name its model does not.
+ */
 .session-library-card-line2 {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-2, 8px);
   align-items: center;
   min-width: 0;
