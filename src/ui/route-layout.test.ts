@@ -99,22 +99,31 @@ describe("route layout contract", () => {
     expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
   });
 
-  it("halves the Proof switcher across its two tabs, not across the strip and its chevron", () => {
+  it("lets the Proof switcher's two tabs share the row instead of splitting it in half", () => {
     /*
-     * `1fr 1fr` is one column per tab, and it was written on `.tabs` — whose two
+     * Two defects, one rule. First, `1fr 1fr` was written on `.tabs` — whose two
      * children are the scrolling strip and the `⌄ n` overflow control. So at
      * 320px the strip got half the screen, both labels still laid out at their
      * nowrap widths inside it, and `Receipt & journal` rendered as an 8px sliver
      * of glyph beside a permanent overflow badge: a two-item switcher reading as
      * a rendering fault on the one route whose content depends on knowing which
      * view you are in.
+     *
+     * Moving the halving onto the strip fixed 320px and then charged every width
+     * up to 760 for it. Two equal tracks are two equal tracks whether or not the
+     * labels need cutting, so at 430px — where both had always fitted whole —
+     * `Attestation evidence` was cut to `Attestation evide…` while `Receipt &
+     * journal` sat in a half it did not fill.
+     *
+     * `flex: 1 1 auto` is the rule that says both things at once: grow into
+     * whatever slack the row has, and give up width in proportion to the label
+     * you are carrying when there is none. No halving on either box.
      */
-    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__strip \{[^}]*grid-template-columns: 1fr 1fr/u);
-    // The root may never carry the halving again: it is a claim about how many
-    // children there are, and there are two only while the chevron exists.
-    expect(styles).not.toMatch(/\.proof-surface-tabs \{[^}]*grid-template-columns/u);
+    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
+    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*flex: 1 1 auto/u);
+    expect(styles).not.toMatch(/\.proof-surface-tabs[^{]*\{[^}]*grid-template-columns/u);
     // And each tab has to be allowed to shrink below its own label, or the
-    // halving just moves the overflow one box inwards.
+    // sharing has nothing to give and the overflow returns.
     expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
     expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
     expect(styles).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis/u);

@@ -14669,7 +14669,10 @@ function ProfileManagerView({
             {profiles.map((profile) => (
               <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
                 <span class="profile-monogram" style={profileBadgeStyle(profileThemeFor(catalog, profile.profileId))}>{profileMonogram(profile.name)}</span>
-                <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
+                {/* The catalog clamps a long name to three lines so one profile
+                    cannot set the height of the whole row; the title is how the
+                    rest of it is recovered without selecting the card. */}
+                <span><strong title={profile.name}>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
                     the revision strip beside it. It used to be typed out here with a
                     comment claiming `profiles-governance` was not in the startup
                     chunk — which was false: `chat/message-parts-view` imports

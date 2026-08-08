@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CUSTOM_SKILL_ID_PREFIX } from "../profiles/domain";
 import { proposedSkillId } from "./skill-editor";
+import { editorPanelNeedsAlignment } from "./skills-manager-view";
 
 function editorSource(): string {
   return readFileSync(new URL("./skill-editor.tsx", import.meta.url), "utf8");
@@ -101,16 +102,59 @@ describe("pressing Edit produces a response the person can see", () => {
    * nothing inside the viewport and the primary authoring verb read as a dead
    * button. The panel is a deferred chunk, so the alignment has to wait for the
    * component rather than fire on the "Loading…" line that stands in for it.
+   *
+   * And it has to be an alignment only when there is something to align: firing
+   * it for New skill on a desktop viewport, where the panel was in frame all
+   * along, scrolled the route's own mode tabs and APPLIES TO scope selector off
+   * the top of a page nobody had asked to move.
    */
   it("aligns the mounted panel and hands it the keyboard", () => {
     const source = skillsSource();
     expect(source).toContain("if (!editorTarget || !SkillEditorPanel) return;");
-    expect(source).toContain('editorRef.current?.scrollIntoView({ block: "start" });');
-    expect(source).toContain('editorRef.current?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });');
+    expect(source).toContain("if (needed) panel.scrollIntoView({ block: \"start\" });");
+    // The keyboard lands in the form whether or not the page had to move; only
+    // the scroll is conditional, and `preventScroll` keeps focus from re-choosing
+    // a position the branch above already decided.
+    expect(source).toContain('const field = panel.querySelector<HTMLInputElement>("input");');
+    expect(source).toContain("field?.focus({ preventScroll: true });");
     expect(source).toContain("}, [editorTarget, SkillEditorPanel]);");
     // The element the alignment reads. `SkillEditor` is a plain function
     // component, so a ref handed to it would not reach the panel's own node.
     expect(source).toContain("<div ref={editorRef}>");
+  });
+
+  /*
+   * The four cases the two regressions between them describe. `scrollport`
+   * is the box the reader actually sees the panel through — the shell's
+   * scrolling `.main`, not the window, because the route chrome that got
+   * carried away lives inside it.
+   */
+  const scrollport = { top: 57, bottom: 900 } as const;
+
+  it("carries the panel to the reader when Edit was pressed from a card below it", () => {
+    // The panel is above the fold entirely: this is the dead-button case.
+    expect(editorPanelNeedsAlignment({ top: -400, bottom: -120 }, { top: -350, bottom: -320 }, scrollport)).toBe(true);
+    // And the case where it is below: a short catalog on a tall screen.
+    expect(editorPanelNeedsAlignment({ top: 1200, bottom: 1900 }, { top: 1260, bottom: 1290 }, scrollport)).toBe(true);
+  });
+
+  it("leaves the page alone when the panel and its first field are already in frame", () => {
+    // desktop-1440 pressing New skill: the panel header sat at y=447 with the
+    // mode tabs, APPLIES TO and the scope card above it. Nothing needed moving,
+    // and moving it cost the author the scope the skill resolves for.
+    expect(editorPanelNeedsAlignment({ top: 447, bottom: 1600 }, { top: 515, bottom: 545 }, scrollport)).toBe(false);
+  });
+
+  it("still aligns when only the panel's header made it onto the fold", () => {
+    // A header on the last few pixels of the scrollport reads as nothing having
+    // happened, which is the failure the alignment exists for.
+    expect(editorPanelNeedsAlignment({ top: 880, bottom: 2000 }, { top: 948, bottom: 978 }, scrollport)).toBe(true);
+  });
+
+  it("asks nothing of a field that is not mounted yet", () => {
+    // The deferred chunk's one-line "Loading the skill editor…" placeholder has
+    // no input, and a visible placeholder is already the feedback.
+    expect(editorPanelNeedsAlignment({ top: 447, bottom: 470 }, undefined, scrollport)).toBe(false);
   });
 });
 
