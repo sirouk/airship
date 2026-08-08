@@ -99,7 +99,7 @@ describe("route layout contract", () => {
     expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
   });
 
-  it("lets the Proof switcher's two tabs share the row instead of splitting it in half", () => {
+  it("keeps the Proof switcher's selected tab whole and charges the shortfall to the other one", () => {
     /*
      * Two defects, one rule. First, `1fr 1fr` was written on `.tabs` — whose two
      * children are the scrolling strip and the `⌄ n` overflow control. So at
@@ -122,31 +122,42 @@ describe("route layout contract", () => {
      * A tab that grows into slack starts from its label; one that lands on a
      * pixel-exact half started from zero.
      *
-     * So the growth is scoped to the band that has a deficit to share. Below
-     * 400px the two labels want 387px and the strip has 286, so an equal split
-     * is the fair one; above it the strip has 396 for the same 387 and the tabs
-     * are simply their labels, both whole. What this test pins is that scoping,
-     * because the failure it replaces was a rule that looked correct in the
-     * sheet and halved the row anyway.
+     * Scoping that growth to ≤400px fixed 430 and charged 390 instead, which is
+     * where this test's subject comes from. The strip is 356px at 390 for a pair
+     * wanting 386, and every rule tried so far has taken the 30px shortfall out
+     * of both tabs — so `Receipt & journal` rendered `Receipt & jou…` while it
+     * was the selected tab, and `Attestation evidence` did the same at 320 and
+     * 390 whenever it was the selected one. That is the one truncation a user
+     * cannot undo: every other clipped label is one tap from being read, and
+     * this one is clipped *because* you already tapped it.
+     *
+     * So what is pinned is not a split at all. The selected tab pays nothing —
+     * `flex-shrink: 0`, because any share of a 30px deficit costs it a
+     * character — and the unselected tab absorbs the whole of it. The cap is
+     * the other half of the contract: without it a selected tab that refuses to
+     * shrink can, at a large `--type-scale`, eat the strip and bring back the
+     * `⌄ n` chevron. Both halves are asserted here because either alone is a
+     * defect.
      */
-    // There are three `400px` bands in this sheet and this assertion is about
-    // one of them, so it selects by what the block contains rather than by
-    // which one happens to come first.
+    // This sheet has more than one band at any given width, so the block is
+    // selected by what it contains rather than by which one comes first.
     const band = (width: number, selector: string) =>
       [...styles.matchAll(new RegExp(`@media \\(max-width: ${width}px\\) \\{(?:[^{}]|\\{[^{}]*\\})*\\}`, "gu"))]
         .map((match) => match[0])
         .find((block) => block.includes(selector)) ?? "";
-    const growth = band(400, ".proof-surface-tabs");
-    expect(growth, "the equal split has a width band of its own").not.toBe("");
-    expect(growth).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
-    expect(growth).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*flex: 1 1 auto/u);
-    // And it may not leak back into the band above it, or 430px pays again.
     const phoneBand = band(760, ".proof-surface-tabs");
-    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
-    expect(phoneBand).not.toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*flex: 1 1 auto/u);
+    expect(phoneBand, "the phone rules for this strip live in one band").not.toBe("");
+    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab\[data-active="true"\] \{[^}]*flex-shrink: 0/u);
+    expect(phoneBand).toMatch(
+      /\.proof-surface-tabs \.tabs__tab\[data-active="true"\] \{[^}]*max-width: calc\(100% - var\(--touch-target\) - var\(--sp-1\)\)/u,
+    );
+    // No band may hand the tabs equal shares again, at any width. `flex: 1 1
+    // auto` on the tab is the 176-of-356 halving this replaces; it belongs to
+    // `.tabs__strip`, which is a different box, so the selector is exact.
+    expect(styles).not.toMatch(/\.proof-surface-tabs \.tabs__tab(?:-button)? \{[^}]*flex: 1 1 auto/u);
     expect(styles).not.toMatch(/\.proof-surface-tabs[^{]*\{[^}]*grid-template-columns/u);
-    // And each tab has to be allowed to shrink below its own label, or the
-    // sharing has nothing to give and the overflow returns.
+    // And the unselected tab has to be allowed to shrink below its own label,
+    // or there is nothing to absorb the shortfall with and the overflow returns.
     expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
     expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
     expect(styles).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis/u);
@@ -163,12 +174,15 @@ describe("route layout contract", () => {
      * width for the label to be given, because the strip is not short of room —
      * it is dividing the room it has by a rule that cannot see the labels.
      *
-     * `minmax(0, auto)` is the rule that says both things at once, the way
-     * `flex: 1 1 auto` does above: take at most your own content, and let the
-     * grid's default stretch hand out the surplus evenly so the strip still
-     * fills the row. The `0` floor is load-bearing on its own — it is what the
-     * enclosing block's note is about, and without it a track can insist on a
-     * width a 320px phone does not have and scroll the whole route sideways.
+     * `minmax(0, auto)` is the rule that says both things at once: take at most
+     * your own content, and let the grid's default stretch hand out the surplus
+     * evenly so the strip still fills the row. This strip is not short of room
+     * at 320, so it needs no version of the Proof switcher's rule above — there
+     * is no shortfall here for a selected tab to be spared from, only a surplus
+     * that was being handed out without looking at the labels. The `0` floor is
+     * load-bearing on its own — it is what the enclosing block's note is about,
+     * and without it a track can insist on a width a 320px phone does not have
+     * and scroll the whole route sideways.
      *
      * Pinned at 360px and not at 640: 390px already affords 117px a tab, and
      * the frames at 390, 430 and landscape-932 were passed by the sweep with
