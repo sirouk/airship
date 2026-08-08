@@ -242,7 +242,7 @@ export function AttestationsView({
   return (
     <section class={`attestations-view${embedded ? " attestations-view--embedded" : ""}`} aria-labelledby="attestations-title">
       <header class="attestations-heading">
-        <div>
+        <div class="attestations-heading-lede">
           <span>Independent evidence ledger</span>
           {embedded ? <h2 id="attestations-title">Endpoint &amp; receipt evidence</h2> : <h1 id="attestations-title">Attestations</h1>}
           <p>Each result applies only to its named claim. A fetched quote, locally matched key, verified endpoint, model artifact, and signed conversation are separate facts with separate authorities.</p>
