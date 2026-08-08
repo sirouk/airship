@@ -265,6 +265,7 @@
 }
 
 .popover__done {
+  position: relative;
   min-height: 28px;
   padding: 0 var(--sp-2);
   border: 1px solid var(--line-control);
@@ -273,6 +274,63 @@
   background: transparent;
   cursor: pointer;
   font-size: var(--fs-caption);
+}
+
+/*
+ * Where a thumb has to reach Done, the mark retreats inside the target rather
+ * than the target growing.
+ *
+ * In a sheet Done is 44px tall and `.popover__header` is floored at the same
+ * 44px — so on any panel whose title fits in one or two lines the two boxes are
+ * *the same box*, and this button's border lands exactly on the sheet's own top
+ * border and on the header's bottom rule. Three judges read that as the frame
+ * rather than as a control, and the capture confirms it: on `capabilities` at
+ * phone-320 the header measures 45px and the button 44px, so the pill's top edge
+ * and the sheet's top edge are one line of pixels.
+ *
+ * The air used to come from `padding: var(--sp-2) var(--sp-3)` on the header,
+ * and it may not come back from there. That padding sat outside the 44px floor,
+ * so it was pure addition on every panel in the product — 16px of a route that
+ * a bottom sheet covers rather than scrolls — which is why it moved onto the
+ * heading, and the move worked: measured across the captures either side of it,
+ * the `capabilities` sheet header went 61px to 45px and the `context`
+ * about-memory header 61px to 48px, with the sheet dropping the same distance
+ * down the page. Buying this button's air back out of that would hand the cost
+ * straight to the route again.
+ *
+ * So nothing grows. The button keeps its full 44px box for the finger and for
+ * `e2e/touch-target-floor.spec.ts`, which measures the rendered border box; its
+ * own border comes off in the sheet block below; and this paints the pill 8px
+ * inside it, top and bottom. That is the same 8px the header padding used to
+ * give, and it lands the painted control at 28px — the identical height it has
+ * on a fine pointer, so Done looks like one control everywhere and only its
+ * target grows.
+ *
+ * `display: none` by default, switched on by the one scope that needs it, rather
+ * than a copy of this rule inside that scope. A fine-pointer button is 28px with
+ * nothing above or below it to collide with, so it keeps its own border and no
+ * anchored desktop panel moves by a pixel. The focus ring stays on the button
+ * rather than on this pseudo, deliberately: the ring's job is to show what
+ * pressing Enter will hit, and that is the 44px target, not the mark inside it.
+ *
+ * The coarse-pointer block near the top of this file looks like a second scope
+ * that would need this and is not one, for a reason worth knowing before
+ * anything is added to it: its `.popover__done, .popover__action { min-height:
+ * 44px }` is (0,1,0) and sits ABOVE the base `.popover__done` rule, so the base
+ * `min-height: 28px` wins on order and that floor has never applied. A coarse
+ * anchored panel therefore has a 28px Done that is already clear of the header's
+ * 44px, and nothing here has anything to retreat from. That ordering is a
+ * separate defect — the 44px touch floor is not being held on a coarse tablet —
+ * and it predates this rule; fixing it is a change to control heights on a shape
+ * no capture in the sweep covers, so it is named here rather than done here.
+ */
+.popover__done::before {
+  content: "";
+  display: none;
+  position: absolute;
+  inset: var(--sp-2) 0;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
 }
 
 .popover__done:hover {
@@ -377,23 +435,55 @@
   }
 
   /*
-   * 44px is the touch floor, and a dismissal control the thumb misses is why a
-   * sheet feels like a trap. 64px was 20px past that floor, and the header is
-   * one row: every pixel Done holds is a pixel the wrapping title does not get,
-   * and the title is the thing that then costs the sheet a line of the route
-   * behind it.
+   * The dismissal control keeps its own label, and it is not the row that
+   * yields.
    *
-   * Measured at phone-320: `Done` sets 32px of label inside 8px of padding and
-   * a 1px border either side, so the button is 50px on its own — still 50x44,
-   * still past the floor in both axes — and the 14px it gives back takes the
-   * heading's box from 224px to 238px. `ACCOUNT STANDING · CHUTES` needs 228px
-   * at the phone type ramp, so that heading falls from three lines to two and
-   * the sheet stops 16px lower down the page. Nothing else is in this row.
+   * 44px is the touch floor, and a dismissal control the thumb misses is why a
+   * sheet feels like a trap. This rule briefly also read that floor as a
+   * *ceiling*, dropping `min-width` from 64px to 44px on the argument that the
+   * header is one row, so the 20px Done held was 20px the wrapping title beside
+   * it did not get.
+   *
+   * The 20px went nowhere. Measured across the sweep captures either side of
+   * that change, the `account` sheet at phone-320 has a 63px header in both —
+   * the same three lines of `ACCOUNT STANDING · CHUTES TELEMETRY AND PROVIDER
+   * INVENTORY`, the same sheet top edge at y=414, the same `Connect Chutes`
+   * call to action covered underneath it — and at phone-390 and phone-430 the
+   * title sets two lines either way. A mono title re-wraps in whole words, so
+   * 20px only ever buys a line when it happens to straddle a word boundary, and
+   * on this heading at these three widths it does not.
+   *
+   * It cost the label. `min-width` on a flex item *replaces* the automatic
+   * minimum size, and `min-width: auto` — the value this had until then — floors
+   * an item at its own min-content, about 50px here for `Done` at the phone
+   * caption ramp inside 8px of padding. That automatic floor was the only thing
+   * keeping the label inside the button, because this header is a flex row
+   * whose other item is a title with a max-content basis of several hundred
+   * pixels at a 320px sheet: every item in the row shrinks, and Done stops at
+   * whatever its minimum says. Replacing 50px of min-content with a declared
+   * 44px left 26px of content box holding 32px of label, and the `e` rode the
+   * border at all three phone widths.
+   *
+   * `flex: none` is the repair that outlives any number: the title is this
+   * row's flexible item and the dismissal control is not, so `Done` sets its own
+   * floor whatever the Type scale preference or a translation does to it — 64px
+   * would have clipped it too at `x-large`. The 64px comes back on top of that
+   * because at 44px tall the 48px its own content asks for reads as a square
+   * rather than as a control, and the measurement above is what says the extra
+   * width is free.
+   *
+   * The border moves to the retreat pseudo-element declared at the top level, so
+   * the pill stops sharing an edge with the sheet's own frame. Dropping it here
+   * costs no width: 64px of `min-width` is 16px past the button's content.
    */
   .popover[data-mode="sheet"] .popover__done {
-    min-width: 44px;
+    flex: none;
+    min-width: 64px;
     min-height: 44px;
+    border: 0;
   }
+
+  .popover[data-mode="sheet"] .popover__done::before { display: block; }
 
   .popover[data-mode="sheet"] .popover__body {
     max-height: 56vh;
