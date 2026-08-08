@@ -20,6 +20,32 @@ import { trapFocus } from "./focus-trap";
 export const POPOVER_HOVER_INTENT_MS = 150;
 /** At or below this width there is no room to anchor; the panel becomes a sheet. */
 export const POPOVER_SHEET_MAX_WIDTH = 640;
+/**
+ * The landscape arm of the same decision.
+ *
+ * A width test alone asks "is this a phone held upright", and the answer for a
+ * phone held sideways is no: 932×430 is wider than any threshold a phone
+ * breakpoint would set and shorter than every one of them. An anchored panel
+ * needs *vertical* room, so a viewport that is wide and short is precisely the
+ * shape the width test gets wrong — and it got it wrong on the Proof route's
+ * claim stack, which is that route's primary evidence surface. Measured on the
+ * shipped build at 932×430: the trigger's bottom edge sits ~305px down a
+ * `.main` pane that ends at 385px above the navigation band, so `popoverRoom`
+ * returned its `POPOVER_MIN_ROOM` floor and the panel deliberately overhung —
+ * leaving the header and about 10px of the first claim above the fold and the
+ * entire list of eight claims underneath the band. The panel was never
+ * mis-sized; there was no room to anchor it in, and the primitive had no way to
+ * say so.
+ *
+ * The numbers are not new. `(max-width: 640px), (max-width: 950px) and
+ * (max-height: 500px)` is how this product has spelt "compact shell" since
+ * `tokens.css:471`, and `approval-dock`, `menu-select`, `model-picker`,
+ * `platform-shell` and `shell` all take both arms. This primitive took only the
+ * first one. Adopting the pair here is not a new breakpoint, it is the popover
+ * finally reading the one already written.
+ */
+export const POPOVER_SHEET_LANDSCAPE_MAX_WIDTH = 950;
+export const POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT = 500;
 /** Minimum distance an anchored panel keeps from the viewport edge. */
 export const POPOVER_EDGE_GUTTER = 12;
 export const POPOVER_DEFAULT_WIDTH = 320;
@@ -42,18 +68,29 @@ export type PopoverPlacement = Readonly<{
 }>;
 
 /**
- * Where a panel of `popoverWidth` opened at `anchorLeft` has to render.
+ * Where a panel of `popoverWidth` opened at `anchorLeft` has to render, and
+ * whether it may be anchored at all.
  *
- * Kept free of the DOM because the flip boundary is the whole correctness
- * question: a panel that overflows the viewport is a fact the user cannot read,
- * and that has to be assertable without a browser.
+ * Kept free of the DOM because both answers are correctness questions rather
+ * than rendering details: a panel that overflows the viewport is a fact the
+ * user cannot read, and so is a panel anchored into a viewport with no room
+ * below the trigger to open it. Both have to be assertable without a browser.
  */
 export function popoverPlacement(input: Readonly<{
   anchorLeft: number;
   popoverWidth: number;
   viewportWidth: number;
+  /**
+   * Required rather than optional on purpose. A default would have to guess a
+   * tall viewport, and every caller that forgot to pass this would silently get
+   * the width-only answer back — which is the bug this parameter exists to fix.
+   */
+  viewportHeight: number;
 }>): PopoverPlacement {
-  if (input.viewportWidth <= POPOVER_SHEET_MAX_WIDTH) return Object.freeze({ mode: "sheet", align: "start" });
+  const tooNarrowToAnchor = input.viewportWidth <= POPOVER_SHEET_MAX_WIDTH;
+  const tooShortToAnchor = input.viewportWidth <= POPOVER_SHEET_LANDSCAPE_MAX_WIDTH
+    && input.viewportHeight <= POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT;
+  if (tooNarrowToAnchor || tooShortToAnchor) return Object.freeze({ mode: "sheet", align: "start" });
   const projectedRight = input.anchorLeft + input.popoverWidth;
   return Object.freeze({
     mode: "anchored",
@@ -66,12 +103,21 @@ export function popoverPlacement(input: Readonly<{
  *
  * `60vh` was standing in for this and is not the same number. An anchored panel
  * does not start at the top of the viewport and the viewport is not where it
- * ends: on the landscape phone the ⓘ sits ~110px down a `.main` pane that stops
- * above a fixed navigation band, so a body capped at 60vh of a 430px screen
- * (258px) laid its last paragraph out *underneath* the band. The panel was
- * scrollable the whole time and it did not matter — the bottom of its own
- * scroll viewport, where the scrollbar and the remaining text live, was the
- * part behind the navigation.
+ * ends: a chip partway down a `.main` pane that itself stops short of the
+ * window has far less room beneath it than any `vh` fraction believes, and a
+ * body capped at a fraction of the *screen* lays its last paragraph out below
+ * the pane that clips it. The panel is scrollable the whole time and it does
+ * not matter — the bottom of its own scroll viewport, where the scrollbar and
+ * the remaining text live, is the part that is out of reach.
+ *
+ * The case that first produced this measurement was the landscape phone, and
+ * that case no longer arrives here: 932×430 satisfies the landscape arm of
+ * `popoverPlacement` above and opens as a sheet, which sizes itself from the
+ * screen's own bottom edge and never asks this function anything. What is left
+ * for this to answer is every anchored panel that remains — a short desktop
+ * window, a chip low in a scrolled pane, the editor route where `.main` is
+ * `overflow: hidden` and clips outright. Those are still real, which is why
+ * measuring the clipping box rather than the window is still the rule.
  *
  * Kept free of the DOM for the same reason `popoverPlacement` is: whether a
  * panel is allowed to overhang the box that clips it is a correctness question,
@@ -154,6 +200,7 @@ export function Popover({
         anchorLeft: anchor.left,
         popoverWidth: width,
         viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
       });
       setPlacement(next);
       // A sheet is pinned to the viewport's own bottom edge by its insets and

@@ -4,14 +4,19 @@ import {
   POPOVER_EDGE_GUTTER,
   POPOVER_HOVER_INTENT_MS,
   POPOVER_MIN_ROOM,
+  POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT,
+  POPOVER_SHEET_LANDSCAPE_MAX_WIDTH,
   POPOVER_SHEET_MAX_WIDTH,
   popoverPlacement,
   popoverRoom,
 } from "./popover";
 
+/** A viewport tall enough that only the width arm can decide the mode. */
+const TALL = 900;
+
 describe("the one anchored disclosure", () => {
   it("anchors from the left while the panel clears the viewport gutter", () => {
-    expect(popoverPlacement({ anchorLeft: 40, popoverWidth: 320, viewportWidth: 1440 }))
+    expect(popoverPlacement({ anchorLeft: 40, popoverWidth: 320, viewportWidth: 1440, viewportHeight: TALL }))
       .toEqual({ mode: "anchored", align: "start" });
   });
 
@@ -20,24 +25,72 @@ describe("the one anchored disclosure", () => {
     // either side of the boundary has to pick a different edge, or the flip is
     // decorative rather than load bearing.
     const justInside = 1440 - POPOVER_EDGE_GUTTER - 320;
-    expect(popoverPlacement({ anchorLeft: justInside, popoverWidth: 320, viewportWidth: 1440 }).align).toBe("start");
-    expect(popoverPlacement({ anchorLeft: justInside + 1, popoverWidth: 320, viewportWidth: 1440 }).align).toBe("end");
+    expect(popoverPlacement({ anchorLeft: justInside, popoverWidth: 320, viewportWidth: 1440, viewportHeight: TALL }).align).toBe("start");
+    expect(popoverPlacement({ anchorLeft: justInside + 1, popoverWidth: 320, viewportWidth: 1440, viewportHeight: TALL }).align).toBe("end");
   });
 
   it("becomes a bottom sheet at and below the phone breakpoint, whatever the anchor", () => {
-    expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH }).mode).toBe("sheet");
-    expect(popoverPlacement({ anchorLeft: 300, popoverWidth: 320, viewportWidth: 430 }).mode).toBe("sheet");
-    expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH + 1 }).mode).toBe("anchored");
+    expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH, viewportHeight: TALL }).mode).toBe("sheet");
+    expect(popoverPlacement({ anchorLeft: 300, popoverWidth: 320, viewportWidth: 430, viewportHeight: TALL }).mode).toBe("sheet");
+    expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH + 1, viewportHeight: TALL }).mode).toBe("anchored");
+  });
+
+  /*
+   * The landscape defect this arm exists for.
+   *
+   * At 932x430 the Proof route's claim-stack chip ends ~305px down a `.main`
+   * pane that stops at 385px above the navigation band. The width test alone
+   * called that anchored — 932 is wider than any upright-phone threshold — so
+   * `popoverRoom` fell to its floor, the panel overhung, and the route's
+   * primary evidence surface showed a header and about 10px of its first claim
+   * with the other eight underneath the band. A viewport can be too short to
+   * anchor in while being far too wide to look like a phone.
+   */
+  it("becomes a sheet on the landscape arm, where the viewport is wide but has no height", () => {
+    expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: 932, viewportHeight: 430 }).mode).toBe("sheet");
+    // Both bounds are inclusive, and one pixel past either returns the panel to
+    // an anchor — the arm has to be a boundary, not a mood.
+    expect(popoverPlacement({
+      anchorLeft: 0,
+      popoverWidth: 320,
+      viewportWidth: POPOVER_SHEET_LANDSCAPE_MAX_WIDTH,
+      viewportHeight: POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT,
+    }).mode).toBe("sheet");
+    expect(popoverPlacement({
+      anchorLeft: 0,
+      popoverWidth: 320,
+      viewportWidth: POPOVER_SHEET_LANDSCAPE_MAX_WIDTH + 1,
+      viewportHeight: POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT,
+    }).mode).toBe("anchored");
+    expect(popoverPlacement({
+      anchorLeft: 0,
+      popoverWidth: 320,
+      viewportWidth: POPOVER_SHEET_LANDSCAPE_MAX_WIDTH,
+      viewportHeight: POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT + 1,
+    }).mode).toBe("anchored");
+  });
+
+  it("leaves a short window that is wider than the landscape arm anchored", () => {
+    // A 1440x420 desktop window is short, but it is not the compact shell and a
+    // full-bleed bottom sheet there would be a 1440px-wide overlay for a chip.
+    // `popoverRoom` is what keeps that case honest, not the mode.
+    expect(popoverPlacement({ anchorLeft: 40, popoverWidth: 320, viewportWidth: 1440, viewportHeight: 420 }).mode)
+      .toBe("anchored");
   });
 
   it("measures the room to the clipping pane, not to the window", () => {
     /*
-     * The landscape phone this is written against: 932x430, the ⓘ trigger
-     * ending at y=94, and a `.main` pane (`overflow: auto`) that stops at
-     * y=382 because a fixed navigation band owns the rest. 60vh of that screen
-     * is 258px and the pane has 276px left, so a body capped at 60vh alone put
-     * its last paragraph — and the bottom of its own scroll viewport — behind
-     * the band. The window's 430px is the number that was never the answer.
+     * A chip partway down a `.main` pane (`overflow: auto`) that stops at y=382
+     * because a fixed band owns the rest, in a 430px window. A body capped at
+     * 60vh of the screen is 258px while the pane has only 276px left below the
+     * trigger, so the `vh` fraction says nothing about how much of the screen
+     * this panel may actually occupy — and the window's own height is the
+     * number that was never the answer.
+     *
+     * Deliberately not written as a landscape phone any more: that shape opens
+     * as a sheet now and never reaches this function. What is left for it are
+     * short desktop windows, chips low in a scrolled pane, and the editor route
+     * where `.main` is `overflow: hidden` and clips outright.
      */
     expect(popoverRoom({ anchorBottom: 94, clipBottom: 382 })).toBe(382 - 94 - POPOVER_EDGE_GUTTER);
     expect(popoverRoom({ anchorBottom: 94, clipBottom: 430 }))
@@ -53,7 +106,7 @@ describe("the one anchored disclosure", () => {
   });
 
   it("returns a frozen placement so a caller cannot mutate the shared result", () => {
-    const placement = popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: 1440 });
+    const placement = popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: 1440, viewportHeight: TALL });
     expect(Object.isFrozen(placement)).toBe(true);
   });
 
@@ -134,11 +187,15 @@ describe("the panel is the width of the box it is pinned to", () => {
 
   it("caps the panel at the room its trigger actually has, and makes the body the row that yields", () => {
     /*
-     * Landscape phone, 932x430: the panel is anchored ~110px down a `.main`
-     * pane that ends above the navigation band, and the only ceiling was the
-     * body's `60vh` — 258px, more than the pane had left. The panel was
-     * scrollable throughout and it did not help, because the bottom of its own
-     * scroll viewport was the part behind the band.
+     * A chip anchored partway down a `.main` pane that ends before the window
+     * does, with the only ceiling being the body's `60vh` — a fraction of the
+     * screen, which is more than the pane has left. The panel is scrollable
+     * throughout and it does not help, because the bottom of its own scroll
+     * viewport is the part outside the box that clips it.
+     *
+     * The landscape phone that first produced this is no longer one of its
+     * cases; it takes the sheet arm now. Short desktop windows and deeply
+     * scrolled panes still land here.
      */
     const panel = block(sheet, ".popover__panel");
     expect(panel).toMatch(/max-height: calc\(var\(--popover-room, 100vh\) - var\(--sp-2\)\)/u);
@@ -195,6 +252,53 @@ describe("the panel is the width of the box it is pinned to", () => {
     expect(body).toContain("local top / 100% 14px");
     expect(body).toContain("local bottom / 100% 14px");
     expect(body).toContain("overflow: auto");
+  });
+
+  it("positions the sheet on both arms of the compact shell, not just the narrow one", () => {
+    /*
+     * The defect this pins, and it is a disagreement between two files rather
+     * than a bad value in either.
+     *
+     * `popover.tsx` sets `data-mode="sheet"` on the landscape arm — wide but
+     * short, the 932x430 phone held sideways. The block that actually makes a
+     * sheet a sheet (`position: fixed`, pinned to the bottom edge, the sticky
+     * header, the 44px Done) was scoped `@media (max-width: 640px)` alone. A
+     * landscape viewport therefore satisfied the JS and missed the CSS, leaving
+     * the panel `position: absolute` under its trigger while calling itself a
+     * sheet: the one state neither mode is designed for.
+     *
+     * So this asserts the query, not the declarations inside it. The
+     * declarations were always right; the width they were gated behind was not.
+     */
+    expect(sheet).toContain('@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {');
+    // And the constants the JS decides with have to be the same two numbers, or
+    // the two files drift apart again silently.
+    expect(POPOVER_SHEET_MAX_WIDTH).toBe(640);
+    expect(POPOVER_SHEET_LANDSCAPE_MAX_WIDTH).toBe(950);
+    expect(POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT).toBe(500);
+  });
+
+  it("bounds the landscape sheet's measure rather than letting it span 932px", () => {
+    /*
+     * The bill for the arm above, paid in the same change that incurred it.
+     *
+     * A sheet spans the bottom edge, and on an upright phone that edge is
+     * 320-430px so the span is also the measure. At 932x430 the same rule sets
+     * a claim's `small` detail — `grid-area: 2 / 1 / 3 / -1`, the full row — to
+     * a ~900px line, roughly 150 characters and twice any measure this product
+     * uses elsewhere. That would have been a legibility defect introduced by
+     * the repair rather than found by it.
+     *
+     * The body's single track is what is capped, not the panel: the panel keeps
+     * its full-bleed geometry, its bottom-edge travel and its sticky header, so
+     * nothing about how the sheet arrives or dismisses is re-derived. The query
+     * floors at 641px so the 640px cap can only ever narrow the column, never
+     * stretch it.
+     */
+    expect(sheet).toContain('@media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {');
+    const landscape = sheet.slice(sheet.indexOf('@media (min-width: 641px) and (max-width: 950px)'));
+    expect(landscape).toContain("grid-template-columns: minmax(0, 640px)");
+    expect(landscape).toContain("justify-content: center");
   });
 });
 

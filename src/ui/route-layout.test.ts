@@ -140,7 +140,7 @@ describe("route layout contract", () => {
     );
   });
 
-  it("keeps the Proof switcher's selected tab whole and charges the shortfall to the other one", () => {
+  it("keeps both Proof tabs whole by letting their labels wrap instead of picking one to cut", () => {
     /*
      * Two defects, one rule. First, `1fr 1fr` was written on `.tabs` — whose two
      * children are the scrolling strip and the `⌄ n` overflow control. So at
@@ -172,13 +172,29 @@ describe("route layout contract", () => {
      * cannot undo: every other clipped label is one tap from being read, and
      * this one is clipped *because* you already tapped it.
      *
-     * So what is pinned is not a split at all. The selected tab pays nothing —
-     * `flex-shrink: 0`, because any share of a 30px deficit costs it a
-     * character — and the unselected tab absorbs the whole of it. The cap is
-     * the other half of the contract: without it a selected tab that refuses to
-     * shrink can, at a large `--type-scale`, eat the strip and bring back the
-     * `⌄ n` chevron. Both halves are asserted here because either alone is a
-     * defect.
+     * The answer written next was "the selected tab pays nothing, the other
+     * absorbs all of it", and it overshot because it was costed in only one
+     * direction. Its own note recorded 320 as leaving the other tab 107px —
+     * the remainder after `Receipt & journal`'s 175. Select the other tab and
+     * the arithmetic changes: `Attestation evidence` needs 207, so the
+     * remainder is 286 - 207 - 4 = 75px and the strip rendered `Rec…`. Three
+     * characters is a stub, not a label a reader can recognise and choose.
+     *
+     * So the split is withdrawn rather than re-balanced, because its premise —
+     * that someone must absorb an unavoidable cut — is false. The pair only
+     * wants 386px of *line* because the button forbids a second one. Letting
+     * the label wrap lets both tabs shrink normally and stay whole: 129px and
+     * 153px at 320, 161px and 191px at 390, and no shrink at all at 430, where
+     * the pair already fits and the band must stay byte-identical.
+     *
+     * What is pinned here is therefore the wrap, the restated leading it needs
+     * (the base rule sets `font: … /1 …`, and two lines set solid collide), the
+     * declared vertical air that keeps a ~40.5px two-line label off the walls
+     * of its 44px box, and — most importantly — the *absence* of every
+     * mechanism that manufactured a cut: the equal splits, and the `min-width:
+     * 0` overrides that let a tab shrink below its own longest word. Restoring
+     * the flex default is what makes "wrap" mean "wrap" rather than "wrap, then
+     * clip".
      */
     // This sheet has more than one band at any given width, so the block is
     // selected by what it contains rather than by which one comes first.
@@ -188,20 +204,28 @@ describe("route layout contract", () => {
         .find((block) => block.includes(selector)) ?? "";
     const phoneBand = band(760, ".proof-surface-tabs");
     expect(phoneBand, "the phone rules for this strip live in one band").not.toBe("");
-    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab\[data-active="true"\] \{[^}]*flex-shrink: 0/u);
-    expect(phoneBand).toMatch(
-      /\.proof-surface-tabs \.tabs__tab\[data-active="true"\] \{[^}]*max-width: calc\(100% - var\(--touch-target\) - var\(--sp-1\)\)/u,
-    );
+    // The wrap, and the two declarations that make it habitable.
+    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*white-space: normal/u);
+    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*line-height: 1\.2/u);
+    expect(phoneBand).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*padding-block: var\(--sp-1\)/u);
+    // The touch floor is untouched by all of it: the button still holds 44px,
+    // and the wrap grows it past that rather than borrowing from it.
+    expect(phoneBand).toMatch(/\.proof-surface-tabs button \{[^}]*min-height: var\(--touch-target\)/u);
+
     // No band may hand the tabs equal shares again, at any width. `flex: 1 1
     // auto` on the tab is the 176-of-356 halving this replaces; it belongs to
     // `.tabs__strip`, which is a different box, so the selector is exact.
     expect(styles).not.toMatch(/\.proof-surface-tabs \.tabs__tab(?:-button)? \{[^}]*flex: 1 1 auto/u);
     expect(styles).not.toMatch(/\.proof-surface-tabs[^{]*\{[^}]*grid-template-columns/u);
-    // And the unselected tab has to be allowed to shrink below its own label,
-    // or there is nothing to absorb the shortfall with and the overflow returns.
-    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
-    expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
-    expect(styles).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis/u);
+    // Nor may the selected tab go back to refusing to shrink: that refusal is
+    // what pushed the whole 100px deficit onto one neighbour and produced
+    // `Rec…`. With both tabs shrinking normally there is no shortfall to charge.
+    expect(styles).not.toMatch(/\.proof-surface-tabs \.tabs__tab\[data-active="true"\] \{[^}]*flex-shrink: 0/u);
+    // And the min-content floor stays restored. `min-width: 0` here is what
+    // lets a tab be squeezed below its own longest word, which turns the wrap
+    // back into a clip — the exact defect this replaced.
+    expect(styles).not.toMatch(/\.proof-surface-tabs \.tabs__tab \{[^}]*min-width: 0/u);
+    expect(styles).not.toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
   });
 
   it("lets the Agent-configuration tabs share the narrowest row instead of each taking a third", () => {
