@@ -58,6 +58,21 @@ next-env.d.ts
 # down in docs/audit/, which is what gets kept.
 /.ui-capture/
 
+# The same species, under the rule above rather than beside it. `.aesthetic/`
+# held 419 committed files — 382 of them PNGs, 102 MB — of exactly this: probe
+# scripts and before/after captures from design-review passes. Nothing built,
+# tested, deployed or documented read them, and every `.aesthetic/` path the
+# design-review documents cite (`shots/`, `tmp/phone/`, `memory/`,
+# `lane-tools.mjs`) had already gone; what was committed was a different set
+# that nothing cited at all. The findings those passes produced are in
+# docs/design-review/ and docs/audit/, which is the part worth a clone's
+# bandwidth.
+/.aesthetic/
+
+# Ground-truth sweep scripts written to drive the running app and report what a
+# human receives. Same rule: the report is the artifact, not the harness.
+/.sweep-tmp*.mjs
+
 # Editor tooling that is not a repository-level decision.
 /.kilo/
 /.playwright-mcp/
