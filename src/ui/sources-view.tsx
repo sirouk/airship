@@ -30,6 +30,7 @@ import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { RouteHeader } from "./route-header";
+import { useScrollEdges } from "./scroll-affordance";
 import { Seal, type SealState } from "./seal";
 import { Tabs } from "./tabs";
 import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
@@ -108,6 +109,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const operationAbort = useRef<AbortController>();
   const diffAbort = useRef<AbortController>();
   const postureRef = useRef<HTMLDetailsElement>(null);
+  const postureChipsRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -166,6 +168,21 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
     () => sourcePostureFacts(client.capabilities, workspaceDurability),
     [client.capabilities, workspaceDurability.state, workspaceDurability.detail],
   );
+  /*
+   * The chip row is a scroller below 760px, and until now it was a silent one.
+   *
+   * Measured at 320x568 on the workbench's advanced source controls: four
+   * posture chips ask for ~700px of a 263px row, so `Direct Git HTTPS · 1
+   * permitted origin` was cut mid-word at the row's edge with nothing to say
+   * that a second chip — let alone a third and a fourth — was there at all.
+   * `scrollbar-width: none` is right for a chip row on a phone and it is also
+   * the reason nothing marked the boundary. This is the affordance the product
+   * already ships on `.tabs__strip` and `.primary-nav`: measured, so the fade
+   * appears only while a chip is genuinely hidden, and on the side that is
+   * hiding it. Keyed on the fact count, because the row's overflow changes when
+   * a capability appears or goes away without any scroll or resize.
+   */
+  useScrollEdges(postureChipsRef, posture.length, "inline");
   const history = client.capabilities.features.history;
 
   function selectRepository(nextId: string) {
@@ -456,7 +473,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
       >
         <summary>
           <span class="eyebrow">Source posture</span>
-          <span class="git-posture-chips">
+          <span class="git-posture-chips" ref={postureChipsRef}>
             {posture.map((fact) => <Seal key={fact.id} state={fact.state} label={fact.label} density="chip" />)}
           </span>
           <small>{posture.length} facts · full detail</small>

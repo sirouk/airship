@@ -2991,7 +2991,25 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
             onClick={() => openDiff(document, "preview")}
             onDblClick={() => openDiff(document, "pinned")}
             onKeyDown={(event) => { if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); openDiff(document, "pinned"); } }}
-          ><span><strong>{commitSubject(entry.message)}</strong><small>{short} · {entry.committedAt.slice(0, 10)}</small></span><b>↱</b></button>
+          ><span><strong>{commitSubject(entry.message)}</strong><small>
+            {/*
+              Two values on one line, and only one of them may be cut.
+
+              This was a single text node — `fe5341494b6c · 2026-08-08` — with
+              no ellipsis on it, so a rail too narrow for the pair clipped the
+              line mid-glyph at the `↱`: measured at tablet-768, the date read
+              "2026-08-0" with the last digit sliced down the middle. A date
+              that has lost its last digit is not a shorter date, it is a wrong
+              one. The revision gives way instead, because it is abbreviated
+              already, it is repeated in full in the accessible name of the
+              button beside it, and it is the value the reader is least likely
+              to be scanning history by. `<time>` carries the whole committed
+              timestamp regardless of what the row has room to print.
+            */}
+            <span class="scm-history-row__oid">{short}</span>
+            <span class="scm-history-row__sep" aria-hidden="true">·</span>
+            <time class="scm-history-row__date" dateTime={entry.committedAt}>{entry.committedAt.slice(0, 10)}</time>
+          </small></span><b>↱</b></button>
           <div><button type="button" aria-label={`Open and keep commit ${short} diff`} title="Open and keep" onClick={() => openDiff(document, "pinned")}>↗</button></div>
         </div>;
       })}

@@ -2872,8 +2872,24 @@
    * The override must outrank the topbar hide two rules above, so it sits
    * inside the same block rather than borrowing shell.css's base rule.
    */
+  /*
+   * The two declarations this band never inherited.
+   *
+   * `.runtime-line:not(.runtime-line--phone)` in shell.css carries the row's
+   * `align-items: center` and its 7px gap, and by construction that selector
+   * cannot reach this element — so the phone band was a flex row with neither.
+   * Measured at 320x568: `.pulse-dot` is 6px tall with a 3px halo and it has a
+   * height, so stretch left it against the top edge of the band, where the
+   * halo crossed the topbar's own hairline and read as a clipped dot; with no
+   * gap, the "L" of "Local kernel ready" then started inside that halo. A
+   * status indicator overlapping the status it indicates is the one thing this
+   * band exists to avoid, and neither declaration costs the band any height —
+   * it is `min-height: 34px` around a 6px dot either way.
+   */
   .runtime-line--phone {
     display: flex;
+    gap: 7px;
+    align-items: center;
     max-width: none;
     min-width: 0;
     overflow: hidden;

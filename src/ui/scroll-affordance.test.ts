@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   SCROLL_EDGE_EPSILON,
+  axisMetrics,
   observeScrollEdges,
   scrollEdges,
   type ScrollAffordanceElement,
@@ -32,6 +33,39 @@ describe("scrollEdges", () => {
   it("never paints an affordance on non-finite geometry", () => {
     expect(scrollEdges({ scrollTop: 0, scrollHeight: Number.NaN, clientHeight: 602 })).toBe("none");
     expect(scrollEdges({ scrollTop: Number.NaN, scrollHeight: 785, clientHeight: 602 })).toBe("end");
+  });
+});
+
+describe("the inline axis", () => {
+  /*
+   * A row of posture chips hides content to the right exactly the way a rail
+   * hides it below. Measured at 320x568 on the workbench's advanced source
+   * controls: four chips, ~700px of them, in a 263px row.
+   */
+  it("reads the row's three numbers and reports the same edges", () => {
+    const row = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, scrollLeft: 0, scrollWidth: 700, clientWidth: 263 };
+    expect(scrollEdges(axisMetrics(row, "inline"))).toBe("end");
+    expect(scrollEdges(axisMetrics({ ...row, scrollLeft: 120 }, "inline"))).toBe("both");
+    expect(scrollEdges(axisMetrics({ ...row, scrollLeft: 437 }, "inline"))).toBe("start");
+    expect(scrollEdges(axisMetrics({ ...row, scrollWidth: 263 }, "inline"))).toBe("none");
+  });
+
+  it("reads a right-to-left row's negative offset as distance travelled", () => {
+    const row = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, scrollLeft: -120, scrollWidth: 700, clientWidth: 263 };
+    expect(scrollEdges(axisMetrics(row, "inline"))).toBe("both");
+  });
+
+  it("leaves the block axis reading the properties it always read", () => {
+    const rail = { scrollTop: 0, scrollHeight: 785, clientHeight: 602, scrollLeft: 0, scrollWidth: 0, clientWidth: 0 };
+    expect(axisMetrics(rail, "block")).toBe(rail);
+    expect(scrollEdges(axisMetrics(rail, "block"))).toBe("end");
+  });
+
+  it("publishes the inline edges through the observer the stylesheet reads", () => {
+    const element = stubElement({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 }, [], { scrollLeft: 0, scrollWidth: 700, clientWidth: 263 });
+    const seen: string[] = [];
+    observeScrollEdges(element.node, (edges) => seen.push(edges), stubView().node, "inline");
+    expect(seen).toEqual(["end"]);
   });
 });
 
@@ -134,10 +168,12 @@ describe("observeScrollEdges", () => {
 function stubElement(
   geometry: { scrollTop: number; scrollHeight: number; clientHeight: number },
   children: readonly Element[] = [],
+  inline?: { scrollLeft: number; scrollWidth: number; clientWidth: number },
 ) {
   const listeners = new Set<() => void>();
   const node: ScrollAffordanceElement = {
     ...geometry,
+    ...(inline ?? {}),
     children,
     addEventListener: (_type, listener) => void listeners.add(listener),
     removeEventListener: (_type, listener) => void listeners.delete(listener),

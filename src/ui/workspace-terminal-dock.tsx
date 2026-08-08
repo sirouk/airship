@@ -9,6 +9,8 @@ import {
   TERMINAL_DOCK_RESIZE_STEP,
   readTerminalDockState,
   terminalDockHeight,
+  terminalDockMaximum,
+  terminalDockMinimum,
   terminalDockStorageKey,
   terminalOpenRequestForAuthority,
   updateTerminalDockState,
@@ -95,12 +97,21 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
     };
   }, [state.height, props.workspaceIdentity, props.profileId]);
 
-  const maximum = dockMaximum(root.current);
+  const available = availableDockHeight(root.current);
+  const maximum = terminalDockMaximum(available);
+  /*
+   * Home goes to the shortest the dock may actually be made, not to the
+   * comfortable 220px opening height. On a panel too small to hold both
+   * surfaces the clamp returns less than that, and a separator that reports
+   * `aria-valuemin` above its own `aria-valuemax` is describing a range that
+   * does not exist to the one reader who cannot see the split.
+   */
+  const minimum = terminalDockMinimum(available);
   const resize = (height: number) => commit({ height }, availableDockHeight(root.current));
   const handleResizeKey = (event: KeyboardEvent) => {
     if (event.key === "ArrowUp") { event.preventDefault(); resize(state.height + TERMINAL_DOCK_RESIZE_STEP); }
     else if (event.key === "ArrowDown") { event.preventDefault(); resize(state.height - TERMINAL_DOCK_RESIZE_STEP); }
-    else if (event.key === "Home") { event.preventDefault(); resize(TERMINAL_DOCK_MIN_HEIGHT); }
+    else if (event.key === "Home") { event.preventDefault(); resize(minimum); }
     else if (event.key === "End") { event.preventDefault(); resize(maximum); }
   };
 
@@ -117,7 +128,7 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
       aria-label="Terminal dock height"
       aria-orientation="horizontal"
       aria-valuenow={state.height}
-      aria-valuemin={TERMINAL_DOCK_MIN_HEIGHT}
+      aria-valuemin={minimum}
       aria-valuemax={maximum}
       tabIndex={0}
       title="Drag, or use Up and Down arrows, to resize the terminal dock"
@@ -175,11 +186,4 @@ function availableDockHeight(root?: HTMLElement | null): number | undefined {
   const parentHeight = root?.parentElement?.clientHeight;
   if (parentHeight && parentHeight > 0) return parentHeight;
   return typeof innerHeight === "number" ? Math.max(TERMINAL_DOCK_MIN_HEIGHT + TERMINAL_DOCK_EDITOR_FLOOR, innerHeight - 96) : undefined;
-}
-
-function dockMaximum(root?: HTMLElement | null): number {
-  const available = availableDockHeight(root);
-  return typeof available === "number"
-    ? Math.max(TERMINAL_DOCK_MIN_HEIGHT, Math.floor(available) - TERMINAL_DOCK_EDITOR_FLOOR)
-    : 720;
 }
