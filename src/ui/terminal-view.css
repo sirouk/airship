@@ -250,6 +250,22 @@
   .terminal-dock__actions button>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .terminal-route--dock .terminal-panel__bar{padding-inline:5px}
   .terminal-route--dock .terminal-panel__meta{grid-template-columns:minmax(0,1fr);padding-inline:7px}
+  /* The process card's own row, drawn inside the card instead of through it.
+     The state group carries `overflow:hidden`, so its automatic minimum size is
+     zero and it shrinks to whatever the controls beside it leave; the thread
+     chip has no `min-width:0`, so it could not shrink below its longest token
+     and stacked "thread" / "bfb525e…" / "30c4a" into a three-line tower
+     instead. The bar is centred at its 44px floor, so the tower paints out of
+     both ends of it: measured at phone-390 the third line ran from y=676 to
+     y=680, across the bar's own bottom border and into the first five pixels of
+     the transcript, and at phone-320 it did the same and then ran out of the
+     bottom of the dock. The 761–1024 band already reached this conclusion for
+     both variants and states the trade — a truncated id is still that id, and
+     the whole of it is the chip's `title` — so this is that decision carried
+     down to the widths below it, scoped to the dock because the full route is
+     another surface's this pass. It costs no height: it removes two lines the
+     bar was never tall enough to hold. */
+  .terminal-route--dock .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 
 /* Between the phone block and a desktop row, five state fields are asked to

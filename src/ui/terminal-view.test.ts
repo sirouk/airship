@@ -506,6 +506,37 @@ describe("the full-view control a thumb has to hit", () => {
     const routePhone = route.slice(route.indexOf("@media(max-width:760px)"));
     expect(routePhone).toContain(".terminal-dock__actions button{min-width:var(--touch-target);min-height:var(--touch-target)");
     expect(routePhone).not.toContain("min-height:38px");
+
+    /*
+     * The same floor on the closed bar, for the two touch devices that report a
+     * wider viewport than the phone block covers — a 932x430 landscape phone
+     * and a 768x1024 tablet — where 34px controls sat inside a 42px bar. It is
+     * load-bearing now rather than cosmetic: a panel too short to hold a
+     * terminal renders this bar and nothing else, so on a landscape phone these
+     * two buttons are the entire dock.
+     */
+    const dockCoarse = dock.slice(dock.indexOf("@media (pointer: coarse)"));
+    expect(dockCoarse).toContain(".workspace-terminal-dock[data-open=false], .workspace-terminal-dock__collapsed { height: 48px; }");
+    expect(dockCoarse).toMatch(/\.workspace-terminal-dock__collapsed button \{\s*min-width: var\(--touch-target\);\s*min-height: var\(--touch-target\);/u);
+  });
+});
+
+/*
+ * The process card's status row, and which of its fields pays for a narrow one.
+ */
+describe("the dock's process row", () => {
+  it("truncates the thread id rather than tower it through the card's own divider", () => {
+    const route = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const routePhone = route.slice(route.indexOf("@media(max-width:760px)"), route.indexOf("@media(min-width:761px)"));
+    expect(routePhone).toContain(".terminal-route--dock .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
+    /*
+     * Scoped to the dock, and asserted as scoped. The full route reaches the
+     * same row through the same markup and is a separate surface with a
+     * separate scroll model — it scrolls its own box below 500px of height,
+     * where the dock is height-bound inside the workbench panel — so the two
+     * are not one decision and an unscoped rule here would make them one.
+     */
+    expect(routePhone).not.toMatch(/^\s*\.terminal-panel__thread\{/mu);
   });
 });
 
