@@ -295,8 +295,35 @@
 
    Scoped off the dock, which declares its own rows and its own smaller floors
    and is height-clamped in JavaScript against its measured parent. */
+/* Lowering the emulator floor to 8rem was half the repair, and the half that
+   could not finish the job. It bought back enough for both rows to be legible
+   again, but they are still the only two rows in this grid whose automatic
+   minimum size is zero, so they are still the rows that pay whatever is left
+   over — and at 932x430 about 16px is left over. Measured on the shipped
+   build: the disclosure loses its bottom border and `Terminal 1` is sliced
+   through the lower third of its label, in 01-rest, 02-setup-open and
+   06-second-tab-open alike.
+
+   There is no more room to take from the emulator. At 8rem the panel is
+   already sitting on its own floor — a 44px bar, the 3rem emulator this block
+   grants below, and a 32px meta row come to 124px inside a 128px track — so
+   cutting the route track further would not shrink the emulator, it would
+   crush the panel and swallow the meta row under its `overflow:hidden`, which
+   is the failure the paragraph above was written against.
+
+   So the two rows state their floors instead of inheriting a zero, and the
+   ~16px that no longer fits leaves through the door the route already has:
+   `.terminal-route` carries `min-height:min-content`, so it grows to its own
+   floors and `main` scrolls those last pixels. A reader scrolls 16px to reach
+   the end of the footer sentence; nobody reads a control that has been sliced
+   in half. The floors are written against `--touch-target` rather than a
+   literal because they are the same 44px decision the summary and the tab
+   buttons already make, plus the 1px borders and the strip's 2px padding that
+   sit outside it. */
 @media(max-height:500px){
   .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(8rem,1fr) auto;gap:8px}
+  .terminal-route:not(.terminal-route--dock)>.terminal-route__setup,
+  .terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}
   .terminal-panel{grid-template-rows:auto minmax(3rem,1fr) auto}
   .terminal-emulator{min-height:3rem}
 }
