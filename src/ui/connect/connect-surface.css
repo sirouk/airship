@@ -795,6 +795,30 @@
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
     gap: 2px;
+    /*
+     * Both rows of the control read down one edge.
+     *
+     * The stack above was landed without settling what it stacks against. The
+     * label is a `<span>` in a button, so it inherits the UA's `text-align:
+     * center`; the sub-label carries the explicit `left` below, which is what
+     * replaced the `right` the side-by-side row needed. Measured on the Connect
+     * Chutes sheet at 320, 390 and 430: `OAuth` sits centred over an
+     * `Unavailable in this build` flush to the tab's inner edge — two lines of
+     * one control on two different axes, which reads as two controls that have
+     * collided rather than as a label and its status.
+     *
+     * Left is the axis to agree on, not centre: the sub-label is mono and wraps
+     * to two and three lines here, and a centred ragged block under a centred
+     * word has no edge for the eye to return to. This declaration is what makes
+     * the button's own text direction the axis, so the `left` below is a
+     * restatement of the agreed edge rather than the only one declared.
+     *
+     * It costs nothing. `text-align` moves ink inside boxes that are already
+     * `1fr` in a strip that is already `max-width: none` at this width — no tab,
+     * no neighbour and no row changes width or height, and the tab's 44px floor
+     * and two-row height are exactly what they were.
+     */
+    text-align: left;
   }
 
   .connect-method__switch small {

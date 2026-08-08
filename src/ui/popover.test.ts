@@ -153,6 +153,49 @@ describe("the panel is the width of the box it is pinned to", () => {
     // exit is off-screen is dismissible solely by a gesture nobody is told about.
     expect(sheet).toMatch(/\.popover\[data-mode="sheet"\] \.popover__done \{[^}]*min-height: 44px/u);
   });
+
+  it("declares the header's vertical air instead of borrowing it from the 44px floor", () => {
+    /*
+     * The other cost of wrapping the heading, and the one that was left unpaid.
+     * `padding: 0 var(--sp-3)` was air only while the title was one line. At
+     * phone-320 the account sheet's title takes three mono `--fs-micro` lines —
+     * 39.6px in a 44px box — so the pixels showed ~2px between the sheet's own
+     * top border and the first glyph and ~2px between the last descender and
+     * the header rule, and at the two larger type scales the same three lines
+     * measure 43px and 47px, which is a collision and then an overflow.
+     *
+     * The floor stays: with 8px either side a one or two-line heading is 29px
+     * or 42px of content, still under 44px, so nothing that fits today moves.
+     */
+    const header = block(sheet, ".popover__header");
+    expect(header).toContain("padding: var(--sp-2) var(--sp-3)");
+    expect(header).toContain("min-height: 44px");
+  });
+
+  it("makes the bounded body's own cut visible rather than leaving it to read as a fault", () => {
+    /*
+     * Capping the panel to its trigger's room was right and it gave the panel a
+     * hard bottom border to draw through whatever row happened to be there:
+     * measured on the laptop-1024 provenance panel, the border runs through the
+     * middle of the `CONTENT DIGEST` glyphs. The scroll shadow is the thing that
+     * says "this row continues", and at 13% of `--ink` its peak measured 8/255
+     * over the body's ground against the border's 78 — an affordance that is
+     * present in the cascade and absent from the screen.
+     *
+     * The two `local` layers are the other half and they are asserted with it:
+     * they scroll with the content and mask these exactly where the text has
+     * genuinely ended, so a stronger shadow may not start claiming a fourth
+     * paragraph that does not exist. Their 14px must stay at or above the
+     * shadow's own height for that to hold.
+     */
+    const body = block(sheet, ".popover__body");
+    expect(body).toContain("var(--ink) 30%");
+    expect(body).toContain("scroll top / 100% 10px");
+    expect(body).toContain("scroll bottom / 100% 10px");
+    expect(body).toContain("local top / 100% 14px");
+    expect(body).toContain("local bottom / 100% 14px");
+    expect(body).toContain("overflow: auto");
+  });
 });
 
 /** The declarations of the first rule with exactly this selector. */

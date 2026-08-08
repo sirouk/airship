@@ -363,13 +363,36 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
    * it; at rest the spacing is unchanged, because the header re-adds it.
    */
   .preferences-dialog { padding-top: 0; -webkit-overflow-scrolling: touch; }
+  /*
+   * The header's own edge, because opaque chrome over live text has to say so.
+   *
+   * Sticking the header gave it an opaque ground and no boundary, so the row it
+   * covers is shorn flat with nothing between the two. Measured at phone-430 on
+   * the tool-steps frame: `Active profile approvals` renders as a band of glyph
+   * bottoms at y=274 with nine clear rows of ground above it and not one pixel
+   * of rule — the same shape at 320 on `System sans`, at 390 on `Density`, and
+   * at landscape-932 where the Color mode select is reduced to a 1px line that
+   * belongs to nothing on screen. Every one of them reads as clipping rather
+   * than as content that has scrolled underneath.
+   *
+   * The rule is the one the reader already had: before the header stuck, the
+   * hairline visible under it was the first row's own `border-top`, and that
+   * hairline is what scrolls away. Moving it onto the header makes it travel,
+   * and the row below drops the border it no longer needs to draw — so the
+   * sheet is the same height to the pixel at every width, and at rest the frame
+   * is byte-identical to what it was. A shadow was the other candidate and is
+   * not here: it would assert depth in the resting state, where these two boxes
+   * genuinely sit in one plane.
+   */
   .preferences-dialog > header {
     position: sticky;
     top: 0;
     z-index: 1;
     padding-top: 1rem;
+    border-bottom: 1px solid var(--line);
     background: var(--surface-raised);
   }
+  .preferences-dialog > header + * { border-top: 0; }
   /* A capped sheet has to give the height back from the scrolling middle, not
      from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
      legend rather than shortening the results list. */

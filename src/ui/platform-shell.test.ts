@@ -527,6 +527,26 @@ describe("the Preferences sheet keeps a way out on screen", () => {
     expect(/\.preferences-dialog > header \{[^}]*padding-top: 1rem/u.test(block)).toBe(true);
   });
 
+  it("gives the held header an edge, and takes it off the row that no longer draws it", () => {
+    /*
+     * The cost of holding it, and the half that was missing. An opaque header
+     * over live text with no boundary does not read as content scrolling under
+     * chrome, it reads as clipping: measured at phone-430, "Active profile
+     * approvals" is a band of glyph bottoms with nine clear rows of ground above
+     * it and no rule anywhere; at landscape-932 the Color mode select is reduced
+     * to a stray 1px line belonging to nothing on screen.
+     *
+     * The hairline is not new ink — it is the first row's own `border-top`,
+     * which is exactly the rule that used to sit there and exactly the rule that
+     * scrolls away. Moving it onto the header makes it travel, and the row drops
+     * the border it would otherwise draw one pixel below: both assertions, or
+     * the sheet grows a pixel and the resting frame stops matching itself.
+     */
+    const block = sheetBlock();
+    expect(/\.preferences-dialog > header \{[^}]*border-bottom: 1px solid var\(--line\)/u.test(block)).toBe(true);
+    expect(block).toContain(".preferences-dialog > header + * { border-top: 0; }");
+  });
+
   it("leaves the Trust sheet's header alone, which shares the layout rule but not the scroll box", () => {
     // `.preferences-dialog > header, .trust-sheet > header` share one flex rule;
     // only the dialog is the scrolling element, so only the dialog sticks.

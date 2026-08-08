@@ -171,6 +171,26 @@
  * heading below is what stops the header's min-content being 490px in the first
  * place — a rule that never has to be overridden is better than a floor that
  * has to fight it.
+ *
+ * The vertical padding is a floor on the title's air, not a decoration.
+ *
+ * `padding: 0` here read as "the 44px minimum is the air", and it is only air
+ * while the heading is one line. The wrapping heading below made it three on
+ * the account sheet: measured at 320, `ACCOUNT STANDING · CHUTES TELEMETRY AND
+ * PROVIDER INVENTORY` sets three mono `--fs-micro` lines at 1.2 — 39.6px inside
+ * a 44px box, so 2px stood between the sheet's own top border and the first
+ * glyph and 2px between the last descender and the header rule. That is not a
+ * header, it is text jammed against a box edge, and at the two larger type
+ * scales (`--fs-micro` at 12px and 13px) the same three lines are 43px and
+ * 47px, so the ramp had already spent the last of it and begun overflowing.
+ *
+ * Declaring the air makes the box grow when the title needs it instead of the
+ * title eating the box. Nothing outside the panel pays: one and two-line
+ * headings still measure under the 44px minimum with this padding (29px and
+ * 42px at the base ramp), so every panel that fits today is byte-identical, and
+ * where a third line does grow the header the panel's `max-height` above takes
+ * it out of `.popover__body` — which scrolls, and is the one row in this panel
+ * where losing height is recoverable.
  */
 .popover__header {
   display: flex;
@@ -179,7 +199,7 @@
   justify-content: space-between;
   min-width: 0;
   min-height: 44px;
-  padding: 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--line);
 }
 
@@ -201,10 +221,13 @@
  * is now beyond the header's reach by construction rather than by a floor.
  *
  * The cost is vertical and it is small: these headings are mono `--fs-micro` at
- * 1.2, so the longest of them takes three lines inside the header's existing
- * 44px minimum and the header does not grow at all. Where a longer one does
- * grow it, the panel's `max-height` above takes it out of the body, which
- * scrolls — the one place in this panel where losing room is recoverable.
+ * 1.2, so the longest of them takes three lines. This once claimed those three
+ * lines fit "inside the header's existing 44px minimum" with the header not
+ * growing at all, and the arithmetic was right while the reading was wrong —
+ * 39.6px does fit in 44px, leaving 2px of clearance a reader sees as a
+ * collision. The header above now states its own padding and grows for the
+ * third line, and the panel's `max-height` takes that height out of the body,
+ * which scrolls — the one place in this panel where losing room is recoverable.
  */
 .popover__header > strong {
   overflow-wrap: anywhere;
@@ -241,6 +264,19 @@
  * nobody has a reason to start. The two `local` layers scroll with the content
  * and so cover the two `scroll` layers exactly while that edge is the end of
  * the text — the shadow is visible if and only if there is more.
+ *
+ * 30%, not the 13% this shipped with, because 13% was an affordance nobody
+ * could see. Measured off the laptop-1024 provenance panel: the shadow's peak
+ * row read 8/255 above the body's own ground where the panel's border reads 78,
+ * so the panel drew a hard rounded border straight through the middle of the
+ * `CONTENT DIGEST` row's glyphs with nothing anywhere saying the row continued
+ * below it — a cut that reads as a rendering fault rather than as a scroller.
+ * 30% puts the peak at roughly 58, about two-thirds of the border it sits under:
+ * legible as a soft edge, still plainly not a second border. It stays under the
+ * 14px `local` layers that mask it, so the guarantee above is unchanged — no
+ * shadow paints where the text has genuinely ended. Nothing pays height or
+ * width for this: all four layers are backgrounds inside the body's existing
+ * box, and the box is not touched.
  */
 .popover__body {
   display: grid;
@@ -251,10 +287,10 @@
   background:
     linear-gradient(var(--surface-raised), transparent) local top / 100% 14px no-repeat,
     linear-gradient(transparent, var(--surface-raised)) local bottom / 100% 14px no-repeat,
-    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--ink) 13%, transparent), transparent)
-      scroll top / 100% 8px no-repeat,
-    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--ink) 13%, transparent), transparent)
-      scroll bottom / 100% 8px no-repeat;
+    radial-gradient(farthest-side at 50% 0, color-mix(in srgb, var(--ink) 30%, transparent), transparent)
+      scroll top / 100% 10px no-repeat,
+    radial-gradient(farthest-side at 50% 100%, color-mix(in srgb, var(--ink) 30%, transparent), transparent)
+      scroll bottom / 100% 10px no-repeat;
   font-size: var(--fs-caption);
   line-height: 1.5;
 }

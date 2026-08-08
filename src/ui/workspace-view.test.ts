@@ -1276,6 +1276,19 @@ describe("the phone's three-way pane switch", () => {
     expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__tab,\n  .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }");
   });
 
+  it("charges a narrow strip to the one label that survives being cut", () => {
+    /*
+     * The cell that can shrink is not the cell that should. Flex weights shrink
+     * by content width, so at phone-320 the ~49px deficit was split 21/16/23
+     * across three labels wanting 72px, 51px and 144px — rendering "Expl…",
+     * "Ed…" and "Source Co…", with the *active* tab cut to four characters and
+     * its neighbour to two. Freezing the two short words sends the whole
+     * deficit to "Source Control", which is still named by its first word after
+     * a cut and still carries its count; "Ed…" names nothing at all.
+     */
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__tab:not(:last-child) { flex-shrink: 0; }");
+  });
+
   it("keeps the change count while the label is what gives way", () => {
     // The count is the reading the switch exists to carry; ellipsising the
     // label around it is the whole trade.
