@@ -115,6 +115,11 @@ describe("the topbar speaks for the browser tab", () => {
      * after and reported that loss independently. One width for "no room for
      * words" is right; it is simply not the session bar's width, because these
      * labels are not the same length.
+     *
+     * Re-derived, not re-borrowed, after the chip's width moved under it: in
+     * this block the label's box is the viewport less 307px, `Browser` sets
+     * 48px of ink, and a word survives only while the box holds that ink plus
+     * 5px — so 360 is the exact viewport at which the first word stops fitting.
      */
     const yielded = styles.slice(styles.indexOf(".topbar-posture-chip .seal__label"));
     expect(yielded).toMatch(/\.topbar-posture-chip \.seal__label \{[^}]*clip-path: inset\(50%\)/u);
@@ -124,5 +129,32 @@ describe("the topbar speaks for the browser tab", () => {
     // Clipped out of the layout, never removed. The whole sentence is still the
     // control's accessible name, and the sheet still renders every claim.
     expect(topbar).toContain("Runtime trust for this browser tab. Weakest claim:");
+  });
+
+  it("leaves the tier's measurement basis alone: nothing is added to the track the chip is measured against", () => {
+    /*
+     * The tier above is a width, so it is worth exactly as much as the chip's
+     * width is stable — and the chip's width is what survives the brand track.
+     * `.topbar` shares `--rail-width` with `.app-shell` so the mark keeps
+     * tracking the rail, which means a rail that widens itself for its own
+     * reasons narrows this chip, silently, on every route at once.
+     *
+     * That is not hypothetical. Half a touch target reserved at the rail's seam
+     * to hold a collapse grip took 13px off this chip at every touch width, and
+     * 390 went from `Browser / Ed…` to `Browser / E…` — a word cut after one
+     * letter — under a tier written on the first of those two renderings.
+     *
+     * Pinned here as well as beside the rail, because the rail is the last
+     * place anyone auditing the topbar would think to look for the cost.
+     */
+    const declared = styles.replace(/\/\*[\s\S]*?\*\//gu, "");
+    expect(declared).toContain("grid-template-columns: var(--rail-width) minmax(280px, 1fr) minmax(0, auto);");
+
+    const widths = [...declared.matchAll(/--rail-width:\s*([^;]+);/gu)].map(([, value]) => value!.trim());
+    expect(widths.length).toBeGreaterThan(3);
+    // A sum is the shape this arrives in: some length, plus room for something
+    // that is not the rail's contents. There is no such thing to make room for
+    // — a grip that hangs off the seam is paid for in overhang, in shell.css.
+    for (const width of widths) expect(width).not.toContain("+");
   });
 });

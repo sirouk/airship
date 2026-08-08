@@ -604,12 +604,10 @@
   flex-direction: column;
   width: 100%;
   min-height: 0;
-  /* The seam's own room. `.rail-collapse` is centred on this box's right edge,
-     so half of whatever it measures lands inside the rail; on a coarse pointer
-     that half is reserved here rather than taken from the nav column, and
-     `--rail-width` is widened by the same amount so nothing inside the rail
-     moves. Zero on a fine pointer, where the grip is 13px and needs nothing. */
-  padding-right: var(--rail-seam-reserve, 0px);
+  /* No gutter is held back for the seam. `.rail-collapse` is centred on this
+     box's right edge and is a floating grip rather than a flow item, so the
+     room a finger needs is hung off that edge — see the coarse-pointer block
+     below — instead of being reserved here, where every route pays for it. */
   border-right: 1px solid var(--line-strong);
   background: var(--surface-soft);
 }
@@ -1354,11 +1352,6 @@
 .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail {
   z-index: 30;
   width: 268px;
-  /* The rule that widens the rail is the rule that releases the seam reserve.
-     At 268px the seam is nowhere near a label, so the 22px held back for the
-     grip is 22px of panel a full destination name would otherwise lose — and
-     the peek exists precisely so those names read in full. */
-  --rail-seam-reserve: 0px;
   box-shadow: var(--shadow);
   transition-delay: 0ms;
 }
@@ -1377,10 +1370,11 @@
      — the longest destination name — renders without `scrollWidth` exceeding
      `clientWidth` at the comfortable density's micro step.
 
-     84px is what the *labels* need, and it is all they need; the seam reserve
-     is added on top rather than carved out of it, so the nav column is the
-     same 84px whether or not a finger is what is driving. */
-  :root[data-rail="rail"] { --rail-width: calc(84px + var(--rail-seam-reserve, 0px)); }
+     84px is what the labels need, and it is all the track is asked for: the
+     collapse grip on the seam is paid for out of its own overhang, not out of
+     this number, so the column is the same 84px whether or not a finger is
+     what is driving and the route beside it starts at the same x either way. */
+  :root[data-rail="rail"] { --rail-width: 84px; }
 
   .sidebar[data-rail-state="rail"] .nav-item {
     display: flex;
@@ -1556,36 +1550,82 @@
      seam, in the same place — the shape changes, the gesture and the position
      do not.
 
-     The full `--touch-target`, and the rail is widened to pay for it. This
-     rule has been 44px and then 24px, and both were wrong in the same way:
-     they argued about the grip while treating the column beside it as fixed.
-     At 44px in an 84px rail the grip's inner half was 22px of a `z-index: 1`
-     control lying across the nav column — measured at 768 it sat over the tail
-     of `Connection`, washing the final `n` out, and the right end of that row
-     collapsed the rail instead of opening the destination. Narrowing to 24px
-     cleared the label and cost the finger 45% of the axis it has to find, on
-     the one pointer class where that axis is the whole problem; 24px is WCAG
-     2.5.8's floor, but this product declares its own in tokens.css
-     (`--touch-target`, both axes, "a target's smaller dimension is the one a
-     finger has to find"), and a 44×24 grip is exactly the shape that rule
-     names. Between two laws, the stricter one governs.
+     This rule has been three things, and each one charged a different
+     neighbour for the same 44px.
 
-     So neither neighbour yields: the seam gets its own room. The rail reserves
-     half a touch target on its right, `--rail-width` grows by the same 22px,
-     and every pixel of rail interior stays where it was — the nav column is
-     still the 84px `Connection` was measured into, and the grip's inner half
-     now lands entirely in the reserve, 10px clear of the nav row's box and
-     11px clear of the word. Its outer half hangs into the route by the same
-     22px the 44px version always did. The cost is stated plainly: 22px of
-     main content on a coarse pointer in any painted rail state, which is what
-     a 44px target on a seam costs when it is not allowed to steal one.
+     Painted 44px wide, it is centred on the seam, so 22px of a `z-index: 1`
+     control lies across the nav column: measured at 768 it sat over the tail
+     of `Connection` — in a rail whose 84px is itself measured to hold exactly
+     that word — washing the final `n` out, and the right end of that row
+     collapsed the rail instead of opening the destination. That charged the
+     labels. Narrowing the paint to 24px cleared them and left a 44×24 control,
+     which is WCAG 2.5.8's floor but under this product's own: tokens.css
+     states `--touch-target` on both axes because "a target's smaller dimension
+     is the one a finger has to find". That charged the finger. Widening the
+     rail by half a touch target so the inner half landed in reserved gutter
+     kept the label and the target and charged everything else — the seam went
+     from x=83 to x=105 with the nav icons still centred on x=41, every route's
+     content column shifted 22px at tablet-768, and because `.topbar` shares
+     `--rail-width` the brand track grew with it and the posture chip lost 13px
+     at every touch width, truncating the runtime name a character or three
+     earlier on twelve routes.
 
-     Set on `:root` and not on `.rail`, because `--rail-width` and the topbar's
-     matching grid track both have to read it — see tokens.css, where every
-     state that paints a rail adds it. */
-  :root { --rail-seam-reserve: calc(var(--touch-target) / 2); }
+     What all three have in common is treating the grip as something that has
+     to fit *between* the rail and the route. It does not: it is a floating
+     grip on a seam, and the only reason its width was ever anyone else's
+     problem is that the painted body and the pressable box were the same box.
 
-  .rail-collapse { width: var(--touch-target); }
+     They are not, here. The painted body stays the 24px that was measured to
+     clear the nav column, in exactly the place it was measured, so nothing in
+     the rail and nothing in any route moves by a pixel from the sheet before
+     the reserve. The 44px a finger has to find is a transparent extension hung
+     off the grip's outer edge, over the route's own left gutter.
+
+     The cost, measured and not asserted. The pressable box reaches 32px past
+     the seam where the 24px grip reached 12px, in a 46px band at the seam's
+     vertical centre. `.main` begins at the seam in every rail state, so that
+     band is always the route's own first 32px, whatever the rail is doing:
+     read off the thirteen route captures at tablet-768, where it is x=84..115,
+     what lives there is a card's border or, on Vault, a card's accent stripe,
+     and not one control on any of them. The same 20px is added to the strip in
+     which a touch-drag finds the grip instead of the route's scroller. Inward,
+     nothing changes at all: the body is where it was, 12px into a rail whose
+     rows stop 10px short of the seam in both painted states. And nothing here
+     applies to a fine pointer, so every desktop, laptop and wide capture is
+     byte-identical. No route loses layout width at any viewport, which is the
+     entire point of paying in overhang rather than in track.
+
+     `touch-target-floor.spec.ts` cannot check this one, and never could: it is
+     a coarse-pointer rule, its only coarse project is a phone, and `.sidebar`
+     is `display: none` below 640px, so the grip measures 0×0 there and is
+     skipped. It also measures the element's own border box, which a pseudo's
+     room does not enter — so if a coarse tablet project is ever added, expect
+     that spec to read 24×46 here and read this before excepting anything. The
+     arithmetic below is what actually holds the floor, and rail.test.ts is
+     what holds the arithmetic. */
+  .rail-collapse {
+    /* Named once, because the extension below is defined as the remainder of
+       `--touch-target` rather than as a second number. Two literals is how a
+       44px-looking grip ends up with a 38px hit box that nothing on screen
+       reports — and this rule's own history is a literal outliving the law it
+       was copied from. */
+    --grip-body: 24px;
+    width: var(--grip-body);
+  }
+
+  /* The room, without the width. `inset-block: 0` takes the grip's own 46px on
+     the axis that is already over floor, and the negative `right` puts the
+     whole difference outward: the box ends `--touch-target` from the body's
+     inner edge, so it never grows back across a destination row — which is the
+     defect the 44px paint was retired for in the first place. */
+  .rail-collapse::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    right: calc(var(--grip-body) - var(--touch-target));
+  }
+
   .chat-nav-disclosure,
   .rail-expander,
   .chat-nav-new { min-height: 44px; min-width: 44px; }
@@ -1599,12 +1639,12 @@
 :root[data-rail="rail"] .edition,
 :root[data-rail="focus"] .brand { display: none; }
 
-/* Centred over the rail's contents, not over its grid track. `.topbar` shares
-   `--rail-width` with `.app-shell` "so the brand block keeps tracking the rail
-   exactly", and the seam reserve is track width that nothing in the rail lives
-   in — so the mark takes the same inset the rail's own contents take, or it
-   would centre 11px right of the icon column it is supposed to sit above. */
-:root[data-rail="rail"] .brand { justify-content: center; padding: 0 var(--rail-seam-reserve, 0px) 0 0; }
+/* No inset to correct for. `.topbar` shares `--rail-width` with `.app-shell`
+   "so the brand block keeps tracking the rail exactly", and the track is now
+   exactly the rail's contents again — nothing is held back at the seam — so
+   centring in the track centres over the icon column, which is what it is
+   drawn above. */
+:root[data-rail="rail"] .brand { justify-content: center; padding: 0; }
 
 /* `.topbar-center` is deliberately absent from the rule above. Focus mode may
    hide chrome; it may not hide a claim, and the posture chip is the only

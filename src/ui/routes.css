@@ -2941,6 +2941,23 @@
    * 320. One width for "this phone has run out of room for words" is right; it
    * is just not the same width the session bar uses, because these labels are
    * not the same length.
+   *
+   * A tier chosen from a label's width is only as stable as the chip's width,
+   * and this one has already been measured twice for that reason. Between those
+   * two measurements the rail reserved 22px for its collapse grip; `.topbar`
+   * shares `--rail-width`, so the brand track grew with it and the chip lost
+   * 13px at every touch width, which is how 390 came to read `Browser / E…` —
+   * a word cut after one letter — under a tier written on the promise that 390
+   * would read `Browser / Ed…`. The reserve is gone (shell.css pays for that
+   * grip in overhang now), and the number is re-derived against the restored
+   * chip rather than assumed to have survived: in this block the label's box is
+   * the viewport less 307px, `Browser` sets 48px of ink, and the sheet keeps a
+   * word only while the box holds that ink plus 5px. 53px of box is 360px of
+   * viewport — so 360 is not a round number here, it is the exact width at
+   * which the first word stops fitting, and the rule clips at and below it.
+   *
+   * Which means: anything that takes width off this topbar again invalidates
+   * this tier. Re-measure it, do not re-borrow it.
    */
   @media (max-width: 360px) {
     .topbar-posture-chip .seal__label {

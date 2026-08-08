@@ -314,69 +314,79 @@ describe("the rail's collapse control", () => {
   });
 
   /*
-   * The handle is centred on the seam, so half of whatever it measures lands
-   * inside the rail — and this rule has now been wrong in both directions.
+   * The handle is centred on the seam, so half of whatever it *paints* lands
+   * inside the rail — and this rule has now been wrong in three directions.
    *
-   * At 44px in an 84px rail that half was 22px of a `z-index: 1` control lying
-   * across the nav column: measured at 768 it washed out the final `n` of
+   * Painted 44px in an 84px rail, that half was 22px of a `z-index: 1` control
+   * lying across the nav column: measured at 768 it washed out the final `n` of
    * `Connection` — in a rail whose 84px is itself measured to hold exactly that
    * word — and the right end of that row collapsed the rail instead of opening
-   * the destination. The repair narrowed the grip to 24px, which cleared the
-   * label by giving a finger a 44×24 control: WCAG 2.5.8's floor, but under
-   * this product's own, which tokens.css states on both axes because "a
-   * target's smaller dimension is the one a finger has to find".
+   * the destination. Narrowing the paint to 24px cleared the label and left a
+   * 44×24 control: WCAG 2.5.8's floor, but under this product's own, which
+   * tokens.css states on both axes because "a target's smaller dimension is the
+   * one a finger has to find". Widening the rail by half a touch target to hold
+   * a 44px paint kept both and charged every route 22px of content column, the
+   * seam moving x=83 → x=105 with the icons still centred on x=41.
    *
-   * Neither neighbour yields. The rail reserves half a touch target on its
-   * right and `--rail-width` grows by the same amount, so the grip is the full
-   * floor, its inner half lands in room nobody else was using, and the nav
-   * column is still exactly the 84px `Connection` was measured into.
+   * So the paint and the target stop being the same box. The body stays the
+   * 24px that was measured to clear the nav column, at the width it was
+   * measured at, and the floor is met by a transparent extension hanging off
+   * the outer edge into the route gutter. These three tests pin that split:
+   * the body's number, the extension's arithmetic, and the fact that no rail
+   * width anywhere adds anything for the seam.
    */
-  const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf(".rail-collapse { width")));
+  const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf("--grip-body")));
 
-  it("gives the coarse-pointer grip the product's own floor, not the standard's", () => {
-    const width = coarseGripBlock.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
+  it("keeps the coarse-pointer grip's paint clear of the nav column", () => {
+    const body = coarseGripBlock.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
 
-    // Named, not numbered: if the floor ever moves, the grip moves with it —
-    // and a literal here is how 24px survived a sweep that was raising three
-    // other controls to 44px in the same commit range.
-    expect(width).toContain("width: var(--touch-target)");
-    // The seam is still the position; only the grip's width answers the finger.
-    expect(width).not.toContain("translate:");
+    // 24px is the measured number, not a taste: 12px of it lands inside the
+    // rail, which stops at `.primary-nav`'s padding instead of on the word.
+    expect(body).toContain("--grip-body: 24px");
+    expect(body).toContain("width: var(--grip-body)");
+    // The seam is still the position; nothing about the finger moves the grip.
+    expect(body).not.toContain("translate:");
   });
 
-  it("pays for the wider grip out of the seam's own reserve and not out of a neighbour", () => {
-    // Exactly the half that lands inside the rail, so the reserve and the
-    // intrusion are the same measurement and cannot drift apart.
-    expect(coarseGripBlock).toContain(":root { --rail-seam-reserve: calc(var(--touch-target) / 2); }");
-    // The reserve is padding on `.rail`, whose right edge the handle is
-    // centred on — inset the contents, do not move the seam relative to them.
-    const [reserved] = rulesDeclaring("padding-right: var(--rail-seam-reserve, 0px)");
-    expect(reserved).toEqual([".rail"]);
-    // …and the grid track grows by the same amount at every width that paints
-    // a rail, so insetting the contents costs the contents nothing. Without
-    // this the reserve would be carved out of the labels it protects — and
-    // `standard` is in the list because its rows run the rail's full width, so
-    // a 44px grip on its seam overlaps the last 12px of every destination row.
-    expect(css).toContain(":root[data-rail=\"rail\"] { --rail-width: calc(84px + var(--rail-seam-reserve, 0px)); }");
+  it("meets the touch floor in overhang, and hangs the whole of it outward", () => {
+    const extension = coarseGripBlock.match(/\.rail-collapse::after \{([^}]+)\}/u)?.[1] ?? "";
+
+    // The remainder of the floor, never a second literal: `--grip-body` plus
+    // this is `--touch-target` by construction, so a 44px-looking grip cannot
+    // acquire a 38px hit box the way a hand-written number would let it.
+    expect(extension).toContain("right: calc(var(--grip-body) - var(--touch-target))");
+    // Anchored to the body's inner edge and grown outward only. `left: 0` is
+    // what keeps the extra room out of the rail: an extension that split the
+    // difference would put it straight back over `Connection`.
+    expect(extension).toContain("left: 0");
+    expect(extension).not.toContain("right: 0");
+    // Room, not a shape. Anything painted here would be the 44px body again.
+    for (const paint of ["background", "border", "opacity"]) expect(extension).not.toContain(paint);
+  });
+
+  it("charges no rail width, in any state, for the grip on its seam", () => {
     const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
-    for (const width of ["calc(60px + var(--rail-seam-reserve, 0px))", "calc(var(--density-sidebar) + var(--rail-seam-reserve, 0px))"]) {
-      expect(tokens).toContain(width);
-    }
+
+    // The regression this replaces: half a touch target added to every painted
+    // rail state moved the seam 22px right on a coarse pointer, and with it
+    // every route's content column and the topbar track the posture chip lives
+    // in — 34 reported regressions on thirteen routes, from one control's
+    // 22px. A grip that hangs off an edge does not widen the column behind it.
+    for (const sheet of [css, tokens]) expect(sheet).not.toContain("--rail-seam-reserve");
+    expect(css).toContain(':root[data-rail="rail"] { --rail-width: 84px; }');
+    expect(tokens).toContain(':root[data-rail="rail"] { --rail-width: 60px; }');
+    expect(tokens).toContain(':root[data-rail="standard"] { --rail-width: var(--density-sidebar); }');
+    // `.rail`'s own box is the seam. Padding here is the same 22px charged one
+    // level down, and it would move the icons off the mark drawn above them.
+    for (const selectors of rulesDeclaring("padding-right")) expect(selectors).not.toContain(".rail");
   });
 
   it("keeps the topbar's mark over the rail's contents and not over its track", () => {
     // `.topbar` shares `--rail-width` with `.app-shell` so the brand tracks the
-    // rail exactly; the reserve is track the rail's contents do not occupy, so
-    // a brand centred in the raw track sits 11px right of the icon column it is
-    // drawn above — the one visible seam this repair could have opened.
-    expect(css).toContain(':root[data-rail="rail"] .brand { justify-content: center; padding: 0 var(--rail-seam-reserve, 0px) 0 0; }');
-  });
-
-  it("releases the reserve in the one state whose seam has no label near it", () => {
-    // The peek is 268px of panel opened so full destination names read; 22px
-    // held back for a grip that is nowhere near them would be 22px of name.
-    const [released] = rulesDeclaring("width: 268px", "--rail-seam-reserve: 0px");
-    expect(released?.every((selector) => selector.includes(":has(:focus-visible)"))).toBe(true);
+    // rail exactly. With nothing held back at the seam the track *is* the
+    // contents, so centring in it centres over the icon column; the inset this
+    // rule briefly carried existed only to undo the reserve.
+    expect(css).toContain(':root[data-rail="rail"] .brand { justify-content: center; padding: 0; }');
   });
 
   it("never widens the rail because a pointer crossed it", () => {
