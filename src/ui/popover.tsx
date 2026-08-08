@@ -126,7 +126,9 @@ export function popoverPlacement(input: Readonly<{
  * worse one. Nothing gives up width for it: the panel is `position: absolute`
  * over `.main`, so no sibling reflows, and `max-width: calc(100vw - 2 *
  * var(--sp-3))` still bounds it — 617px at the narrowest viewport that reaches
- * here. Sheets never reach here at all; below 640px the panel is full-bleed.
+ * here. Sheets never reach here at all; they take their width from
+ * `popover.css`, full-bleed on an upright phone and a bounded card on the short
+ * shape where full-bleed would swallow the screen.
  *
  * Kept free of the DOM alongside `popoverPlacement`, and for a harder reason
  * than symmetry: the right-edge flip is computed from the panel's width, so a
@@ -162,12 +164,13 @@ export function popoverWidth(input: Readonly<{
  *
  * The case that first produced this measurement was the landscape phone, and
  * that case no longer arrives here: 932×430 satisfies the landscape arm of
- * `popoverPlacement` above and opens as a sheet, which sizes itself from the
- * screen's own bottom edge and never asks this function anything. What is left
- * for this to answer is every anchored panel that remains — a short desktop
- * window, a chip low in a scrolled pane, the editor route where `.main` is
- * `overflow: hidden` and clips outright. Those are still real, which is why
- * measuring the clipping box rather than the window is still the rule.
+ * `popoverPlacement` above and opens as a sheet, which is sized from the
+ * navigation band upwards by `popover.css` and never asks this function
+ * anything. What is left for this to answer is every anchored panel that
+ * remains — a short desktop window, a chip low in a scrolled pane, the editor
+ * route where `.main` is `overflow: hidden` and clips outright. Those are still
+ * real, which is why measuring the clipping box rather than the window is still
+ * the rule.
  *
  * Kept free of the DOM for the same reason `popoverPlacement` is: whether a
  * panel is allowed to overhang the box that clips it is a correctness question,
@@ -240,6 +243,20 @@ export function Popover({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const intent = useRef<number>();
+  /**
+   * The mode the document-level handlers below read, held in a ref rather than
+   * taken from `placement`.
+   *
+   * Those handlers are installed by the same effect that performs the
+   * measurement, so a closure over the `placement` state would see the value
+   * from *before* this open resolved — "anchored" on the very first open of a
+   * sheet, which is the one case the sheet-specific dismissal exists for.
+   * Adding the mode to the effect's dependencies would fix the staleness by
+   * re-measuring and re-installing the listeners a second time on every open.
+   * A ref written at the moment of measurement is read correctly by a keypress
+   * that has not happened yet, and costs neither.
+   */
+  const modeRef = useRef<PopoverMode>("anchored");
 
   function cancelIntent() {
     if (intent.current !== undefined) window.clearTimeout(intent.current);
@@ -266,9 +283,12 @@ export function Popover({
       });
       setPanelWidth(opened);
       setPlacement(next);
-      // A sheet is pinned to the viewport's own bottom edge by its insets and
-      // sizes itself from there; only the anchored panel hangs off a chip
-      // partway down a scrolling pane and has to be told where that pane ends.
+      modeRef.current = next.mode;
+      // A sheet is pinned by its own insets — to the viewport's bottom edge on
+      // an upright phone, to the top of the navigation band on a screen too
+      // short to give one away — and sizes itself from there either way. Only
+      // the anchored panel hangs off a chip partway down a scrolling pane and
+      // has to be told where that pane ends.
       // Measured once at open, like the width and the edge flip beside it: all
       // three are answers about where the trigger was when it was pressed.
       setRoom(next.mode === "anchored"
@@ -279,6 +299,26 @@ export function Popover({
     function onPointerDown(event: PointerEvent) {
       if (!hostRef.current?.contains(event.target as Node)) setOpen(false);
     }
+    /**
+     * A sheet may not outlive the focus that was inside it.
+     *
+     * Captured at 932×430: the SESSION STATE sheet still open in the next
+     * screenshot with the focus ring on the topbar's `Connect a model` — a
+     * control outside the sheet, while the sheet occluded the route. A
+     * disclosure that has lost the keyboard has already been dismissed by the
+     * only gesture the reader made; leaving it drawn over the page is the
+     * product disagreeing with them.
+     *
+     * Only sheets. An anchored panel sits beside its trigger and takes no room
+     * from the route, so closing it the instant focus moves would fight the
+     * `:focus-within` contract `onPointerLeave` relies on below.
+     */
+    function onFocusOut(event: FocusEvent) {
+      if (modeRef.current !== "sheet") return;
+      const landing = event.relatedTarget;
+      if (landing instanceof Node && hostRef.current?.contains(landing)) return;
+      setOpen(false);
+    }
     function onKeyDown(event: KeyboardEvent) {
       // Containment applies only once the keyboard is actually inside the
       // disclosure. A fine-pointer hover can open this panel while the user is
@@ -288,23 +328,43 @@ export function Popover({
       // not — it swallowed EVERY Escape at the document while a hover-open
       // panel sat elsewhere on the page, refocusing a trigger the typist had
       // never touched and eating the keypress their own control was waiting
-      // for. One containment check now gates both keys identically.
-      if (!hostRef.current?.contains(document.activeElement)) return;
+      // for. One containment check still gates both keys.
+      const contained = hostRef.current?.contains(document.activeElement) ?? false;
       if (event.key === "Escape") {
+        /*
+         * The one asymmetry, and the defect it is written against.
+         *
+         * A sheet draws over the route; an anchored panel draws beside its
+         * trigger. So a sheet has to be dismissible from wherever the keyboard
+         * happens to be, or a reader whose focus is not inside it has no exit
+         * at all — which is how the landscape sheet became something you could
+         * open and not close. The containment gate stays for everything the
+         * asymmetry does not cover: propagation is only stopped, and the
+         * trigger only refocused, when the keypress really did come from
+         * inside this disclosure, so the typist's own Escape is still theirs.
+         */
+        if (!contained) {
+          if (modeRef.current !== "sheet") return;
+          setOpen(false);
+          return;
+        }
         event.stopPropagation();
         setOpen(false);
         triggerRef.current?.focus();
         return;
       }
+      if (!contained) return;
       if (event.key === "Tab") {
         trapFocus(event, panelRef.current);
       }
     }
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("keydown", onKeyDown, true);
+    host?.addEventListener("focusout", onFocusOut);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKeyDown, true);
+      host?.removeEventListener("focusout", onFocusOut);
     };
   }, [open, width]);
 
@@ -348,6 +408,28 @@ export function Popover({
         id={panelId}
         role="group"
         aria-label={heading}
+        /*
+         * The panel is its own focus landing site, and this is what disarmed
+         * the keyboard.
+         *
+         * Every rule above turns on `document.activeElement` being inside the
+         * host. A tap or click on the panel's own prose — a paragraph, a claim
+         * row's detail sentence, the space between rows — is not on a focusable
+         * element, so focus fell to `<body>`: outside the host, by a gesture
+         * the reader made *inside* the disclosure. From that moment Escape was
+         * ignored and Tab walked the document into the controls behind the
+         * panel, which is exactly the state the landscape capture caught.
+         *
+         * `-1` makes the panel the nearest focusable ancestor of its own
+         * content, so that gesture keeps focus where the reader put it. It adds
+         * no tab stop: `FOCUSABLE_SELECTOR` excludes `tabindex="-1"`, so the
+         * trap does not treat the container as a stop inside itself.
+         *
+         * Deliberately not `role="dialog"` with `aria-modal`. The sheet leaves
+         * the navigation band uncovered on purpose, and claiming the rest of
+         * the page is inert would be a promise this disclosure does not keep.
+         */
+        tabIndex={-1}
         /*
          * `data-open` rather than `hidden`, because the sheet needs a closed
          * *state* it can transition out of — `hidden` is a box that does not
