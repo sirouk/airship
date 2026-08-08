@@ -1119,9 +1119,23 @@
   border-radius: 4px;
 }
 
+/*
+ * Four equal quarters spent the same width on a cell holding one digit and a
+ * cell holding a provider and a model name, so the strip ran short in the only
+ * place it had anything to say. At 768 a quarter was 97px against a 104px
+ * label, and the second cell rendered "MINIMUM PROO" with the F taken by the
+ * divider; at 1920 the runtime cell still held "airship-demo · airship…" while
+ * three cells beside it sat on width their own contents did not use.
+ *
+ * The three cells whose content is a fixed label over a short value take what
+ * they measure; the runtime cell, whose value is an unbounded identifier, takes
+ * the remainder. Nothing is squeezed to pay for this — the quarters were
+ * already narrower than the labels they had to hold, which is what the chopping
+ * was, so every track ends up at least as wide as it was.
+ */
 .revision-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, auto));
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
@@ -1141,10 +1155,21 @@
   border-left: 1px solid var(--line);
 }
 
+/*
+ * The label needs a clipping recipe of its own. `text-overflow` is not
+ * inherited, and the cell's ellipsis governs only the cell's own inline
+ * content, so this block-level label was left to the cell's `overflow: hidden`
+ * — a hard cut mid-letter, which reads as a shorter word rather than as a
+ * truncated one. "MINIMUM PROOF" became "MINIMUM PROO", a label naming a
+ * posture nobody can look up. The track sizing above should now leave every
+ * label its full width; this is what happens on the day it does not.
+ */
 .revision-strip small {
   display: block;
   margin-bottom: 5px;
+  overflow: hidden;
   color: var(--ink-faint);
+  text-overflow: ellipsis;
   text-transform: uppercase;
 }
 
@@ -4029,6 +4054,30 @@
   .skills-toolbar,
   .skill-controls {
     grid-template-columns: 1fr;
+  }
+
+  /*
+   * The same collapse, at the specificity it actually needs.
+   *
+   * The rule above names `.profile-boundary-grid` at 0,1,0, while the grid a
+   * person actually opens is templated by `.profile-editor-disclosure >
+   * .profile-boundary-grid` at 0,2,1 — so the single column this block declares
+   * never reached it, and order did not help, because specificity is settled
+   * before it. At 430 the base `auto-fit` therefore still made two columns of
+   * 169px and held "Current workspa…", a boundary whose whole job is to say
+   * which workspace the profile is bound to. The type ramp in `tokens.css`
+   * makes this a 430-only defect: 320 and 390 are narrow enough that `auto-fit`
+   * already resolves to one column, and reads in full today.
+   *
+   * Nested at width alone, because the landscape arm of the query above is a
+   * 932px-wide viewport. There the six fields have room for four legible
+   * columns, and stacking them would spend most of a 430px-tall screen on a
+   * disclosure the reader opened to glance at.
+   */
+  @media (max-width: 640px) {
+    .profile-editor-disclosure > .profile-boundary-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .profile-hub-tabs,

@@ -340,7 +340,36 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
      a wrapped chord column reads as two shortcuts. The keys take their own
      line instead. */
   .shortcut-sheet dl > div { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
-  .preferences-dialog { -webkit-overflow-scrolling: touch; }
+  /*
+   * "Done" stays on screen, because at this size it is the only dismissal a
+   * reader can see.
+   *
+   * Capped to a sheet the whole dialog is the scroll box, header included, so
+   * scrolling to the last row at 320 left "Reset preferences" as the one
+   * control in view and nothing at all that closes the dialog. Escape and a tap
+   * on the scrim both still work and neither is an affordance a phone can see —
+   * and the control the reader can see is the irreversible one.
+   *
+   * Sticky rather than a fixed footer, because the rows are direct children of
+   * the dialog and there is no middle that could scroll on its own; this is the
+   * same trade the palette makes two rules below, keeping its legend and
+   * shortening its results. The cost is the header's own height — about 110px
+   * of a 477px sheet at 320 — held back from the rows while scrolled, which is
+   * the price of the dialog having a way out.
+   *
+   * The dialog hands its top padding to the header to carry. A sticky box
+   * sticks to the scrollport's padding edge, so leaving the 1rem on the dialog
+   * would park the header 1rem down and show a strip of rows sliding past above
+   * it; at rest the spacing is unchanged, because the header re-adds it.
+   */
+  .preferences-dialog { padding-top: 0; -webkit-overflow-scrolling: touch; }
+  .preferences-dialog > header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-top: 1rem;
+    background: var(--surface-raised);
+  }
   /* A capped sheet has to give the height back from the scrolling middle, not
      from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
      legend rather than shortening the results list. */
