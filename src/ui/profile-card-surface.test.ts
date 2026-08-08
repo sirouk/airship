@@ -110,3 +110,68 @@ describe("the profile boundary selects are enrolled in the touch floor", () => {
     expect(rule(".profile-boundary-grid .menu-select-trigger")).toContain("min-height: 38px");
   });
 });
+
+describe("the revision strip spends its width where the strip has something to say", () => {
+  /*
+   * Four equal quarters gave a cell holding one digit the same room as a cell
+   * holding a provider and a model name. A quarter was 97px at 768 against a
+   * 104px label, so "MINIMUM PROOF" rendered as "MINIMUM PROO" — a label naming
+   * a posture the reader cannot then look up — while "airship-demo · airship…"
+   * was still truncated at 1920, with three cells beside it sitting on width
+   * their own contents did not use.
+   */
+  it("sizes the three fixed cells to their contents and gives the remainder to the unbounded one", () => {
+    expect(rule(".revision-strip"))
+      .toContain("grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, auto))");
+    // The runtime value is the first cell, so the flexible track is the one
+    // holding the identifier rather than whichever cell happens to be widest.
+    expect(app).toContain("<small>Runtime</small>{selected.providerId} · {selected.model}");
+  });
+
+  it("ellipsises a label that still runs out of room rather than cutting a letter off it", () => {
+    /*
+     * `text-overflow` is not inherited, and the cell's own ellipsis governs only
+     * the cell's inline content — so this block-level label was left to the
+     * cell's `overflow: hidden`, which cuts mid-letter. A hard cut reads as a
+     * shorter word; an ellipsis reads as a truncated one, and only the second is
+     * true. Track sizing should keep every label whole; this is the fallback.
+     */
+    const label = rule(".revision-strip small");
+    expect(label).toContain("overflow: hidden");
+    expect(label).toContain("text-overflow: ellipsis");
+    // Inherited from the cell, which is why the label never declared it — and
+    // nowrap without a clipping recipe is exactly what chopped the F off PROOF.
+    expect(rule(".revision-strip > span")).toContain("white-space: nowrap");
+  });
+});
+
+describe("the profile boundaries stay legible where the phone made two columns of them", () => {
+  /*
+   * `.profile-boundary-grid` is collapsed to one column in the narrow block, but
+   * the editor's own grid is templated by `.profile-editor-disclosure >
+   * .profile-boundary-grid` — 0,2,1 against 0,1,0 — so the collapse never
+   * reached the grid a person opens, and order could not settle it, because
+   * specificity is settled first. At 430 the base `auto-fit` therefore still
+   * made two 169px columns and held "Current workspa…".
+   */
+  it("collapses the editor's own grid at the specificity the base rule set", () => {
+    const narrow = /@media \(max-width: 640px\) \{\s*\.profile-editor-disclosure > \.profile-boundary-grid \{([^}]+)\}/u
+      .exec(routes)?.[1] ?? "";
+    expect(narrow).toContain("grid-template-columns: 1fr");
+    // The base rule it has to outrank is still the one being outranked.
+    expect(rule(".profile-editor-disclosure > .profile-boundary-grid"))
+      .toContain("grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))");
+  });
+
+  it("leaves landscape alone, where four columns still fit and height is what is scarce", () => {
+    /*
+     * The enclosing query has a landscape arm — 950px wide by 500px tall — and
+     * stacking six fields there would spend most of a 430px-high screen on a
+     * disclosure opened for a glance. The collapse is nested at width alone, so
+     * the arm that fires on height cannot reach it.
+     */
+    const at = routes.indexOf("@media (max-width: 640px) {\n    .profile-editor-disclosure");
+    expect(at).toBeGreaterThan(-1);
+    expect(routes.slice(at, at + 200)).not.toContain("max-height");
+  });
+});

@@ -489,6 +489,51 @@ function elementsNamed(source: string, name: string): readonly string[] {
   return found;
 }
 
+describe("the Preferences sheet keeps a way out on screen", () => {
+  const overlayStyles = () => readFileSync(new URL("./platform-shell.css", import.meta.url), "utf8");
+
+  /** The narrow-viewport block, where the dialog is capped into a bottom sheet. */
+  const sheetBlock = () => {
+    const styles = overlayStyles();
+    const start = styles.indexOf("@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {");
+    return styles.slice(start, styles.indexOf("\n}\n", start));
+  };
+
+  it("holds the header — and the Done button in it — against the dialog's own scroll", () => {
+    /*
+     * Capped to a sheet, the whole dialog is the scroll box, header included.
+     * Scrolled to the last row at 320 the only control left in view was "Reset
+     * preferences": the irreversible one on screen and the dismissal gone. Esc
+     * and a tap on the scrim both still close it, and neither is an affordance
+     * a phone can see.
+     */
+    const header = /\.preferences-dialog > header \{([^}]+)\}/u.exec(sheetBlock())?.[1] ?? "";
+    expect(header).toContain("position: sticky");
+    expect(header).toContain("top: 0");
+    // Without a ground of its own a sticky header is a window onto the rows
+    // sliding under it.
+    expect(header).toContain("background: var(--surface-raised)");
+  });
+
+  it("moves the dialog's top padding onto the header rather than leaving a gap above it", () => {
+    /*
+     * A sticky box sticks to the scrollport's *padding* edge, so 1rem left on
+     * the dialog parks the header 1rem down and shows a strip of rows travelling
+     * past in the clear above it. The header re-adds the same 1rem, so the
+     * spacing at rest is unchanged — this buys nothing back from the content.
+     */
+    const block = sheetBlock();
+    expect(/\.preferences-dialog \{[^}]*padding-top: 0/u.test(block)).toBe(true);
+    expect(/\.preferences-dialog > header \{[^}]*padding-top: 1rem/u.test(block)).toBe(true);
+  });
+
+  it("leaves the Trust sheet's header alone, which shares the layout rule but not the scroll box", () => {
+    // `.preferences-dialog > header, .trust-sheet > header` share one flex rule;
+    // only the dialog is the scrolling element, so only the dialog sticks.
+    expect(sheetBlock()).not.toContain(".trust-sheet > header {");
+  });
+});
+
 describe("modal focus and key ownership", () => {
   const dialog = () => shellSource();
 
