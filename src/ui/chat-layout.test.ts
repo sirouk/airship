@@ -3,6 +3,34 @@ import { readAirshipStyles } from "./style-sheets.test-helper";
 
 const styles = await readAirshipStyles();
 
+describe("chat stage tracks", () => {
+  /*
+   * The stage's first child — the agent-runtime eyebrow — is conditional three
+   * times over, and its lazy chunk means every first paint starts without it.
+   * Grid auto-placement is positional, so unpinned that frame slid the
+   * transcript onto an `auto` track: not a scroll region, and `safe center`
+   * centring the zero state inside a box its own height. Declaring four rows
+   * was not enough on its own; the two tracks that may never move say so.
+   */
+  it("pins the transcript and the composer so a missing eyebrow cannot displace them", () => {
+    const rule = (selector: string) =>
+      new RegExp(`\\.chat-stage > \\.${selector}\\s*\\{[^}]*grid-row:\\s*(\\d)`, "u").exec(styles)?.[1];
+    expect(rule("transcript")).toBe("3");
+    expect(rule("composer-wrap")).toBe("4");
+  });
+
+  it("keeps the four-row declaration the pinning depends on", () => {
+    // `.chat-stage` is declared more than once across the concatenated sheets —
+    // routes.css carries a breakpoint rule that only clears `border-right` — so
+    // this picks the block that actually templates the rows, the same way the
+    // `.message` assertion below picks its base rule.
+    const stage = [...styles.matchAll(/\.chat-stage\s*\{([^}]+)\}/gu)]
+      .map((match) => match[1] ?? "")
+      .find((rule) => rule.includes("grid-template-rows")) ?? "";
+    expect(stage).toContain("grid-template-rows: auto auto minmax(0, 1fr) auto");
+  });
+});
+
 describe("chat role layout", () => {
   it("places user messages on the right and agent messages on the left without changing DOM order", () => {
     const userRules = [...styles.matchAll(/\.message\.user\s*\{([^}]+)\}/gu)].map((match) => match[1] ?? "");

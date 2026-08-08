@@ -21,8 +21,13 @@
  * measurement below it paid: desktop deltas of `> 22%`, sessions mid-screen
  * at about 900px, compact density inversion, and the tall-viewport centre of
  * the empty-transcript zero state failed in the same frame. Declaring all
- * four rows treats missing children honestly: nothing rendered at a row is a
- * zero-height auto, never a displaced band.
+ * four rows was necessary and, on its own, not sufficient: the sentence that
+ * used to end this comment — "nothing rendered at a row is a zero-height auto,
+ * never a displaced band" — is not how grid works. Auto-placement is
+ * positional, not by name. A row is only skipped if something is placed past
+ * it, so an absent first child does not leave row 1 empty; it slides every
+ * later child up one, which is the same displacement the extra row was added
+ * to stop. The two tracks that may never move are therefore pinned below.
  */
 .chat-stage {
   display: grid;
@@ -31,6 +36,30 @@
   min-height: 0;
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--ground) 76%, transparent);
+}
+
+/*
+ * The eyebrow is conditional three times over — on `sessionId &&
+ * runtime.current?.journal`, on its lazy chunk (`DeferredAgentRuntimeStatus`
+ * renders nothing until the module lands), and on the journal read inside the
+ * tag. Every first paint therefore begins without it, and unpinned that frame
+ * put the SessionBar in row 1, the transcript in row 2 — an `auto` track sized
+ * to its own content, so not a scroll region at all — and the composer in the
+ * flexible one. `align-content: safe center` on `.transcript.no-turns` then
+ * centred the zero state inside a box the height of the zero state, leaving it
+ * 24px from the top instead of optically centred, and the empty row was the
+ * trailing one nobody could see.
+ *
+ * Pinned, both frames agree: with the eyebrow, rows 1-4 in order; without it,
+ * row 2 is an empty zero-height `auto` and nothing else moves. Same repair
+ * `.main` and `.mobile-nav` carry in routes.css, for the same reason.
+ */
+.chat-stage > .transcript {
+  grid-row: 3;
+}
+
+.chat-stage > .composer-wrap {
+  grid-row: 4;
 }
 
 /*
