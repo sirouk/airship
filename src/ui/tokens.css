@@ -120,10 +120,8 @@
   /* The rail's three states resolve to one width token so `.app-shell` and
      `.topbar` share a grid template and the brand block keeps tracking the
      rail exactly. `standard` stays density-driven; the other two are fixed,
-     because 60px is an icon target and 0px is nothing. Every state that paints
-     a rail adds `--rail-seam-reserve` — see the block below — including this
-     cold-load default, so the rail does not jump on a tablet's first frame. */
-  --rail-width: calc(var(--density-sidebar) + var(--rail-seam-reserve, 0px));
+     because 60px is an icon target and 0px is nothing. */
+  --rail-width: var(--density-sidebar);
   /* One measure for the Connect surface, inherited by every descendant, in
      place of the four competing max-widths it carries today. */
   --connect-measure: 760px;
@@ -349,24 +347,19 @@ body {
  * 8px gutter around a 44px touch target, which is the smallest column that can
  * still be pressed accurately. `focus` is nothing at all.
  *
- * `--rail-seam-reserve` is added, not folded in, and is 0px unless shell.css's
- * coarse-pointer block sets it. The collapse grip is centred on the rail's
- * right edge, so half of it lands inside the rail: the widths below are what
- * the *contents* need, and the seam is given its half separately so that
- * widening the grip for a finger never comes out of an icon or a label. The
- * fallback keeps every fine-pointer width byte-identical.
- *
- * Both painted states, not only the collapsed one. `standard`'s rows run the
- * full width of the rail, so a 44px grip on its seam overlaps the last 12px of
- * every destination row — the same "the right end of that row collapsed the
- * rail instead of opening the destination" this reserve exists to prevent, at
- * a width where it is easy to assume there is slack.
+ * These are what the rail's *contents* need, and nothing else is added to
+ * them. The collapse grip that rides the seam was briefly paid for here, by
+ * adding half a touch target to every painted state; that moved the seam 22px
+ * right on a coarse pointer with the icons still centred where they were, and
+ * every route's content column, and the topbar track the posture chip lives
+ * in, moved with it. A grip that hangs off an edge does not get to widen the
+ * column behind it — shell.css's coarse-pointer block pays for it in overhang.
  *
  * `data-rail` is written by the shell from the remembered preference, so the
  * `:root` default above only ever paints during the first frame of a cold load.
  */
-:root[data-rail="standard"] { --rail-width: calc(var(--density-sidebar) + var(--rail-seam-reserve, 0px)); }
-:root[data-rail="rail"] { --rail-width: calc(60px + var(--rail-seam-reserve, 0px)); }
+:root[data-rail="standard"] { --rail-width: var(--density-sidebar); }
+:root[data-rail="rail"] { --rail-width: 60px; }
 :root[data-rail="focus"] { --rail-width: 0px; }
 
 /* Stated rather than left to the `:root` fallback. `data-type-scale` is written
