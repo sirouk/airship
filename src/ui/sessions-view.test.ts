@@ -370,17 +370,52 @@ describe("conversation library space budget", () => {
    * is the only thing `flex-wrap: nowrap` left it able to do, and the reason
    * the model still read as one character at laptop widths after the shrink
    * order was corrected. Flex lines are broken at content size before any item
-   * is shrunk, so the model now drops to its own line whole.
+   * is shrunk, so in the two-pane layout the model drops to its own line whole:
+   * measured at 1024x768 it reads `airship/demo-v1` entire.
    */
   it("wraps the row's last line rather than grinding the model down to a character", () => {
-    const line2 = ruleBody(".session-library-card-line2") ?? "";
-    expect(line2).toContain("flex-wrap: wrap;");
+    const twoPaneAndTall =
+      styles.match(/@media \(min-width: 861px\) and \(min-height: 561px\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(twoPaneAndTall).toContain(".session-library-card-line2");
+    expect(twoPaneAndTall).toContain("flex-wrap: wrap;");
     /*
      * `white-space: nowrap` has to survive alongside it. It governs text inside
      * each fact, not the flex line, so it is what keeps a break falling between
      * "23 events" and the model rather than inside either of them.
      */
-    expect(line2).toContain("white-space: nowrap;");
+    expect(ruleBody(".session-library-card-line2")).toContain("white-space: nowrap;");
+  });
+
+  /*
+   * …and that wrap has to stay an exception, because a second line is only a
+   * wider line where a column sets the line's width. Below 861px the route is a
+   * single column and the line's width is set by the row's sibling tracks — the
+   * opener, the state pill, the star, and the reorder cluster that is held open
+   * from 560px down because touch has no hover to expand it. Wrapping moves
+   * none of them. Measured at 320px on a favourited row it split one ~160px
+   * line into three ~50px ones, so `24 events` came out `24 eve`, `general`
+   * came out `gen…` and `airship/demo-v1` came out `air…` — strictly more
+   * truncation than the line it replaced.
+   *
+   * And the ~19px it costs comes out of whatever sits below the list. At
+   * 932x430 that was the favourited row's entire right-hand control cluster —
+   * the pill's label, the drag handle, ↑, ↓ and the unstar — carried below the
+   * mobile tab bar, which is a control made unreachable to abbreviate a fact
+   * less. That trade only ever runs one way.
+   */
+  it("does not wrap the line where a second line cannot be a wider one", () => {
+    expect(
+      ruleBody(".session-library-card-line2"),
+      "the unconditional wrap put five hit targets below the fold at 932x430",
+    ).toContain("flex-wrap: nowrap;");
+
+    /*
+     * The gate is two conditions and needs both. Width alone would still wrap
+     * the 932x430 phone held sideways, which is where the controls were lost;
+     * height alone would still wrap every phone, which is where the facts
+     * truncated harder. Assert the conjunction, not merely that a query exists.
+     */
+    expect(styles).toContain("@media (min-width: 861px) and (min-height: 561px) {");
   });
 
   /*
