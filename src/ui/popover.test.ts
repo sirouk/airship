@@ -1,12 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  POPOVER_DEFAULT_WIDTH,
   POPOVER_EDGE_GUTTER,
   POPOVER_HOVER_INTENT_MS,
+  POPOVER_LANDSCAPE_MAX_HEIGHT,
+  POPOVER_LANDSCAPE_MAX_WIDTH,
+  POPOVER_LANDSCAPE_WIDTH,
   POPOVER_MIN_ROOM,
   POPOVER_SHEET_MAX_WIDTH,
   popoverPlacement,
   popoverRoom,
+  popoverWidth,
 } from "./popover";
 
 describe("the one anchored disclosure", () => {
@@ -50,6 +55,70 @@ describe("the one anchored disclosure", () => {
     // floor holds and the panel overhangs instead — visible beats contained.
     expect(popoverRoom({ anchorBottom: 352, clipBottom: 382 })).toBe(POPOVER_MIN_ROOM);
     expect(popoverRoom({ anchorBottom: 900, clipBottom: 382 })).toBe(POPOVER_MIN_ROOM);
+  });
+
+  it("spends the landscape phone's abundant axis on the one it has none of", () => {
+    /*
+     * 932x430. The panel is anchored partway down a `.main` pane that ends
+     * above the navigation band, so height is what it runs out of — and 320px
+     * of a 932px viewport was leaving the About-memory header wrapping to three
+     * mono lines (64px of a 430px screen) with the body's last paragraph cut.
+     * Width is free on this shape and it is what buys lines back in both boxes.
+     */
+    expect(popoverWidth({ requested: 320, viewportWidth: 932, viewportHeight: 430 }))
+      .toBe(POPOVER_LANDSCAPE_WIDTH);
+    expect(POPOVER_LANDSCAPE_WIDTH).toBeGreaterThan(POPOVER_DEFAULT_WIDTH);
+  });
+
+  it("leaves every other shape at the width it asked for", () => {
+    // The cost side, and it is nil at every viewport that is not a landscape
+    // phone. A tall phone-width window has height to spend and a desktop never
+    // had the problem; a sheet is full-bleed and reads no width from here.
+    expect(popoverWidth({ requested: 320, viewportWidth: 932, viewportHeight: 900 })).toBe(320);
+    expect(popoverWidth({ requested: 320, viewportWidth: 1440, viewportHeight: 430 })).toBe(320);
+    expect(popoverWidth({ requested: 320, viewportWidth: 430, viewportHeight: 932 })).toBe(320);
+    // Exactly at the bounds, and one pixel outside each of them.
+    expect(popoverWidth({
+      requested: 320,
+      viewportWidth: POPOVER_LANDSCAPE_MAX_WIDTH,
+      viewportHeight: POPOVER_LANDSCAPE_MAX_HEIGHT,
+    })).toBe(POPOVER_LANDSCAPE_WIDTH);
+    expect(popoverWidth({
+      requested: 320,
+      viewportWidth: POPOVER_LANDSCAPE_MAX_WIDTH + 1,
+      viewportHeight: POPOVER_LANDSCAPE_MAX_HEIGHT,
+    })).toBe(320);
+    expect(popoverWidth({
+      requested: 320,
+      viewportWidth: POPOVER_LANDSCAPE_MAX_WIDTH,
+      viewportHeight: POPOVER_LANDSCAPE_MAX_HEIGHT + 1,
+    })).toBe(320);
+    // Sheets start at the breakpoint, so the widening may never reach one.
+    expect(popoverWidth({ requested: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH, viewportHeight: 430 }))
+      .toBe(320);
+  });
+
+  it("is a floor on the room the shape can afford, not a cap on the caller", () => {
+    expect(popoverWidth({ requested: 480, viewportWidth: 932, viewportHeight: 430 })).toBe(480);
+  });
+
+  it("flips the panel on the width it actually opens at", () => {
+    /*
+     * The one way widening a panel becomes a defect: `popoverPlacement` decides
+     * the right-edge flip from `anchorLeft + popoverWidth`, so if the component
+     * hands CSS 380px and the flip math 320px, a trigger in the last 60px of
+     * that band opens a panel that runs off the screen. The measurement has to
+     * feed both, which is why this reads the source rather than the styles.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const effect = source.slice(source.indexOf("const anchor = host.getBoundingClientRect()"));
+    const measured = effect.indexOf("popoverWidth({");
+    expect(measured, "the width is measured before the placement").toBeGreaterThan(-1);
+    expect(effect.indexOf("popoverPlacement({")).toBeGreaterThan(measured);
+    expect(effect.slice(measured, effect.indexOf("setPlacement"))).toContain("popoverWidth: opened");
+    // And the same number is what CSS lays the panel out at.
+    expect(source).toContain('"--popover-width": `${panelWidth}px`');
+    expect(source).toContain("setPanelWidth(opened)");
   });
 
   it("returns a frozen placement so a caller cannot mutate the shared result", () => {
@@ -148,48 +217,78 @@ describe("the panel is the width of the box it is pinned to", () => {
     expect(block(sheet, ".popover__body")).toContain("overflow: auto");
   });
 
-  it("keeps the sheet's dismissal control at the touch floor inside that width", () => {
-    // Done is what makes the header worth bounding: a sheet whose only visible
-    // exit is off-screen is dismissible solely by a gesture nobody is told about.
-    expect(sheet).toMatch(/\.popover\[data-mode="sheet"\] \.popover__done \{[^}]*min-height: 44px/u);
+  it("keeps the sheet's dismissal control at the touch floor and not a pixel past it", () => {
+    /*
+     * Done is what makes the header worth bounding: a sheet whose only visible
+     * exit is off-screen is dismissible solely by a gesture nobody is told
+     * about. 44px is that floor in both axes.
+     *
+     * It is also a ceiling here, which is the half this used to leave open. The
+     * header is one row, so the 64px this asked for was 14px the wrapping title
+     * beside it did not get — measured at phone-320, enough to hold `ACCOUNT
+     * STANDING · CHUTES TELEMETRY AND PROVIDER INVENTORY` on three lines in a
+     * 224px box when it sets two in a 238px one, and a third line of header on
+     * a sheet is a line of the route behind it. `Done` is 50px on its own
+     * content, so the floor is still cleared with room to spare.
+     */
+    // Indented inside the sheet media query, so this reads the rule by pattern
+    // rather than through `block`, which anchors on a top-level selector.
+    const done = /\.popover\[data-mode="sheet"\] \.popover__done \{([^}]*)\}/u.exec(sheet)?.[1];
+    expect(done, "the sheet's Done rule exists").toBeTypeOf("string");
+    expect(done).toContain("min-height: 44px");
+    expect(done).toContain("min-width: 44px");
   });
 
-  it("declares the header's vertical air instead of borrowing it from the 44px floor", () => {
+  it("puts the header's vertical air on the heading, where the 44px floor absorbs it", () => {
     /*
-     * The other cost of wrapping the heading, and the one that was left unpaid.
-     * `padding: 0 var(--sp-3)` was air only while the title was one line. At
-     * phone-320 the account sheet's title takes three mono `--fs-micro` lines —
-     * 39.6px in a 44px box — so the pixels showed ~2px between the sheet's own
-     * top border and the first glyph and ~2px between the last descender and
-     * the header rule, and at the two larger type scales the same three lines
-     * measure 43px and 47px, which is a collision and then an overflow.
+     * The air is right and the box that declared it was wrong. `.popover__done`
+     * is 44px on every coarse pointer and in every sheet, so the header's
+     * content height is already floored at 44px and `padding: var(--sp-2)
+     * var(--sp-3)` on the header added 16px to every panel in the product
+     * whether its title needed the room or not. A sheet is sized by its content
+     * and pinned to the viewport's bottom edge, so that 16px was charged to the
+     * route: measured on the shipped build, the account sheet at phone-320 rose
+     * from y=431 to y=414 and cut the `Connect Chutes` label, and the
+     * connection info sheet's header went 45px to 61px.
      *
-     * The floor stays: with 8px either side a one or two-line heading is 29px
-     * or 42px of content, still under 44px, so nothing that fits today moves.
+     * On the heading the same 8px sits inside the box the floor measures: one
+     * line is 15.6 + 16 = 32px and two are 31.2 + 16 = 47px at the phone type
+     * ramp, at or under the Done button beside them, so the header is 44px
+     * again — and three lines are 63px, where the heading gets every pixel it
+     * was short of and the panel's `max-height` takes it out of the body, which
+     * scrolls. Padding on the header may not come back: it is outside the floor
+     * by construction, so it can only ever be addition.
      */
     const header = block(sheet, ".popover__header");
-    expect(header).toContain("padding: var(--sp-2) var(--sp-3)");
+    expect(header).toContain("padding: 0 var(--sp-3)");
     expect(header).toContain("min-height: 44px");
+    expect(block(sheet, ".popover__header > strong")).toContain("padding-block: var(--sp-2)");
   });
 
-  it("makes the bounded body's own cut visible rather than leaving it to read as a fault", () => {
+  it("makes the bounded body's own cut visible without washing out the line under it", () => {
     /*
      * Capping the panel to its trigger's room was right and it gave the panel a
      * hard bottom border to draw through whatever row happened to be there:
      * measured on the laptop-1024 provenance panel, the border runs through the
      * middle of the `CONTENT DIGEST` glyphs. The scroll shadow is the thing that
-     * says "this row continues", and at 13% of `--ink` its peak measured 8/255
-     * over the body's ground against the border's 78 — an affordance that is
-     * present in the cascade and absent from the screen.
+     * says "this row continues".
+     *
+     * It has to say it evenly. `radial-gradient(farthest-side at 50% ...)` put
+     * the whole mark at the body's centre — 8/255 at the edges, which is what
+     * read as no affordance at all — and raising it to 30% to reach the edges
+     * took the centre to 90/255 over a 33/255 ground, dropping `--ink-muted` on
+     * the last line to 2.7:1. A flat gradient at 12% lifts the ground to 56/255
+     * at every x: 4.6:1, above the body-text floor, and seven times the mark
+     * that was invisible at the edges.
      *
      * The two `local` layers are the other half and they are asserted with it:
      * they scroll with the content and mask these exactly where the text has
-     * genuinely ended, so a stronger shadow may not start claiming a fourth
-     * paragraph that does not exist. Their 14px must stay at or above the
-     * shadow's own height for that to hold.
+     * genuinely ended, so no shadow may claim a fourth paragraph that does not
+     * exist. Their 14px must stay at or above the shadow's own height.
      */
     const body = block(sheet, ".popover__body");
-    expect(body).toContain("var(--ink) 30%");
+    expect(body).toContain("var(--ink) 12%");
+    expect(body).not.toContain("radial-gradient");
     expect(body).toContain("scroll top / 100% 10px");
     expect(body).toContain("scroll bottom / 100% 10px");
     expect(body).toContain("local top / 100% 14px");
