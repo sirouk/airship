@@ -853,10 +853,14 @@ export function SessionsView({
                       <time dateTime={item.updatedAt}>{relativeSessionTime(item.updatedAt)}</time>
                     </span>
                     <span class="session-library-card-line2">
-                      {/* `ACTIVE` was a 42px uppercase pill. It survives as a
-                          word, not as the dot's colour: P2 forbids colour as
-                          the only carrier, so the mark and the word ship
-                          together. */}
+                      {/* `ACTIVE` was a 42px uppercase pill, then an 11px word
+                          on this line. It is now the accessible half of a pair:
+                          the visible carrier for the green mark is the row's
+                          own opener, which is disabled and reads `Active` under
+                          exactly this condition, so P2 is satisfied without the
+                          row printing one word twice — see the rule beside
+                          `.session-library-visually-hidden`, which is what
+                          hides this copy and why. */}
                       {active ? <em class="session-library-card-active">Active</em> : null}
                       {lineage ? <em class="session-library-card-lineage">↳ from {lineage.label}</em> : null}
                       <span>{sessionEventCount(item.headSequence)}</span>

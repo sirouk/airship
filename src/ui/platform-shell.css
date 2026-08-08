@@ -363,10 +363,23 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
    * sticks to the scrollport's padding edge, so leaving the 1rem on the dialog
    * would park the header 1rem down and show a strip of rows sliding past above
    * it; at rest the spacing is unchanged, because the header re-adds it.
+   *
+   * `scroll-padding-block-start` is the other half of that hold, and it is the
+   * half no amount of edge treatment can buy. The header occupies the top ~61px
+   * of the scrollport while `.is-scrolled`, and a browser scrolling a control
+   * into view — a Tab, an anchor, a select handing focus back to its trigger on
+   * close — aligns that control to the scrollport's padding edge, which is
+   * behind the header. Declared, the scroll simply stops 3.75rem lower, so
+   * nothing the keyboard reaches can come to rest in the band the header is
+   * holding. It moves no box and takes no width or height from anything at any
+   * width; it changes only where a scroll stops. 3.75rem is the *collapsed*
+   * header, which is the only one that can ever be doing the occluding: any
+   * scroll at all sets `.is-scrolled`.
    */
-  .preferences-dialog { padding-top: 0; -webkit-overflow-scrolling: touch; }
+  .preferences-dialog { padding-top: 0; scroll-padding-block-start: 3.75rem; -webkit-overflow-scrolling: touch; }
   /*
-   * The header's own edge, because opaque chrome over live text has to say so.
+   * The header's own edge, because opaque chrome over live text has to say so —
+   * stated as depth, and only while there is something under it to say it about.
    *
    * Sticking the header gave it an opaque ground and no boundary, so the row it
    * covers is shorn flat with nothing between the two. Measured at phone-430 on
@@ -377,24 +390,44 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
    * belongs to nothing on screen. Every one of them reads as clipping rather
    * than as content that has scrolled underneath.
    *
-   * The rule is the one the reader already had: before the header stuck, the
-   * hairline visible under it was the first row's own `border-top`, and that
-   * hairline is what scrolls away. Moving it onto the header makes it travel,
-   * and the row below drops the border it no longer needs to draw — so the
-   * sheet is the same height to the pixel at every width, and at rest the frame
-   * is byte-identical to what it was. A shadow was the other candidate and is
-   * not here: it would assert depth in the resting state, where these two boxes
-   * genuinely sit in one plane.
+   * That was first answered with a hairline on the header — the first row's own
+   * `border-top`, moved up so it would travel, with the row dropping the border
+   * it no longer needed to draw. It bought the resting frame back to the pixel
+   * and it traded one misreading for another, because a 1px `--line` on the
+   * header is not distinguishable from the content rules travelling beneath it.
+   * Measured at 932x430 scrolled to the bottom: the header's edge at y=170 and
+   * the `--line-strong` rule of `.preferences-dialog__divider` at y=179, 9px of
+   * bare ground between them and not the same length — the header's spans the
+   * sheet, the divider's is inset by the sheet's 1rem. Two unequal parallel
+   * lines around an empty strip, directly above `STORAGE`, read as a mis-drawn
+   * border rather than as a section beginning.
+   *
+   * A shadow cannot double with a rule, because it is not one. The earlier
+   * objection to it — that it would assert depth at rest, where these two boxes
+   * genuinely sit in one plane — is answered by `.is-scrolled`, which did not
+   * exist when that was written. At scrollTop 0 there is no shadow, the first
+   * row draws its own `border-top` exactly where the header's edge used to be,
+   * and the resting frame is unchanged to the pixel at every width. The moment
+   * a row is actually underneath, the depth says so and the section rule stays
+   * the only line on screen. `box-shadow` paints outside the border box, so it
+   * moves nothing and the sheet is the same height it was.
+   *
+   * `var(--shadow)`, not a shadow of this rule's own: it is the product's one
+   * elevation and the only one the light-mode block remaps, so a bespoke value
+   * here would be the eleventh popover with its own drop shadow and a dark
+   * build's tint on a parchment page. `src/ui/view-stylesheet-contract.test.ts`
+   * holds that line.
    */
   .preferences-dialog > header {
     position: sticky;
     top: 0;
     z-index: 1;
     padding-top: 1rem;
-    border-bottom: 1px solid var(--line);
     background: var(--surface-raised);
   }
-  .preferences-dialog > header + * { border-top: 0; }
+  .preferences-dialog.is-scrolled > header {
+    box-shadow: var(--shadow);
+  }
   /*
    * Held, the header keeps its job and drops its introduction.
    *

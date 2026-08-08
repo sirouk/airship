@@ -527,7 +527,7 @@ describe("the Preferences sheet keeps a way out on screen", () => {
     expect(/\.preferences-dialog > header \{[^}]*padding-top: 1rem/u.test(block)).toBe(true);
   });
 
-  it("gives the held header an edge, and takes it off the row that no longer draws it", () => {
+  it("gives the held header depth while it is holding, and no second hairline ever", () => {
     /*
      * The cost of holding it, and the half that was missing. An opaque header
      * over live text with no boundary does not read as content scrolling under
@@ -536,15 +536,46 @@ describe("the Preferences sheet keeps a way out on screen", () => {
      * it and no rule anywhere; at landscape-932 the Color mode select is reduced
      * to a stray 1px line belonging to nothing on screen.
      *
-     * The hairline is not new ink — it is the first row's own `border-top`,
-     * which is exactly the rule that used to sit there and exactly the rule that
-     * scrolls away. Moving it onto the header makes it travel, and the row drops
-     * the border it would otherwise draw one pixel below: both assertions, or
-     * the sheet grows a pixel and the resting frame stops matching itself.
+     * That was first answered by moving the first row's own `border-top` onto
+     * the header so it would travel. It kept the resting frame to the pixel and
+     * it introduced the defect this test now pins, because a 1px `--line` on
+     * chrome is not distinguishable from the content rules passing under it:
+     * measured at 932x430 scrolled to the bottom, the header's edge at y=170 and
+     * `.preferences-dialog__divider`'s `--line-strong` rule at y=179, 9px of
+     * bare ground between two unequal lines directly above `STORAGE`.
+     *
+     * A shadow cannot double with a rule. It is gated on `.is-scrolled` so it
+     * asserts no depth at rest — the objection that kept it out before
+     * `.is-scrolled` existed — and it paints outside the border box, so the
+     * sheet is the same height it was.
      */
     const block = sheetBlock();
-    expect(/\.preferences-dialog > header \{[^}]*border-bottom: 1px solid var\(--line\)/u.test(block)).toBe(true);
-    expect(block).toContain(".preferences-dialog > header + * { border-top: 0; }");
+    const header = /\.preferences-dialog > header \{([^}]+)\}/u.exec(block)?.[1] ?? "";
+    expect(header).not.toContain("border-bottom");
+    // And the row keeps its own rule, which is the line the reader had before
+    // any of this: dropping it here is what made the frame a pixel short.
+    expect(block).not.toContain(".preferences-dialog > header + * { border-top: 0; }");
+
+    const held = /\.preferences-dialog\.is-scrolled > header \{([^}]+)\}/u.exec(block)?.[1] ?? "";
+    // The shared elevation, not one of this rule's own: `--shadow` is the only
+    // one the light-mode block remaps, and a bespoke value here would carry a
+    // dark build's tint onto a parchment page.
+    expect(held).toContain("box-shadow: var(--shadow);");
+    // Depth only while something is underneath. An ungated shadow reasserts
+    // exactly the false plane the hairline was rejected for.
+    expect(/\.preferences-dialog > header \{[^}]*box-shadow/u.test(block)).toBe(false);
+  });
+
+  it("stops a scrolled-in control from landing in the band the header is holding", () => {
+    /*
+     * The header holds the top ~61px of the scrollport while `.is-scrolled`, and
+     * a browser scrolling a control into view aligns it to the scrollport's
+     * padding edge — behind the header. `scroll-padding-block-start` moves only
+     * where that scroll stops; it takes no width or height from anything at any
+     * width, which is why the answer to an occlusion is here and not in a
+     * shorter row.
+     */
+    expect(/\.preferences-dialog \{[^}]*scroll-padding-block-start: 3\.75rem/u.test(sheetBlock())).toBe(true);
   });
 
   it("collapses the held header's introduction while scrolled, keeping the title and Done", () => {
