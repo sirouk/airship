@@ -307,9 +307,9 @@
    on the grounds that it scrolls its own scrollback while every other row here
    is a fact or a control that does not. That reasoning is sound about which row
    should shrink FIRST and says nothing about how far, and taken to its end it
-   left a one-row terminal. The block below stops treating "height-bound" as a
-   premise; the paragraph in front of it is the measurement that made that
-   necessary.
+   left a one-row terminal. The block below stops making the emulator pay for a
+   budget that cannot cover it; the paragraph in front of it is the measurement
+   that made that necessary.
 
    Scoped off the dock, which declares its own rows and its own smaller floors
    and is height-clamped in JavaScript against its measured parent. */
@@ -337,12 +337,31 @@
    A terminal that can show one row is not a terminal, and no redistribution of
    308px produces one, because the shortfall is not 41px of air; it is about
    150px of screen that does not exist. So the route stops pretending to fit
-   and scrolls. That is the decision the phone block above already reached at
-   390x844, for the same reason and in the same two declarations — `height:auto`
-   with `min-height:100%` — and `main` carries it, because `main` has always had
-   `overflow:auto`. What was wrong here was not the scrolling; it was scrolling
-   15px of residue nobody can see while the content that overflowed was a live
-   region and a shell.
+   and scrolls. That decision is right and it stays. What was wrong was where
+   the scroll was put.
+
+   The pass that reached it wrote `height:auto` with `min-height:100%`, on the
+   reasoning that `main` has always had `overflow:auto` and would therefore
+   carry the excess. `main` did not carry it. Measured on the shipped build at
+   932x430: `documentElement.scrollHeight - clientHeight` read 95 where every
+   other device class reads 0 and where this one read 0 before that pass, the
+   full-page frame came back 525px tall against a 430px viewport, and a
+   `window.scrollTo` to the foot of the document moved the entire shell — so the
+   44px navigation band rode up with the route and came to rest over ~90px of
+   bare `--ground`, while the panel's meta row and the `role="status"` footer
+   stayed in the 95px below it that no scroll reaches. The reading is 0 at rest
+   and 95 only after a session has been typed into, so whatever carries the
+   excess out of `main` is fed by what the route puts inside itself; the repair
+   is not to find that box but to stop handing `main` an excess at all.
+
+   So the scroll goes inside the route's own border box. `height:100%` with
+   `min-height:0` is the pair `.terminal-route--dock` already uses for the same
+   reason: it retracts the base rule's `min-height:min-content`, which is what
+   let this grid inflate its own box to the height of its rows, and pins the box
+   to the port it was given. `overflow:auto` then makes the route the scroller
+   for the rows that no longer fit it. The reader scrolls the same 143px through
+   the same content; the shell has nothing left to scroll, and the band keeps
+   its footing.
 
    What remains is deciding how much of the screen the terminal is worth, and
    that is written as one number: the panel's track floor. `16rem` makes the
@@ -352,11 +371,13 @@
    viewport with the 40px status line and their 4px gap underneath it (300px),
    which is what makes the scroll worth taking: one scroll past the 151px of
    header, disclosure and tab strip puts the entire terminal and the sentence it
-   reports through on screen together. The route measures 451px in a 308px port,
-   and the 143px that scrolls away is exactly that chrome. Nothing is sliced,
-   and the overflow is now large enough to be its own affordance — the panel is
-   visibly cut mid-card at rest, where 15px of residue said nothing and overlay
-   scrollbars paint nothing at rest to say it for them.
+   reports through on screen together — inside the route, above the band, rather
+   than 95px below the foot of the document where they were unreachable. The
+   rows measure 451px in a 308px box, and the 143px that scrolls away is exactly
+   that chrome. Nothing is sliced, and the overflow is large enough to be its
+   own affordance — the panel is visibly cut mid-card at rest, where 15px of
+   residue said nothing and overlay scrollbars paint nothing at rest to say it
+   for them.
 
    The rest of this block is what lands those 256px where they are worth most:
 
@@ -384,16 +405,38 @@
      at the one viewport height where height is the scarce axis, and giving them
      back would only lengthen the scroll.
 
-   The cost is that scroll, and it is paid inside this route's own box. No
-   neighbour gives up width or height for it: every declaration is scoped to
-   this route, its panel and its emulator, inside a media query no viewport
-   over 500px tall can match, so the other seven device classes see none of it.
-   Nothing on the inline axis moves and no touch target shrinks. The dock is
-   excluded by name from the route rule, and its own `.terminal-route--dock`
-   declarations outrank the two unscoped ones on specificity, so the workspace
-   pane keeps the smaller floors it is clamped against in JavaScript. */
+   The cost is that scroll, and it is now genuinely paid inside this route's own
+   box. Measured at every viewport: the media query cannot match above 500px of
+   height, so seven of the eight device classes — phone-320 at 568, phone-390 at
+   844, phone-430 at 932, tablet-768 at 1024, laptop-1024 at 768, desktop-1440
+   at 900 and wide-1920 at 1080 — never see this block at all, and their frames
+   are unchanged. At 932x430 no neighbour gives up width or height: every
+   declaration is scoped to this route, its panel and its emulator, nothing on
+   the inline axis moves, no touch target shrinks, and every floor above is
+   untouched. The dock is excluded by name from the route rule, and its own
+   `.terminal-route--dock` declarations outrank the two unscoped ones on
+   specificity, so the workspace pane keeps the smaller floors it is clamped
+   against in JavaScript.
+
+   One cascade fact that changed and should be said out loud: the 760px block
+   above and this one used to declare the same `height:auto; min-height:100%`
+   pair, so their overlap — a viewport both narrow and short — was a no-op.
+   They now disagree, and this block wins on order, so a 390x430 window would
+   get the bounded scroller rather than a route that scrolls with the page. No
+   device class in the sweep is in that overlap (phone-320 is 568px tall, the
+   shortest of the seven), so nothing measured moves; it is stated because the
+   two blocks are no longer interchangeable.
+
+   The one thing `overflow:auto` changes beyond the scroll is that the route
+   becomes a clipping ancestor. Both descendants that could care are already
+   accounted for: `.terminal-panel__popover` is absolutely positioned but sits
+   inside `.terminal-panel`, whose `overflow:hidden` clips it one level closer,
+   so nothing about it moves; and the close confirmation is
+   `.workbench-dialog-scrim`, `position:fixed` with no transform, filter or
+   containment between it and the viewport, which a scroll container does not
+   clip. */
 @media(max-height:500px){
-  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:auto;min-height:100%}
+  .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:100%;min-height:0;overflow:auto}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__setup,
   .terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}

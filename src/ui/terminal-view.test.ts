@@ -316,21 +316,53 @@ describe("the terminal route on a short viewport", () => {
    * where it had to: a 45px emulator box, 33px of content inside its gutter,
    * and a 22px cell — ONE row of shell output.
    *
-   * So the route stops being height-bound and scrolls, which is the same pair
-   * of declarations the phone block reaches at 390×844 for the same reason.
-   * This is the assertion that keeps a future height budget from being balanced
-   * against the terminal again.
+   * So the rows are allowed to be taller than the port and the reader scrolls
+   * to the rest of them. This is the assertion that keeps a future height budget
+   * from being balanced against the terminal again.
    */
-  it("lets the route outgrow a viewport that cannot hold it instead of slicing its own content", () => {
+  it("lets the rows outgrow a viewport that cannot hold them instead of slicing its own content", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const short = shortBlock();
-    expect(short).toContain("gap:4px;height:auto;min-height:100%}");
-    // Only here. The base route stays height-bound so the 1fr emulator absorbs
-    // the slack on every viewport that has slack to absorb.
+    expect(short).toContain("gap:4px;height:100%;min-height:0;overflow:auto}");
+    // The base route's `min-height:min-content` is the declaration that inflates
+    // the box to its rows; retracting it here is what keeps the box the port.
     expect(css).toMatch(/\.terminal-route\{[^}]*height:100%;min-height:min-content/u);
     // The dock declares its own rows and is clamped against a measured parent;
     // an unscoped `.terminal-route` here would impose a fifth row on its four.
     expect(short).not.toMatch(/\n\s*\.terminal-route\{/u);
+  });
+
+  /*
+   * The regression this pins, and the reason the previous line reads
+   * `height:100%` rather than `height:auto`.
+   *
+   * The pass that made this route scroll wrote `height:auto` with
+   * `min-height:100%`, on the reasoning that `main` has always had
+   * `overflow:auto` and would carry the excess. It did not. Measured on the
+   * shipped build at 932×430: `documentElement.scrollHeight - clientHeight`
+   * read 95 where all seven other device classes read 0 and where this one read
+   * 0 before that pass; the full-page frame came back 525px against a 430px
+   * viewport; and scrolling to the foot of the document moved the whole shell,
+   * leaving the 44px navigation band over ~90px of bare `--ground` with the
+   * panel's meta row and the `role="status"` footer stranded below it.
+   *
+   * A route may be taller than its port. Its BOX may not: the moment this grid
+   * is allowed to inflate to the height of its own rows, the excess leaves
+   * `main` and the shell scrolls with it. `height:100%` pins the box, and
+   * `overflow:auto` is what then carries the rows — the two only work as a pair,
+   * because `overflow:auto` on an auto-height box has nothing to scroll and
+   * `height:100%` without it clips the rows outright.
+   */
+  it("scrolls its own rows rather than the shell the navigation band stands on", () => {
+    const short = shortBlock();
+    const route = short.match(/\.terminal-route:not\(\.terminal-route--dock\)\{([^}]+)\}/u)?.[1] ?? "";
+    expect(route).toContain("overflow:auto");
+    expect(route).toContain("height:100%");
+    // `height:auto` is the exact declaration that put the excess on the
+    // document; `min-height:min-content` and `min-height:100%` reach the same
+    // inflated box by the other door.
+    expect(route).not.toMatch(/height:auto/u);
+    expect(route).not.toMatch(/min-height:(?:min-content|100%)/u);
   });
 
   /*
