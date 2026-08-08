@@ -496,10 +496,26 @@
   text-overflow: ellipsis;
 }
 
+/* The profile yields next, for the reason stated one rule above: it is the
+   scope the toolbar already names in full ("Profile · General"), while the
+   model is the fact this line exists to carry. Without a shrink rule it kept
+   its whole word and the model — the only flexible item left — was squeezed to
+   about 18px at 1440px and 1920px alike, which rendered as one bare letter with
+   the ellipsis itself clipped away, so the row read as broken rather than as
+   abbreviated. */
 .session-library-card-profile {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  overflow: hidden;
   color: var(--ink-muted, #9fa5a3);
+  text-overflow: ellipsis;
 }
 
+/* The model is the item that absorbs whatever the line has left, and its floor
+   stays 0 deliberately: a `min-width` here can exceed the space the other three
+   facts leave on a 260px list panel, and the overflow would then be clipped by
+   `.session-library-card-line2` — taking the ellipsis with it and restoring the
+   very "one bare letter" reading this line is written against. */
 .session-library-card-model {
   flex: 0 1 auto;
   min-width: 0;
@@ -525,15 +541,34 @@
   line-height: 1;
 }
 
+/*
+ * Collapsed at rest, not merely transparent.
+ *
+ * `opacity: 0` alone left this cluster holding its full inline size — a 14px
+ * drag handle and two 26px buttons — in one of the row's five tracks, so every
+ * favorited row spent 66px of a 330px list panel on controls nobody could see
+ * and paid for it out of the only track that yields, the title. Measured at
+ * 1440px: the same conversation read "Investigate th…" in RECENT and "Inv…"
+ * under FAVORITES, with a band of empty card between the Active verb and the
+ * star where the invisible controls were standing.
+ *
+ * Collapsing the box gives that width back. The cost is that the row's opener
+ * shifts left when the cluster expands under the pointer; the row is the hover
+ * target, so the expansion cannot flicker, and the same two verbs are reachable
+ * without hover at all through the Alt+↑/Alt+↓ shortcuts the card announces.
+ */
 .session-library-favorite-order {
   display: inline-flex;
   align-items: center;
+  width: 0;
   opacity: 0;
+  overflow: hidden;
   transition: opacity 120ms ease;
 }
 
 .session-library-row:hover .session-library-favorite-order,
 .session-library-row:focus-within .session-library-favorite-order {
+  width: auto;
   opacity: 1;
 }
 
@@ -1482,7 +1517,10 @@
     min-height: 44px;
   }
 
+  /* Touch has no hover to expand it with, so the cluster is open and holds its
+     own width from the start. */
   .session-library-favorite-order {
+    width: auto;
     opacity: 1;
   }
 
@@ -1576,6 +1614,45 @@
   }
 }
 
+/*
+ * The phone held sideways.
+ *
+ * Every rule above this one asks how much width there is; at 932x430 the
+ * scarce axis is height, and none of them fire, so the route lays itself out as
+ * if it had a desktop's vertical room. Measured on that viewport: the pane's
+ * whole action row — Rename, Proof, Fork, Delete — sat below the fold with
+ * about 8px of each button's top corner showing above the tab band, so the four
+ * verbs the route exists to offer had to be discovered by scrolling a pane that
+ * looks finished.
+ *
+ * Two rules of vertical thrift, both restoring what the file already says at a
+ * width where nothing is scarce:
+ *
+ * `min-height: 420px` on the detail pane is a floor no 430px viewport can
+ * honour; it can only reserve dead space below the last thing in the pane.
+ *
+ * The heading stacks its actions under the title from 1180px down because
+ * horizontal room is what runs out there. It is not what runs out here — the
+ * pane is still ~560px wide — and stacking spends a whole title block's height,
+ * roughly 110px, to save width this viewport has to spare. Sitting the actions
+ * beside the title again lifts them back above the fold.
+ */
+@media (max-height: 560px) {
+  .session-library-detail {
+    min-height: 0;
+  }
+}
+
+@media (max-height: 560px) and (min-width: 861px) {
+  .session-library-detail-heading {
+    display: flex;
+  }
+
+  .session-library-actions {
+    justify-content: flex-end;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .session-library-view *,
   .session-library-view *::before,
@@ -1584,8 +1661,35 @@
     transition-duration: 0.01ms !important;
   }
 }
-.session-library-rename { display: flex; gap: var(--sp-2, 8px); align-items: center; margin: var(--sp-2, 8px) 0; }
+/* Wraps rather than pushes. `flex-wrap: wrap` is the safety net for a width or
+   a localisation the 560px rule below does not cover: a rename row that cannot
+   fit takes a second line instead of setting a min-content width the detail
+   column has no choice but to honour. */
+.session-library-rename { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); align-items: center; margin: var(--sp-2, 8px) 0; }
 .session-library-rename input { flex: 1 1 22em; min-width: 0; padding: 0 var(--sp-3, 12px); }
+
+/*
+ * On a phone the field takes its own line, and the two verbs sit beneath it.
+ *
+ * A text input's min-content width is its own `size`, which `min-width: 0` does
+ * not lower — it only permits flexing below it. So on one nowrap line the field
+ * plus `Save rename` plus `Cancel` demanded about 345px; at 320px the detail
+ * card grew to that width and hung off the right edge of the viewport, slicing
+ * `Cancel` to "Ca", the created/updated line to "updated Au" and the primary
+ * action to "Active conversa", with no horizontal scroller anywhere to reach
+ * any of it. Given its own line the field contributes nothing the column has to
+ * honour, and the widest thing the row can demand is one button.
+ *
+ * It has to be stated after the `flex: 1 1 22em` above rather than beside the
+ * route's other 560px rules: the two selectors weigh the same, so the shorthand
+ * — which resets flex-basis — wins on source order from anywhere earlier in the
+ * sheet, and the override would be inert.
+ */
+@media (max-width: 560px) {
+  .session-library-rename input {
+    flex-basis: 100%;
+  }
+}
 
 .session-library-lineage-line {
   display: flex;
@@ -1703,5 +1807,14 @@
   .session-library-row:not([data-dragging="true"]) .session-library-open:not(:disabled) {
     border-color: var(--line-control, rgba(225, 217, 200, 0.24));
     color: var(--accent-bright, #d8b273);
+  }
+
+  /* The same reason, applied to the reorder cluster the row collapses at rest.
+     It is collapsed to zero width, not merely faded, so on a coarse pointer it
+     would be a control with no box to press rather than an invisible one — and
+     a touch tablet is wider than the 560px rule that reopens it on a phone. */
+  .session-library-favorite-order {
+    width: auto;
+    opacity: 1;
   }
 }
