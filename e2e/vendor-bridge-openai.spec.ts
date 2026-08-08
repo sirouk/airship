@@ -103,6 +103,10 @@ test("openai responses lane: tool call docks for approval before the memory writ
   if (!(await records.evaluate((element: HTMLDetailsElement) => element.open))) {
     await records.locator("summary").click();
   }
-  const record = page.getByRole("main").locator("text=Likes mint tea").first();
+  // Scoped to the record list rather than the route: this asserts the write
+  // landed in the profile's own corpus, not merely that the words appear
+  // somewhere on #memory — a search echo or a stat line would satisfy the
+  // looser locator.
+  const record = records.locator("text=Likes mint tea").first();
   await expect(record).toBeVisible({ timeout: 15_000 });
 });

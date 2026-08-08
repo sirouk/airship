@@ -98,6 +98,8 @@ test("anthropic messages lane: tool call docks for approval before the memory wr
   if (!(await records.evaluate((element: HTMLDetailsElement) => element.open))) {
     await records.locator("summary").click();
   }
-  const record = page.getByRole("main").locator("text=Likes mint tea").first();
+  // Scoped to the record list, same reason as the OpenAI lane: the proof is
+  // that the write is in the profile's corpus, not that the text is on screen.
+  const record = records.locator("text=Likes mint tea").first();
   await expect(record).toBeVisible({ timeout: 15_000 });
 });
