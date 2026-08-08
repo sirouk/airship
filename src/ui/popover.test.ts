@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   POPOVER_EDGE_GUTTER,
   POPOVER_HOVER_INTENT_MS,
+  POPOVER_MIN_ROOM,
   POPOVER_SHEET_MAX_WIDTH,
   popoverPlacement,
+  popoverRoom,
 } from "./popover";
 
 describe("the one anchored disclosure", () => {
@@ -26,6 +28,28 @@ describe("the one anchored disclosure", () => {
     expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH }).mode).toBe("sheet");
     expect(popoverPlacement({ anchorLeft: 300, popoverWidth: 320, viewportWidth: 430 }).mode).toBe("sheet");
     expect(popoverPlacement({ anchorLeft: 0, popoverWidth: 320, viewportWidth: POPOVER_SHEET_MAX_WIDTH + 1 }).mode).toBe("anchored");
+  });
+
+  it("measures the room to the clipping pane, not to the window", () => {
+    /*
+     * The landscape phone this is written against: 932x430, the ⓘ trigger
+     * ending at y=94, and a `.main` pane (`overflow: auto`) that stops at
+     * y=382 because a fixed navigation band owns the rest. 60vh of that screen
+     * is 258px and the pane has 276px left, so a body capped at 60vh alone put
+     * its last paragraph — and the bottom of its own scroll viewport — behind
+     * the band. The window's 430px is the number that was never the answer.
+     */
+    expect(popoverRoom({ anchorBottom: 94, clipBottom: 382 })).toBe(382 - 94 - POPOVER_EDGE_GUTTER);
+    expect(popoverRoom({ anchorBottom: 94, clipBottom: 430 }))
+      .toBeGreaterThan(popoverRoom({ anchorBottom: 94, clipBottom: 382 }));
+  });
+
+  it("stops measuring rather than hand a chip near the fold a two-line panel", () => {
+    // A trigger 30px above the pane's bottom edge has no usable room. Reporting
+    // that honestly would produce a scroll viewport too short to read, so the
+    // floor holds and the panel overhangs instead — visible beats contained.
+    expect(popoverRoom({ anchorBottom: 352, clipBottom: 382 })).toBe(POPOVER_MIN_ROOM);
+    expect(popoverRoom({ anchorBottom: 900, clipBottom: 382 })).toBe(POPOVER_MIN_ROOM);
   });
 
   it("returns a frozen placement so a caller cannot mutate the shared result", () => {
@@ -85,9 +109,43 @@ describe("the panel is the width of the box it is pinned to", () => {
 
     expect(panel).toContain("grid-template-columns: minmax(0, 1fr)");
     expect(header).toContain("min-width: 0");
-    // The floor is half the contract. The heading still has to have somewhere
-    // to put the characters that a narrower box costs it.
-    expect(sheet).toMatch(/\.popover__header > strong \{[^}]*text-overflow: ellipsis/u);
+  });
+
+  it("bounds the header by wrapping it, not by deleting the half that does not fit", () => {
+    /*
+     * The cost side of the rule above, and the reason it is no longer paid.
+     * Containing the header with `white-space: nowrap` plus an ellipsis fitted
+     * the title by removing it: `ACCOUNT STANDING · CHUTES TELEMETRY AND
+     * PROVIDER INVENTORY` rendered as `ACCOUNT STANDING · CHUTES T…` on a
+     * 1920px display, and `PROVENANCE · ARCHITECTURE.MD` lost the extension of
+     * the file it names on a tablet — with no wider state to open, so the
+     * missing half was unreachable everywhere.
+     *
+     * Wrapping bounds it harder: a nowrap heading's min-content is the entire
+     * 490px string, which is what sized the panel in the first place, and a
+     * wrapping one's is a single word. So `nowrap` must not come back here —
+     * it would reinstate both defects at once.
+     */
+    const heading = block(sheet, ".popover__header > strong");
+    expect(heading).toContain("white-space: normal");
+    expect(heading).toContain("overflow-wrap: anywhere");
+    expect(heading).not.toContain("nowrap");
+  });
+
+  it("caps the panel at the room its trigger actually has, and makes the body the row that yields", () => {
+    /*
+     * Landscape phone, 932x430: the panel is anchored ~110px down a `.main`
+     * pane that ends above the navigation band, and the only ceiling was the
+     * body's `60vh` — 258px, more than the pane had left. The panel was
+     * scrollable throughout and it did not help, because the bottom of its own
+     * scroll viewport was the part behind the band.
+     */
+    const panel = block(sheet, ".popover__panel");
+    expect(panel).toMatch(/max-height: calc\(var\(--popover-room, 100vh\) - var\(--sp-2\)\)/u);
+    // The header carries Done. If it were the flexible row, bounding the panel
+    // would compress the dismissal control instead of the prose.
+    expect(panel).toContain("grid-template-rows: auto minmax(0, 1fr)");
+    expect(block(sheet, ".popover__body")).toContain("overflow: auto");
   });
 
   it("keeps the sheet's dismissal control at the touch floor inside that width", () => {
