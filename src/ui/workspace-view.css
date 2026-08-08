@@ -95,21 +95,45 @@
 }
 
 /*
- * `flex: 1 1 0` is what makes the pair read as one switch instead of two
- * buttons of unequal weight, but on its own it splits the rail into halves
- * neither label asked for. Measured at 1024: both cells are 119px, "Explorer"
- * uses 81px of its 93px content box and leaves the other 12 unspent, and
- * "Source Control 0" — which wants 139px — is cut to "Sourc… 0" beside it.
- * `max-width: max-content` caps a cell at the width its own label needs, so
- * the flex algorithm freezes Explorer there and redistributes the surplus to
- * the neighbour that is still clipping.
+ * The pair fills the rail, and the label that needs the width gets it.
+ *
+ * Two rules were tried here and each bought one half of the problem. `flex:
+ * 1 1 0` splits the rail into halves neither label asked for: measured at 1024,
+ * both cells are 119px, "Explorer" uses 81px of its 93px content box and leaves
+ * the other 12 unspent, and "Source Control 0" — which wants 139px — is cut to
+ * "Sourc… 0" in the cell beside it. Capping each cell at `max-width:
+ * max-content` rescued that label and spent the rail to do it: with both cells
+ * frozen at their own content the pair stopped 73px short of a 1920 desktop's
+ * 352px rail and read as two buttons parked at one end of an empty strip.
+ *
+ * `flex: 1 1 auto` is the answer that owes neither. The cell starts at the
+ * width its own label asks for — so nothing is cut while the rail can hold
+ * both — and the surplus above that is shared, so the pair still reaches the
+ * far edge. The two cells end up different widths because the two labels are
+ * different lengths; what makes them read as one switch is that they are the
+ * same height, hairline-separated, and carry one 2px `--accent` under whichever
+ * is current — not that they are halves.
  */
 .tabs.workbench-mode-tabs .tabs__tab {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: max-content;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
+}
+
+/*
+ * Explorer is this strip's first cell and its short one, and it does not yield.
+ *
+ * Shrink is otherwise weighted by content width, so a rail too narrow for both
+ * would take characters off "Explorer" as well — and there is nothing in it to
+ * spend: 108px is the whole word plus its glyph, its padding and its border.
+ * Charging the entire deficit to "Source Control" is what keeps the trade the
+ * block below describes, where the count survives and the label is what gives
+ * way. It cannot overflow the strip instead of shrinking: `.workbench-shell`
+ * clamps the rail at `15rem` (:22), which is 240px against Explorer's 108.
+ */
+.tabs.workbench-mode-tabs .tabs__tab:first-child {
+  flex-shrink: 0;
 }
 
 /*
@@ -149,8 +173,10 @@
  * The padding, though, is the product's own `--sp-3`: the step down to `--sp-1`
  * was never argued for and it is what made two controls read as prose. At the
  * 26% default rail the pair measures 289px of a 314px strip; below that the
- * strip's measured overflow menu takes over, which is the machinery it was
- * built for.
+ * cells shrink and "Source Control" ellipsises, which is the trade argued two
+ * blocks up. This once said the strip's measured overflow menu took over there;
+ * it does not and must not — that menu is what the `min-width: 0` above exists
+ * to keep away from a two-way switch.
  */
 .tabs.workbench-mode-tabs .tabs__tab-button {
   padding: 0 var(--sp-3);
@@ -980,6 +1006,35 @@
    * Control merge into the pane switch with the change count intact.
    */
   .tabs.workbench-mobile-switch { display: flex; flex: 0 0 auto; padding-inline: var(--sp-2); }
+  /*
+   * The switch contains itself. It never sends a third of itself behind a `⌄`.
+   *
+   * `Tabs` grows an overflow control the moment a tab measures outside the
+   * strip's view, and on this row that measurement latches: the control it
+   * grows takes ~38px of the very row it was measuring, so every re-measure
+   * after the first sees a strip narrower than the one that fitted and the
+   * state can never unwind. At 390px — where the three labels want 347px of a
+   * 374px row — 27px of slack was all that stood between the two stable
+   * readings, and once the strip tipped it stayed tipped: "Explorer" cut to
+   * "lorer" by the viewport edge with the strip scrolled, "Source Control"
+   * stripped of its change count, and a `⌄ 1` chevron holding a third of the
+   * only navigation a phone has into this route.
+   *
+   * Letting the cells shrink removes the latch rather than widening the gap it
+   * waits in. `min-width: 0` is what allows a flex item to go below its own
+   * nowrap label at all; with it the row can always be made to fit, so no tab
+   * is ever out of view, so the chevron has nothing to report and the strip has
+   * nothing to scroll — and a label that runs out of room ellipsises inside its
+   * own cell instead of being cut by the edge of the screen. While the three
+   * labels fit, which they do at 390 and above, none of this fires and the row
+   * is exactly what it was.
+   */
+  .tabs.workbench-mobile-switch .tabs__tab,
+  .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }
+  /* The label gives way and the count does not, the same way round as the
+     desktop strip: a switch that drops the number of changes to keep the word
+     "Control" has hidden the reading the reader was steering by. */
+  .tabs.workbench-mobile-switch .tabs__count { flex: 0 0 auto; }
   .tabs.workbench-mode-tabs { display: none; }
   .workbench-shell { display: block; }
   .workbench-activity, .workbench-editor { display: none; min-height: 0; height: 100%; border: 0; }

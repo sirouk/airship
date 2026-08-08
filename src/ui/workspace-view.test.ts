@@ -1215,22 +1215,75 @@ describe("the file strip and the sheet it describes", () => {
 /*
  * Two labels, one rail, and only one of them can be shortened.
  *
- * `flex: 1 1 0` splits the strip into halves, which spends width on the label
- * that already fits: measured at 1024, "Explorer" left 12px of its cell unused
- * while "Source Control 0" was cut to five characters in the cell beside it.
- * `max-width: max-content` is what lets the flex algorithm freeze the short
- * cell at its own content width and give the rest to its neighbour, and it has
- * to sit with `min-width: 0` — the declaration that allows any of this to
- * ellipsise rather than overflow the rail.
+ * Both halves of this are regressions someone has already shipped. `flex: 1 1 0`
+ * splits the strip into halves, which spends width on the label that already
+ * fits: measured at 1024, "Explorer" left 12px of its cell unused while "Source
+ * Control 0" was cut to five characters beside it. Capping the cells at
+ * `max-width: max-content` freed that label and froze the pair at its own
+ * content, leaving 73px of dead rail on a 1920 desktop. `flex: 1 1 auto` is the
+ * basis that owes neither — content width first, surplus shared after — so both
+ * numbers below are asserted together and neither can be traded for the other
+ * without this failing.
  */
 describe("the workbench's two-way activity switch", () => {
   const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
 
-  it("caps a cell at the label it holds instead of at half the rail", () => {
+  it("sizes a cell from its own label and shares what the rail has left over", () => {
     const tab = styles.match(/\n\.tabs\.workbench-mode-tabs \.tabs__tab \{([^}]+)\}/u)?.[1] ?? "";
-    expect(tab).toContain("flex: 1 1 0;");
+    // `auto`, not `0`: a zero basis is the halving, and it is what cut the
+    // label. A grow factor, not none: without it the pair stops at its content.
+    expect(tab).toContain("flex: 1 1 auto;");
     expect(tab).toContain("min-width: 0;");
-    expect(tab).toContain("max-width: max-content;");
+    // The cap this replaces. Reinstating it would re-open the dead-rail half.
+    expect(tab).not.toContain("max-width: max-content;");
+  });
+
+  it("charges a rail too narrow for both entirely to the longer label", () => {
+    // Shrink is weighted by content width, so without this "Explorer" — which
+    // has no characters to spare — loses letters alongside a neighbour that
+    // does. The rule is positional, so it is only true while Explorer is the
+    // strip's first item; that ordering is asserted with it.
+    const first = styles.match(/\n\.tabs\.workbench-mode-tabs \.tabs__tab:first-child \{([^}]+)\}/u)?.[1] ?? "";
+    expect(first).toContain("flex-shrink: 0;");
+    expect(source.indexOf('{ id: "explorer", label: "Explorer", leading:'))
+      .toBeLessThan(source.indexOf('{ id: "source", label: "Source Control", leading:'));
+    // And it can only refuse to shrink because the rail has a floor it clears:
+    // 15rem is 240px against Explorer's measured 108.
+    expect(styles).toContain("clamp(15rem, var(--workbench-rail, 26%), 22rem)");
+  });
+});
+
+/*
+ * The phone's only way between the three panes, and it may not hide one.
+ *
+ * `Tabs` grows a `⌄ n` control the moment a tab measures outside the strip's
+ * view, and on this row that reading latches: the control takes ~38px of the
+ * row it was measuring, so every re-measure after the first sees a narrower
+ * strip than the one that fitted. At 390px the three labels want 347px of a
+ * 374px row — 27px of slack between two stable readings — and once it tipped it
+ * stayed tipped: "Explorer" cut to "lorer" by the viewport edge, "Source
+ * Control" without its count, and a third of the route's navigation behind a
+ * chevron. `min-width: 0` is what makes the losing reading unreachable: cells
+ * that can shrink always fit, and a strip with nothing out of view has nothing
+ * to report.
+ */
+describe("the phone's three-way pane switch", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const phone = styles.slice(styles.indexOf("@media (max-width: 760px) {"));
+
+  it("lets a cell shrink so the strip never has a tab to hide", () => {
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__tab,\n  .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }");
+  });
+
+  it("keeps the change count while the label is what gives way", () => {
+    // The count is the reading the switch exists to carry; ellipsising the
+    // label around it is the whole trade.
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__count { flex: 0 0 auto; }");
+    // And the label has somewhere to put the characters it drops — the
+    // primitive's own rule, which this depends on and does not restate.
+    const routes = readFileSync(new URL("./routes.css", import.meta.url), "utf8");
+    expect(routes).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis;/u);
   });
 });
 
@@ -1357,12 +1410,15 @@ describe("Explorer density", () => {
     expect(coarse).toContain("opacity: 1;");
   });
 
-  it("splits the activity row between Explorer and Source Control", () => {
-    // Equal flex tracks make the two destinations easy to scan and the gap
-    // gives them a quiet separation without inventing a second tab grammar.
-    // Every rule the strip's tab button carries, joined: the button is named by
-    // two of them — one for the padding, one for the `min-width: 0` that lets a
-    // 240px rail truncate a label instead of hiding a whole tab.
+  it("gives the whole activity row to Explorer and Source Control", () => {
+    // Two flexible cells and a gap between them: one tab grammar, one rail,
+    // nothing left over. Not equal tracks — the two labels are different
+    // lengths and halving the rail is what cut the longer one; the sizing
+    // itself is argued and asserted in "the workbench's two-way activity
+    // switch" above. Every rule the strip's tab button carries, joined: the
+    // button is named by two of them — one for the padding, one for the
+    // `min-width: 0` that lets a 240px rail truncate a label instead of hiding
+    // a whole tab.
     const button = [...styles.matchAll(/\.tabs\.workbench-mode-tabs \.tabs__tab-button \{([^}]+)\}/gu)]
       .map((match) => match[1] ?? "").join("\n");
     expect(button).toContain("padding: 0 var(--sp-3);");
@@ -1372,7 +1428,7 @@ describe("Explorer density", () => {
     expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {");
     expect(styles).toContain("gap: var(--sp-2);");
     expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__tab {");
-    expect(styles).toContain("flex: 1 1 0;");
+    expect(styles).toContain("flex: 1 1 auto;");
     expect(source).toContain('{ id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> }');
   });
 
