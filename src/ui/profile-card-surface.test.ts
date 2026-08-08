@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 const routes = await readFile(new URL("./routes.css", import.meta.url), "utf8");
+const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 
 function rule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -28,12 +29,41 @@ describe("a profile name stays inside its own card", () => {
     expect(rule(".profile-card strong")).toContain("overflow-wrap: anywhere");
   });
 
-  it("wraps rather than truncates, because the list is how two profiles are told apart", () => {
-    // The posture chip beside it does truncate — a posture label is one of a
-    // fixed handful of words. A name is not, and two names sharing a prefix
-    // must not ellipsise to the same string in a list you pick from.
-    expect(rule(".profile-card strong")).not.toContain("text-overflow: ellipsis");
+  it("wraps rather than cutting to one line, because the list is how two profiles are told apart", () => {
+    // The posture chip beside it takes the one-line ellipsis — a posture label
+    // is one of a fixed handful of words. A name is not, and two names sharing
+    // a prefix must not cut to the same string in a list you pick from.
+    expect(rule(".profile-card strong")).not.toContain("white-space: nowrap");
     expect(routes).toContain(".profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis;");
+  });
+
+  it("clamps the wrap at three lines, so one name cannot set the height of the whole row", () => {
+    /*
+     * Wrapping alone only moved the cost: the same 49-character name took seven
+     * lines at landscape-932 and ten in the phone column, and since the cards
+     * share a row it dictated every sibling's height — the catalog went ragged,
+     * and in the narrow layout the other profiles were pushed most of a screen
+     * down by a name. Three lines is one more than the description a sibling
+     * card already carries, and around 120 characters of prefix at this size.
+     *
+     * `-webkit-box` is not a legacy accident: the clamp only takes effect on
+     * that inner display, so it has to win over the `display: block` the shared
+     * `.profile-card strong, .profile-card small` rule above sets. The standard
+     * `line-clamp` rides with the prefixed one for the engines that have it.
+     */
+    const name = rule(".profile-card strong");
+    expect(name).toContain("display: -webkit-box");
+    expect(name).toContain("-webkit-box-orient: vertical");
+    expect(name).toContain("-webkit-line-clamp: 3");
+    expect(name).toContain("line-clamp: 3");
+    expect(name).toContain("overflow: hidden");
+    expect(routes.indexOf(".profile-card strong {")).toBeGreaterThan(routes.indexOf(".profile-card strong,\n.profile-card small {"));
+  });
+
+  it("keeps the clamped remainder recoverable without selecting the card", () => {
+    // A clamp that hides text with nowhere to read it is the defect the wrap
+    // was chosen over in the first place. The element carries the whole name.
+    expect(app).toContain("<strong title={profile.name}>{profile.name}</strong>");
   });
 });
 

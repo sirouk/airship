@@ -266,7 +266,8 @@
 
 @media (max-width: 760px) {
   /*
-   * `1fr 1fr` means one column per tab, and it was written on the wrong box.
+   * A phone-width fix for this strip was first written as `1fr 1fr`, and it was
+   * written on the wrong box.
    *
    * This class sits on the `.tabs` root, whose two children are the scrolling
    * strip and the `⌄ n` overflow control — so the halving gave the strip half a
@@ -277,29 +278,38 @@
    * fault, on the one route whose content is meaningless without knowing which
    * view you are in.
    *
-   * The halving belongs to the strip, where the tabs actually are. Each tab then
-   * owns a real half and `.tabs__label` ellipsises inside it — the primitive
-   * already carries that rule — so nothing is scrolled out of the frame and the
-   * overflow control has nothing left to report. The root stays the flex row it
-   * is at every other width, because a two-column root is a claim about how many
-   * children there are, and there are two only while the chevron exists.
+   * Moving the halving down to the strip fixed 320px and then charged every
+   * width up to 760 for it: two equal tracks are two equal tracks whether or not
+   * the labels need cutting, so at 430px — where both labels had always fitted
+   * whole — `Attestation evidence` was ellipsised to `Attestation evide…` while
+   * `Receipt & journal` sat in a half it did not fill. An equal split is the
+   * right answer only at the widths where there is nothing to split fairly.
+   *
+   * So the strip stays the flex row it is everywhere else and the tabs are told
+   * to share it: `flex: 1 1 auto` grows them into whatever slack the row has and
+   * shrinks them in proportion to the label each one is carrying when there is
+   * none. Above about 400px that means no cut at all; at 320px each tab gives up
+   * a share of its own width rather than the longer label paying the whole bill,
+   * and `.tabs__label` ellipsises inside the result — the primitive already
+   * carries that rule. Either way nothing is scrolled out of the frame, so the
+   * overflow control still has nothing to report.
    */
   .proof-surface-tabs { width: 100%; }
 
-  .proof-surface-tabs .tabs__strip {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  .proof-surface-tabs .tabs__strip { flex: 1 1 auto; }
+
+  /* A flex item defaults to `min-width: auto`, so it would refuse to shrink
+     below the nowrap label it contains — which is the whole reason the labels
+     overflowed the strip rather than ellipsising inside it. Shrinking is what
+     makes the sharing above possible; growing is what fills the row. */
+  .proof-surface-tabs .tabs__tab {
     flex: 1 1 auto;
+    min-width: 0;
   }
 
-  /* A grid item, and it would otherwise refuse to shrink below the nowrap label
-     it contains — which is the whole reason the labels overflowed the strip
-     rather than ellipsising inside it. */
-  .proof-surface-tabs .tabs__tab { min-width: 0; }
-
   .proof-surface-tabs .tabs__tab-button {
-    /* Fills the segment it was given, and shrinks below its own label to do it.
-       A pill narrower than its half reads as a button that has come loose from
+    /* Fills the share it was given, and shrinks below its own label to do it.
+       A pill narrower than its tab reads as a button that has come loose from
        the control it belongs to. */
     flex: 1 1 auto;
     justify-content: center;
@@ -845,11 +855,27 @@
  * `anywhere` rather than `break-word` because only `anywhere` also shrinks the
  * element's min-content contribution, which is the number the grid track is
  * sized against; `break-word` would still have handed the track the whole word.
- * Wrapping rather than the ellipsis recipe the posture chip above uses: a
- * catalog row is how a person tells two profiles apart, and truncating names
- * that share a prefix to the same string makes the list unpickable.
+ * Wrapping rather than the one-line ellipsis recipe the posture chip above uses:
+ * a catalog row is how a person tells two profiles apart, and cutting names that
+ * share a prefix to the same string makes the list unpickable.
+ *
+ * Wrapping without a floor only moves the cost, though. Unclamped, the same
+ * 49-character name took seven lines at landscape-932 and ten in the phone
+ * column, and because the cards share a row it set the height of every sibling:
+ * the catalog went ragged, and in the narrow layout Research and Developer were
+ * pushed most of a screen down by a name. Three lines is where both arguments
+ * are satisfied — around 120 characters at this size in the narrowest card, far
+ * more prefix than any real pair of profiles needs to be told apart, and a card
+ * that can be at most one line taller than the two its description already
+ * takes. Past that the name is `title`d on the element and printed in full in
+ * the revision form the click opens, so nothing is only ever half-known.
  */
 .profile-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow-wrap: anywhere;
   font-size: var(--fs-micro);
 }

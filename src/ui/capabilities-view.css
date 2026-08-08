@@ -3,7 +3,15 @@
    recipe stays, shared with the extension panel's buttons. */
 .capabilities-refresh, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
 .capability-summary { display: flex; gap: .8rem; align-items: center; justify-content: space-between; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.capability-summary > span { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+/* `:not(.seal)` names the one sibling this rule was ever about — the approval
+   policy sentence that sits at the far end of the row and is read back towards
+   the pill. A `Seal` root is also a `<span>`, so the bare child selector caught
+   it too; that was invisible only while `.seal__label` could not wrap. The
+   moment the freshness label below took a second line, the tail of the sentence
+   it is — the single word "EDT" — right-aligned itself against the pill's edge
+   under a full-width first line, reading as a misalignment rather than as a
+   wrapped sentence. A pill's own text is set from its glyph, at every width. */
+.capability-summary > span:not(.seal) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
 /* This Seal's label is a claim plus the instant it was observed — "3/6 runtimes
    ready · observed Aug 8, 3:12 AM PDT" — and `.seal__label`'s shared
    `white-space: nowrap` gave it only one way to lose: at 320px it read
@@ -116,7 +124,12 @@
 @media (max-width: 760px) {
   .capabilities-refresh { min-width: 44px; min-height: 44px; }
   .capability-summary, .capability-extension { align-items: stretch; flex-direction: column; }
-  .capability-summary > span { text-align: left; }
+  /* The column stack puts the sentence under the pill rather than across from
+     it, so it is read left-to-right like everything else in the column. Scoped
+     the same way as the rule it answers: the pill was never right-aligned here
+     either, it only looked settled because at these widths the wrap happened to
+     leave no short trailing line. */
+  .capability-summary > span:not(.seal) { text-align: left; }
   .capability-grid { grid-template-columns: 1fr; }
   .capability-device > header { align-items: stretch; flex-direction: column; }
   .capability-signal-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }

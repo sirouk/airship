@@ -250,6 +250,26 @@ describe("live load surface", () => {
     expect(declarations).not.toContain("text-overflow: ellipsis");
     expect(declarations).toContain("overflow-wrap: anywhere");
   });
+
+  /*
+   * `Seal` renders its root as a `<span>`, so `.capability-summary > span` — a
+   * rule written for the approval-policy sentence at the far end of the row,
+   * which is read back towards the pill and so is set right — also reached the
+   * freshness pill. That was invisible only while the pill could not wrap. The
+   * moment it took a second line, the tail of that line ("EDT") right-aligned
+   * itself under a full-width first line and read as a misalignment. The one
+   * width where it was already correct, ≤760, was correct by accident: a
+   * counter-rule in the phone block happened to flip it back.
+   */
+  it("sets the freshness pill from its own glyph at every width, not from the sentence beside it", () => {
+    for (const rule of [...styles.matchAll(/\.capability-summary > span[^{]*\{[^}]*text-align[^}]*\}/gu)].map((match) => match[0])) {
+      expect(rule).toContain(":not(.seal)");
+    }
+    // The sentence keeps both of its readings: set right across the row, and
+    // left once the phone stack puts it under the pill rather than opposite it.
+    expect(styles).toContain(".capability-summary > span:not(.seal) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }");
+    expect(styles).toContain(".capability-summary > span:not(.seal) { text-align: left; }");
+  });
 });
 
 describe("extension capability surface", () => {
