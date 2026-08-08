@@ -297,11 +297,20 @@
  * goes from 828px to 725px, where its widest content is the 552px action
  * cluster that already carries `flex-wrap: wrap` and already spills Delete onto
  * a second row at 828px, and the two full-width bands below it (the integrity
- * chips and RUNTIME RECORD) end 365px short of their own right edge today. The
- * clamp is what keeps that honest at the narrow end: the percentage does not
- * reach 330px until the container is about 868px, so every two-pane width below
- * a laptop keeps exactly the column it has, and the detail pane there — where
- * it really is the scarce one — gives up nothing.
+ * chips and RUNTIME RECORD) end 365px short of their own right edge today.
+ *
+ * The clamp's floor keeps that honest at the narrow end, but it does not reach
+ * as far as this comment once claimed. 38% does not hit 330px until the
+ * container is about 868px, and both two-pane containers in the sweep are above
+ * it: 905px on a 932x430 phone held sideways, 917px on a 1024px laptop, where
+ * the nav rail eats the difference the viewports suggest. So neither of them
+ * "keeps the column it has" — both hand the detail pane's width to the list.
+ *
+ * At the laptop that is free, because from 1180px down the detail heading is a
+ * grid: the actions sit on their own row and the eyebrow gets the whole pane,
+ * 532px for 232px of text. At the landscape phone it is not, because there the
+ * heading is flex — see the `max-height: 560px` block near the end of this
+ * file, which is where the growth is handed back.
  */
 .session-library-layout {
   display: grid;
@@ -1718,9 +1727,35 @@
  *
  * The heading stacks its actions under the title from 1180px down because
  * horizontal room is what runs out there. It is not what runs out here — the
- * pane is still ~560px wide — and stacking spends a whole title block's height,
+ * pane is 574px wide — and stacking spends a whole title block's height,
  * roughly 110px, to save width this viewport has to spare. Sitting the actions
  * beside the title again lifts them back above the fold.
+ *
+ * The third rule is the price of the second, and it is why the list column
+ * stops growing here.
+ *
+ * Sitting the actions beside the heading is what makes this pane's width
+ * critical: in the grid heading the eyebrow spans the pane, but in the flex one
+ * it shares the line with the action cluster and gets whatever proportional
+ * shrink leaves it, and the block carrying it has no `min-width: 0` to make
+ * that share predictable. Measured at 932x430, where the container is 905px in
+ * every build: with the list at 330px the pane is 574px, the eyebrow's left
+ * block is 271px, and `Conversation B924F3C2…F142` — 232px — sits on one line.
+ * Let the base rule's 38% take the column to 344px and the pane falls to 560px,
+ * the left block to 236px, and the id breaks mid-token onto a second line. That
+ * second line costs 19px, and 19px is the whole margin this viewport has: the
+ * `Created … · updated …` line, legible above the tab bar before, is pushed
+ * under it and stops being readable at all.
+ *
+ * So in this one block the column is pinned to the clamp's own floor. It is not
+ * a new number — 330px is what every width had before the growth existed, and
+ * what this viewport was photographed rendering correctly. What it gives up is
+ * measured and small: the row's title loses two characters
+ * ("Investigate th…" back to "Investigate …") and its model stub loses an
+ * ellipsis glyph ("a…" back to "a"), which is no fact at all, in exchange for a
+ * whole metadata line and an unbroken identifier. Nothing else can be affected:
+ * the query needs a viewport both wider than 861px and shorter than 561px, and
+ * a landscape phone is the only thing shaped like that.
  */
 @media (max-height: 560px) {
   .session-library-detail {
@@ -1735,6 +1770,10 @@
 
   .session-library-actions {
     justify-content: flex-end;
+  }
+
+  .session-library-layout {
+    grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
   }
 }
 

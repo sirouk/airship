@@ -349,10 +349,16 @@ describe("conversation library space budget", () => {
 
     /*
      * The floor of the clamp is what stops this from being a raid on the detail
-     * pane. 38% does not reach 330px until the container is about 868px, so the
-     * narrow two-pane widths — where the detail pane is the scarce one — keep
-     * exactly the column they have. Lowering that floor, or raising the 38%,
-     * would start taking width from the pane that has none to give.
+     * pane at widths where the pane is the scarce one. Lowering that floor would
+     * take width from a pane that has none to give.
+     *
+     * It was once claimed here that the floor also protects the narrow two-pane
+     * widths outright, because 38% does not reach 330px until the container is
+     * about 868px. That is the right threshold and the wrong conclusion: every
+     * two-pane container in the sweep is above it (905px at 932x430, 917px at
+     * 1024px, the nav rail accounting for why those are so close), so the floor
+     * protects neither. The landscape phone is protected by the rule pinned in
+     * the test below instead.
      */
     expect(layout, "the growth may never drop the column below the width it has today")
       .toMatch(/clamp\(330px,/u);
@@ -465,6 +471,52 @@ describe("conversation library space budget", () => {
     expect(guard).toContain("@media (max-height: 560px) and (min-width: 861px) {");
     expect(guard).toContain(".session-library-detail-heading {");
     expect(guard).toContain("display: flex;");
+  });
+
+  /*
+   * …and sitting the actions beside the heading is what makes this pane's width
+   * critical, so the same block has to stop the list column growing into it.
+   *
+   * In the grid heading the eyebrow spans the pane. In the flex one it shares
+   * the line with the action cluster and takes whatever proportional shrink
+   * leaves it, and the block carrying it has no `min-width: 0` to make that
+   * share predictable — so a small loss on the pane lands amplified on the id.
+   * Measured at 932x430, where the layout container is 905px in every build:
+   * with the column at 330px the pane is 574px, the eyebrow's block is 271px,
+   * and `Conversation B924F3C2…F142` (232px) sits on one line. Let 38% take the
+   * column to 344px and the pane falls to 560px, the block to 236px, and the id
+   * breaks mid-token. The extra line costs 19px, which is exactly the margin
+   * this viewport has: `Created … · updated …` was legible above the tab bar
+   * and is pushed under it.
+   */
+  it("stops the list column growing into the pane whose heading it just widened", () => {
+    const landscape =
+      styles.match(/@media \(max-height: 560px\) and \(min-width: 861px\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(landscape).toContain(".session-library-layout {");
+    expect(landscape).toContain("grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);");
+
+    /*
+     * 330px is the clamp's own floor, not a new number: this is the growth
+     * handed back, not the column cut below what it had before the growth
+     * existed.
+     */
+    expect(ruleBody(".session-library-layout")).toContain("clamp(330px,");
+
+    /*
+     * And the hold has to be stated after the base rule. Both selectors weigh
+     * (0,1,0) and a media query adds nothing to specificity, so source order is
+     * the only thing deciding this — written above the base rule it is inert,
+     * and inert in the silent way that reads as fixed. Same trap as the rename
+     * field's `flex-basis` two tests above.
+     */
+    expect(styles.indexOf("@media (max-height: 560px) and (min-width: 861px) {"))
+      .toBeGreaterThan(styles.indexOf(".session-library-layout {"));
+
+    /*
+     * The narrowing may never reach a portrait phone, where the route is one
+     * column and the list *is* the route: `min-width: 861px` is load-bearing.
+     */
+    expect(styles).not.toContain("@media (max-height: 560px) {\n  .session-library-layout");
   });
 });
 
