@@ -419,9 +419,23 @@
   color: var(--ink-faint);
   font: var(--fs-micro)/1.2 var(--font-mono);
   text-align: right;
-  /* No ellipsis: these sub-labels are short by construction now, and a clipped
-     "Add the Airship e…" is a status a person cannot read. */
-  overflow-wrap: anywhere;
+  /*
+   * No ellipsis: a clipped "Add the Airship e…" is a status a person cannot
+   * read. But `anywhere` bought that by breaking at any character, including
+   * where a word-boundary break would have fitted, and the sub-labels are not
+   * as short as this rule once assumed: the Chutes lane builds its own strip in
+   * `access-view.tsx` and puts "Unavailable in this build" here, 25 characters
+   * that no entry in `METHOD_SUBLABELS` is measured against. In the ~60px the
+   * `auto 1fr` split leaves beside the label, that rendered as "Unavai/lable in"
+   * at 320px and "Unavailabl/e in this/build" at 390px — a word split down the
+   * middle reads as a rendering fault, not as a status.
+   *
+   * `break-word` keeps the protection and drops the damage: it breaks inside a
+   * word only when that word alone cannot fit the line, so the sub-label still
+   * can never overflow the tab, and every width with room to wrap on the space
+   * now does.
+   */
+  overflow-wrap: break-word;
 }
 
 .connect-method__switch > button[aria-selected="true"] small {
@@ -758,8 +772,33 @@
     max-width: none;
   }
 
+  /*
+   * The sub-label takes the button's own width here instead of a sliver beside
+   * the label.
+   *
+   * `auto 1fr` is right where the strip has 420px to divide. At 320px it has
+   * ~130px per tab, and "OAuth" plus the 8px gap claims enough of it that the
+   * status is left roughly 60px — about nine mono characters at `--fs-micro`,
+   * which "Unavailable" alone overruns. `break-word` above stops that from
+   * splitting mid-word wherever the word fits, but at this width no wrap mode
+   * can help a word that does not fit the column at all; the column is the
+   * problem, so the column is what changes.
+   *
+   * Stacking costs height, not width, and nothing beside it pays: the two tabs
+   * stay `1fr` each inside a strip that is already `max-width: none` here, so
+   * no neighbour is squeezed to buy this. The button grows from one baseline
+   * row to two — against a 44px floor it is already holding, a few pixels of
+   * page height in a column that scrolls.
+   */
   .connect-method__switch > button {
     width: auto;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 2px;
+  }
+
+  .connect-method__switch small {
+    text-align: left;
   }
 
   /* The promoted fact strip is a convenience, not a home: the identical three
