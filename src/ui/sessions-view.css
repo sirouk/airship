@@ -364,8 +364,9 @@
  * is and when it moved first; how big it is, whose profile it runs and what
  * model it is pinned to after. Provider and the absolute timestamp move into
  * the row's `title` and the detail pane's Runtime record, where they are the
- * point. The second line is normally one line and wraps only when the panel is
- * too narrow to hold it — see `.session-library-card-line2`.
+ * point. The second line is one line everywhere the row has to share its band
+ * with the controls beside it, and wraps to give the model its own line only in
+ * the two-pane layout — see `.session-library-card-line2`.
  *
  * The pin is a sibling, not a child: it used to be a `role="button"` span
  * nested inside a `<button>`, which is two controls occupying one accessible
@@ -484,31 +485,48 @@
 }
 
 /*
- * Wrapping is what the line does when there is no width left to take.
+ * The line wraps only where a second line is a wider line.
  *
- * The panel above buys about 100px at laptop widths and up, which is enough for
- * all four facts at 1440px and 1920px. It is not enough everywhere: below about
- * an 868px container the column stays 330px on purpose, because there the
- * detail pane is the scarce one and taking from it would only move the defect.
- * With `flex-wrap: nowrap` the line had exactly one way to answer a deficit —
- * shrink the last item — and the last item is the model, so the narrow widths
- * kept the "one bare letter" reading no matter how the shrink order was tuned.
+ * Wrapping is here to stop the model id — the row's only discriminating fact
+ * when every title in a profile reads alike — from being ground down to one
+ * character by the shrink order, because flex places items on lines at their
+ * content size before it shrinks any of them. It does that at exactly one
+ * shape: the two-pane layout, where the line's width is set by a list column
+ * the rule above can size, and where there is vertical room to spend a line on.
+ * Measured at 1024x768 the model reads `airship/demo-v1` whole on its own line.
+ * At 1440px and 1920px the column reaches the clamp's 430px ceiling, all four
+ * facts fit on one line and the line does not wrap at all, so the wrap costs
+ * nothing there either.
  *
- * Flex places items on lines at their content size before it shrinks any of
- * them, so wrapping is what happens first now: the model drops to its own line
- * whole rather than being ground down to a character. `white-space: nowrap`
- * stays and still inherits, so each fact is one unbroken run and only the line
- * between facts may break. The ellipsis rules below stay too, for the case a
- * single fact is wider than a 260px panel's line.
+ * Everywhere else it took more than it gave, because on those shapes a second
+ * line is not a wider line. Below 861px the layout is a single column and the
+ * line's width is set by the row's *other* tracks — the opener, the state pill,
+ * the star, and from 560px down the reorder cluster, which is held open there
+ * because touch has no hover to expand it with. Wrapping does not move any of
+ * them, so it only splits the same ~160px into three ~50px lines: measured at
+ * 320px on a favourited row, `24 events` came out `24 eve`, `general` came out
+ * `gen…` and `airship/demo-v1` came out `air…`. That is more truncation than
+ * the one line it replaced, not less.
  *
- * The cost is height, and it is real: a wrapped row is about 16px taller, so a
- * 720px list shows roughly nine rows instead of eleven at the widths that wrap.
- * A row that is one row shorter still says which conversation it is; a row that
- * cannot name its model does not.
+ * The height it costs is what turns that into a control defect rather than a
+ * typography one. A wrapped row is about 19px taller, and where the list is
+ * already against a fold that height comes out of whatever is below it: at
+ * 932x430 the favourited row's third line carried its whole right-hand cluster
+ * — the state pill's label, the drag handle, ↑, ↓ and the gold unstar, five hit
+ * targets — down past the mobile tab bar, and at 320x568 it sliced the row
+ * card's own bottom border off and pushed the detail pane's title under the
+ * bar. A fact that abbreviates behind a visible ellipsis is still readable; a
+ * control that is not on screen cannot be reached at all. So the fact yields.
+ *
+ * `white-space: nowrap` governs text inside each fact rather than the flex
+ * line, so where the line does wrap the break still falls between facts and
+ * never inside one. The ellipsis rules below carry the narrow shapes.
  */
 .session-library-card-line2 {
   display: flex;
-  flex-wrap: wrap;
+  /* Stated rather than left to the initial value, so the exception below reads
+     as the exception it is and cannot be quietly inverted by deleting a rule. */
+  flex-wrap: nowrap;
   gap: var(--sp-2, 8px);
   align-items: center;
   min-width: 0;
@@ -517,6 +535,26 @@
   color: var(--ink-faint, #858d8a);
   font-size: var(--fs-micro);
   white-space: nowrap;
+}
+
+/*
+ * Two-pane, and tall enough to spend a line on.
+ *
+ * `min-width: 861px` is the same threshold the layout block below uses to keep
+ * two panes: above it there is a list column that can be narrow, and widening
+ * the line by wrapping it is a real answer. Below it the route is one column
+ * and the deficit belongs to the row's sibling tracks, which no amount of
+ * wrapping widens.
+ *
+ * `min-height: 561px` is the threshold the phone-held-sideways block below
+ * already uses, and it is here for the same reason: at 430px tall this route
+ * has no spare 19px anywhere, and the row is the last place that should be
+ * allowed to take it.
+ */
+@media (min-width: 861px) and (min-height: 561px) {
+  .session-library-card-line2 {
+    flex-wrap: wrap;
+  }
 }
 
 .session-library-card-active,
