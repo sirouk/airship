@@ -2846,10 +2846,18 @@
    * Clipped out of the layout, never removed: the ring keeps the state colour,
    * the chip keeps its whole 44px target, and the claim itself is still in the
    * button's accessible name and rendered verbatim in the sheet a tap opens.
-   * 400px is the tier the session bar's own chips already yield at, a few rules
-   * down — one width for "this phone has run out of room for words", not two.
+   *
+   * 360px, not the 400px this first shipped at. The session bar's chips yield
+   * at 400 and borrowing that tier looked tidy, but it was measured against the
+   * wrong screen: at 390 the chip reads `Browser / Ed…`, which is truncated and
+   * still names the runtime, and clipping it there traded a legible label for
+   * no label at all. Thirteen route audits reported that loss independently —
+   * the sweep's most-agreed regression, against a defect that only exists at
+   * 320. One width for "this phone has run out of room for words" is right; it
+   * is just not the same width the session bar uses, because these labels are
+   * not the same length.
    */
-  @media (max-width: 400px) {
+  @media (max-width: 360px) {
     .topbar-posture-chip .seal__label {
       position: absolute;
       width: 1px;
