@@ -833,7 +833,24 @@
 .profile-card .posture-chip > small { margin: 0 0 2px; }
 .profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/*
+ * A profile name is whatever its author typed, and nothing upstream clips it.
+ * The middle track is `minmax(0, 1fr)` so the *track* may shrink, but a name
+ * with no break opportunity in it — one 49-character word — has a min-content
+ * width of the whole string, so it simply painted outside its own card: off the
+ * right edge of the viewport at 390, and clean across the panel divider at 1440,
+ * where it ran under the Profile revision panel's NAME and ROLE labels and put
+ * two panels' text on one baseline.
+ *
+ * `anywhere` rather than `break-word` because only `anywhere` also shrinks the
+ * element's min-content contribution, which is the number the grid track is
+ * sized against; `break-word` would still have handed the track the whole word.
+ * Wrapping rather than the ellipsis recipe the posture chip above uses: a
+ * catalog row is how a person tells two profiles apart, and truncating names
+ * that share a prefix to the same string makes the list unpickable.
+ */
 .profile-card strong {
+  overflow-wrap: anywhere;
   font-size: var(--fs-micro);
 }
 
@@ -1179,6 +1196,21 @@
 .profile-archive-zone p { max-width: 68ch; margin: var(--sp-1) 0 0; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.45; }
 .profile-archive-zone label { display: grid; gap: 5px; color: var(--ink-faint); font-size: var(--fs-micro); }
 .profile-archive-zone .danger { min-height: 40px; color: var(--v-failed); border-color: color-mix(in srgb, var(--v-failed) 45%, var(--line)); }
+/*
+ * The rule above is unconditional, so it reasserted the full-strength failed
+ * hue and border over `button:disabled` in `tokens.css` and Remove profile read
+ * as live while `disabled` was set — in the same frame where Switch to this
+ * profile, disabled for the same preview, was correctly greyed. That is exactly
+ * the failure tokens.css's baseline exists to prevent, so the disabled state is
+ * handed straight back to it. Same shape as `.skill-authoring .danger:disabled`
+ * below, which is the other destructive verb in this sheet.
+ */
+.profile-archive-zone .danger:disabled {
+  color: var(--ink-disabled);
+  border-color: var(--line);
+  background: var(--surface-disabled);
+  cursor: not-allowed;
+}
 
 .skills-toolbar {
   display: grid;
@@ -4473,11 +4505,17 @@
    * at 38px, and each is the primary action of a card.
    * `e2e/touch-target-floor.spec.ts` measures `skills` now, which is what keeps
    * this honest: the rule and the rendered box are different claims.
+   *
+   * The Profiles route's six boundary selects join them: they are written from
+   * the same 38px recipe two rules apart in this sheet, and the one that was
+   * enrolled got the floor while the one that was not stayed 38px under the
+   * same finger. Enrolled rather than given a seventh number of their own.
    */
   .toggle-control,
   .profile-hub-scope .menu-select-trigger,
   .skills-toolbar .menu-select-trigger,
-  .skill-controls .menu-select-trigger {
+  .skill-controls .menu-select-trigger,
+  .profile-boundary-grid .menu-select-trigger {
     min-height: var(--touch-target);
   }
 }
