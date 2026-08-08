@@ -6,6 +6,7 @@ import {
   canvasToGraphPoint,
   createMemoryNodeSpatialIndex,
   createViewportControls,
+  drawNodeLabels,
   fitMemoryGraphViewport,
   graphToCanvasPoint,
   hitTestMemoryNode,
@@ -181,6 +182,86 @@ describe("Canvas memory graph gestures", () => {
     harness.release();
   });
 });
+
+/**
+ * Where the labels land, which is the half of the graph a still frame judges.
+ *
+ * The renderer's own collision grid is what decides this, and it was quantising
+ * each label's *centre* into one 16px row: two labels four pixels apart claimed
+ * adjacent rows, agreed they did not touch, and printed through each other. The
+ * arithmetic is assertable without a browser — only `measureText` and
+ * `fillText` are needed — so these drive `drawNodeLabels` directly.
+ */
+describe("Canvas memory graph labels", () => {
+  it("drops the second of two labels whose ink overlaps, rather than printing them through each other", () => {
+    // The #context frame this is written from: "notes/retrieval.md" was drawn
+    // four pixels below "README.md" with their spans overlapping, and both
+    // words became unreadable. Four pixels is one row apart under the old
+    // quantisation and no overlap at all under it.
+    const harness = labelHarness([
+      node("README.md", 0, 0, 8),
+      node("notes/retrieval.md", -3, 4, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["README.md"]);
+  });
+
+  it("keeps both labels once their ink no longer overlaps, which one row per centre could not tell", () => {
+    // Fifteen pixels apart: two clear, disjoint 12px bands. Both centres landed
+    // in the same 16px row, so the old grid suppressed the second — the loss
+    // the coarse row was quietly paying for alongside the overlap it missed.
+    const harness = labelHarness([
+      node("README.md", 0, -12, 7),
+      node("notes/retrieval.md", -3, 3, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["README.md", "notes/retrieval.md"]);
+  });
+
+  it("refuses to draw a label through a node that already carries one", () => {
+    // "docs/architecture.md" spans x=276..396 and the "General session" node it
+    // crosses is a disc over x=390..410, so the two really do overlap on the
+    // canvas — while the labels themselves do not touch, which is why a
+    // label-only reservation reported no collision and drew it anyway.
+    const harness = labelHarness([
+      node("General session", 0, 0, 10),
+      node("docs/architecture.md", -136, 0, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["General session"]);
+  });
+});
+
+/**
+ * The 2D context reduced to what label placement asks of it. `measureText`
+ * returns six pixels per character — close enough to the 11px face to make the
+ * spans in these cases the spans the product had.
+ */
+function labelHarness(nodes: readonly MemoryGraphNode[]) {
+  const drawn: string[] = [];
+  const context = {
+    font: "",
+    textBaseline: "",
+    fillStyle: "",
+    globalAlpha: 1,
+    measureText: (text: string) => ({ width: text.length * 6 }),
+    fillText: (text: string) => drawn.push(text),
+  } as unknown as CanvasRenderingContext2D;
+  const engine = {
+    context,
+    graph: { nodes } as never,
+    palette: { inkMuted: "#fff" } as never,
+    viewport: { centerX: 0, centerY: 0, scale: 1, width: 800, height: 600 },
+    hoverId: undefined,
+  } as unknown as CanvasEngine;
+  return { engine, nodes, drawn };
+}
 
 /**
  * The engine without a browser: only the canvas members the interaction layer

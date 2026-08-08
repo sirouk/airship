@@ -4046,6 +4046,37 @@
    * `narrow-viewport-overflow` was the only thing that ever said so.
    */
   .profile-hub-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /*
+   * Below 360px the three tabs share the row instead of each taking a third.
+   *
+   * `1fr` is an equal *share*, and the three labels are not equal. Measured at
+   * 320px on `#capabilities`: the strip hands every tab a 93px cell, and
+   * "Capabilities" wants 86px of ink inside it. The word rendered with seven
+   * pixels of air to its left and one to its right — at 3x the trailing "s"
+   * stands on the pill's rounded border — while "Skills" held 38px of ink in
+   * an identical 93px cell. No equal-thirds strip can fit that word at this
+   * width, so the third is what gives way, at the one size where it has to:
+   * 390px already affords 117px a tab and needs none of this.
+   *
+   * `minmax(0, auto)` keeps both properties the `1fr` was there for. The `0`
+   * floor is the one the note above is about — no track may insist on a width
+   * the phone does not have, so the 3px sideways scroll cannot return. The
+   * `auto` ceiling is the repair: a cell grows to at most its own content, and
+   * the grid's default stretch then shares the leftover evenly, so the strip
+   * still fills the row rather than ending ragged. Profiles and Skills give up
+   * only the air they were holding — they land near 88px and 71px against 55px
+   * and 38px of ink — and nothing outside this strip changes size at all.
+   */
+  @media (max-width: 360px) {
+    .profile-hub-tabs { grid-template-columns: repeat(3, minmax(0, auto)); }
+    /*
+     * With the padding stated rather than inherited from the user agent's
+     * button default, which is what "zero inline padding" amounted to: the only
+     * thing holding the label off its own border was a number no rule in this
+     * sheet had ever written down.
+     */
+    .profile-hub-tabs > button { padding-inline: var(--sp-2); }
+  }
   .profile-scope-contract { display: grid; width: 100%; }
 
   .profile-editor {
