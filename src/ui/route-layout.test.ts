@@ -99,6 +99,47 @@ describe("route layout contract", () => {
     expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
   });
 
+  it("wraps the Attestations actions to their own line instead of crushing the lede beside them", () => {
+    /*
+     * `.attestations-heading-actions` is `flex: 0 0 auto`, so it never gives up
+     * a pixel and the prose beside it paid for every shortfall on its own.
+     * Measured off the shipped Attestation-evidence frames, the actions took an
+     * identical 713px at 1440, 1024 and 932, and the lede was left 419px,
+     * 175px and 168px respectively — meaning the section's own title and
+     * description were laid out narrower on a laptop than on a 320px phone,
+     * where the ≤860px band stacks them and hands them the whole column. At
+     * landscape-932 the 13-line paragraph that produced pushed both action
+     * buttons off a 430px viewport altogether.
+     *
+     * What is pinned is that the header may wrap and that the lede has a
+     * flex-basis to wrap against. Either alone is inert: without `flex-wrap`
+     * the basis is just another thing to shrink out of, and without a basis
+     * larger than the crushed width there is nothing for the wrap to trigger
+     * on. The basis has to stay font-relative — a px threshold cannot see that
+     * viewport 1024 yields 920px of content behind a collapsed rail while
+     * viewport 1440 yields 1156px behind an expanded one, which is the reason
+     * this is not a media query.
+     */
+    const attestations = featureStyles.find(({ selector }) => selector === "attestations-view")!.source;
+    const heading = cssRule(attestations, ".attestations-heading");
+    expect(heading).toMatch(/flex-wrap:\s*wrap/u);
+    const lede = cssRule(attestations, ".attestations-heading-lede");
+    expect(lede).toMatch(/flex:\s*1 1 \d+ch/u);
+    // The actions keep their max-content width first and the lede grows into
+    // what is left, which is what makes the wide layout byte-identical to the
+    // one this replaces rather than a second renegotiation of it.
+    expect(cssRule(attestations, ".attestations-heading-actions")).toMatch(/flex:\s*0 0 auto/u);
+    // On a wrapped line the actions are the only item, and `space-between`
+    // would seat them at its start rather than against the right edge.
+    expect(heading).toMatch(/justify-content:\s*flex-end/u);
+    // The phone band turns this header into a grid, where that `flex-end` would
+    // push the single column off to the right; it has to restate its own
+    // alignment or the fix above reaches a width it was never measured at.
+    expect(attestations).toMatch(
+      /@media \(max-width: 860px\) \{[\s\S]*?\.attestations-heading \{[^}]*justify-content:\s*start/u,
+    );
+  });
+
   it("keeps the Proof switcher's selected tab whole and charges the shortfall to the other one", () => {
     /*
      * Two defects, one rule. First, `1fr 1fr` was written on `.tabs` — whose two

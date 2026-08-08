@@ -7,9 +7,65 @@
 
 .attestations-heading {
   display: flex;
+  /*
+   * The actions beside this heading are `flex: 0 0 auto` — they declare
+   * themselves unshrinkable — so before this rule the whole of any shortfall
+   * was charged to the prose next to them. Measured off the shipped frames of
+   * the Attestation-evidence tab, the actions took the same 713px at every
+   * width, and the lede absorbed the entire difference:
+   *
+   *   desktop-1440  content 1156px  ->  actions 713, lede 419  (reads well)
+   *   laptop-1024   content  920px  ->  actions 713, lede 175  (crushed)
+   *   landscape-932 content  905px  ->  actions 713, lede 168  (crushed)
+   *
+   * At 175px "INDEPENDENT EVIDENCE LEDGER" broke across two lines, the H2 took
+   * three, and the description ran to eight — so the section's prose was laid
+   * out *narrower on a 1024px laptop than on a 320px phone*, where the ≤860px
+   * band below stacks it and gives it the full column. At landscape-932 the
+   * resulting 13-line paragraph pushed the actions off the bottom of a 430px
+   * viewport entirely: "Retry acquisition" and "Export status summary" were not
+   * merely misplaced, they were unreachable without scrolling past a paragraph
+   * that only that misplacement had made long.
+   *
+   * `flex-wrap` is the fix rather than another breakpoint because the box this
+   * depends on is not a function of the viewport. The rail collapses: the same
+   * measurements above show viewport 1024 giving 920px of content behind a 59px
+   * rail while viewport 1440 gives 1156px behind a 231px one, so any
+   * `max-width` query here would be guessing at a rail state it cannot see.
+   * Wrapping asks the actual line whether both boxes fit, and moves the actions
+   * to their own line when they do not.
+   *
+   * `justify-content` is `flex-end` rather than `space-between` for the wrapped
+   * line only. On the unwrapped line the lede's `flex-grow` consumes all free
+   * space, so the two are indistinguishable there; on a wrapped line the
+   * actions are alone, and `space-between` would leave them at its start.
+   */
+  flex-wrap: wrap;
   gap: 24px;
   align-items: end;
-  justify-content: space-between;
+  justify-content: flex-end;
+}
+
+.attestations-heading-lede {
+  /*
+   * The basis is what decides when the actions wrap, and it is expressed in
+   * `ch` so it is decided in characters of the prose being protected rather
+   * than in pixels. The row holds both boxes while the lede's basis fits in
+   * `content - 713 - 24` of gap: that is 419px at desktop-1440 and 183px at
+   * laptop-1024, so any basis between those two wraps exactly the widths
+   * measured as broken and leaves the ones measured as good untouched. 34ch is
+   * ~272px at the shipped 15px body size, roughly central in that window, and
+   * being font-relative it also moves the wrap earlier as `--type-scale` grows
+   * — which is when the prose needs the room most and a px threshold would
+   * have gone on ignoring.
+   *
+   * `flex-grow` is what keeps the wide layout identical to the one this
+   * replaces: the actions still take their max-content 713px first and the lede
+   * still grows into everything left over, so desktop-1440 and wide-1920 render
+   * exactly as before.
+   */
+  flex: 1 1 34ch;
+  min-width: 0;
 }
 
 .attestations-heading h1 {
@@ -594,7 +650,13 @@
 }
 
 @media (max-width: 860px) {
-  .attestations-heading { display: grid; align-items: start; }
+  /* `justify-content` is restated because this band turns the header into a
+     grid, where the base rule's `flex-end` would push the single column to the
+     right edge instead of aligning items inside it. It was previously
+     `space-between`, which a one-column grid happens to resolve to `start` — so
+     the phone layout was correct by coincidence and is now correct by
+     statement. Both render identically. */
+  .attestations-heading { display: grid; align-items: start; justify-content: start; }
   .attestations-heading-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .attestations-acquisition-mode { grid-column: 1 / -1; max-width: none; margin: 0; text-align: left; }
   .attestations-boundary > header { grid-template-columns: auto minmax(0, 1fr); }
