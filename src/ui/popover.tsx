@@ -24,6 +24,14 @@ export const POPOVER_SHEET_MAX_WIDTH = 640;
 export const POPOVER_EDGE_GUTTER = 12;
 export const POPOVER_DEFAULT_WIDTH = 320;
 /**
+ * The landscape phone, named by the same bounds the type ramp already uses for
+ * it (`tokens.css:471`), so the shape means one thing across this product.
+ */
+export const POPOVER_LANDSCAPE_MAX_WIDTH = 950;
+export const POPOVER_LANDSCAPE_MAX_HEIGHT = 500;
+/** What an anchored panel opens to on that shape. See `popoverWidth`. */
+export const POPOVER_LANDSCAPE_WIDTH = 380;
+/**
  * The shortest an anchored panel is allowed to be told it is.
  *
  * A chip sitting a few pixels above the fold would otherwise be handed a
@@ -59,6 +67,48 @@ export function popoverPlacement(input: Readonly<{
     mode: "anchored",
     align: projectedRight > input.viewportWidth - POPOVER_EDGE_GUTTER ? "end" : "start",
   });
+}
+
+/**
+ * How wide an anchored panel opens.
+ *
+ * 320px is a portrait-phone measure and it is the wrong one on a landscape
+ * phone, which is the shape this product was never designed against. At 932x430
+ * the scarce axis is height: the panel hangs partway down a `.main` pane that
+ * ends above a fixed navigation band, so every line it spends is a line of the
+ * claim the reader does not get. Width is the abundant axis on exactly that
+ * shape — 932px of it, of which 320 was being used — and width is what buys
+ * lines back, in the header and in the body at the same time.
+ *
+ * Measured on the shipped build at 932x430, with the About-memory panel whose
+ * header still wrapped to three lines: `MEMORY INDEX · REVISION-BOUND LOCAL
+ * MATERIALIZATION` sets three mono lines in the 234px heading box a 320px panel
+ * leaves and two in the 294px box a 380px panel leaves, so the header falls
+ * from 64px to 48px of a 430px-tall viewport; and the body's paragraphs wrap at
+ * roughly 51 characters instead of 42, which is a better measure rather than a
+ * worse one. Nothing gives up width for it: the panel is `position: absolute`
+ * over `.main`, so no sibling reflows, and `max-width: calc(100vw - 2 *
+ * var(--sp-3))` still bounds it — 617px at the narrowest viewport that reaches
+ * here. Sheets never reach here at all; below 640px the panel is full-bleed.
+ *
+ * Kept free of the DOM alongside `popoverPlacement`, and for a harder reason
+ * than symmetry: the right-edge flip is computed from the panel's width, so a
+ * width the placement math does not know about is a panel that runs off the
+ * screen. One function answers both, and the flip now turns 60px earlier on
+ * this shape because the panel is 60px wider — which is the flip working.
+ */
+export function popoverWidth(input: Readonly<{
+  /** What the caller asked for; `POPOVER_DEFAULT_WIDTH` for every panel today. */
+  requested: number;
+  viewportWidth: number;
+  viewportHeight: number;
+}>): number {
+  const landscapePhone = input.viewportWidth > POPOVER_SHEET_MAX_WIDTH
+    && input.viewportWidth <= POPOVER_LANDSCAPE_MAX_WIDTH
+    && input.viewportHeight <= POPOVER_LANDSCAPE_MAX_HEIGHT;
+  // `max`, not a replacement: a caller that has asked for more has a reason,
+  // and this is a floor on the room the shape can afford, not a cap.
+  return landscapePhone ? Math.max(input.requested, POPOVER_LANDSCAPE_WIDTH) : input.requested;
 }
 
 /**
@@ -133,6 +183,13 @@ export function Popover({
     Object.freeze({ mode: "anchored", align: "start" } as const));
   /** `null` until the panel has been measured, and for sheets, which size themselves. */
   const [room, setRoom] = useState<number | null>(null);
+  /**
+   * The width the panel actually opens at. Held in state beside the placement
+   * and set from the same measurement, because the two have to agree: the flip
+   * boundary is `anchorLeft + panelWidth`, and a CSS width the flip has not
+   * seen is a panel hanging off the right edge of the screen.
+   */
+  const [panelWidth, setPanelWidth] = useState(width);
   const hostRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -150,17 +207,23 @@ export function Popover({
     const host = hostRef.current;
     if (host) {
       const anchor = host.getBoundingClientRect();
+      const opened = popoverWidth({
+        requested: width,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
       const next = popoverPlacement({
         anchorLeft: anchor.left,
-        popoverWidth: width,
+        popoverWidth: opened,
         viewportWidth: window.innerWidth,
       });
+      setPanelWidth(opened);
       setPlacement(next);
       // A sheet is pinned to the viewport's own bottom edge by its insets and
       // sizes itself from there; only the anchored panel hangs off a chip
       // partway down a scrolling pane and has to be told where that pane ends.
-      // Measured once at open, like the edge flip beside it: both are answers
-      // about where the trigger was when it was pressed.
+      // Measured once at open, like the width and the edge flip beside it: all
+      // three are answers about where the trigger was when it was pressed.
       setRoom(next.mode === "anchored"
         ? popoverRoom({ anchorBottom: anchor.bottom, clipBottom: clippingBottom(host) })
         : null);
@@ -253,7 +316,7 @@ export function Popover({
         data-open={open ? "true" : "false"}
         inert={!open}
         style={{
-          "--popover-width": `${width}px`,
+          "--popover-width": `${panelWidth}px`,
           // Absent rather than a guess when the panel is a sheet or has not
           // been measured yet; `popover.css` falls back to the viewport, which
           // is the only honest answer before the trigger has a rectangle.
