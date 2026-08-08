@@ -783,7 +783,7 @@ function drawCanvasEngine(engine: CanvasEngine): void {
   context.globalAlpha = 1;
 }
 
-function drawNodeLabels(
+export function drawNodeLabels(
   engine: CanvasEngine,
   visibleNodes: readonly MemoryGraphNode[],
   selected: string | undefined,
@@ -804,23 +804,58 @@ function drawNodeLabels(
   context.fillStyle = engine.palette.inkMuted;
   context.globalAlpha = 0.92;
   const columnWidth = 20;
-  const rowHeight = 16;
+  /*
+   * Four pixels, not the sixteen a line of this text occupies.
+   *
+   * The row used to be a text line, claimed by quantising the label's centre —
+   * `floor(y / 16)` — and that is not the same question as "where is the ink".
+   * Two labels four pixels apart round to adjacent rows, collide with nothing,
+   * and print straight through each other: "notes/retrieval.md" over
+   * "README.md" on #context, both unreadable. The grid is a spatial hash, so
+   * the row only has to be finer than the extent it protects; the extent is
+   * declared below and reserved as a band.
+   */
+  const rowHeight = 4;
+  /*
+   * The label is drawn `textBaseline: middle` at 11px, so its ink covers about
+   * six pixels either side of the node's y. Reserving that band is what makes
+   * the collision test agree with what the eye sees.
+   */
+  const labelHalfHeight = 6;
+  const cellsWithin = (minX: number, maxX: number, minY: number, maxY: number): readonly string[] => {
+    const cells: string[] = [];
+    const lastColumn = Math.floor(maxX / columnWidth);
+    const lastRow = Math.floor(maxY / rowHeight);
+    for (let row = Math.floor(minY / rowHeight); row <= lastRow; row += 1) {
+      for (let column = Math.floor(minX / columnWidth); column <= lastColumn; column += 1) cells.push(`${column}:${row}`);
+    }
+    return cells;
+  };
   for (const node of candidates) {
     const point = graphToCanvasPoint(node, engine.viewport);
     const forced = node.id === selected || node.id === engine.hoverId;
-    const labelX = point.x + Math.max(2.5, node.size) + 6;
+    const radius = Math.max(2.5, node.size);
+    const labelX = point.x + radius + 6;
     // Reserve the label's ACTUAL measured footprint (not a coarse fixed bucket)
     // so wide labels block later ones instead of overlapping into unreadable soup.
     const labelWidth = Math.min(190, context.measureText(node.label).width);
-    const row = Math.floor(point.y / rowHeight);
-    const firstColumn = Math.floor(labelX / columnWidth);
-    const lastColumn = Math.floor((labelX + labelWidth) / columnWidth);
-    let collides = false;
-    for (let column = firstColumn; column <= lastColumn && !collides; column += 1) {
-      if (occupied.has(`${column}:${row}`)) collides = true;
-    }
-    if (!forced && collides) continue;
-    for (let column = firstColumn; column <= lastColumn; column += 1) occupied.add(`${column}:${row}`);
+    const labelCells = cellsWithin(labelX, labelX + labelWidth, point.y - labelHalfHeight, point.y + labelHalfHeight);
+    if (!forced && labelCells.some((cell) => occupied.has(cell))) continue;
+    for (const cell of labelCells) occupied.add(cell);
+    /*
+     * A drawn label also spends its own node's shape, because text is painted
+     * after every node: a later label crossing an earlier node lands on the
+     * glyph as well as beside the word, which is how "docs/architecture.md"
+     * came to be drawn through the "General session" node that already carried
+     * a label of its own.
+     *
+     * Only *labelled* nodes claim their shape. Reserving all 152 was measured
+     * and rejected — at this graph's density a 130px label sweeps about 1.6
+     * node centres, so blanket reservation deletes most of the labels the panel
+     * exists to show. Small unlabelled dots may still be clipped by a passing
+     * label; a label lost is worse than a dot touched.
+     */
+    for (const cell of cellsWithin(point.x - radius, point.x + radius, point.y - radius, point.y + radius)) occupied.add(cell);
     context.fillText(node.label, labelX, point.y, 190);
   }
 }

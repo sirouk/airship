@@ -151,6 +151,38 @@ describe("route layout contract", () => {
     expect(styles).toMatch(/\.proof-surface-tabs \.tabs__tab-button \{[^}]*min-width: 0/u);
     expect(styles).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis/u);
   });
+
+  it("lets the Agent-configuration tabs share the narrowest row instead of each taking a third", () => {
+    /*
+     * The same defect as the Proof switcher above, one route over and one tab
+     * wider. `repeat(3, minmax(0, 1fr))` is an equal share, and at 320px an
+     * equal share is a 93px cell — into which "Capabilities" lays out 86px of
+     * ink. Measured off the shipped frame: seven pixels of air to the word's
+     * left, one to its right, its trailing "s" standing on the pill's rounded
+     * border, while "Skills" held 38px of ink in an identical cell. There is no
+     * width for the label to be given, because the strip is not short of room —
+     * it is dividing the room it has by a rule that cannot see the labels.
+     *
+     * `minmax(0, auto)` is the rule that says both things at once, the way
+     * `flex: 1 1 auto` does above: take at most your own content, and let the
+     * grid's default stretch hand out the surplus evenly so the strip still
+     * fills the row. The `0` floor is load-bearing on its own — it is what the
+     * enclosing block's note is about, and without it a track can insist on a
+     * width a 320px phone does not have and scroll the whole route sideways.
+     *
+     * Pinned at 360px and not at 640: 390px already affords 117px a tab, and
+     * the frames at 390, 430 and landscape-932 were passed by the sweep with
+     * equal thirds. A repair that reshaped them would be taking width from
+     * things that had nothing wrong with them.
+     */
+    expect(styles).toMatch(/@media \(max-width: 360px\) \{[^}]*\.profile-hub-tabs \{[^}]*grid-template-columns: repeat\(3, minmax\(0, auto\)\)/u);
+    // Stated, not inherited from the user agent's button default: "zero inline
+    // padding" was only ever true because no rule here had said otherwise.
+    expect(styles).toMatch(/@media \(max-width: 360px\) \{[\s\S]*?\.profile-hub-tabs > button \{[^}]*padding-inline:/u);
+    // Above that width the thirds are still thirds, so nothing the sweep passed
+    // is reshaped by this.
+    expect(cssRule(styles, ".profile-hub-tabs")).toContain("repeat(3, minmax(100px, 1fr))");
+  });
 });
 
 function cssRule(source: string, selector: string): string {
