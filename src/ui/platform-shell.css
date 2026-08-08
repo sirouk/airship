@@ -353,9 +353,11 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
    * Sticky rather than a fixed footer, because the rows are direct children of
    * the dialog and there is no middle that could scroll on its own; this is the
    * same trade the palette makes two rules below, keeping its legend and
-   * shortening its results. The cost is the header's own height — about 110px
-   * of a 477px sheet at 320 — held back from the rows while scrolled, which is
-   * the price of the dialog having a way out.
+   * shortening its results. The cost is the header's own height, held back from
+   * the rows while scrolled, which is the price of the dialog having a way out
+   * — and it is now the *collapsed* header's height, roughly 61px rather than
+   * the 135px the whole header costs, because the `.is-scrolled` rules below
+   * drop the introduction the moment it stops being the thing on screen.
    *
    * The dialog hands its top padding to the header to carry. A sticky box
    * sticks to the scrollport's padding edge, so leaving the 1rem on the dialog
@@ -393,6 +395,35 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
     background: var(--surface-raised);
   }
   .preferences-dialog > header + * { border-top: 0; }
+  /*
+   * Held, the header keeps its job and drops its introduction.
+   *
+   * The rule above buys a permanent "Done" with the header's whole height, and
+   * the eyebrow and description ride along inside it: measured on the current
+   * shots, the pinned header is 135px of a 477px sheet at phone-320 and 101px
+   * of a 361px sheet at landscape-932 — 28% of the surface, held for two lines
+   * of prose whose only job is to introduce a dialog the reader is already
+   * inside and has already read past. Landscape is where it bites: with a
+   * select open, header plus listbox is the entire screen, so a reader changing
+   * Type scale can see no other setting while they do it.
+   *
+   * Only the introduction goes. The title stays, because it is what
+   * `aria-labelledby` names the dialog by, and Done stays, because it is the
+   * reason the header is held at all. Nothing is destroyed either — scrolling
+   * back to the top restores both, which is where a reader looks for an
+   * introduction anyway.
+   *
+   * This costs the resting frame nothing at any width: `.is-scrolled` is absent
+   * at scrollTop 0, and the whole block is inside the sheet breakpoint, so
+   * every viewport that never becomes a sheet is untouched. Nothing here
+   * changes a width, and the only height that moves is the header's own.
+   */
+  .preferences-dialog.is-scrolled > header .eyebrow,
+  .preferences-dialog.is-scrolled > header p { display: none; }
+  /* Padding sized to frame a three-line block is loose around one line. The
+     Done button keeps its own `--touch-target` floor, which padding cannot
+     shrink, so the collapsed header still lands 44px of tappable dismissal. */
+  .preferences-dialog.is-scrolled > header { padding-top: .5rem; padding-bottom: .5rem; }
   /* A capped sheet has to give the height back from the scrolling middle, not
      from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
      legend rather than shortening the results list. */

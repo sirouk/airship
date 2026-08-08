@@ -547,6 +547,45 @@ describe("the Preferences sheet keeps a way out on screen", () => {
     expect(block).toContain(".preferences-dialog > header + * { border-top: 0; }");
   });
 
+  it("collapses the held header's introduction while scrolled, keeping the title and Done", () => {
+    /*
+     * Holding the whole header pays for a permanent "Done" with 135px of a
+     * 477px sheet at phone-320 and 101px of a 361px sheet at landscape-932 —
+     * 28% of the surface, held for prose introducing a dialog the reader is
+     * already inside. Landscape is the frame that shows the loss: header plus
+     * an open listbox is the whole screen, with no other setting visible.
+     *
+     * The eyebrow and the description go; the title must not, because it is the
+     * `aria-labelledby` target that names the dialog, and Done must not, because
+     * it is the entire reason the header is held.
+     */
+    const block = sheetBlock();
+    expect(block).toContain(".preferences-dialog.is-scrolled > header .eyebrow,\n  .preferences-dialog.is-scrolled > header p { display: none; }");
+    expect(block).not.toMatch(/\.preferences-dialog\.is-scrolled > header (h2|button)/u);
+  });
+
+  it("collapses only under a class the resting sheet does not carry", () => {
+    /*
+     * The whole saving is conditional on `.is-scrolled`, which the dialog sets
+     * from its own `scrollTop`. An unconditional rule here would delete the
+     * description at rest on every phone — the introduction gone before it was
+     * ever read — so every collapsing selector must carry the class, and the
+     * dialog must only carry the class once it has actually scrolled.
+     */
+    const collapsing = [...sheetBlock().matchAll(/^\s*(\.preferences-dialog[^,{]*> header (?:\.eyebrow|p))\s*[,{]/gmu)]
+      .map((match) => match[1] ?? "");
+    expect(collapsing.length).toBeGreaterThanOrEqual(2);
+    // Every one of them, not merely one: a single unguarded selector is enough
+    // to delete the description from a sheet that has never been scrolled.
+    expect(collapsing.filter((selector) => selector.includes(".is-scrolled"))).toEqual(collapsing);
+    const source = readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8");
+    expect(source).toContain('scrolled ? "preferences-dialog is-scrolled" : "preferences-dialog"');
+    expect(source).toContain("onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 2)}");
+    // Closing unmounts the sheet, so a reopened one is at scrollTop 0 with no
+    // scroll event to say so; without the reset it reopens collapsed.
+    expect(/if \(!open\) return;\n\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*setScrolled\(false\);/u.test(source)).toBe(true);
+  });
+
   it("leaves the Trust sheet's header alone, which shares the layout rule but not the scroll box", () => {
     // `.preferences-dialog > header, .trust-sheet > header` share one flex rule;
     // only the dialog is the scrolling element, so only the dialog sticks.
