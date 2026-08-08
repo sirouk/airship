@@ -1070,15 +1070,19 @@
    * absorbs the whole deficit — the same sentence `:first-child` states for the
    * desktop pair at :135, for the same reason.
    *
-   * The cost, measured rather than asserted, is one more character off the third
-   * label at phone-320 alone: its ~131px of label ink takes the full ~49px
-   * instead of its proportional 23px, so "Source Co…" becomes about "Source C…"
-   * while Explorer and Editor render whole. With documents open the Editor cell
-   * also carries a count, ~14px more that the third label now pays too, giving
-   * "Source…" at 320 — with the change count still beside it, because the rule
-   * below pins it. Nothing else on the route is touched: the strip's own width
-   * is unchanged, and 390 and 430 have slack, so at every other device class
-   * this rule never fires and the row is byte-identical.
+   * The cost, measured rather than asserted, is a few more characters off the
+   * third label at phone-320 alone: its ~131px of label ink takes the full ~49px
+   * instead of its proportional 23px, while Explorer and Editor render whole.
+   * Re-measured off the shipped strip rather than predicted from the deficit,
+   * because the first draft of this paragraph guessed one character too
+   * generously in both readings: at rest the third cell reads "Source …", and
+   * with a document open — where the Editor cell also carries a count, ~14px
+   * more that the third label pays too — it reads "Sourc…". Both keep the first
+   * word, which is what makes the destination still named, and both keep the
+   * change count beside them, because the rule below pins it. Nothing else on
+   * the route is touched: the strip's own width is unchanged, and 390 and 430
+   * have slack — both render "Source Control" whole — so at every other device
+   * class this rule never fires and the row is byte-identical.
    */
   .tabs.workbench-mobile-switch .tabs__tab:not(:last-child) { flex-shrink: 0; }
   /* The label gives way and the count does not, the same way round as the
