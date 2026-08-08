@@ -918,22 +918,36 @@
  * share a prefix to the same string makes the list unpickable.
  *
  * Wrapping without a floor only moves the cost, though. Unclamped, the same
- * 49-character name took seven lines at landscape-932 and ten in the phone
- * column, and because the cards share a row it set the height of every sibling:
- * the catalog went ragged, and in the narrow layout Research and Developer were
- * pushed most of a screen down by a name. Three lines is where both arguments
- * are satisfied — around 120 characters at this size in the narrowest card, far
- * more prefix than any real pair of profiles needs to be told apart, and a card
- * that can be at most one line taller than the two its description already
- * takes. Past that the name is `title`d on the element and printed in full in
- * the revision form the click opens, so nothing is only ever half-known.
+ * name took seven lines at landscape-932 and ten in the phone column, and
+ * because the cards share a flex line there it set the height of every sibling:
+ * the catalog went ragged, and Research and Developer were pushed most of a
+ * screen down by a name. That is the argument for a clamp, and it is an
+ * argument about the narrow band only — it is stated with the override in the
+ * `max-width: 640px` block, next to the `display: flex` that creates the
+ * coupling it is about.
+ *
+ * Here, where the catalog is the stacked one-column grid above, no card can set
+ * another's height; a long name costs only its own card, inside a panel that
+ * scrolls with the page. Five lines is what that reading affords: the
+ * 119-character name this was written against takes four lines at desktop-1440
+ * and five at laptop-1024, so it now renders whole at every width where the
+ * column is wide enough to want it, and the narrowest stacked column —
+ * tablet-768, about thirteen characters to a line — is still bounded, at five
+ * lines instead of the ten it wanted.
+ *
+ * The clamp was three everywhere before this, which is where it cost more than
+ * it bought: measured at laptop-1024 it saved 38px on one card of a panel that
+ * ended 46px above a fold the page scrolls past anyway, and spent the last 27
+ * characters of the name to do it. Past the clamp the name is `title`d on the
+ * element and printed in full in the revision form the click opens, so nothing
+ * is only ever half-known.
  */
 .profile-card strong {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
   overflow-wrap: anywhere;
   font-size: var(--fs-micro);
 }
@@ -4226,6 +4240,25 @@
   .profile-card {
     flex: 1 1 min(78vw, 270px);
     min-height: 68px;
+  }
+
+  /*
+   * Three lines, because here the cards share a flex line.
+   *
+   * A flex line stretches every item to its tallest, so in this band — and only
+   * in this band — one long name sets the height of Research and Developer as
+   * well as its own. At landscape-932, where three cards fit one line, the
+   * unclamped name took seven of them and spent most of a 430px-tall card on a
+   * single string, in the layout with the least height to spend. Three lines is
+   * about 120 characters in a card this wide, far more prefix than any real pair
+   * of profiles needs to be told apart.
+   *
+   * The base sheet clamps at five, which is the reading for the stacked column
+   * where a card's height is nobody's business but its own.
+   */
+  .profile-card strong {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
 
   .profile-card .posture-chip { display: none; }

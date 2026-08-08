@@ -844,62 +844,115 @@ export function drawNodeLabels(
       return forced || (!moving && selected === undefined && node.size >= threshold);
     })
     .sort((left, right) => labelPriority(right, selected, engine.hoverId, neighbors) - labelPriority(left, selected, engine.hoverId, neighbors));
-  const occupied = new Set<string>();
+  /*
+   * What is reserved, and where it is filed.
+   *
+   * Each cell holds the rectangles that touch it rather than a bare "taken"
+   * flag. The lattice is a broad phase — it narrows which rectangles are worth
+   * comparing — and the answer comes from comparing them, so a cell size is a
+   * bucketing choice and never a geometric claim.
+   *
+   * It used to be the claim itself, and that is the defect this replaces. A
+   * rectangle is filed in every cell its edges fall in, and both edges round
+   * outward, so a flag-per-cell reserves the rectangle grown to the lattice:
+   * up to a row at each edge and, far worse, up to a whole 20px column. Two
+   * labels that miss each other by six pixels rounded into one column and the
+   * later one was refused. Measured on the two-label harness before this
+   * change: two 11px labels stop sharing ink at a 12px gap, where their bands
+   * meet edge to edge, and the grid refused the second until the gap reached
+   * 14, 15, 16 or 17 depending on nothing but phase. That phantom
+   * separation is what erased "Evidence first" and "Concise handoff" from
+   * #memory at landscape-932 while the neighbours they do not touch stayed,
+   * and its dependence on phase is why the losses read as force-graph jitter
+   * instead of as a rule.
+   *
+   * Comparing the rectangles removes the slop in both axes at once and cannot
+   * introduce an overlap: a reservation is now exactly the extent it names,
+   * every extent still contains the ink it protects, and the test still
+   * refuses any pair that shares area. It only stops refusing pairs that never
+   * shared any.
+   */
+  type Reservation = { minX: number; maxX: number; minY: number; maxY: number };
+  const occupied = new Map<string, Reservation[]>();
   const context = engine.context;
   context.font = "500 11px ui-sans-serif, system-ui, sans-serif";
   context.textBaseline = "middle";
   context.fillStyle = engine.palette.inkMuted;
   context.globalAlpha = 0.92;
   const columnWidth = 20;
-  /*
-   * Four pixels, not the sixteen a line of this text occupies.
-   *
-   * The row used to be a text line, claimed by quantising the label's centre —
-   * `floor(y / 16)` — and that is not the same question as "where is the ink".
-   * Two labels four pixels apart round to adjacent rows, collide with nothing,
-   * and print straight through each other: "notes/retrieval.md" over
-   * "README.md" on #context, both unreadable. The grid is a spatial hash, so
-   * the row only has to be finer than the extent it protects; the extent is
-   * declared below and reserved as a band.
-   */
   const rowHeight = 4;
+  /*
+   * Touching edges do not collide. Two ±6 bands that meet edge to edge are 12px
+   * apart — adjacent lines of text, which is what every paragraph is.
+   */
+  const intersects = (left: Reservation, right: Reservation): boolean =>
+    left.minX < right.maxX && right.minX < left.maxX && left.minY < right.maxY && right.minY < left.maxY;
   /*
    * The label is drawn `textBaseline: middle` at 11px, so its ink covers about
    * six pixels either side of the node's y. Reserving that band is what makes
    * the collision test agree with what the eye sees.
    */
   const labelHalfHeight = 6;
-  const cellsWithin = (minX: number, maxX: number, minY: number, maxY: number): readonly string[] => {
+  const cellsWithin = (area: Reservation): readonly string[] => {
     const cells: string[] = [];
-    const lastColumn = Math.floor(maxX / columnWidth);
-    const lastRow = Math.floor(maxY / rowHeight);
-    for (let row = Math.floor(minY / rowHeight); row <= lastRow; row += 1) {
-      for (let column = Math.floor(minX / columnWidth); column <= lastColumn; column += 1) cells.push(`${column}:${row}`);
+    const lastColumn = Math.floor(area.maxX / columnWidth);
+    const lastRow = Math.floor(area.maxY / rowHeight);
+    for (let row = Math.floor(area.minY / rowHeight); row <= lastRow; row += 1) {
+      for (let column = Math.floor(area.minX / columnWidth); column <= lastColumn; column += 1) cells.push(`${column}:${row}`);
     }
     return cells;
   };
+  /** Every reservation filed in a cell this area touches, each considered once. */
+  const nearby = (area: Reservation): readonly Reservation[] => {
+    const found = new Set<Reservation>();
+    for (const cell of cellsWithin(area)) for (const taken of occupied.get(cell) ?? []) found.add(taken);
+    return [...found];
+  };
+  const isClear = (area: Reservation): boolean => !nearby(area).some((taken) => intersects(area, taken));
+  const reserve = (area: Reservation): void => {
+    for (const cell of cellsWithin(area)) {
+      const bucket = occupied.get(cell);
+      if (bucket) bucket.push(area);
+      else occupied.set(cell, [area]);
+    }
+  };
+  /**
+   * The air a label keeps between itself and whatever it stands next to.
+   *
+   * `anchorOf` already spends it on the left, holding a name off its own node's
+   * shape. A stub cut to fit a gap spends the same on the right, so it stops
+   * short of the thing that stopped it rather than resting against it: text
+   * abutting a disc reads as text printed on a disc, which is the failure the
+   * cut exists to avoid in the first place.
+   */
+  const labelGutter = 6;
   /*
    * How far right of `startX` the label band stays clear, capped at `limit`.
    *
    * The second pass asks this rather than retrying a ladder of guessed widths:
    * the stub it then paints is exactly as long as the room the first pass left
-   * beside the node, and cannot reach one column into a neighbour.
+   * beside the node, and cannot reach into a neighbour.
+   *
+   * The room is measured to the blocking rectangle's own left edge, less the
+   * gutter — not back to the start of the lattice column that rectangle happens
+   * to sit in. Rounding down to the column threw away up to 19px on every stub,
+   * which is the difference between a name and the `MIN_LABEL_WIDTH` floor
+   * declining to draw one.
    */
   const clearWidthFrom = (startX: number, minY: number, maxY: number, limit: number): number => {
-    const firstRow = Math.floor(minY / rowHeight);
-    const lastRow = Math.floor(maxY / rowHeight);
-    for (let column = Math.floor(startX / columnWidth); column * columnWidth < startX + limit; column += 1) {
-      for (let row = firstRow; row <= lastRow; row += 1) {
-        if (occupied.has(`${column}:${row}`)) return Math.max(0, column * columnWidth - startX);
-      }
+    const band = { minX: startX, maxX: startX + limit, minY, maxY };
+    let room = limit;
+    for (const taken of nearby(band)) {
+      if (taken.maxY <= minY || taken.minY >= maxY || taken.maxX <= startX) continue;
+      room = Math.min(room, Math.max(0, taken.minX - labelGutter - startX));
     }
-    return limit;
+    return room;
   };
   /** Where a node's label starts: clear of the node's own shape, on its right. */
   const anchorOf = (node: MemoryGraphNode) => {
     const point = graphToCanvasPoint(node, engine.viewport);
     const radius = Math.max(2.5, node.size);
-    return { point, radius, labelX: point.x + radius + 6 };
+    return { point, radius, labelX: point.x + radius + labelGutter };
   };
   /** Draws one label at no more than `budget` pixels, reporting whether it went down. */
   const place = (node: MemoryGraphNode, budget: number, forced: boolean): boolean => {
@@ -908,9 +961,14 @@ export function drawNodeLabels(
     const { point, radius, labelX } = anchorOf(node);
     // Reserve the label's ACTUAL drawn footprint (not a coarse fixed bucket)
     // so wide labels block later ones instead of overlapping into unreadable soup.
-    const labelCells = cellsWithin(labelX, labelX + fitted.width, point.y - labelHalfHeight, point.y + labelHalfHeight);
-    if (!forced && labelCells.some((cell) => occupied.has(cell))) return false;
-    for (const cell of labelCells) occupied.add(cell);
+    const labelArea = {
+      minX: labelX,
+      maxX: labelX + fitted.width,
+      minY: point.y - labelHalfHeight,
+      maxY: point.y + labelHalfHeight,
+    };
+    if (!forced && !isClear(labelArea)) return false;
+    reserve(labelArea);
     /*
      * A drawn label also spends its own node's shape, because text is painted
      * after every node: a later label crossing an earlier node lands on the
@@ -924,7 +982,7 @@ export function drawNodeLabels(
      * exists to show. Small unlabelled dots may still be clipped by a passing
      * label; a label lost is worse than a dot touched.
      */
-    for (const cell of cellsWithin(point.x - radius, point.x + radius, point.y - radius, point.y + radius)) occupied.add(cell);
+    reserve({ minX: point.x - radius, maxX: point.x + radius, minY: point.y - radius, maxY: point.y + radius });
     context.fillText(fitted.text, labelX, point.y);
     return true;
   };
