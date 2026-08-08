@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   TERMINAL_DOCK_DEFAULT_HEIGHT,
   TERMINAL_DOCK_EDITOR_FLOOR,
+  TERMINAL_DOCK_FLOOR_HEIGHT,
   TERMINAL_DOCK_MIN_HEIGHT,
   readTerminalDockState,
   terminalDockHeight,
+  terminalDockMaximum,
+  terminalDockMinimum,
   terminalDockStorageKey,
   terminalOpenRequestForAuthority,
   updateTerminalDockState,
@@ -69,6 +72,52 @@ describe("profile-scoped Workspace terminal dock state", () => {
     expect(readTerminalDockState({ getItem: () => "{" }, "workspace-a", "profile-a")).toEqual({ open: false, height: TERMINAL_DOCK_DEFAULT_HEIGHT });
     expect(terminalDockHeight(-100, 600)).toBe(TERMINAL_DOCK_MIN_HEIGHT);
     expect(terminalDockHeight(900, 600)).toBe(600 - TERMINAL_DOCK_EDITOR_FLOOR);
+  });
+
+  /*
+   * The landscape phone this clamp was losing. Measured on the shipped build at
+   * 932x430: `.editor-route__panel` is 327px, the workbench above the dock needs
+   * 150px for its document tab strip and its file strip, and the dock was
+   * returning 220px regardless — 107px for 150px of chrome, so the theme picker,
+   * Keep open, Wrap and Save were cut in half by the dock's top edge with
+   * nothing on the route scrolling to reach them.
+   */
+  it("gives up the dock's opening height before it buries the controls above it", () => {
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, 327)).toBe(327 - TERMINAL_DOCK_EDITOR_FLOOR);
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, 327)).toBeLessThan(TERMINAL_DOCK_MIN_HEIGHT);
+    // 320x568 with the dock open: a 322px panel, where the same trade hands the
+    // file tree its first row back instead of leaving the rail nothing but its
+    // search field.
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, 322)).toBe(322 - TERMINAL_DOCK_EDITOR_FLOOR);
+    // And it is a trade with a bottom: the dock keeps its own toolbar, session
+    // strip and session header whatever the panel does.
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, 180)).toBe(TERMINAL_DOCK_FLOOR_HEIGHT);
+    expect(terminalDockMaximum(120)).toBe(TERMINAL_DOCK_FLOOR_HEIGHT);
+    // The dock's floor may never be the term that binds at a viewport this
+    // product ships to: at 932x430 only 295px of the 327px panel is on screen,
+    // and a floor tall enough to be chosen there would re-slice the editor's
+    // controls the day that 32px is given back.
+    expect(TERMINAL_DOCK_FLOOR_HEIGHT).toBeLessThanOrEqual(295 - TERMINAL_DOCK_EDITOR_FLOOR);
+  });
+
+  it("leaves every panel that can afford both surfaces exactly as it was", () => {
+    // The clamp binds only below MIN + FLOOR. Measured panels at phone-390,
+    // phone-430, tablet-768, laptop-1024, desktop-1440 and wide-1920 are all
+    // above it, so the dock still opens at its stored height there.
+    const roomy = TERMINAL_DOCK_MIN_HEIGHT + TERMINAL_DOCK_EDITOR_FLOOR;
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, 607)).toBe(TERMINAL_DOCK_DEFAULT_HEIGHT);
+    expect(terminalDockHeight(TERMINAL_DOCK_DEFAULT_HEIGHT, roomy)).toBe(TERMINAL_DOCK_MIN_HEIGHT);
+    expect(terminalDockMinimum(607)).toBe(TERMINAL_DOCK_MIN_HEIGHT);
+  });
+
+  /*
+   * The resize separator states a range, and a range whose minimum is above its
+   * maximum is a lie told to the one reader who cannot see the split.
+   */
+  it("never reports a minimum above the maximum on a panel too small for both", () => {
+    for (const available of [120, 180, 322, 327, 400, 900]) {
+      expect(terminalDockMinimum(available)).toBeLessThanOrEqual(terminalDockMaximum(available));
+    }
   });
 
   it("rejects empty or control-character scope identifiers", () => {

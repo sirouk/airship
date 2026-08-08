@@ -440,12 +440,18 @@
  * `overflow: hidden` is what makes the frame lose height rather than paint
  * outside it. `flex: 1 1 auto; min-height: 0` already gives the column's slack
  * to the code and the floor to the strip beneath it, but with the terminal
- * dock open on a 932×430 landscape phone the column has about 65px for both:
- * the frame duly shrank to nothing and then went on painting three wrapped
- * lines straight through the Modified verdict, the file path, the revision and
- * the Wrap/Save controls, with both layers illegible where they crossed. A
- * pane with no room left is honest; a pane that overruns its own chrome is a
- * lie about which one you are reading.
+ * dock open on a 932×430 landscape phone the column has almost nothing for
+ * both: the frame duly shrank to nothing and then went on painting three
+ * wrapped lines straight through the Modified verdict, the file path, the
+ * revision and the Wrap/Save controls, with both layers illegible where they
+ * crossed. A pane with no room left is honest; a pane that overruns its own
+ * chrome is a lie about which one you are reading.
+ *
+ * How much room is left is no longer this rule's problem to survive. The
+ * column had 107px for 150px of chrome because the dock's 220px opening height
+ * outranked the room above it; `TERMINAL_DOCK_EDITOR_FLOOR` now keeps the tab
+ * strip and the file strip whole at that viewport and the frame is what goes
+ * to zero, which is what this rule was always for.
  */
 .code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; background: var(--code-ground, transparent); }
 /* The gutter must share the textarea's exact metrics or the numbers drift out
@@ -978,7 +984,22 @@
    instead of at the row's end. */
 .scm-history-row > button > span { display: grid; flex: 1 1 auto; min-width: 0; gap: 2px; }
 .scm-history-row > button strong { overflow: hidden; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
-.scm-history-row > button small { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
+.scm-history-row > button small { display: flex; gap: var(--sp-1); align-items: baseline; min-width: 0; color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
+/*
+ * The meta line's deficit is charged to the revision, never to the date.
+ *
+ * Measured at tablet-768, where the rail hands this row about 178px and the
+ * pair asks for ~183: the line was one text node with no ellipsis on it, so the
+ * span's `overflow: hidden` cut it mid-glyph and the date rendered "2026-08-0"
+ * with its last digit sliced in half, directly under the `↱`. A truncated hash
+ * is still a hash — it is already an abbreviation of one, and the full value is
+ * in the accessible name of the button next to it — while a date missing a
+ * digit is a different date. `min-width: 0` is what lets the flex item shrink
+ * below its own unbroken word at all; the ellipsis it then shows is inherited
+ * from `.scm-row > button span` above.
+ */
+.scm-history-row__oid { min-width: 0; }
+.scm-history-row__sep, .scm-history-row__date { flex: 0 0 auto; }
 .scm-commit { display: grid; gap: .4rem; margin-top: .5rem; }
 .scm-commit textarea { min-height: 64px; resize: vertical; }
 /* The one full-word button the rail still needs, and it was drawing at 24px —
