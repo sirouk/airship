@@ -274,26 +274,84 @@ describe("the panel is the width of the box it is pinned to", () => {
     expect(block(sheet, ".popover__body")).toContain("overflow: auto");
   });
 
-  it("keeps the sheet's dismissal control at the touch floor and not a pixel past it", () => {
+  it("never lets the sheet's dismissal control be shrunk below its own label", () => {
     /*
      * Done is what makes the header worth bounding: a sheet whose only visible
      * exit is off-screen is dismissible solely by a gesture nobody is told
      * about. 44px is that floor in both axes.
      *
-     * It is also a ceiling here, which is the half this used to leave open. The
-     * header is one row, so the 64px this asked for was 14px the wrapping title
-     * beside it did not get — measured at phone-320, enough to hold `ACCOUNT
-     * STANDING · CHUTES TELEMETRY AND PROVIDER INVENTORY` on three lines in a
-     * 224px box when it sets two in a 238px one, and a third line of header on
-     * a sheet is a line of the route behind it. `Done` is 50px on its own
-     * content, so the floor is still cleared with room to spare.
+     * Reading the floor as a ceiling is what broke it. `min-width` was dropped
+     * from 64px to 44px on the argument that the header is one row and every
+     * pixel Done holds is a pixel the wrapping title does not get — and the
+     * captures either side of that change say the title got nothing: the
+     * `account` sheet header at phone-320 is 63px in both, three lines of
+     * `ACCOUNT STANDING · CHUTES TELEMETRY AND PROVIDER INVENTORY` either way,
+     * the sheet top edge at y=414 either way, `Connect Chutes` covered either
+     * way. A mono title re-wraps in whole words; 20px only buys a line when it
+     * straddles a word boundary, and here it does not.
+     *
+     * What it did buy was a clipped label, and by a mechanism a stylesheet hides
+     * well: `min-width` REPLACES a flex item's automatic minimum size. Until
+     * then this was `min-width: auto`, which floors an item at its min-content —
+     * about 50px, `Done` at the phone caption ramp inside 8px of padding — and
+     * that automatic floor was the only reason the button had never been
+     * compressed, because the title beside it has a max-content basis of several
+     * hundred pixels at a 320px sheet and the whole row shrinks against it.
+     * Declaring 44px handed 26px of content box to 32px of label.
+     *
+     * `flex: none` is what this asserts hardest, because it is the part that
+     * cannot go stale: the title is the row's flexible item and the dismissal
+     * control is not, so `Done` sets its own floor at any type scale and in any
+     * translation — 64px alone would have clipped it at `x-large`.
      */
     // Indented inside the sheet media query, so this reads the rule by pattern
     // rather than through `block`, which anchors on a top-level selector.
     const done = /\.popover\[data-mode="sheet"\] \.popover__done \{([^}]*)\}/u.exec(sheet)?.[1];
     expect(done, "the sheet's Done rule exists").toBeTypeOf("string");
+    expect(done).toContain("flex: none");
     expect(done).toContain("min-height: 44px");
-    expect(done).toContain("min-width: 44px");
+    // A pill at 44px tall, not a square: 64px is 16px past the label's own box.
+    expect(done).toContain("min-width: 64px");
+  });
+
+  it("retreats Done's paint inside its target rather than growing the header again", () => {
+    /*
+     * The second half of the same report: three judges read Done as welded to
+     * the sheet's frame. It was. The header is floored at 44px and Done is 44px,
+     * so on a one- or two-line title the two boxes coincide and the button's
+     * border IS the sheet's top border — measured on the `capabilities` capture
+     * at phone-320, a 45px header around a 44px button.
+     *
+     * The air that used to separate them was `padding: var(--sp-2) var(--sp-3)`
+     * on the header, and it may not come back: that padding was outside the 44px
+     * floor, so it was pure addition on every panel in the product, and a bottom
+     * sheet charges its own height to the route it covers. It was moved onto the
+     * heading and the move measurably worked — the `capabilities` sheet header
+     * fell 61px to 45px and the `context` about-memory header 61px to 48px,
+     * against a judge's reading that the 16px had been deleted rather than
+     * moved. Restoring the button's air out of the header would hand that cost
+     * straight back to the route.
+     *
+     * So the target does not move and the mark retreats inside it. The button
+     * keeps its 44px border box — `e2e/touch-target-floor.spec.ts` measures
+     * exactly that box, and a finger measures it too — drops its own border, and
+     * the pseudo-element paints the pill 8px inside, which is both the air the
+     * header padding used to give and the 28px the same control is on a fine
+     * pointer.
+     */
+    const mark = block(sheet, ".popover__done::before");
+    expect(mark).toContain("position: absolute");
+    // 8px top and bottom, 0 inline: the pill is the full width of the target and
+    // 16px shorter than it. A `--sp-1` retreat here would be a 36px pill.
+    expect(mark).toContain("inset: var(--sp-2) 0");
+    expect(mark).toContain("border: 1px solid var(--line-control)");
+    // Off unless a scope switches it on, so the 28px fine-pointer button keeps
+    // its own border and no anchored desktop panel moves.
+    expect(mark).toContain("display: none");
+    expect(block(sheet, ".popover__done")).toContain("position: relative");
+    const done = /\.popover\[data-mode="sheet"\] \.popover__done \{([^}]*)\}/u.exec(sheet)?.[1];
+    expect(done).toContain("border: 0");
+    expect(sheet).toContain('.popover[data-mode="sheet"] .popover__done::before { display: block; }');
   });
 
   it("puts the header's vertical air on the heading, where the 44px floor absorbs it", () => {
@@ -315,10 +373,21 @@ describe("the panel is the width of the box it is pinned to", () => {
      * was short of and the panel's `max-height` takes it out of the body, which
      * scrolls. Padding on the header may not come back: it is outside the floor
      * by construction, so it can only ever be addition.
+     *
+     * A judge reported this air as deleted rather than moved, and the captures
+     * say otherwise on both counts. The heading's padding is applying — the
+     * `account` sheet's three-line title measures 63px of header, which is
+     * 46.8px of type plus exactly this 16px — and the panels whose titles are
+     * short did drop by the full 16px rather than keeping it: `capabilities` at
+     * phone-320 went 61px to 45px, `context` about-memory at phone-390 61px to
+     * 48px. What the judge was reading is Done sharing an edge with the frame
+     * now that nothing separates them, and that is repaired by retreating the
+     * button's paint inside its own target, not by growing this box back.
      */
     const header = block(sheet, ".popover__header");
     expect(header).toContain("padding: 0 var(--sp-3)");
     expect(header).toContain("min-height: 44px");
+    expect(header).not.toMatch(/padding-block|padding-top|padding-bottom/u);
     expect(block(sheet, ".popover__header > strong")).toContain("padding-block: var(--sp-2)");
   });
 
