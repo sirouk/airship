@@ -125,8 +125,9 @@
    * this sheet instead. This still governs every anchored panel that is left.
    *
    * The viewport fallback is for the frame before the measurement lands and
-   * for the sheet, which is pinned to the screen's own bottom edge and takes
-   * its height from `56vh` on the body instead.
+   * for the sheet, whose height comes from its own block below — `56vh` on the
+   * body where the sheet is flush with the screen's bottom edge, and the room
+   * between the navigation band and the top of the screen where it is not.
    */
   max-height: calc(var(--popover-room, 100vh) - var(--sp-2));
   border: 1px solid var(--line-control);
@@ -402,34 +403,82 @@
 }
 
 /*
- * The landscape sheet's measure — this is the bill for the arm added above.
+ * The short screen, where a full-bleed sheet stops being a sheet and becomes an
+ * occlusion. This is the bill for the arm added above, and it is a height bill.
  *
- * A sheet spans the bottom edge, and on an upright phone that edge is 320–430px
- * so the span *is* the measure. At 932×430 the same rule sets a claim's `small`
- * detail sentence — which is `grid-area: 2 / 1 / 3 / -1`, the full row — to a
- * ~900px line. That is roughly 150 characters, twice any measure this product
- * uses anywhere else, and it would have been a legibility defect introduced by
- * the repair rather than one found by it.
+ * A bottom sheet is pinned to the screen's bottom edge, which is where the
+ * navigation band also lives. On an upright phone that costs the band while the
+ * sheet is open and leaves 600–800px of route visible around it, so the reader
+ * can see where they are and has somewhere to tap to get out. At 932×430 the
+ * same rule produced a different object: measured on the shipped build, the
+ * chat SESSION STATE sheet ran y=143→430 — a 45px header over a body capped at
+ * `56vh`, 241px — and the connection info sheet ran y=264→430. Both covered the
+ * navigation band whole, so the answer to "can I go somewhere else" was no; and
+ * because the sheet reached the screen's own bottom edge, the scroll shadow
+ * that says "this list continues" was painted into the last 10px of the
+ * viewport, against no visible container edge, which is why a body cut ~90px
+ * short read as a body that had simply ended.
  *
- * The column is capped and centred rather than the panel, deliberately. The
- * panel keeps its full-bleed geometry — the edge it is pinned to, the travel it
- * slides along, the sticky header, the `--popover-lift` that is purely
- * `translateY` — so nothing about how the sheet arrives or dismisses is
- * re-derived here. Only the body's single grid track is bounded, and its
- * children stretch to it as before. The two scroll shadows are the body's own
- * backgrounds and still span the panel, which is correct: the scroller is the
- * full width even where its content is not.
+ * So: it stays a sheet, and it scrolls. What it stops doing is spanning the
+ * screen.
  *
- * 640px is `POPOVER_SHEET_MAX_WIDTH` read as a measure rather than as a
- * breakpoint — the widest this product ever lets a sheet's content get before
- * it stops calling the viewport compact. The query floors at 641px so the cap
- * can never bind below its own value; inside this band the viewport is at least
- * 641px, so the column is only ever narrowed, never stretched.
+ * The geometry is not invented here. `.mobile-sheet-scrim` in `routes.css`
+ * already reserves `64px + env(safe-area-inset-bottom)` for the navigation band
+ * and already caps its sheet at `min(72dvh, 680px)`, and that sheet is the one
+ * overlay in this product a landscape phone has always been able to use: at
+ * 932×430 it opens at y=56 and ends at y=366 with the band untouched below it.
+ * Taking those same two numbers puts this panel in the same box — 310px tall
+ * with its top edge at y=56 — which buys the body 263px where `56vh` gave it
+ * 241, restores the band a person navigates with, and gives the scroll shadow a
+ * real border with route behind it to be seen against. One change, and the
+ * cause of all three failures was the same edge.
+ *
+ * The width cap moved from the body's grid track to the panel itself, which is
+ * why the track rule that used to live here is gone. It was there because a
+ * full-bleed sheet set a claim's `small` detail — `grid-area: 2 / 1 / 3 / -1`,
+ * the full row — to a ~900px line, twice any measure this product uses; a panel
+ * that is 640px wide cannot do that to any of its rows, so bounding the panel
+ * subsumes bounding the column and the scroll shadows go back to spanning the
+ * scroller exactly. 640px is still `POPOVER_SHEET_MAX_WIDTH` read as a measure
+ * rather than as a breakpoint, and `min()` with the viewport gutter means it can
+ * only ever narrow the panel, never stretch one on a screen too small for it.
+ *
+ * Keyed on the height alone, deliberately. Shortness is what makes a bottom
+ * sheet swallow a screen — a 600×400 window has the same problem for the same
+ * reason — and of the eight device classes under test only 932×430 is under
+ * 500px tall, so every phone, tablet and desktop sheet keeps the flush geometry
+ * five capture sets have already verified.
  */
-@media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {
+@media (max-width: 950px) and (max-height: 500px) {
+  .popover[data-mode="sheet"] .popover__panel {
+    /* Clear of the navigation band, so the band is still readable and still
+       tappable while the disclosure is open. */
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    width: min(100% - (2 * var(--sp-3)), 640px);
+    /* `left: 0; right: 0` come from the sheet block above; with a width set,
+       auto margins are what centre the panel between them. */
+    margin-inline: auto;
+    max-height: min(72dvh, 680px);
+    /* No longer flush with anything, so it is bordered on all four sides —
+       the bottom edge is the one the scroll shadow needs to be seen against. */
+    border-width: 1px;
+    border-radius: var(--radius-panel);
+    /* The travel has to clear the band as well as the panel, or the sheet
+       begins its entrance already sitting on top of the navigation. */
+    --popover-lift: translateY(calc(100% + 64px + env(safe-area-inset-bottom)));
+  }
+
   .popover[data-mode="sheet"] .popover__body {
-    grid-template-columns: minmax(0, 640px);
-    justify-content: center;
+    /* The panel's own `max-height` is the ceiling now, and `grid-template-rows:
+       auto minmax(0, 1fr)` makes the body the row that yields to it. A second
+       cap here would only ever bind first and hand the body less room than the
+       panel it sits in actually has — which is the 90px the reader was short. */
+    max-height: none;
+    /* The flush sheet pads for the home indicator because it ends at the
+       screen's edge. This one ends 64px above it, so that inset is already
+       cleared and repeating it here would be dead space at the bottom of the
+       one box that is short of room. */
+    padding-bottom: var(--sp-3);
   }
 }
 

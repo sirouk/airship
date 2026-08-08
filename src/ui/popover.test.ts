@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { FOCUSABLE_SELECTOR } from "./focus-trap";
 import {
   POPOVER_DEFAULT_WIDTH,
   POPOVER_EDGE_GUTTER,
@@ -190,22 +191,114 @@ describe("the one anchored disclosure", () => {
      * reader's focus in a control somewhere else, an Escape meant for THAT
      * control. The document-level capture listener used to swallow every
      * Escape while any popover was open, closing the panel and refocusing its
-     * trigger under someone else's cursor. The adjacent Tab guard already
-     * required focus containment; Escape now passes the identical gate before
-     * it may close, stop propagation, or refocus anything.
+     * trigger under someone else's cursor. Both keys still read one containment
+     * check, and the two things that reach past this disclosure — stopping
+     * propagation, and pulling focus back to the trigger — remain behind it.
      */
     const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
     const start = source.indexOf("function onKeyDown");
     // Only the handler itself — `onPointerLeave` further down legitimately
     // reads the same containment, and the listener attach marks the boundary.
     const keydown = source.slice(start, source.indexOf("document.addEventListener", start));
-    const gate = keydown.indexOf("if (!hostRef.current?.contains(document.activeElement)) return;");
+    const gate = keydown.indexOf("const contained = hostRef.current?.contains(document.activeElement) ?? false;");
     expect(gate, "the shared containment gate exists").toBeGreaterThan(-1);
     expect(keydown.indexOf('if (event.key === "Escape")')).toBeGreaterThan(gate);
     expect(keydown.indexOf('if (event.key === "Tab")')).toBeGreaterThan(gate);
     // One gate, both keys: the Tab branch must not have quietly regrown a
     // second, divergent containment check of its own.
     expect(keydown.match(/contains\(document\.activeElement\)/gu)).toHaveLength(1);
+    // Tab is gated outright; the reader's next Tab is never yanked into a panel
+    // they did not ask for.
+    expect(keydown.indexOf("if (!contained) return;")).toBeLessThan(keydown.indexOf('if (event.key === "Tab")'));
+    // Escape's two out-of-scope effects stay inside the gate.
+    const uncontained = keydown.slice(keydown.indexOf("if (!contained) {"), keydown.indexOf("event.stopPropagation()"));
+    expect(uncontained).not.toContain("stopPropagation");
+    expect(uncontained).not.toContain("triggerRef.current?.focus()");
+  });
+
+  it("leaves a sheet an exit from wherever the keyboard is, because a sheet covers the route", () => {
+    /*
+     * The landscape defect, stated as the asymmetry that fixes it.
+     *
+     * An anchored panel opens beside its trigger and takes nothing from the
+     * page, so a reader who is not inside it loses nothing by it staying open.
+     * A sheet draws over the route. At 932×430 the SESSION STATE sheet was
+     * caught still open with the focus ring on the topbar's `Connect a model` —
+     * focus outside the disclosure, so the containment gate above discarded
+     * every Escape, and the sheet had become something a keyboard could open
+     * and could not close. Phones never showed it because a phone sheet leaves
+     * most of the route exposed, and the outside click that dismisses it is
+     * somewhere a thumb can reach.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const keydown = source.slice(source.indexOf("function onKeyDown"), source.indexOf("document.addEventListener"));
+    const escape = keydown.slice(keydown.indexOf('if (event.key === "Escape")'));
+    // Uncontained: anchored gives the keypress back, a sheet closes.
+    expect(escape).toContain('if (modeRef.current !== "sheet") return;');
+    expect(escape.indexOf('if (modeRef.current !== "sheet") return;'))
+      .toBeLessThan(escape.indexOf("setOpen(false)"));
+  });
+
+  it("does not let a sheet outlive the focus that was inside it", () => {
+    /*
+     * The same capture, closed from the other side. Escape is the exit a reader
+     * takes deliberately; this is the one the product owes them when focus has
+     * already moved on — a sheet drawn over a route nobody is reading any more
+     * is the product disagreeing with a gesture the reader already made.
+     *
+     * Scoped to sheets on purpose: an anchored panel is held open by
+     * `:focus-within` so a keyboard reader does not lose it to a stray mouse,
+     * and closing that one on `focusout` would fight the contract below it.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const handler = source.slice(source.indexOf("function onFocusOut"), source.indexOf("function onKeyDown"));
+    expect(handler, "the focusout handler exists").toContain("setOpen(false)");
+    expect(handler).toContain('if (modeRef.current !== "sheet") return;');
+    // Focus moving *within* the disclosure is not focus leaving it.
+    expect(handler).toContain("hostRef.current?.contains(landing)");
+    expect(source).toContain('host?.addEventListener("focusout", onFocusOut)');
+    expect(source).toContain('host?.removeEventListener("focusout", onFocusOut)');
+  });
+
+  it("makes the panel the landing site for a tap on its own prose", () => {
+    /*
+     * The mechanism that disarmed every rule above, and it needs no keyboard to
+     * trigger: the reader taps a paragraph or a claim's detail sentence inside
+     * the panel. Neither is focusable, so focus fell to `<body>` — outside the
+     * host, by a gesture made *inside* the disclosure — and from that instant
+     * `document.activeElement` reported the reader as somewhere else. Escape
+     * was discarded and Tab walked the document into the controls behind the
+     * panel, which is precisely the landscape capture.
+     *
+     * `-1` and not `0`: this is a landing site, not a stop. `FOCUSABLE_SELECTOR`
+     * excludes `tabindex="-1"`, so the trap cannot mistake the container for a
+     * stop inside itself.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const panel = source.slice(source.indexOf('class="popover__panel"'), source.indexOf('class="popover__header"'));
+    expect(panel).toContain("tabIndex={-1}");
+    expect(FOCUSABLE_SELECTOR).toContain('[tabindex]:not([tabindex="-1"])');
+    // A disclosure that deliberately leaves the navigation band reachable may
+    // not also tell assistive technology the rest of the page is inert. The
+    // attribute, not the word — the comment beside it explains the choice.
+    expect(panel).not.toMatch(/aria-modal=/u);
+    expect(panel).toContain('role="group"');
+  });
+
+  it("reads the mode from a ref, so the first open of a sheet is not judged as an anchor", () => {
+    /*
+     * The staleness this avoids is not cosmetic. `placement` starts life as
+     * `anchored`, and the effect that measures it is the same effect that
+     * installs these listeners — so a handler closing over the state would see
+     * `anchored` for the whole of a sheet's first open, which is exactly the
+     * open the sheet-specific dismissal exists for.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    expect(source).toContain('const modeRef = useRef<PopoverMode>("anchored");');
+    // Written where the placement is decided, not on a later render.
+    const effect = source.slice(source.indexOf("const next = popoverPlacement({"));
+    expect(effect.indexOf("modeRef.current = next.mode;"))
+      .toBeLessThan(effect.indexOf("function onFocusOut"));
   });
 });
 
@@ -377,27 +470,84 @@ describe("the panel is the width of the box it is pinned to", () => {
     expect(POPOVER_SHEET_LANDSCAPE_MAX_HEIGHT).toBe(500);
   });
 
-  it("bounds the landscape sheet's measure rather than letting it span 932px", () => {
+  it("lifts the sheet off a short screen's bottom edge so the navigation band survives it", () => {
     /*
-     * The bill for the arm above, paid in the same change that incurred it.
+     * The bill for the arm above, and it is a height bill.
      *
-     * A sheet spans the bottom edge, and on an upright phone that edge is
-     * 320-430px so the span is also the measure. At 932x430 the same rule sets
-     * a claim's `small` detail — `grid-area: 2 / 1 / 3 / -1`, the full row — to
-     * a ~900px line, roughly 150 characters and twice any measure this product
-     * uses elsewhere. That would have been a legibility defect introduced by
-     * the repair rather than found by it.
+     * A bottom sheet is pinned to the edge the navigation band also occupies.
+     * On an upright phone it costs the band and leaves 600-800px of route
+     * visible around it. At 932x430 it produced a different object: measured on
+     * the shipped build, the chat SESSION STATE sheet ran y=143 to y=430 and
+     * the connection info sheet y=264 to y=430, both covering the band whole,
+     * so a person could not navigate while a disclosure was open — and because
+     * the sheet reached the screen's own bottom edge, the scroll shadow that
+     * says "this list continues" was painted into the last 10px of the viewport
+     * against no visible container edge, which is why a body cut ~90px short
+     * read as a body that had simply ended.
      *
-     * The body's single track is what is capped, not the panel: the panel keeps
-     * its full-bleed geometry, its bottom-edge travel and its sticky header, so
-     * nothing about how the sheet arrives or dismisses is re-derived. The query
-     * floors at 641px so the 640px cap can only ever narrow the column, never
-     * stretch it.
+     * The numbers are `.mobile-sheet-scrim`'s, not new ones: `routes.css`
+     * already reserves 64px for the band and already caps its sheet at
+     * `min(72dvh, 680px)`, and that sheet opens at y=56 and ends at y=366 on
+     * this exact viewport. Same box here, so the panel is 310px with 263px of
+     * body where `56vh` gave it 241.
      */
-    expect(sheet).toContain('@media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {');
-    const landscape = sheet.slice(sheet.indexOf('@media (min-width: 641px) and (max-width: 950px)'));
-    expect(landscape).toContain("grid-template-columns: minmax(0, 640px)");
-    expect(landscape).toContain("justify-content: center");
+    expect(sheet).toContain('@media (max-width: 950px) and (max-height: 500px) {');
+    const short = sheet.slice(sheet.indexOf('@media (max-width: 950px) and (max-height: 500px) {'));
+    // Clear of the band, and clear of it on the way in as well — a slide that
+    // only travels the panel's own height starts on top of the navigation.
+    expect(short).toContain("bottom: calc(64px + env(safe-area-inset-bottom));");
+    expect(short).toContain("--popover-lift: translateY(calc(100% + 64px + env(safe-area-inset-bottom)));");
+    expect(short).toContain("max-height: min(72dvh, 680px);");
+    // Bordered on all four sides: the bottom one is what the scroll shadow is
+    // read against, and it did not exist while the sheet was flush.
+    expect(short).toContain("border-width: 1px;");
+  });
+
+  it("caps the panel rather than the body's track, and lets the body have the rest", () => {
+    /*
+     * Two caps in a column are one cap too many. The body carried `56vh` so a
+     * flush sheet would not eat the screen; once the panel is bounded to the
+     * room between the band and the top of the viewport, that second cap can
+     * only ever bind first and hand the body less than the panel it sits in
+     * actually has — which is the ~90px of SESSION STATE the reader was short,
+     * with `grid-template-rows: auto minmax(0, 1fr)` above already guaranteeing
+     * the body is the row that yields.
+     *
+     * The width cap moved for the same reason. It lived on the body's grid
+     * track because a full-bleed sheet set a claim's `small` detail —
+     * `grid-area: 2 / 1 / 3 / -1` — to a ~900px line, twice any measure in this
+     * product. A 640px panel cannot do that to any row it contains, so bounding
+     * the panel subsumes bounding the column, and the scroll shadows go back to
+     * spanning the scroller exactly rather than a track inside it.
+     */
+    const short = sheet.slice(sheet.indexOf('@media (max-width: 950px) and (max-height: 500px) {'));
+    expect(short).toContain("max-height: none;");
+    expect(short).toContain("width: min(100% - (2 * var(--sp-3)), 640px);");
+    expect(short).toContain("margin-inline: auto;");
+    // The superseded track cap must not linger beside the panel cap.
+    expect(short).not.toContain("grid-template-columns: minmax(0, 640px)");
+    // The home-indicator inset belongs to a sheet that ends at the screen edge.
+    // This one ends 64px above it, so repeating the inset is dead space in the
+    // one box that is short of room.
+    expect(short).toContain("padding-bottom: var(--sp-3);");
+  });
+
+  it("charges the short-screen geometry to the one device class that is short", () => {
+    /*
+     * Four waves have introduced regressions by buying one control room from
+     * its neighbours, so the query is keyed on the height alone. Of the eight
+     * viewports under test — 320x568, 390x844, 430x932, 768x1024, 932x430,
+     * 1024x768, 1440x900, 1920x1080 — only the landscape phone is under 500px
+     * tall. Every other sheet in the product keeps the flush geometry five
+     * capture sets have verified, and a `min-width` floor here would have left
+     * a narrow-and-short window with the defect for no reason.
+     */
+    const short = sheet.slice(sheet.indexOf('@media (max-width: 950px) and (max-height: 500px) {'));
+    const viewports = [[320, 568], [390, 844], [430, 932], [768, 1024], [932, 430], [1024, 768], [1440, 900], [1920, 1080]];
+    expect(viewports.filter(([w, h]) => w <= 950 && h <= 500)).toEqual([[932, 430]]);
+    expect(short).not.toContain("min-width:");
+    // And the flush sheet above it still owns every one of the others.
+    expect(block(sheet, ".popover__body")).toContain("max-height: min(420px, 60vh)");
   });
 });
 
