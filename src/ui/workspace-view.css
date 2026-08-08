@@ -126,11 +126,11 @@
  *
  * Shrink is otherwise weighted by content width, so a rail too narrow for both
  * would take characters off "Explorer" as well — and there is nothing in it to
- * spend: 108px is the whole word plus its glyph, its padding and its border.
+ * spend: its 100px is the whole word plus its glyph, its padding and its border.
  * Charging the entire deficit to "Source Control" is what keeps the trade the
  * block below describes, where the count survives and the label is what gives
  * way. It cannot overflow the strip instead of shrinking: `.workbench-shell`
- * clamps the rail at `15rem` (:22), which is 240px against Explorer's 108.
+ * clamps the rail at `15rem` (:22), which is 240px against Explorer's 100.
  */
 .tabs.workbench-mode-tabs .tabs__tab:first-child {
   flex-shrink: 0;
@@ -170,16 +170,35 @@
  * disappears into the overflow menu on every tablet. A legible 15px label that
  * keeps the count visible beats a 17px one that hides it.
  *
- * The padding, though, is the product's own `--sp-3`: the step down to `--sp-1`
- * was never argued for and it is what made two controls read as prose. At the
- * 26% default rail the pair measures 289px of a 314px strip; below that the
- * cells shrink and "Source Control" ellipsises, which is the trade argued two
- * blocks up. This once said the strip's measured overflow menu took over there;
- * it does not and must not — that menu is what the `min-width: 0` above exists
- * to keep away from a two-way switch.
+ * The padding is the gutter the cut label can be paid out of, and `--sp-2` is
+ * the most of it that can be spent. Measured: laptop-1024 and tablet-768 hand
+ * this strip the same 255px rail, which leaves the two cells 236px after the
+ * strip's own inset and the gap between them. At `--sp-3` "Explorer" asked 108
+ * and "Source Control 0" asked 165, so 37px were missing and the block above
+ * charges every one of them to the label — which left the label 70px, reading
+ * "Source …", a destination named by the one word in it that does not say which
+ * destination it is. `--sp-2` returns 16 of those 37: 8 that Explorer no longer
+ * spends on its own gutter, which costs it nothing because its cell is its
+ * content and its word was never the thing being cut, and 8 the Source cell no
+ * longer spends on its own. The label gets 88px and reads "Source Con…".
+ *
+ * Nothing outside the strip pays for that. The rail is not touched, and where
+ * there is surplus the cells still `flex: 1 1 auto` to the far edge, so the
+ * desktop pair is what it was with 4px more air around each label. `--sp-1` is
+ * still not the answer — 4px is what made two bordered controls read as prose —
+ * and 8px is the gutter `.tabs__overflow-trigger` already uses inside this same
+ * primitive. The last 21px have no honest source here: only `.workbench-shell`'s
+ * `clamp(15rem, 26%, 22rem)` (:22) could pay them, and it would pay them out of
+ * the code column at exactly the widths where that column is what the clamp
+ * exists to protect. The label is still cut at tablet and laptop; it is cut
+ * three characters further in.
+ *
+ * This once said the strip's measured overflow menu takes over below that; it
+ * does not and must not — that menu is what the `min-width: 0` above exists to
+ * keep away from a two-way switch.
  */
 .tabs.workbench-mode-tabs .tabs__tab-button {
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-2);
   font-size: var(--fs-body);
 }
 
