@@ -115,4 +115,30 @@ describe("approval modes", () => {
     });
     expect(approvalProvenance(policy, toolContext)).toBeUndefined();
   });
+
+  /*
+   * The gate and the record answer different questions. An unanswered request
+   * must not run, so it resolves `deny` — but the journal is the evidence
+   * chain, and a person who walked away from the screen refused nothing. The
+   * broker has kept that distinction all along in `takeOutcome`; until now
+   * nothing read it, so every expiry was written down as "Denied or expired"
+   * and left its reader to guess.
+   */
+  it("records an unanswered Ask First request as an expiry, not as a refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new ApprovalBroker({ decisionTimeoutMs: 10 });
+      const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+      const writeContext = context("expired");
+      const decision = policy.review(writeTool, {}, writeContext);
+      await vi.advanceTimersByTimeAsync(11);
+      // The gate still fails closed; only the record tells the two apart.
+      await expect(decision).resolves.toBe("deny");
+      const reason = approvalProvenance(policy, writeContext)?.reason ?? "";
+      expect(reason).not.toMatch(/denied/iu);
+      expect(reason).toMatch(/expired/iu);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

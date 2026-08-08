@@ -26,11 +26,25 @@ services:
       CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
       CADDY_PORT: ${CADDY_PORT:-443}
       CADDY_TLS: ${CADDY_TLS:-true}
+      # The one value that belongs in both columns, deliberately. It is a build
+      # argument above because Vite inlines it, and runtime environment here
+      # because Caddy has to answer the URLs that inlining produced — the cache
+      # matchers and the SPA fallback in the Caddyfile all carry this prefix.
+      # `deploy.sh` builds and starts in one step from one `.env`, so the two
+      # readings cannot disagree.
+      AIRSHIP_PUBLIC_BASE_PATH: ${AIRSHIP_PUBLIC_BASE_PATH:-/}
     ports:
       - "${CADDY_PORT:-443}:${CADDY_PORT:-443}"
-      # ACME HTTP-01 challenges. Harmless when CADDY_TLS=false, and the
-      # certificate cannot be issued without it when TLS is on.
-      - "80:80"
+      # Caddy's plain-HTTP listener: where Let's Encrypt validates HTTP-01 and
+      # where someone who typed `http://` gets redirected. The certificate
+      # cannot be issued without it when TLS is on, so `80:80` stays the
+      # default. It is not harmless with `CADDY_TLS=false`, which is what this
+      # comment used to claim: Caddy then listens only on CADDY_PORT, so the
+      # binding forwards to nothing, and it still aborts the whole `up` on a
+      # host that already owns port 80 — killing the one path whose purpose is
+      # to need no configuration. Compose cannot drop a port entry, so local
+      # mode sets CADDY_HTTP_BIND=80 and Docker picks the host side.
+      - "${CADDY_HTTP_BIND:-80:80}"
     volumes:
       # Certificates and OCSP staples. Without this every restart re-requests
       # from Let's Encrypt and walks into the rate limit.
@@ -42,7 +56,10 @@ services:
       # moves that listener to CADDY_PORT and serves HTTP; TLS mode uses the
       # same port with a self-issued/ACME certificate, so the probe ignores
       # certificate identity but still requires a real handshake and response.
-      test: ["CMD-SHELL", "if [ \"$${CADDY_TLS:-true}\" = \"false\" ]; then wget --no-verbose --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"http://127.0.0.1:$${CADDY_PORT:-443}/\"; else wget --no-verbose --no-check-certificate --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"https://127.0.0.1:$${CADDY_PORT:-443}/\"; fi"]
+      # It asks for the base path, not the origin root: a subpath deployment has
+      # no document at `/`, and a healthcheck that fails on a healthy container
+      # teaches people to ignore it.
+      test: ["CMD-SHELL", "if [ \"$${CADDY_TLS:-true}\" = \"false\" ]; then wget --no-verbose --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"http://127.0.0.1:$${CADDY_PORT:-443}$${AIRSHIP_PUBLIC_BASE_PATH:-/}\"; else wget --no-verbose --no-check-certificate --tries=1 --spider --header=\"Host: $${CADDY_DOMAIN:-localhost}\" \"https://127.0.0.1:$${CADDY_PORT:-443}$${AIRSHIP_PUBLIC_BASE_PATH:-/}\"; fi"]
       interval: 30s
       timeout: 10s
       retries: 3

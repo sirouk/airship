@@ -4,6 +4,16 @@
 # enables automatic HTTPS, `http://` disables it for local testing. Same shape
 # as the proxy services in this fleet.
 #
+# `{$AIRSHIP_PUBLIC_BASE_PATH:/}` is the one deployment value that is both a
+# build argument and a runtime one. Vite inlined it into the bundle, so every
+# URL the browser asks for carries that prefix; the Dockerfile lays `dist/` down
+# at `/srv<base>` so the filesystem mirrors that URL space, which is what the
+# Pages workflow does to the same build. The matchers below have to carry the
+# prefix too — anchored at the origin root they match nothing on a subpath
+# deployment, and the site then serves correctly while quietly losing its cache
+# and service-worker headers. `caddy-entrypoint.sh` supplies the trailing slash
+# Caddy will not.
+#
 # The header blocks below are not decoration. `public/_headers` is the
 # Netlify/Cloudflare format and **Caddy does not read it**, so serving `dist/`
 # without these would silently publish Airship with no Content-Security-Policy
@@ -41,17 +51,20 @@
 	}
 
 	# Content-addressed by the build, so a year is safe and a rebuild busts it.
-	@immutable path /assets/* /semantic-pack/v1/*
+	@immutable path {$AIRSHIP_PUBLIC_BASE_PATH:/}assets/* {$AIRSHIP_PUBLIC_BASE_PATH:/}semantic-pack/v1/*
 	header @immutable Cache-Control "public, max-age=31536000, immutable"
 
 	# The service worker decides when the app updates. Caching it defeats that:
-	# a stale worker keeps serving a stale build long after a deploy.
-	@nocache path /sw.js /release-manifest.json
+	# a stale worker keeps serving a stale build long after a deploy. The allowed
+	# scope is the base path because that is the scope the app registers with
+	# (`src/main.tsx`), not the origin.
+	@nocache path {$AIRSHIP_PUBLIC_BASE_PATH:/}sw.js {$AIRSHIP_PUBLIC_BASE_PATH:/}release-manifest.json
 	header @nocache Cache-Control "no-cache"
-	header /sw.js Service-Worker-Allowed "/"
+	header {$AIRSHIP_PUBLIC_BASE_PATH:/}sw.js Service-Worker-Allowed "{$AIRSHIP_PUBLIC_BASE_PATH:/}"
 
 	# Hash-routed, but a refresh or a shared deep link can still reach a path
-	# the build does not emit.
-	try_files {path} /index.html
+	# the build does not emit. The fallback is the base's index, not the origin's:
+	# on a subpath deployment there is no `/index.html` on disk.
+	try_files {path} {$AIRSHIP_PUBLIC_BASE_PATH:/}index.html
 	file_server
 }

@@ -35,11 +35,25 @@ export class ShellCommandError extends Error {
   }
 }
 
-/** An unimplemented flag is an error, never a silently ignored argument. */
-export function unsupportedOption(command: string, option: string): ShellCommandError {
-  return new ShellCommandError(`${command}: unsupported option: ${option}`, 2);
+/**
+ * An unimplemented flag is an error, never a silently ignored argument.
+ *
+ * Neither of these puts the command name in the message. `Interpreter.guard`
+ * prefixes every `ShellCommandError` it catches with the argv[0] it actually
+ * dispatched — which is why `filesystem.ts` and `regex.ts` write their
+ * diagnostics without one — and these two wrote it in as well, so the person
+ * read it twice: `ls: ls: unsupported option: -Z`. argv[0] is also the more
+ * truthful of the two names, because it is the word that was typed: `[ -t 1 ]`
+ * is reported as `[`, not as `test`.
+ *
+ * The parameter stays. Every call site uses it to declare which utility the
+ * diagnostic belongs to, and that is worth reading there even though the
+ * printed name now comes from the dispatcher.
+ */
+export function unsupportedOption(_command: string, option: string): ShellCommandError {
+  return new ShellCommandError(`unsupported option: ${option}`, 2);
 }
 
-export function usageError(command: string, detail: string): ShellCommandError {
-  return new ShellCommandError(`${command}: ${detail}`, 2);
+export function usageError(_command: string, detail: string): ShellCommandError {
+  return new ShellCommandError(detail, 2);
 }

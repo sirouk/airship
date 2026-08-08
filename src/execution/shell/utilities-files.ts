@@ -177,18 +177,26 @@ async function copy(context: CommandContext): Promise<number> {
  * what was asked, which is the contract `execute_shell` advertises.
  */
 function refuseSelfDirectedCopy(utility: "cp" | "mv", fs: ShellFileSystem, from: string, to: string): void {
-  if (from === to) throw new ShellCommandError(`${utility}: ${from} and ${to} are the same file`);
+  /*
+   * Nameless, because `Interpreter.guard` prefixes the dispatched `argv[0]`
+   * onto every `ShellCommandError` on its way out. Spelling the utility here as
+   * well printed it twice — `cp: cp: /workspace/a and /workspace/a are the same
+   * file` — the same duplication `unsupportedOption` and `usageError` carried.
+   * The parameter stays because the two refusals are worded differently for the
+   * two verbs, which is a fact about the operation and not about the name.
+   */
+  if (from === to) throw new ShellCommandError(`${from} and ${to} are the same file`);
   if (fs.isDirectory(from) && to.startsWith(`${from}/`)) {
     throw new ShellCommandError(utility === "cp"
-      ? `cp: cannot copy a directory, ${from}, into itself, ${to}`
-      : `mv: cannot move ${from} to a subdirectory of itself, ${to}`);
+      ? `cannot copy a directory, ${from}, into itself, ${to}`
+      : `cannot move ${from} to a subdirectory of itself, ${to}`);
   }
 }
 
 function copyPath(context: CommandContext, from: string, to: string, recursive: boolean): void {
   const fs = context.shell.fs;
   if (fs.isDirectory(from)) {
-    if (!recursive) throw new ShellCommandError(`cp: ${from}: is a directory (use -r)`);
+    if (!recursive) throw new ShellCommandError(`${from}: is a directory (use -r)`);
     fs.makeDirectory(to, true);
     for (const name of fs.list(from)) {
       context.shell.charge();

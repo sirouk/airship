@@ -14,6 +14,16 @@ if (process.env.AIRSHIP_CHUTES_LIVE === "1" && !apiKey) {
   throw new Error("Live Chutes acceptance requires CHUTES_TEST_API_KEY.");
 }
 const liveDescribe = apiKey ? describe : describe.skip;
+/*
+ * `AIRSHIP_CHUTES_STRESS=1` is named in no script, config, or release stage,
+ * and until this comment it was named nowhere else in the repository either —
+ * an operator holding a credential had no way to learn the block existed, so a
+ * deliberate cost switch was indistinguishable from dead code. It stays opt-in
+ * on purpose: the block below drives repeated real turns against a paid chute
+ * to catch transport reuse defects across a session, which is an operator's
+ * decision about spend rather than something a release gate should force.
+ * Run it as `AIRSHIP_CHUTES_STRESS=1 npm run test:chutes:live`.
+ */
 const stressDescribe = apiKey && process.env.AIRSHIP_CHUTES_STRESS === "1" ? describe : describe.skip;
 
 liveDescribe("live Airship Chutes E2EE transport", () => {

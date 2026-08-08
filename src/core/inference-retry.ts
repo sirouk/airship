@@ -80,6 +80,16 @@ const RETRYABLE_TRANSPORT_CODES: ReadonlySet<string> = new Set([
   "timeout",
   "stream-truncated",
   "stream-interrupted",
+  // How the local providers spell `network-or-cors`. Both codes name the same
+  // event — a `fetch` that rejected before any response existed — and neither
+  // browser will say whether that was a refused preflight or a model server
+  // that dropped the connection, which is why both names concede the
+  // ambiguity. Only the cloud spelling was listed, so the identical dropped
+  // socket destroyed a turn against Ollama or LM Studio while surviving it
+  // against OpenAI. A CORS refusal really is permanent, and it now costs three
+  // attempts inside the first couple of seconds before the same diagnostic
+  // surfaces — the price the cloud lane has always paid for the same guess.
+  "cors-or-private-network-access",
   // The same three carriage failures as the Chutes transport spells them. Its
   // `TIMEOUT` is deliberately absent: it is the 300s whole-request lifetime
   // (`transport.ts` `RequestLifetime`), not a socket that went quiet, so

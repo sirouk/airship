@@ -129,8 +129,12 @@ describe("ToolRegistry authorization boundary", () => {
     const ctx = context(controller);
     const argumentsValue = { path: "notes/a.md", content: "abort" };
     await registry.review("write_record", argumentsValue, ctx, allow);
-    controller.abort(new DOMException("Stopped", "AbortError"));
-    await expect(registry.executeApproved("write_record", argumentsValue, ctx)).rejects.toBeTruthy();
+    const stopped = new DOMException("Stopped", "AbortError");
+    controller.abort(stopped);
+    // Pinned to the exact reason rather than `toBeTruthy()`, which accepted any
+    // thrown value at all and so could not tell the aborted-signal short
+    // circuit apart from a bind failure arriving for some other cause.
+    await expect(registry.executeApproved("write_record", argumentsValue, ctx)).rejects.toBe(stopped);
     // That rejection is only the aborted signal answering for itself, and it
     // would arrive whether or not the ticket survived. The removal is the claim
     // under test: the same approval key, presented with a live signal, must

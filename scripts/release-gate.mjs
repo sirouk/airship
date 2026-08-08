@@ -68,11 +68,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // artifact. The tripwire margin this budget insists on cannot be kept at
   // 116 KiB — 981 B — so gzip takes the usual whole-KiB step; 117 KiB leaves
   // 1,246 bytes. Raw keeps 384 KiB and now carries 6 KiB of its clearance.
-  // Re-measured at 388,754 B raw / 119,891 B gzip on the merged prime port: the
-  // compression gate's own lazy modal kept the entry's static footprint at
-  // 1,505 B raw / 412 B gzip, so gzip takes one further whole-KiB step to
-  // 118 KiB, leaving 862 B; raw stays inside its 384 KiB clearance. The
-  // claim states the floor across both build modes.
+  // The merged prime port then took gzip one further whole-KiB step to 118 KiB:
+  // the compression gate's own lazy modal kept the entry's static footprint at
+  // 1,505 B raw / 412 B gzip, and raw stayed inside its 384 KiB clearance. That
+  // reading is not restated here — it describes an artifact this build no
+  // longer produces, and a superseded figure above a live ceiling is what the
+  // rule below reads as a raise nobody reviewed.
+  // Re-measured at 388,198 B raw / 119,623 B gzip after the surface-repair
+  // sweep, and this one went down: the /models summary stopped promising a fork
+  // the product no longer always performs, the engine tag stopped naming an
+  // engine the gate does not run, and the queued-message and transition
+  // refusals replaced branches with sentences. Neither ceiling moves — 384 KiB
+  // raw and 118 KiB gzip still clear the reading with room — but the figure has
+  // to be re-taken, because a comment claiming bytes nothing shipped is the
+  // same defect as a ceiling nobody reviewed. The gzip figure is the Docker
+  // reading, eight bytes under this host artifact: the claim states the floor
+  // across build modes, or whichever mode comes in lightest fails the gate on
+  // the other's justification.
   entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 118 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains governed by its stricter entry-specific ceiling above. Heavy
@@ -334,8 +346,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // takes 444 KiB because 443 would sit inside minifier rename; gzip is
   // unchanged inside its existing 131 KiB.
   //
-  // Re-measured at 454,715 B raw / 133,743 B gzip after the surface-repair
-  // sweep, 62 bytes over the raw ceiling. The growth is deferred surfaces
+  // Re-measured at 454,711 B raw / 133,742 B gzip after the surface-repair
+  // sweep, 58 bytes over the raw ceiling. Those are the *Docker* readings, and
+  // deliberately: this config-free host artifact measures four raw bytes and one
+  // gzip byte more, and the rule above is that a comment may not claim more than
+  // the build contains — so the figure has to be the floor across build modes,
+  // or whichever mode comes in lightest fails the gate on its own justification.
+  // The same divergence is recorded on the ceilings above; it is the origin
+  // string Vite inlines, which differs between a container build and this one. The growth is deferred surfaces
   // stating refusals they used to swallow: the Explorer, the Source Control
   // verbs and the terminal's Restart/Interrupt now report a failure instead of
   // discarding it, the approval dialog measures the file rather than its own
@@ -735,8 +753,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // handful of bytes rather than hugging the line. 2,301 KiB raw and
   // 730 KiB gzip would have left 201 / 235 B, below the aggregate's 768-byte
   // floor, so raw takes 2,302 and gzip takes 731.
-  // Re-measured at 2,360,450 B raw / 748,651 B gzip after the surface-repair
-  // sweep. Everything in the delta is first-party correctness: the shell,
+  // Re-measured at 2,360,422 B raw / 748,651 B gzip after the surface-repair
+  // sweep. Everything in the delta is first-party correctness: the shell, These are the Docker readings; this
+  // config-free host artifact measures 28 raw bytes more, and the figure has to
+  // be the floor across build modes or the lighter one fails the gate on its own
+  // justification.
   // prime, execution, storage, trust and tooling repairs listed against their
   // own ceilings above, none of which made anything eager. 2,306 KiB raw would
   // have left 714 B, below the aggregate's 768-byte floor, so raw takes one
@@ -998,8 +1019,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so raw takes one further whole step to
   // 2,981 (1,598 B). Gzip takes the smallest whole-KiB step that clears
   // the reading, so 919.
-  // Re-measured at 3,055,890 B raw / 941,690 B gzip after the surface-repair
-  // sweep. This backstop tracks the first-party and prime readings above and
+  // Re-measured at 3,055,862 B raw / 941,690 B gzip after the surface-repair
+  // sweep. This backstop tracks the first-party and prime readings above and These are the Docker readings, 28 raw bytes
+  // under this host artifact, for the reason recorded on the first-party ceiling
+  // above: the claim states the floor across build modes.
   // moves for the same reason they do: eighty-four repairs that make surfaces
   // report what they actually did. 2,985 KiB raw would have left 570 B and
   // 920 KiB gzip would have left 303 B, both inside the aggregate's 768-byte

@@ -104,6 +104,11 @@ case "${choice}" in
       export CADDY_DOMAIN="localhost"
       export CADDY_TLS="false"
       export CADDY_PORT="${LOCAL_PORT:-8080}"
+      # Without TLS there is no certificate to obtain and no HTTPS to redirect
+      # to, so nothing inside the container listens on port 80. Publishing it on
+      # a host port Docker picks keeps `up` from failing on a machine that
+      # already serves 80 — which local mode must never require.
+      export CADDY_HTTP_BIND="80"
       export VITE_AIRSHIP_PUBLIC_ORIGIN="http://localhost:${CADDY_PORT}"
       export AIRSHIP_PUBLIC_BASE_PATH="/"
       echo -e "${YELLOW}Local mode: http://localhost:${CADDY_PORT} — no TLS, no domain.${NC}"
@@ -156,16 +161,20 @@ case "${choice}" in
     scheme="https"; [ "${CADDY_TLS}" = "false" ] && scheme="http"
     url="${scheme}://${CADDY_DOMAIN}:${CADDY_PORT}"
     [ "${CADDY_PORT}" = "443" ] && url="${scheme}://${CADDY_DOMAIN}"
+    # The app answers under its base path. On a subpath deployment the origin
+    # root holds no document, so probing it would report a broken deploy that
+    # is not broken — and skip the header checks that are the point.
+    url="${url}${AIRSHIP_PUBLIC_BASE_PATH:-/}"
 
     echo -e "${BLUE}Checking what is actually served…${NC}"
-    if curl -kfsS -o /dev/null -w "  HTTP %{http_code}\n" "${url}/" 2>/dev/null; then
-      served_csp="$(curl -kfsSI "${url}/" 2>/dev/null | grep -i "^content-security-policy:" | head -1 || true)"
+    if curl -kfsS -o /dev/null -w "  HTTP %{http_code}\n" "${url}" 2>/dev/null; then
+      served_csp="$(curl -kfsSI "${url}" 2>/dev/null | grep -i "^content-security-policy:" | head -1 || true)"
       if [ -n "${served_csp}" ]; then
         echo -e "  ${GREEN}✓${NC} Content-Security-Policy is being sent"
       else
         echo -e "  ${RED}✗${NC} No CSP on the served response — check the Caddyfile header block"
       fi
-      coep="$(curl -kfsSI "${url}/" 2>/dev/null | grep -i "^cross-origin-embedder-policy:" | head -1 || true)"
+      coep="$(curl -kfsSI "${url}" 2>/dev/null | grep -i "^cross-origin-embedder-policy:" | head -1 || true)"
       if [ -n "${coep}" ]; then
         echo -e "  ${GREEN}✓${NC} Cross-origin isolation headers present"
       else

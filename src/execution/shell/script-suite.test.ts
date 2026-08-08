@@ -215,10 +215,10 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
    * recursed through the children they were creating until the step budget
    * stopped them, leaving a partial tree and still reporting success.
    */
-  { name: "mv onto the same name refuses instead of deleting the file", script: `mv a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderrMatch: /are the same file/u, files: { "/workspace/a": "payload\n" } },
-  { name: "cp onto the same name refuses", script: `cp a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderrMatch: /are the same file/u, files: { "/workspace/a": "payload\n" } },
-  { name: "cp -r refuses a directory into its own subtree", script: `mkdir -p d/inner; cp -r d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderrMatch: /cannot copy a directory, \/workspace\/d, into itself/u },
-  { name: "mv refuses a directory into its own subtree", script: `mkdir -p d/inner; mv d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderrMatch: /cannot move \/workspace\/d to a subdirectory of itself/u },
+  { name: "mv onto the same name refuses instead of deleting the file", script: `mv a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderr: "mv: /workspace/a and /workspace/a are the same file\n", files: { "/workspace/a": "payload\n" } },
+  { name: "cp onto the same name refuses", script: `cp a a`, seed: { "/workspace/a": "payload\n" }, exitCode: 1, stderr: "cp: /workspace/a and /workspace/a are the same file\n", files: { "/workspace/a": "payload\n" } },
+  { name: "cp -r refuses a directory into its own subtree", script: `mkdir -p d/inner; cp -r d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderr: "cp: cannot copy a directory, /workspace/d, into itself, /workspace/d/inner/d\n" },
+  { name: "mv refuses a directory into its own subtree", script: `mkdir -p d/inner; mv d d/inner`, seed: { "/workspace/d/a": "x\n" }, exitCode: 1, stderr: "mv: cannot move /workspace/d to a subdirectory of itself, /workspace/d/inner/d\n" },
   { name: "rm -r removes a tree", script: `rm -r d; ls`, seed: { "/workspace/d/x": "", "/workspace/keep": "" }, stdout: "keep\n" },
   { name: "mkdir -p creates parents", script: `mkdir -p a/b/c; [ -d a/b/c ] && echo made`, stdout: "made\n" },
   { name: "head and tail select lines", script: `seq 1 5 | head -n 2; seq 1 5 | tail -n 2`, stdout: "1\n2\n4\n5\n" },
@@ -251,7 +251,10 @@ const CASES: readonly Case[] = Object.freeze<Case[]>([
   { name: "diff on identical files is silent", script: `diff a b; echo $?`, seed: { "/workspace/a": "x\n", "/workspace/b": "x\n" }, stdout: "0\n" },
   { name: "stat -c reports honest fields", script: `stat -c '%n %s %F' f`, seed: { "/workspace/f": "1234" }, stdout: "f 4 regular file\n" },
   { name: "du -s totals a subtree", script: `du -s d`, seed: { "/workspace/d/a": "x", "/workspace/d/b": "y" }, stdout: "2\td\n" },
-  { name: "an unimplemented utility flag is an error", script: `ls -Z`, exitCode: 2, stderrMatch: /unsupported option: -Z/u },
+  // The exact string, not a tail-anchored match: the utility named itself and
+  // then `Interpreter.guard` named it again, and only a whole-line assertion
+  // can see `ls: ls: unsupported option: -Z`.
+  { name: "an unimplemented utility flag is an error, and names the command once", script: `ls -Z`, exitCode: 2, stderr: "ls: unsupported option: -Z\n" },
 
   // --- combined, realistic scripts ---------------------------------------
   {

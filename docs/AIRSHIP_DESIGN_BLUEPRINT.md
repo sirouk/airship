@@ -47,7 +47,7 @@ Airship is a **static, backendless, edge-first browser agent** whose one defensi
 
 - **The trust *model*** — three honest postures, asserted-vs-verified copy (`"Key match · unverified"`), fail-closed approvals, local-tool results tagged `excluded from model context`, optimistic-concurrency guards, identity-fenced streaming. No mainstream agent does this.
 - **The streaming engine** — rAF-coalesced deltas, identity fences, disciplined `AbortController`. Superior to the borrow target.
-- **The lightweight footprint** — three runtime deps (preact/sigma/graphology). This constraint *is* the moat; every fix below ships as zero-dep Preact.
+- **The lightweight footprint** — a Preact UI with no framework, component library or graph runtime under it. `sigma`/`graphology` were surveyed and never adopted, so the memory graph ships as a hand-written 2D canvas (`docs/MEMORY_RELATIONSHIP_GRAPH.md`), and `package.json` is the authority on what is actually pinned. This constraint *is* the moat; every fix below ships as zero-dep Preact.
 - **Honest bounding as first-class UI** — transcript-boundary banner, bounded diff preview, 200-session cap.
 
 ### What is broken (the load-bearing failures)
@@ -1464,7 +1464,7 @@ Interaction states (each part & control): **rest / hover (`--dur-control` color+
 7. **Action row + variants**; **single-slot queue**; **attachments (in/out)**.
 8. **Composer**: ARIA-complete slash combobox, auto-grow, inline model/profile pickers, `visualViewport` + full safe-area.
 
-Every item ships as **zero-dep Preact** (runtime deps stay exactly `preact/sigma/graphology`). No `innerHTML`, no editor framework, no socket client, no new modal — the single `ApprovalDock` remains the only blocking surface, and model tool activity renders inline as sealed evidence, never as a modal.
+Every item ships as **zero-dep Preact** (runtime deps stay exactly what `package.json` pins; `sigma`/`graphology` never became two of them). No `innerHTML`, no editor framework, no socket client, no new modal — the single `ApprovalDock` remains the only blocking surface, and model tool activity renders inline as sealed evidence, never as a modal.
 
 ---
 
@@ -2247,7 +2247,7 @@ src/ui/
   patterns/           RegionShell Inspector CommandPalette useWindow.ts
   state.ts            resolveWorstOf(), stateWord(), postureLabel(), formatAge()
 ```
-**Guardrail (P8 / borrow-lane):** runtime deps stay **exactly** `preact, sigma, graphology`. No markdown lib (hand-rolled `MarkdownBody`, createElement only — never `innerHTML`, preserves trusted-types), no sanitizer, no editor framework, no socket client, no component library, no new modal system beyond `<Sheet>`. Any PR adding a runtime dep fails CI.
+**Guardrail (P8 / borrow-lane):** runtime deps stay **exactly** the set `package.json` already pins — `sigma` and `graphology` are not in it and never were, because the memory graph is a hand-written 2D canvas (`docs/MEMORY_RELATIONSHIP_GRAPH.md`). No markdown lib (hand-rolled `MarkdownBody`, createElement only — never `innerHTML`, preserves trusted-types), no sanitizer, no editor framework, no socket client, no component library, no new modal system beyond `<Sheet>`. This is a review rule, not a gate: nothing under `scripts/` compares `package.json` against this list, so a PR that adds a runtime dep fails only if a human notices.
 
 ---
 
@@ -2296,7 +2296,7 @@ Reference devices: **Mid phone** = Moto G / Pixel 6a class ≈ Chrome + 4× CPU 
 | Each lazy route (context/billing/attestations/…) | ≤ 40 KB |
 | `MarkdownBody` renderer | ≤ 6 KB |
 | Inline seal SVG set | ≤ 2 KB |
-| Runtime deps | frozen: preact + sigma + graphology (CI-enforced) |
+| Runtime deps | frozen: the set `package.json` pins — not sigma/graphology, which were surveyed and never adopted |
 
 ### D9.4 · Animation / motion / thermal budget
 

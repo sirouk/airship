@@ -160,7 +160,17 @@ describe("retry classification", () => {
   });
 
   it("retries carriage failures and refuses content verdicts", () => {
-    for (const code of ["network-or-cors", "offline", "timeout", "stream-truncated", "stream-interrupted"]) {
+    // `cors-or-private-network-access` is the local lane's spelling of
+    // `network-or-cors`; a local model server that drops the connection is the
+    // same carriage failure as a cloud one that does.
+    for (const code of [
+      "network-or-cors",
+      "cors-or-private-network-access",
+      "offline",
+      "timeout",
+      "stream-truncated",
+      "stream-interrupted",
+    ]) {
       expect(isRetryableTransportFailure({ code })).toBe(true);
     }
     for (const code of ["invalid-response", "tool-call-invalid", "cancelled", "bridge-unavailable"]) {

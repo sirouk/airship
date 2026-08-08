@@ -47,16 +47,30 @@ Vite inlines its `VITE_*` inputs *when the bundle compiles*. So do webpack's
 at `docker run` reaches nothing, because by then the JavaScript already contains
 whatever was there at build time.
 
-Therefore: **the public origin, the base path, and every OAuth client ID are
-`ARG`s in the `Dockerfile` and `args:` in `docker-compose.yaml` — not
-`environment:`.** Changing the domain means rebuilding. `deploy.sh` does that for
-you so nobody has to remember.
+Therefore: **the public origin and every OAuth client ID are `ARG`s in the
+`Dockerfile` and `args:` in `docker-compose.yaml` — not `environment:`.**
+Changing the domain means rebuilding. `deploy.sh` does that for you so nobody has
+to remember.
+
+**The base path is the one value in both columns, and that is not a violation of
+the rule but a consequence of it.** Vite inlines it, so every URL the browser
+asks for carries the prefix — that is the build-argument half. Caddy then has to
+*answer* those URLs: map them onto the filesystem, match the cache and
+service-worker rules against them, and fall back to the right `index.html`. A
+server cannot do any of that from a value baked into JavaScript it never reads.
+So it is also `environment:`, and `caddy-entrypoint.sh` normalizes the trailing
+slash Vite adds and Caddy does not. The two readings cannot disagree, because
+`deploy.sh` builds and starts in one step from one `.env`.
+
+The tell that this was missing: the site serves, and every asset request falls
+through the SPA fallback, so the browser is handed HTML where it asked for
+JavaScript and the app never boots.
 
 The split in this repository is exact, and it is the thing to preserve:
 
 | Value | Where it lives | Why |
 |---|---|---|
-| `AIRSHIP_PUBLIC_BASE_PATH` | build arg | inlined into the manifest and service-worker scope |
+| `AIRSHIP_PUBLIC_BASE_PATH` | build arg **and** runtime env | inlined into the manifest and service-worker scope — and Caddy has to answer the URLs that inlining produced, so the same value reaches the runtime container too |
 | `VITE_AIRSHIP_PUBLIC_ORIGIN` | build arg | inlined; OAuth redirects are compared against it |
 | `VITE_GOOGLE_CLIENT_ID` | build arg | inlined; also selects the default vault at build time |
 | `VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID` | build arg | inlined |
@@ -289,9 +303,10 @@ separate. Three things are worth naming:
 ```yaml
     ports:
       - "${CADDY_PORT:-443}:${CADDY_PORT:-443}"
-      # ACME HTTP-01 challenges. Harmless when CADDY_TLS=false, and the
-      # certificate cannot be issued without it when TLS is on.
-      - "80:80"
+      # Caddy's plain-HTTP listener: ACME HTTP-01 and the http:// redirect. Not
+      # harmless without TLS, where nothing listens on it — local mode sets
+      # CADDY_HTTP_BIND=80 so Docker picks the host port.
+      - "${CADDY_HTTP_BIND:-80:80}"
     volumes:
       # Certificates and OCSP staples. Without this every restart re-requests
       # from Let's Encrypt and walks into the rate limit.
@@ -301,8 +316,11 @@ separate. Three things are worth naming:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
 ```
 
-- **Port 80 must be mapped even when you only serve 443.** ACME HTTP-01
-  challenges arrive there. Without it, no certificate.
+- **Port 80 must be mapped when TLS is on — and only then.** ACME HTTP-01
+  challenges arrive there, and without it there is no certificate. With
+  `CADDY_TLS=false` Caddy puts no listener on 80 at all, so the binding forwards
+  to nothing and still aborts `up` on a host that already owns the port. That is
+  why local mode sets `CADDY_HTTP_BIND=80` and lets Docker choose the host side.
 - **`caddy_data` must be a named volume.** Without it every restart re-requests
   from Let's Encrypt and walks into the rate limit.
 - **The healthcheck goes over loopback inside the container**, so it does not

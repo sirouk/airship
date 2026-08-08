@@ -151,11 +151,15 @@ the browser has OS privileges it does not have.
   authority. It relates real session messages, workspace documents, profiles,
   skills, and extracted terms; selecting and searching nodes never sends those
   values to Airship.
-- Graphology supplies the bounded in-browser graph model and stable Sigma.js
-  supplies a lazy-loaded WebGL view. This gives a Neo4j-like exploratory
+- Airship's own derivation owns the bounded in-browser graph model, and a
+  hand-written, lazy-loaded 2D canvas draws it
+  (`src/memory-graph/canvas-renderer.tsx`). Graphology and Sigma.js were
+  surveyed and not adopted; neither is a dependency of this repository, and the
+  survey is kept as the record of that decision in
+  `MEMORY_RELATIONSHIP_GRAPH.md`. This gives a Neo4j-like exploratory
   experience without requiring Neo4j Server, exposing browser database
-  credentials, or adding an Airship backend. A non-WebGL list/inspector remains
-  available.
+  credentials, or adding an Airship backend. A relationship list/inspector
+  remains available beside the canvas.
 - Durable graph snapshots, derived statistics, and extraction checkpoints use
   the same encrypted object generations as other memory artifacts. The graph is
   reproducible from its lineage and may be discarded or rebuilt at any time.

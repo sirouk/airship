@@ -6,7 +6,7 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "../core/contracts";
-import type { ApprovalBroker } from "./broker";
+import { approvalOutcomeReason, approvalRequestId, type ApprovalBroker } from "./broker";
 
 export type ApprovalMode = ApprovalProvenance["mode"];
 
@@ -67,10 +67,21 @@ export function createApprovalModePolicy(options: Readonly<{
 
       if (options.mode === "ask-first") {
         const decision = await options.broker.request(tool, argumentsValue, context);
+        /*
+         * The gate's answer and the record's answer are not the same fact. An
+         * expiry resolves as `deny` because an unanswered request must not run,
+         * but the journal is the evidence chain, and a person who walked away
+         * from the screen did not refuse anything. The broker keeps the wider
+         * outcome for exactly one reader; this is that reader, which is why the
+         * record no longer has to write "Denied or expired" and leave whoever
+         * reads it back to guess which. Falling back to the decision keeps the
+         * sentence honest if the record was never taken.
+         */
+        const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
           source: "human",
-          reason: decision === "allow" ? "Allowed once by the user." : "Denied or expired without user approval.",
+          reason: approvalOutcomeReason(outcome),
         });
         return decision;
       }
@@ -108,10 +119,11 @@ export function createApprovalModePolicy(options: Readonly<{
       }
 
       const decision = await options.broker.request(tool, argumentsValue, context);
+      const fallbackOutcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
       remember(context, {
         mode: options.mode,
         source: "human-fallback",
-        reason: `${review.reason} ${decision === "allow" ? "Allowed once by the user." : "Denied or expired without user approval."}`,
+        reason: `${review.reason} ${approvalOutcomeReason(fallbackOutcome)}`,
         ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
         ...(review.model ? { reviewModel: review.model } : {}),
       });
@@ -186,14 +198,17 @@ export async function decideHumanIntent(options: Readonly<{
     });
   }
   const decision = await options.broker.request(options.tool, options.argumentsValue, options.context);
+  const outcome = options.broker.takeOutcome(approvalRequestId(options.context)) ?? decision;
   return Object.freeze({
     decision,
     provenance: Object.freeze({
       mode: options.mode,
       source: "human" as const,
-      reason: decision === "allow"
+      // The allow sentence stays its own: this is the one path where the person
+      // proposed the effect as well as permitting it, and the record says so.
+      reason: outcome === "allow"
         ? "Allowed once by the user, who proposed the action."
-        : "Denied or expired without user approval.",
+        : approvalOutcomeReason(outcome),
     }),
   });
 }

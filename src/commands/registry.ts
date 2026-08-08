@@ -177,7 +177,11 @@ function registerBuiltins(
   registerBuiltin(registry, {
     name: "models",
     aliases: ["model"],
-    summary: "List available inference models or select a model for a new pinned session.",
+    // Not "a new pinned session": a thread pinned to the connection it is
+    // already on now changes model in place, and only a thread pinned
+    // elsewhere still forks. This sentence is read verbatim in `/help` and in
+    // the composer's argument menu, so it must not promise either route.
+    summary: "List available inference models, or switch the model in use.",
     category: "model",
     usage: "/models [list|use]",
     availability: normalizeAvailability(availability.models),

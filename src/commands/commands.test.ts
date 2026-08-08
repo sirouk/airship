@@ -200,6 +200,21 @@ describe("browser-native slash commands", () => {
   });
 
   /*
+   * `/models` described a product that no longer exists: its summary promised
+   * "a new pinned session", which `/help` and the composer's argument menu both
+   * print verbatim, while a thread pinned to the connection it is already on
+   * changes model in place — one `session.model-changed` event, no fork and no
+   * transcript reset. This asserts the absence of the false promise rather than
+   * the presence of a particular sentence, because the copy may be reworded but
+   * must never again describe forking as the only outcome.
+   */
+  it("does not promise a fork that /models no longer always performs", () => {
+    const summary = workspaceRegistry().resolve("models")?.summary ?? "";
+    expect(summary).not.toMatch(/new pinned session/iu);
+    expect(summary).toMatch(/model/iu);
+  });
+
+  /*
    * Skills governed every reply and were reachable from nothing the composer
    * offers: `/help` listed sessions, models and every workspace tool, and never
    * named one of the artifacts actually composing the prompt. A skill is not a
