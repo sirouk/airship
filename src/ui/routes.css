@@ -4072,9 +4072,19 @@
   /* Portrait pays for the cluster's honesty with a second row; a ≤500px-tall
      landscape has no height to pay with, so here it stays one line beside the
      folded title. Wrapping stays on, so an overflow costs height inside the
-     cluster's own column rather than clipping a chip mid-text. */
+     cluster's own column rather than clipping a chip mid-text.
+
+     Both axes are released, not just the column. The portrait block above
+     pins the cluster to `grid-row: 1`, and releasing the column alone left it
+     the only child with a definite row — which auto-placement resolves first,
+     so the chips claimed the `minmax(0, 1fr)` title track and the H1, first in
+     the DOM, was pushed into the trailing `auto` column. Measured at 932×430:
+     Demo, the not-saved diamond, the journal chip, the switcher and `+` hard
+     left, the conversation's own name hard right, ~500px of nothing between
+     them — the inversion of the order every other width ships. */
   .session-bar__chips {
     grid-column: auto;
+    grid-row: auto;
     justify-self: start;
   }
 

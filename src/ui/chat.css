@@ -307,6 +307,37 @@
 }
 
 /*
+ * The three icon-only verbs of this bar, floored on the pointer axis.
+ *
+ * `routes.css` already floors all of them to `--touch-target`, but inside
+ * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)` — and a
+ * portrait tablet matches neither clause. Measured on this build at 768×1024
+ * with a coarse pointer, the journal chip's `⌗` and the `+` rendered ~25px
+ * circles and the conversation switcher a bare 28px glyph, beside the `⌘K`,
+ * gear and shield buttons of the topbar at their full 44 in the same frame.
+ * A control that is a target on a phone and not on an iPad has a floor
+ * written against the wrong axis: what a finger has to find is decided by the
+ * pointer, not by the width.
+ *
+ * Here rather than in `tokens.css` beside the primitive floor, because these
+ * carry their resting `min-height` in the rules directly above at the same
+ * specificity — declared earlier in the barrel, the floor would lose the
+ * cascade to the 26px and 28px it exists to raise and would sit in the sheet
+ * looking correct and doing nothing. This sheet already keeps three such
+ * blocks, each beside the recipe it raises, for the same reason.
+ */
+@media (pointer: coarse) {
+  .journal-chip__branch,
+  .journal-chip__record,
+  .session-bar__new,
+  .session-bar__switch.menu-select.compact .menu-select-trigger {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    justify-content: center;
+  }
+}
+
+/*
  * The model chip while nothing is connected.
  *
  * Brass, because §4.3 reserves brass for "act here" and connecting a provider

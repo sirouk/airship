@@ -23,6 +23,19 @@ const phoneBlock =
     /@media \(max-width: 640px\), \(max-width: 950px\) and \(max-height: 500px\) \{([\s\S]*?)\n@media \(min-width: 641px\)/u,
   )?.[1] ?? "";
 
+/* The landscape phone gets its own block, and it overrides the portrait one
+   selector by selector — so what it does *not* restate is as load-bearing as
+   what it does. */
+const landscapeBlock =
+  styles.match(
+    /@media \(min-width: 641px\) and \(max-width: 950px\) and \(max-height: 500px\) \{([\s\S]*?)\n@media \(prefers-reduced-transparency/u,
+  )?.[1] ?? "";
+
+/* The resting recipes the two verbs and the switcher carry at every width live
+   in `chat.css`, and so does the pointer-axis floor that raises them; the phone
+   block above is the width-axis copy. Read by name for the same reason the
+   sheet above is: the barrel would fold four sheets of matching selectors in. */
+const chatStyles = await readFile(new URL("./chat.css", import.meta.url), "utf8");
 
 describe("session bar at phone width", () => {
   /*
@@ -155,5 +168,84 @@ describe("session bar at phone width", () => {
     // Every chip stays mounted at every width: clipping carries the shed,
     // `display: none` on a chip would take it out of the accessibility tree.
     expect(narrowestBlock).not.toMatch(/\.session-[a-z-]+ \{ display: none/u);
+  });
+});
+
+describe("session bar in landscape", () => {
+  /*
+   * The block says the cluster "stays one line beside the folded title", and
+   * for one release it did the opposite of that.
+   *
+   * The portrait block pins `.session-bar__chips` to `grid-column: 2` *and*
+   * `grid-row: 1`. Landscape released only the column, which left the chips
+   * the one child of the bar with a definite row — and auto-placement resolves
+   * definite positions first, so the cluster took the `minmax(0, 1fr)` title
+   * track and the H1, first in the DOM, was pushed into the trailing `auto`
+   * column. Measured at 932×430: every chip hard left, the conversation's own
+   * name hard right, ~500px of nothing between them, and the reading order
+   * every other width ships reversed.
+   */
+  it("lets both children auto-place in DOM order", () => {
+    const chips = landscapeBlock.match(/\.session-bar__chips \{([^}]+)\}/u)?.[1] ?? "";
+    expect(chips, "the landscape block exists and owns the cluster").toContain("grid-column: auto");
+    expect(chips, "the portrait row pin is released with the column, not left behind")
+      .toContain("grid-row: auto");
+  });
+});
+
+describe("session bar under a coarse pointer", () => {
+  /*
+   * A floor written against a width is a floor a tablet walks under.
+   *
+   * Every 44px target on this bar is declared inside
+   * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`, and a
+   * portrait iPad at 768×1024 matches neither clause. Measured there: the
+   * journal chip's `⌗` and the `+` rendered ~25px circles and the conversation
+   * switcher a bare 28px glyph — the three icon-only verbs of the bar, all
+   * below the minimum, in the same frame as the topbar's `⌘K`, gear and shield
+   * at their full 44. What a finger has to find is decided by the pointer.
+   */
+  it("floors the icon-only verbs on the pointer axis, not only on the width axis", () => {
+    // The sheet keeps several coarse-pointer blocks, each beside the recipe it
+    // raises, so the block is found by what it floors rather than by position.
+    // Splitting these four across two blocks would leave one of them behind,
+    // which is the shape of the defect itself, so one block has to hold them.
+    const blocks = [...chatStyles.matchAll(/@media \(pointer: coarse\) \{([\s\S]*?)\n\}\n/gu)]
+      .map((match) => match[1] ?? "");
+    const verbs = [
+      ".journal-chip__branch",
+      ".journal-chip__record",
+      ".session-bar__new",
+      ".session-bar__switch.menu-select.compact .menu-select-trigger",
+    ];
+    const floor = blocks.find((block) => block.includes(".session-bar__new")) ?? "";
+    for (const selector of verbs) {
+      expect(floor, `${selector} is inside the coarse-pointer floor`).toContain(selector);
+    }
+    // Both axes, and the token rather than a copy of the number — the same two
+    // rules the width-axis copy above is held to.
+    expect(floor).toContain("min-width: var(--touch-target)");
+    expect(floor).toContain("min-height: var(--touch-target)");
+  });
+
+  it("declares the floor after the resting recipes it has to outrank", () => {
+    /*
+     * `.journal-chip__record` and the switcher's trigger carry their 26px and
+     * 28px resting heights in this same sheet at the same specificity, so the
+     * floor only wins by source order. Declared in `tokens.css` beside the
+     * primitive `(pointer: coarse)` block — which is where a floor belongs by
+     * every other reading — it would have lost the cascade to the very numbers
+     * it exists to raise, silently, with the rule present and inert.
+     */
+    const resting = chatStyles.indexOf(".journal-chip__record {");
+    const trigger = chatStyles.indexOf(".session-bar__switch.menu-select.compact .menu-select-trigger {");
+    // The block itself, not whichever coarse-pointer block happens to come
+    // first in the sheet — the sheet keeps four of them.
+    const floor = chatStyles.indexOf("@media (pointer: coarse) {\n  .journal-chip__branch");
+    expect(floor, "the session bar's coarse-pointer floor exists").toBeGreaterThan(-1);
+    expect(resting).toBeGreaterThan(-1);
+    expect(trigger).toBeGreaterThan(-1);
+    expect(floor).toBeGreaterThan(resting);
+    expect(floor).toBeGreaterThan(trigger);
   });
 });

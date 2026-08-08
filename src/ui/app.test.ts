@@ -45,6 +45,23 @@ describe("the composer's growth cap", () => {
     expect(cleared).toBeLessThan(measured);
     expect(fit).toContain("parseFloat(style.maxHeight)");
   });
+
+  it("collapses an emptied composer without asking the box how tall it is", () => {
+    /*
+     * The other half of the same box, and the one the cap repair left open.
+     * Measured at every width the sweep captures, 320 through 1920: clear a
+     * long draft and the textarea stayed at exactly the cap, an empty bordered
+     * box roughly 200px tall carrying a placeholder and nothing else, with the
+     * transcript pushed off the phone entirely. Three separate paths already
+     * refit on the cleared value — the element's `input` event, the JSX
+     * handler, and the layout effect keyed on `[input]` — and all three
+     * measured the same stuck `scrollHeight`, so the fix cannot be another
+     * refit. An empty value's height is not a measurement: it is the minimum.
+     */
+    const fit = functionBody("function fitComposerTextarea");
+    expect(fit, "emptiness resolves to the resting height, growth is still measured")
+      .toContain("const natural = element.value ? element.scrollHeight : minimum;");
+  });
 });
 
 describe("a failed turn's footer", () => {
