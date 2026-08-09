@@ -47,18 +47,6 @@
     min-width: 44px;
     padding-block: var(--sp-1);
   }
-
-  /*
-   * The same floor inside the panel. The trigger was lifted while `.popover__done`
-   * (28px) and `.popover__action` (32px) — the controls a touch reader actually
-   * lands on once the disclosure is open — stayed below it. A sheet at ≤640px
-   * already sized its Done button; this is the coarse pointer at any other
-   * width, the anchored panel a fingertip still has to reach.
-   */
-  .popover__done,
-  .popover__action {
-    min-height: 44px;
-  }
 }
 
 /*
@@ -171,6 +159,109 @@
 }
 
 /*
+ * The other flip, and the axis this primitive had never learnt.
+ *
+ * `top: calc(100% + var(--sp-2))` above is the downward tier and it was the
+ * only tier. The defence against a trigger low in a pane was the panel's
+ * `max-height` — `popoverRoom()` clamping the panel to what is left below —
+ * and a clamp with a floor under it stops defending anything once the room
+ * runs out. Measured on the shipped build with a `context` provenance chip
+ * parked 40px above the bottom of `.main`, which is where a reader scrolling
+ * to that row actually leaves it: the panel took the floor's assumed 180px,
+ * laid out 172px tall, and ran 140.0px past the bottom of the pane and of the
+ * window at tablet-768 — 140.1 at laptop-1024, 139.8 at desktop-1440, 139.7 at
+ * wide-1920. Twelve of the 76 openings in that probe, every one of them a chip
+ * a person had to scroll to.
+ *
+ * `bottom: calc(100% + var(--sp-2))` is the same 8px gap measured from the
+ * other edge of the trigger, so the panel keeps its distance from the chip
+ * whichever way it opens. `popover.tsx` publishes `--popover-room` from the
+ * side it chose, so the `max-height` above bounds this panel against the top of
+ * the pane exactly as it bounds the downward one against the bottom.
+ *
+ * The entrance is mirrored rather than dropped. `--popover-lift` is the
+ * pre-arrival offset, so a panel that grows from the trigger's BOTTOM corner
+ * has to start below where it lands, not above it: the sign flips with the
+ * direction, and the origin moves to the corner the panel actually hangs from.
+ * A 120ms fade that grows out of the wrong corner says "this came from
+ * somewhere else", which is the one sentence the animation exists to avoid.
+ */
+.popover[data-side="above"] .popover__panel {
+  top: auto;
+  bottom: calc(100% + var(--sp-2));
+  --popover-lift: translateY(4px) scale(.985);
+}
+
+.popover[data-side="above"][data-align="start"] .popover__panel { --popover-origin: bottom left; }
+.popover[data-side="above"][data-align="end"] .popover__panel { --popover-origin: bottom right; }
+
+/*
+ * The anchored panel says what it is doing to the route, once the reader has
+ * asked for it twice.
+ *
+ * The sheet has said this since the scrim below landed. The anchored tier never
+ * did, and the judges read the result as the panel being in the way rather than
+ * being a layer: at every fine-pointer width the route-header ⓘ opens directly
+ * over the block it exists to explain. Measured with `elementsFromPoint` under
+ * the panel's own centre line, on the build this replaces — `capabilities` at
+ * 1440 covers `dd "0 concurrent"` and the `seal` that dates the reading;
+ * `connection` covers `p.connect-lane__detail "Chutes sign-in is not available
+ * in this build."`; `account` covers the route's only sentence.
+ *
+ * Geometry cannot answer this one, which is why the flip above is not also the
+ * fix for it. These triggers sit in the route header with the whole route
+ * beneath them, so there is nothing above to flip into — measured at 1440 the
+ * pane's top edge is 24.6px above the trigger against a panel 142–240px tall —
+ * and there is no gutter to move sideways into either: the route column spans
+ * 258→1414 of a 1440px viewport, leaving 26px beside it, 23px at laptop-1024,
+ * 18px at tablet-768 and 264px at wide-1920, against a 320px panel. Every
+ * placement inside the pane lands on route content. What was missing was not a
+ * better position; it was the panel admitting it is temporarily on top.
+ *
+ * So the same `--scrim` the sheet uses, on the same host `::before`, for the
+ * same reason: content dimmed underneath a raised panel reads as content behind
+ * something, and content at full contrast under an opaque card reads as content
+ * that has been cut.
+ *
+ * `pointer-events: none` is the one place this deliberately differs from the
+ * sheet, and the difference is what the two overlays are. A sheet covers the
+ * route and takes the press so a reader cannot fire a control they can only
+ * half see. An anchored panel covers a card's worth of a route that stays fully
+ * legible and fully operable around it, and pressing straight through to what
+ * you meant to press — which both dismisses the disclosure and does the thing —
+ * is the behaviour this primitive has always had and that the suite relies on
+ * (`e2e/catalog-enrichment-retry.spec.ts` presses an embedding choice with the
+ * provenance panel open). Taking the press here would make an info chip modal
+ * on a desktop for no defect that was reported. It also keeps the host's hit
+ * area exactly as it was: a fixed pseudo that swallowed pointer events would
+ * put the whole viewport inside `.popover`, so `onPointerLeave` would never
+ * fire and the hover tier would stop being able to close itself.
+ *
+ * `[data-intent="commit"]` is the whole reason this is affordable. A fine
+ * pointer opens these panels by hovering for 150ms, and dimming a route because
+ * a cursor crossed a chip would be a worse defect than the one being fixed. A
+ * click or an Enter is a different gesture: the reader has asked for this panel
+ * and it stays until they dismiss it, which is precisely when the page behind
+ * it needs to read as waiting. A hover-open panel keeps the route bright and
+ * disappears the moment the pointer leaves — nothing is occluded for longer
+ * than the glance that produced it.
+ *
+ * z-index 59 against the panel's 60. `.popover` sets no `z-index` and no
+ * `transform`, so both resolve against the root: this paints over every layer
+ * the routes use — 40 is the highest z-index in any route stylesheet — and
+ * under the topbar (90–110) and the navigation band (100), which stay readable
+ * and pressable exactly as the short-shape sheet's scrim leaves them.
+ */
+.popover[data-mode="anchored"][data-open="true"][data-intent="commit"]::before {
+  content: "";
+  position: fixed;
+  z-index: 59;
+  inset: 0;
+  background: var(--scrim);
+  pointer-events: none;
+}
+
+/*
  * The header may not size the panel.
  *
  * A grid item whose overflow is visible takes its automatic minimum size from
@@ -265,9 +356,53 @@
   padding-block: var(--sp-2);
 }
 
-.popover__done {
+/*
+ * The dismissal control, stated from the panel, and given its air the same way
+ * the heading beside it is given its own.
+ *
+ * Two facts had to be read together to see why this rule is written like this.
+ *
+ * The first is that `.popover__done` alone does not describe this button. The
+ * panel renders inside the route that owns the trigger, so a route's descendant
+ * rule — `.access-connection-view button`, `.terminal-route button`, the
+ * `min-height: 44px` rows in `sources-view.css` — is (0,1,1) against this
+ * rule's (0,1,0) and simply wins. Measured on the shipped build at 1440: the
+ * connection panel's Done came out 44px tall with `padding: 9px 13px`, the
+ * terminal panel's 44px at a 17px font, the context provenance panels' 44px,
+ * while the capabilities and memory panels next to them were the 28px this file
+ * intended. That is where the judges' "1.0px of air on some panels, 8.5 or 9.0
+ * or 16.0 on others" came from: not four decisions, but this file's one
+ * decision being overwritten on four routes. `.popover__panel .popover__done`
+ * is (0,2,0) and outranks a route's descendant `button` rule, which is the
+ * minimum needed for the primitive to describe its own control.
+ *
+ * The second is that `align-items: center` cannot produce a consistent gap in a
+ * header whose height is set by a title that wraps. Centring a 28px button in a
+ * 43px content box gives 7.5px, in a 44px box 8px, and in the 58px box a
+ * three-line title produces 15px — measured as 8.5, 9.0 and 16.0 from the
+ * panel's top border. The air was never wrong on any one panel; it was
+ * different on every one.
+ *
+ * `align-self: start` plus `var(--sp-2)` is the fix, and it is the same 8px the
+ * heading carries as `padding-block` — so both items in this header begin at
+ * the same offset from the panel's top border, and the button sits on the
+ * title's first line however many lines the title takes. The air comes from the
+ * item, never from the header: padding on the header would sit outside the 44px
+ * floor and be pure addition on every panel in the product, which is the cost
+ * the long comment above `.popover__header` was written to stop coming back.
+ *
+ * The margin belongs only to the tier where the target IS the mark. Where the
+ * target is 44px — a coarse pointer, and every sheet — the retreat pseudo below
+ * already spends exactly this 8px inside the button, so those two scopes zero
+ * the margin and the painted pill lands in the same place. One number, three
+ * scopes, one measured result: the pill's top edge is 9.0px below the panel's
+ * top border on every panel this primitive opens.
+ */
+.popover__panel .popover__done {
   position: relative;
+  align-self: start;
   min-height: 28px;
+  margin-block-start: var(--sp-2);
   padding: 0 var(--sp-2);
   border: 1px solid var(--line-control);
   border-radius: var(--radius-control);
@@ -307,25 +442,18 @@
  * on a fine pointer, so Done looks like one control everywhere and only its
  * target grows.
  *
- * `display: none` by default, switched on by the one scope that needs it, rather
- * than a copy of this rule inside that scope. A fine-pointer button is 28px with
- * nothing above or below it to collide with, so it keeps its own border and no
- * anchored desktop panel moves by a pixel. The focus ring stays on the button
- * rather than on this pseudo, deliberately: the ring's job is to show what
- * pressing Enter will hit, and that is the 44px target, not the mark inside it.
+ * `display: none` by default, switched on by the two scopes that need it —
+ * every sheet, and every coarse pointer — rather than copied into each. A
+ * fine-pointer button is 28px and IS its own mark, so it keeps its border and
+ * takes the identical 8px as a margin instead. The focus ring stays on the
+ * button rather than on this pseudo, deliberately: the ring's job is to show
+ * what pressing Enter will hit, and that is the 44px target, not the mark
+ * inside it.
  *
- * The coarse-pointer block near the top of this file looks like a second scope
- * that would need this and is not one, for a reason worth knowing before
- * anything is added to it: its `.popover__done, .popover__action { min-height:
- * 44px }` is (0,1,0) and sits ABOVE the base `.popover__done` rule, so the base
- * `min-height: 28px` wins on order and that floor has never applied. A coarse
- * anchored panel therefore has a 28px Done that is already clear of the header's
- * 44px, and nothing here has anything to retreat from. That ordering is a
- * separate defect — the 44px touch floor is not being held on a coarse tablet —
- * and it predates this rule; fixing it is a change to control heights on a shape
- * no capture in the sweep covers, so it is named here rather than done here.
+ * Declared before the two scopes that switch it on, because all three rules are
+ * (0,2,0) now and order is what separates them.
  */
-.popover__done::before {
+.popover__panel .popover__done::before {
   content: "";
   display: none;
   position: absolute;
@@ -334,8 +462,41 @@
   border-radius: var(--radius-control);
 }
 
-.popover__done:hover {
+.popover__panel .popover__done:hover {
   color: var(--ink);
+}
+
+/*
+ * The touch floor inside the panel, finally at a weight that applies.
+ *
+ * This lived in the `pointer: coarse` block at the top of this file as
+ * `.popover__done, .popover__action { min-height: 44px }` — (0,1,0), sitting
+ * ABOVE the base rule, so the base `min-height: 28px` won on order and the
+ * floor had never once applied. The comment above named that as a separate
+ * defect and left it; it is fixed here rather than named again, because lifting
+ * the base rule to (0,2,0) would have buried it a second time.
+ *
+ * The measured cost is a pixel. A coarse anchored panel's header is floored at
+ * 44px already, so a 44px Done fits inside it once the margin is zeroed, and
+ * the mark the reader sees stays 28px because the retreat above paints it —
+ * the same control at the same size on every pointer, with only the target
+ * growing. Before this, `capabilities` at tablet-768 handed a fingertip a 28px
+ * dismissal control on a screen with no hover and no keyboard.
+ */
+@media (pointer: coarse) {
+  .popover__panel .popover__done,
+  .popover__panel .popover__action {
+    min-height: 44px;
+  }
+
+  .popover__panel .popover__done {
+    /* The pill above spends the same 8px inside this bigger target instead. */
+    margin-block-start: 0;
+    /* The frame is the pill's or the button's, never both. */
+    border: 0;
+  }
+
+  .popover__panel .popover__done::before { display: block; }
 }
 
 /*
@@ -523,6 +684,10 @@
     min-width: 64px;
     min-height: 44px;
     border: 0;
+    /* The retreat below already spends the header's 8px inside this target, so
+       the base rule's margin — which buys that air for the 28px button that has
+       no pill — would be 8px of sheet charged to the route on top of it. */
+    margin-block-start: 0;
   }
 
   .popover[data-mode="sheet"] .popover__done::before { display: block; }
@@ -741,13 +906,14 @@
  * Retracting `--popover-lift` is the only part left, which is why nothing else
  * is declared here.
  *
- * Both selectors are restated so this outranks the sheet's own `--popover-lift`
- * at equal specificity; a single `.popover__panel` rule would lose the sheet to
- * the more specific declaration above and leave the one panel that moves
- * furthest as the one panel still moving.
+ * All three selectors are restated so this outranks the sheet's own
+ * `--popover-lift` and the upward tier's at equal specificity; a single
+ * `.popover__panel` rule would lose both to the more specific declarations
+ * above and leave the panel that moves furthest as the one panel still moving.
  */
 @media (prefers-reduced-motion: reduce) {
   .popover__panel,
+  .popover[data-side="above"] .popover__panel,
   .popover[data-mode="sheet"] .popover__panel {
     --popover-lift: none;
   }

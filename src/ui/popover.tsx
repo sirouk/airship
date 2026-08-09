@@ -69,6 +69,19 @@ export const POPOVER_MIN_ROOM = 180;
 
 export type PopoverMode = "anchored" | "sheet";
 
+/** Which way an anchored panel opens off its trigger. */
+export type PopoverSide = "below" | "above";
+
+/**
+ * How an open was asked for.
+ *
+ * A hover is a glance — the reader's pointer is still travelling and the panel
+ * goes away the moment it moves on. A click or an Enter is a commitment: the
+ * panel stays until it is dismissed, and it is the one that has to say what it
+ * is doing to the route underneath it. `popover.css` scrims only the second.
+ */
+export type PopoverIntent = "hover" | "commit";
+
 export type PopoverPlacement = Readonly<{
   mode: PopoverMode;
   /** `end` is the right-edge flip: the panel hangs off the anchor's right. */
@@ -185,23 +198,89 @@ export function popoverRoom(input: Readonly<{
   return Math.max(POPOVER_MIN_ROOM, input.clipBottom - input.anchorBottom - POPOVER_EDGE_GUTTER);
 }
 
+export type PopoverVerticalPlacement = Readonly<{
+  side: PopoverSide;
+  /** What `--popover-room` is published as, measured on the side that won. */
+  room: number;
+}>;
+
 /**
- * The bottom edge of the box that will actually clip this panel.
+ * Which way the panel opens, and how much room that direction actually has.
+ *
+ * The horizontal axis learnt this long ago: `popoverPlacement` flips a panel to
+ * the anchor's right edge rather than letting it run off the screen. The
+ * vertical axis never did — every panel opened downward and the only defence
+ * was `popoverRoom`, which clamps the panel's HEIGHT to what is left below the
+ * trigger and floors that at `POPOVER_MIN_ROOM`. A floor is not a placement.
+ * Below the floor the clamp deliberately stops helping, so a chip a reader has
+ * scrolled near the foot of a pane opens a panel that simply overhangs.
+ *
+ * Measured on the shipped build with the `context` route's provenance chips
+ * parked 40px above the bottom of `.main` — the position a reader reaches by
+ * scrolling to the row they want, which is the only way to reach these chips at
+ * all: the panel opened at the floor's 180px of assumed room, laid out 172px
+ * tall, and ran 140.0px past the bottom of both the pane and the window at
+ * tablet-768, laptop-1024 (140.1), desktop-1440 (139.8) and wide-1920 (139.7).
+ * The room ABOVE those same triggers was 870px of empty pane.
+ *
+ * So the rule is the narrow one that fact supports: flip only when below cannot
+ * hold a readable panel and above can. Both bounds are the same
+ * `POPOVER_MIN_ROOM` the floor already uses, which keeps one number answering
+ * one question — "is there enough room here to be worth opening into" — and
+ * makes the flip impossible to trigger while the downward panel is still fine.
+ * When neither side clears the floor the panel stays below, because a panel
+ * that overhangs the foot of a pane still shows its header and its first lines
+ * next to the trigger, while one that overhangs the top of a pane is cut off at
+ * exactly the end the reader is meant to start from.
+ *
+ * Kept free of the DOM alongside the other two, and for the same reason as the
+ * width: the direction and the height have to be decided from one measurement
+ * or they contradict each other — a panel told to open upward with the room
+ * below is a panel that runs off the top instead.
+ */
+export function popoverVerticalPlacement(input: Readonly<{
+  /** Viewport-relative top edge of the trigger the panel hangs from. */
+  anchorTop: number;
+  anchorBottom: number;
+  /** Viewport-relative edges of the nearest box that clips the panel. */
+  clipTop: number;
+  clipBottom: number;
+}>): PopoverVerticalPlacement {
+  const below = input.clipBottom - input.anchorBottom - POPOVER_EDGE_GUTTER;
+  const above = input.anchorTop - input.clipTop - POPOVER_EDGE_GUTTER;
+  if (below < POPOVER_MIN_ROOM && above >= POPOVER_MIN_ROOM) {
+    return Object.freeze({ side: "above", room: above });
+  }
+  return Object.freeze({
+    side: "below",
+    room: popoverRoom({ anchorBottom: input.anchorBottom, clipBottom: input.clipBottom }),
+  });
+}
+
+/**
+ * The edges of the box that will actually clip this panel.
  *
  * `.main` is `overflow: auto`, so it — not the window — is what an anchored
  * panel is really allowed to occupy, and on the editor route it is
  * `overflow: hidden` and clips outright. Any ancestor whose `overflow-y` has
  * computed to something other than `visible` is such a box; the nearest one
- * wins, which is what taking the running minimum means here.
+ * wins on each edge, which is what the running minimum and maximum mean here.
+ *
+ * The top edge is read for the same reason the bottom one is: a panel that
+ * flips upward is bounded by the pane it opens into, not by the window above
+ * it, and on every route in this product the pane starts below a fixed topbar.
  */
-function clippingBottom(host: HTMLElement): number {
+function clippingBox(host: HTMLElement): Readonly<{ top: number; bottom: number }> {
   let bottom = document.documentElement.clientHeight;
+  let top = 0;
   for (let node = host.parentElement; node; node = node.parentElement) {
     if (getComputedStyle(node).overflowY !== "visible") {
-      bottom = Math.min(bottom, node.getBoundingClientRect().bottom);
+      const rect = node.getBoundingClientRect();
+      bottom = Math.min(bottom, rect.bottom);
+      top = Math.max(top, rect.top);
     }
   }
-  return bottom;
+  return { top, bottom };
 }
 
 export type PopoverProps = Readonly<{
@@ -230,8 +309,16 @@ export function Popover({
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<PopoverPlacement>(() =>
     Object.freeze({ mode: "anchored", align: "start" } as const));
+  /** Which way the anchored panel opens. Sheets are pinned and never flip. */
+  const [side, setSide] = useState<PopoverSide>("below");
   /** `null` until the panel has been measured, and for sheets, which size themselves. */
   const [room, setRoom] = useState<number | null>(null);
+  /**
+   * Whether this open was a glance or a commitment. See `PopoverIntent`: the
+   * scrim is the difference, and dimming a route because a pointer crossed a
+   * chip would be the worse defect of the two.
+   */
+  const [openIntent, setOpenIntent] = useState<PopoverIntent>("commit");
   /**
    * The width the panel actually opens at. Held in state beside the placement
    * and set from the same measurement, because the two have to agree: the flip
@@ -257,6 +344,16 @@ export function Popover({
    * that has not happened yet, and costs neither.
    */
   const modeRef = useRef<PopoverMode>("anchored");
+  /**
+   * Whether the panel is open, readable by a timer that has not fired yet.
+   *
+   * The host contains the panel as well as the trigger, so a pointer that
+   * leaves the trigger and lands on the open panel enters the host again and
+   * arms the 150ms hover intent. Without this the timer would fire on an
+   * already-open panel and rewrite a commitment as a glance — taking the scrim
+   * out from under a reader who is doing nothing but reading.
+   */
+  const openRef = useRef(false);
 
   function cancelIntent() {
     if (intent.current !== undefined) window.clearTimeout(intent.current);
@@ -264,6 +361,7 @@ export function Popover({
   }
 
   useEffect(() => cancelIntent, []);
+  useEffect(() => { openRef.current = open; }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -288,12 +386,23 @@ export function Popover({
       // an upright phone, to the top of the navigation band on a screen too
       // short to give one away — and sizes itself from there either way. Only
       // the anchored panel hangs off a chip partway down a scrolling pane and
-      // has to be told where that pane ends.
+      // has to be told where that pane ends, and which end of it to open into.
       // Measured once at open, like the width and the edge flip beside it: all
-      // three are answers about where the trigger was when it was pressed.
-      setRoom(next.mode === "anchored"
-        ? popoverRoom({ anchorBottom: anchor.bottom, clipBottom: clippingBottom(host) })
-        : null);
+      // four are answers about where the trigger was when it was pressed.
+      if (next.mode === "anchored") {
+        const clip = clippingBox(host);
+        const vertical = popoverVerticalPlacement({
+          anchorTop: anchor.top,
+          anchorBottom: anchor.bottom,
+          clipTop: clip.top,
+          clipBottom: clip.bottom,
+        });
+        setSide(vertical.side);
+        setRoom(vertical.room);
+      } else {
+        setSide("below");
+        setRoom(null);
+      }
     }
 
     /**
@@ -316,7 +425,13 @@ export function Popover({
       const target = event.target as Node;
       const insideTrigger = triggerRef.current?.contains(target) ?? false;
       const insidePanel = panelRef.current?.contains(target) ?? false;
-      if (!insideTrigger && !insidePanel) setOpen(false);
+      if (insideTrigger || insidePanel) return;
+      // A dismissal outranks an intent that has not fired yet. `pointerleave`
+      // normally cancels it first, but a press that arrives inside the 150ms —
+      // or from a pointer that never left, on a trigger the press missed —
+      // would otherwise reopen the panel the reader just dismissed.
+      cancelIntent();
+      setOpen(false);
     }
     /**
      * A sheet may not outlive the focus that was inside it.
@@ -394,10 +509,18 @@ export function Popover({
       data-open={open ? "true" : "false"}
       data-mode={placement.mode}
       data-align={placement.align}
+      data-side={side}
+      data-intent={openIntent}
       onPointerEnter={(event) => {
         if (event.pointerType !== "mouse") return;
         cancelIntent();
-        intent.current = window.setTimeout(() => setOpen(true), POPOVER_HOVER_INTENT_MS);
+        intent.current = window.setTimeout(() => {
+          // Only an open that was still closed is a glance. Re-entering the
+          // host of an already-open panel — which, once it is scrimmed, is any
+          // movement over the route — must not rewrite what asked for it.
+          if (!openRef.current) setOpenIntent("hover");
+          setOpen(true);
+        }, POPOVER_HOVER_INTENT_MS);
       }}
       onPointerLeave={(event) => {
         if (event.pointerType !== "mouse") return;
@@ -416,6 +539,9 @@ export function Popover({
         aria-label={label}
         onClick={() => {
           cancelIntent();
+          // A press — or an Enter, which arrives here as a click — is the
+          // commitment. It is the gesture the scrim answers.
+          setOpenIntent("commit");
           setOpen((current) => !current);
         }}
       >
