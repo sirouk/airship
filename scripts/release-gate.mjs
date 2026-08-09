@@ -200,7 +200,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // clearance — re-measure it at 572,461 B raw / 191,573 B gzip, and gzip takes
   // one further whole-KiB step to 188 (963 B). Raw is unchanged and keeps
   // 213 KiB of its clearance.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 188 * 1024 }),
+  //
+  // Re-measured at 574,270 B raw / 192,176 B gzip after the campaign's closing
+  // waves, gzip taken from the container build, which compresses this
+  // aggregate 22 bytes tighter than the host artifact and is therefore the
+  // number the claim has to state. 188 KiB gzip would have left 314 B, under the 768-byte floor, so
+  // gzip takes one further whole step to 189 (1,338 B). Raw is unchanged and
+  // keeps 211 KiB of its clearance.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 189 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -369,7 +376,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
   //
-  // Re-measured at 456,717 B raw / 134,496 B gzip after the surface sweep's
+  // Re-measured at 456,713 B raw / 134,487 B gzip after the surface sweep's
   // closing waves. The named cause is the deferred routes finally being audited
   // at eight device classes: Preferences keeping its header from slicing the
   // row beneath it, the conversation library seating its own rows at 320, the
@@ -798,7 +805,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 689 B and 734 KiB gzip would have left 390 B, both under the aggregate's
   // 768-byte minifier-rename floor, so each takes one further whole step — raw
   // to 2,312 (1,713 B) and gzip to 735 (1,414 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2312 * 1024, gzip: 735 * 1024 }),
+  //
+  // Re-measured at 2,368,900 B raw / 752,175 B gzip — the floor across both
+  // build modes, the container coming in 26 raw and 53 gzip bytes under the
+  // host — after the campaign closed
+  // its clusters: the scroller that contains what it clips, the second overlay
+  // primitive's sheet contract, the popover's vertical flip, the graph's label
+  // pass, the conversation card's shrink order, and the validation that brings
+  // the offending field to the reader. All first-party, none of it eager.
+  // 2,314 KiB raw would have left 610 B and 735 KiB gzip 412 B, both under the
+  // aggregate's 768-byte floor, so each takes one further whole step — raw to
+  // 2,315 (1,634 B) and gzip to 736 (1,436 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2315 * 1024, gzip: 736 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1079,7 +1097,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so raw takes one further whole step to 2,991
   // (1,395 B); gzip takes its smallest clearing step to 923, which leaves
   // 841 B and is already above the floor.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2991 * 1024, gzip: 923 * 1024 }),
+  //
+  // Re-measured at 3,064,599 B raw / 945,303 B gzip, again the floor across
+  // both modes. This backstop tracks the
+  // first-party reading above and moves for the same reason. 2,993 KiB raw
+  // would have left 207 B, under the aggregate's 768-byte floor, so raw takes
+  // one further whole step to 2,994 (1,231 B); gzip takes its smallest
+  // clearing step to 924, which leaves 819 B and is already above the floor.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2994 * 1024, gzip: 924 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1318,7 +1343,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the entry chunk does not move. Raw takes the tightest whole step above
   // the reading, 86 KiB, leaving 783 B; gzip stays at 28 KiB with 767 B left.
   //
-  // Re-measured at 88,281 B raw / 28,172 B gzip after the surface sweep — the
+  // Re-measured at 88,281 B raw / 28,166 B gzip after the surface sweep — the
   // floor across both modes, gzip taken from the container build, which
   // compresses two bytes tighter than this host artifact. The named cause is
   // the dock learning to close honestly at the two viewports it could not fit:
@@ -1466,7 +1491,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The phase-1 duplicate reviewer joined the records panel: the cluster
   // strip, its keeper/fold-in prose, and the session-scoped dismiss affordance
   // render only while clusters exist, so the whole wave rides the route that
-  // was already fetched on navigation — re-measured at 64,384 B raw / 21,413 B
+  // was already fetched on navigation — re-measured at 64,158 B raw / 21,344 B
   // gzip, the claim standing at the floor across both build modes with the
   // origin-inlined Docker variant measuring one raw byte and twenty-nine gzip
   // bytes under the config-free CI artifact, and its own reading wandering by
@@ -1813,7 +1838,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // slicing itself at 430px, the vault's recovery banner paid for from inside
   // its own box — and raw takes one whole step to 177 KiB. Gzip still does not
   // move: same families, more sizes.
-  entryCss: Object.freeze({ raw: 177 * 1024, gzip: 32 * 1024 }),
+  //
+  // Re-measured at 186,933 B raw / 31,468 B gzip after the surface campaign.
+  // The named cause is stylesheet, which is what this budget is for: the route
+  // scroller's fade, both overlay primitives' sheet tiers, the coarse-pointer
+  // floors restated where a width query had been standing in for a finger, and
+  // the single-column tier a 320px phone gets instead of two starved columns.
+  // 183 KiB raw would have left 459 B, under the 768-byte minifier-rename
+  // floor, so raw takes one further whole step to 184 (1,483 B). Gzip does not
+  // move and keeps 1,300 B inside the 32 KiB it already had — the new rules
+  // compress against text this sheet was already carrying.
+  entryCss: Object.freeze({ raw: 184 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
