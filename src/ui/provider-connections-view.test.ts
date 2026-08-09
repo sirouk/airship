@@ -296,6 +296,32 @@ describe("the lock beside the loopback sentence", () => {
   });
 });
 
+
+describe("the card's call to action is sized for the finger that presses it", () => {
+  it("floors the setup button on a coarse pointer, and does so by height alone", async () => {
+    /*
+     * These buttons carry no class of their own, which is why the campaign's
+     * touch-floor pass missed them: they are bare `<button>`s inside
+     * `.provider-setup-card` taking the generic 40px control height. Measured
+     * at 768x1024 with a touch pointer once every other floor had landed,
+     * `Connect OpenAI` / `Connect Anthropic` / `Connect xAI` were 272x40 and
+     * `Check Ollama` / `Check LM Studio` were 285x40 — five of the six
+     * remaining sub-floor controls anywhere in the product.
+     *
+     * Keyed on the pointer rather than on a width, because that is what the
+     * floor is for; and `min-height` only, because these are already 272-285px
+     * wide and a declared `min-width` on a flex item replaces the min-content
+     * floor that keeps a label inside its own box.
+     */
+    const sheet = await readFile(new URL("./provider-connections-view.css", import.meta.url), "utf8");
+    const coarse = sheet.slice(sheet.lastIndexOf("@media (pointer: coarse) {"));
+    expect(coarse).toContain(".provider-setup-card button");
+    expect(coarse).toContain("min-height: var(--touch-target)");
+    expect(coarse).not.toContain("min-width:");
+  });
+});
+
+
 function fixtureModel(
   capabilities: InferenceModelDescriptor["capabilities"],
   id = "model-1",

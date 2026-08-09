@@ -532,3 +532,27 @@
     white-space: normal;
   }
 }
+
+/*
+ * The one control on this card a finger has to hit, floored for the finger.
+ *
+ * The campaign's touch-floor pass keyed every floor it could find on
+ * `(pointer: coarse)` rather than on viewport width, and this card was missed
+ * because its call to action carries no class of its own — it is a bare
+ * `<button>` inside `.provider-setup-card`, taking its 40px from the generic
+ * control height. Measured on the shipped build at 768x1024 with a touch
+ * pointer, after every other floor had landed: `Connect OpenAI`, `Connect
+ * Anthropic` and `Connect xAI` at 272x40, `Check Ollama` and `Check LM Studio`
+ * at 285x40 — five of the six remaining sub-floor controls in the whole
+ * product, and the six were all on this route.
+ *
+ * Height only. These buttons are already 272-285px wide, so the floor has
+ * nothing to say about their inline axis, and `min-height` on a block-level
+ * button cannot take the min-content escape that once let a `Done` label ride
+ * out of its own box.
+ */
+@media (pointer: coarse) {
+  .provider-setup-card button {
+    min-height: var(--touch-target);
+  }
+}
