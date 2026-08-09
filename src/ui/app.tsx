@@ -5510,6 +5510,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   // nesting changes the content height so the fade cannot go stale.
   useScrollEdges(primaryNav, `${String(shellMounted)}:${railState}:${view}`);
 
+  // The route scroller earns the same affordance, and unlike the rail it earns
+  // it at every viewport this product ships to: `.main` is bounded by the
+  // topbar above and the navigation band below, so a short viewport ends the
+  // content on a hard line and cuts whatever row is crossing it. `routes.css`
+  // turns this reading into a 26px fade on the edge that is genuinely hiding
+  // something. Re-bind on `view` because each route brings its own height, and
+  // on `railState` because collapsing the rail rewidens every route and
+  // rewraps its text — both change the overflow without a scroll event.
+  useScrollEdges(mainRegion, `${String(shellMounted)}:${railState}:${view}`);
+
   // `data-rail` is on the document element, not the shell, because the topbar
   // and the app grid both size their first column from `--rail-width`. This is
   // a layout effect because the root grid and the Rail render are one visual

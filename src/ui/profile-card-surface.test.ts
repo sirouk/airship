@@ -212,3 +212,44 @@ describe("the profile boundaries stay legible where the phone made two columns o
     expect(routes.slice(at, at + 200)).not.toContain("max-height");
   });
 });
+
+/*
+ * Three named tracks could not say how many actions the row has.
+ *
+ * `auto minmax(190px, 0.55fr) minmax(0, 1fr)` described the two-button rest
+ * state and handed the third action the leftover. Measured at tablet-768 with a
+ * theme preview armed, that leftover was 52.69px: "Save new revision" took its
+ * 130.78px, "Switch to this profile" took its 190px floor, and "Cancel preview"
+ * — the control that abandons the preview, the one a reader reaches for having
+ * changed their mind — stacked into "Cancel" / "preview" in a 53px slot. The
+ * same template overshot the other way at desktop-1440, making that button
+ * 385px wide beside a 131px sibling.
+ *
+ * The three buttons want roughly 117 + 147 + 103px plus two 8px gaps against a
+ * 389px row, so the row is told to wrap rather than told how to divide.
+ */
+describe("the profile action row", () => {
+  it("sizes every action by its own label and wraps rather than crushing the last one", () => {
+    const actions = rule(".profile-actions");
+    expect(actions).toContain("grid-template-columns: repeat(auto-fit, minmax(150px, max-content))");
+
+    // `max-content` as the maximum is the whole repair: a track can never be
+    // narrower than the label standing in it, at any type scale or Density, so
+    // no button here can be crushed however many arrive or how long their words
+    // are. The old floor said the opposite about one track and nothing about
+    // the rest.
+    expect(actions).not.toContain("minmax(0, 1fr)");
+    expect(actions).not.toContain("minmax(190px");
+
+    // The spans are claims about the row, not a fourth action in it.
+    expect(rule(".profile-actions > span")).toContain("grid-column: 1 / -1");
+  });
+
+  it("keeps the phone band's one-action-per-row answer, which is a different statement", () => {
+    // `auto-fit` would put two 150px tracks in a 320px route; the narrow band
+    // still says one full-width action, and still means it.
+    const at = routes.indexOf(".profile-actions,");
+    expect(at).toBeGreaterThan(-1);
+    expect(routes.slice(at, at + 260)).toContain("grid-template-columns: 1fr");
+  });
+});

@@ -262,6 +262,63 @@ describe("route layout contract", () => {
     // is reshaped by this.
     expect(cssRule(styles, ".profile-hub-tabs")).toContain("repeat(3, minmax(100px, 1fr))");
   });
+
+  /*
+   * The route scroller ends its content on a hard line, and a hard line lands
+   * in the middle of letterforms.
+   *
+   * `.route-layout` is `.main`, bounded above by the topbar and below by the
+   * navigation band, so at a short viewport every resting scroll position cuts
+   * whatever row is crossing the edge. Measured at landscape-932 on
+   * #capabilities with all boundaries open, 11 of 13 resting stops cut at least
+   * one text leaf, and at scrollTop 0 — the state a reader arrives in — both
+   * "Live page-memory probe" and the amber performance-schedule pill were
+   * sliced through their midline. #skills with the editor open was 8 of 12.
+   *
+   * This is `.primary-nav`'s `data-scroll-edges` recipe applied to the shell's
+   * only other scroller, and it is measured rather than assumed in the same
+   * way: the attribute comes from live overflow, so a route that fits keeps a
+   * hard edge and the fade never claims content that is not there.
+   */
+  it("fades the route scroller's edges only on the side genuinely hiding content", () => {
+    for (const [edges, gradient] of [
+      ["start", "linear-gradient(to bottom, transparent 0, #000 26px)"],
+      ["end", "linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%)"],
+    ] as const) {
+      expect(styles).toContain(`.route-layout[data-scroll-edges="${edges}"] { --route-scroll-fade: ${gradient}; }`);
+    }
+    expect(styles).toContain('.route-layout[data-scroll-edges="both"] { --route-scroll-fade:');
+
+    // `none` is a state, not an absence: an always-on fade would assert "there
+    // is more below" on a route that fits.
+    expect(styles).toMatch(/\.route-layout\[data-scroll-edges\]:not\(\[data-scroll-edges="none"\]\)/u);
+
+    // The shell writes the reading; the sheet only paints it.
+    expect(app).toContain("useScrollEdges(mainRegion,");
+
+    // A fade carries no forced-colors equivalent, so it stands down there and
+    // lets the scrollbar carry the affordance — the same escape hatch the rail
+    // takes, for the same reason.
+    expect(styles).toMatch(/@media \(forced-colors: active\) \{[\s\S]*?\.route-layout\[data-scroll-edges\][\s\S]*?mask-image: none/u);
+  });
+
+  /*
+   * The guard is the difference between this scroller and the rail, and it is
+   * the reason the recipe could not simply be copied.
+   *
+   * A mask is a group effect: it applies to the element's whole painted
+   * subtree, `position: fixed` descendants included — which is precisely the
+   * capture `.main { position: relative }` was chosen to avoid. Popovers open
+   * inside `main` and in sheet mode are fixed against the viewport. Measured at
+   * phone-320, the proof claim-stack sheet is `main`'s descendant and its box
+   * runs to y=568 while `main`'s own bottom is y=512, so an unguarded mask
+   * would not soften that sheet's last line — it would erase it.
+   */
+  it("stands the fade down while a sheet is open inside the scroller it would mask", () => {
+    const masked = /\.route-layout\[data-scroll-edges\]:not\(\[data-scroll-edges="none"\]\)([^{]*)\{([^}]+)\}/u.exec(styles);
+    expect(masked?.[1], "the masking rule must carry the open-popover guard").toContain(':not(:has(.popover[data-open="true"]))');
+    expect(masked?.[2]).toContain("mask-image: var(--route-scroll-fade)");
+  });
 });
 
 function cssRule(source: string, selector: string): string {

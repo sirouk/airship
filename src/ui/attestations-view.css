@@ -104,12 +104,32 @@
   justify-content: end;
 }
 
+/*
+ * Right-aligned in the row, left-aligned in the text. Those are two different
+ * claims and only the first one was wanted.
+ *
+ * `text-align: right` sat in this base rule and was reset to `left` only inside
+ * the 860px band, so every viewport wide enough to read comfortably was the one
+ * getting the ragged left margin. Measured at desktop-1440: the caption
+ * "Manual acquisition is a retry and diagnostic; it never rewrites a receipt."
+ * wrapped inside a 343px box with every line starting at a different x and
+ * "a receipt." orphaned on the last one. Flush-right is for a label or a
+ * figure — a run of prose set that way makes the eye hunt for each new line's
+ * start, which is exactly the cost WCAG names for justified text and which a
+ * sentence explaining what a manual re-acquisition *is not* can least afford.
+ *
+ * The block still sits at the row's right edge: its parent
+ * `.attestations-heading-actions` is a flex row with `justify-content: end`, so
+ * position was never this declaration's to give. Removing it takes the ink back
+ * to the reading default and leaves the box exactly where it was, which is why
+ * the 860px override that used to restate `left` is gone too — there is no
+ * longer anything there to override.
+ */
 .attestations-acquisition-mode {
   display: grid;
   gap: 2px;
   max-width: 32ch;
   margin-right: 4px;
-  text-align: right;
 }
 
 .attestations-acquisition-mode strong { font-size: var(--fs-caption); }
@@ -658,7 +678,10 @@
      statement. Both render identically. */
   .attestations-heading { display: grid; align-items: start; justify-content: start; }
   .attestations-heading-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .attestations-acquisition-mode { grid-column: 1 / -1; max-width: none; margin: 0; text-align: left; }
+  /* `text-align: left` used to be restated here against a base rule that set
+     `right`. The base no longer sets it, so the restatement would be describing
+     a conflict that does not exist. */
+  .attestations-acquisition-mode { grid-column: 1 / -1; max-width: none; margin: 0; }
   .attestations-boundary > header { grid-template-columns: auto minmax(0, 1fr); }
   .attestations-boundary > header > small { grid-column: 2; white-space: normal; }
   .attestations-boundary > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }

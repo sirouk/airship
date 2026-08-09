@@ -148,4 +148,46 @@ describe("chat role layout", () => {
     expect(empty).toContain("align-content: safe center");
     expect(empty).not.toContain("align-content: end");
   });
+
+  /*
+   * The engine eyebrow starts where the bar's title starts, by sharing the
+   * declaration rather than by matching it.
+   *
+   * `.chat-stage` is a bare grid with no padding: every other child brings its
+   * own gutter. The runtime tag arrived with none, so it ran the full width of
+   * the stage — measured at phone-320 its E-stem was on the viewport edge at
+   * x=0 while the conversation title beneath it sat at 12, and at desktop-1440
+   * it began at x=232, flush on the rail seam, against a title at 256.
+   *
+   * Naming a token instead would have been a guess dressed as a match, and it
+   * was tried: this gutter is 24px at desktop, 12px in the phone band and 9px
+   * in the short-landscape band, because the header's inset is a function of
+   * how much width the device has. A `var(--sp-5)` on the eyebrow measured
+   * correct at desktop, 12px past the title at phone-320, and wide enough there
+   * to wrap the tag onto a second line on the shortest viewport in the product.
+   * One selector list per band is what keeps the two from drifting apart.
+   */
+  it("gives the runtime eyebrow the session bar's own gutter at every width", () => {
+    const shared = "\n.session-bar,\n.chat-stage > .agent-runtime-status {";
+    expect(styles).toContain(shared);
+    expect(styles.slice(styles.indexOf(shared)).slice(0, 120)).toContain("padding-inline: var(--sp-5)");
+
+    // The bar keeps its own block padding; only the inline axis is shared.
+    expect(styles.match(/\n\.session-bar \{([^}]+)\}/u)?.[1]).toContain("padding-block: var(--sp-1)");
+
+    /*
+     * Both responsive re-statements carry the eyebrow with them, so there is no
+     * width at which the header moves and the tag stays behind. Read forward
+     * from the eyebrow's own selector rather than back from the inset: these
+     * `max(token, safe-area)` expressions are the shell's standard mobile
+     * gutter and appear on other elements too, so the first match in the sheet
+     * is not this one.
+     */
+    const blocks = [...styles.matchAll(/\.chat-stage > \.agent-runtime-status \{([^}]+)\}/gu)]
+      .map((match) => match[1] ?? "");
+    expect(blocks).toHaveLength(3);
+    expect(blocks.join("\n")).toContain("max(var(--sp-3), env(safe-area-inset-left))");
+    expect(blocks.join("\n")).toContain("max(9px, env(safe-area-inset-left))");
+    for (const block of blocks) expect(block).toMatch(/padding-inline(?:-start)?:/u);
+  });
 });
