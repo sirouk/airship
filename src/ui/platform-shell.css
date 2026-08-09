@@ -174,13 +174,129 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding: 1rem;
+  /*
+   * Top padding is 0 here and re-added by the header, which carries it: a
+   * sticky box sticks to the scrollport's *padding* edge, so 1rem left on the
+   * dialog would park the held header 1rem down and show a strip of rows
+   * travelling past in the clear above it. At rest the spacing is identical.
+   */
+  padding: 0 1rem 1rem;
+  /*
+   * Where a scrolled-in control is allowed to come to rest. The held header
+   * owns the top ~61px of the scrollport while `.is-scrolled`, and a browser
+   * scrolling a control into view — a Tab, a select handing focus back to its
+   * trigger on close — aligns it to the padding edge, which is behind the
+   * header. Declared, that scroll simply stops 3.75rem lower. It moves no box
+   * and takes no width or height from anything at any width.
+   */
+  scroll-padding-block-start: 3.75rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-panel);
   background: var(--surface-raised);
   box-shadow: var(--shadow);
 }
 .preferences-dialog > header, .trust-sheet > header { display: flex; gap: 1rem; justify-content: space-between; align-items: start; padding-bottom: 1rem; }
+/*
+ * "Done" stays on screen at every width, because at every width it is the only
+ * dismissal a reader can see.
+ *
+ * This began life inside the sheet breakpoint below, on the reasoning that a
+ * dialog capped to a bottom sheet is the one that scrolls. It is not: the
+ * dialog is its own scroll box at every width, 908px of content in a 612-814px
+ * box, so the wide tiers scroll too and there the header was `static`. Measured
+ * at laptop-1024 with the dialog scrolled to its foot: Done travels from
+ * y=94.8 to y=-201.2, 278px above the dialog's own top edge and therefore
+ * clipped out of it, the title with it, while `Reset preferences` sits at
+ * y=925.9 fully in view. The one control left on screen was the irreversible
+ * one. Same shape at desktop-1440 (Done y=108 -> y=-82, 172px above the box),
+ * tablet-768 (-79px) and wide-1920 (-76px) — the last two read as "in the
+ * viewport" to a naive rect check and are not in the *dialog*, which is what
+ * clips them. Escape and a click on the scrim still close it and neither is an
+ * affordance a mouse or a keyboard can see.
+ *
+ * Sticky rather than a fixed footer, because the rows are direct children of
+ * the dialog and there is no middle that could scroll on its own; this is the
+ * same trade the palette makes at the breakpoint below, keeping its legend and
+ * shortening its results. The cost is the header's own height, held back from
+ * the rows while scrolled — and it is the *collapsed* header's height, roughly
+ * 61px rather than the 135px the whole header costs, because `.is-scrolled`
+ * drops the introduction the moment it stops being the thing on screen.
+ *
+ * `z-index: 1` is against the rows only. `.menu-select-popover` is z-index 320,
+ * so a Preferences dropdown opening upward still paints over the held header
+ * rather than under it.
+ */
+.preferences-dialog > header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 1rem;
+  background: var(--surface-raised);
+}
+/*
+ * The header's own edge, because opaque chrome over live text has to say so —
+ * stated as depth, and only while there is something under it to say it about.
+ *
+ * Sticking the header gave it an opaque ground and no boundary, so the row it
+ * covers is shorn flat with nothing between the two: measured at phone-430,
+ * `Active profile approvals` renders as a band of glyph bottoms at y=274 with
+ * nine clear rows of ground above it and not one pixel of rule. Every such
+ * frame reads as clipping rather than as content that has scrolled underneath.
+ *
+ * That was first answered with a hairline on the header — the first row's own
+ * `border-top`, moved up so it would travel. It bought the resting frame back
+ * to the pixel and traded one misreading for another, because a 1px `--line` on
+ * the header is not distinguishable from the content rules travelling beneath
+ * it. Measured at 932x430 scrolled to the bottom: the header's edge at y=170
+ * and the `--line-strong` rule of `.preferences-dialog__divider` at y=179, 9px
+ * of bare ground between them and not the same length — two unequal parallel
+ * lines around an empty strip, directly above `STORAGE`, reading as a mis-drawn
+ * border rather than as a section beginning.
+ *
+ * A shadow cannot double with a rule, because it is not one. The earlier
+ * objection to it — that it would assert depth at rest, where these two boxes
+ * genuinely sit in one plane — is answered by `.is-scrolled`. At scrollTop 0
+ * there is no shadow, the first row draws its own `border-top` exactly where
+ * the header's edge used to be, and the resting frame is unchanged to the pixel
+ * at every width. `box-shadow` paints outside the border box, so it moves
+ * nothing and the dialog is the same height it was.
+ *
+ * `var(--shadow)`, not a shadow of this rule's own: it is the product's one
+ * elevation and the only one the light-mode block remaps, so a bespoke value
+ * here would be the eleventh popover with its own drop shadow and a dark
+ * build's tint on a parchment page. `src/ui/view-stylesheet-contract.test.ts`
+ * holds that line.
+ */
+.preferences-dialog.is-scrolled > header {
+  box-shadow: var(--shadow);
+}
+/*
+ * Held, the header keeps its job and drops its introduction.
+ *
+ * The rule above buys a permanent "Done" with the header's whole height, and
+ * the eyebrow and description ride along inside it: the pinned header is 135px
+ * of a 477px sheet at phone-320 and 101px of a 361px sheet at landscape-932 —
+ * 28% of the surface, held for two lines of prose whose only job is to
+ * introduce a dialog the reader is already inside and has already read past.
+ * Landscape is where it bites: with a select open, header plus listbox is the
+ * entire screen. At laptop-1024 it is the same trade in absolute terms, 74px of
+ * a 612px box, and the same answer.
+ *
+ * Only the introduction goes. The title stays, because it is what
+ * `aria-labelledby` names the dialog by, and Done stays, because it is the
+ * reason the header is held at all. Nothing is destroyed either — scrolling
+ * back to the top restores both, which is where a reader looks for an
+ * introduction anyway.
+ *
+ * This costs the resting frame nothing at any width: `.is-scrolled` is absent
+ * at scrollTop 0.
+ */
+.preferences-dialog.is-scrolled > header .eyebrow,
+.preferences-dialog.is-scrolled > header p { display: none; }
+/* Padding sized to frame a three-line block is loose around one line. The Done
+   button keeps its own min-height, which padding cannot shrink, so the
+   collapsed header still lands a full-size dismissal. */
+.preferences-dialog.is-scrolled > header { padding-top: .5rem; padding-bottom: .5rem; }
 .preferences-dialog h2, .trust-sheet h2 { margin: .15rem 0; font-family: var(--font-display); font-size: var(--fs-title); }
 .preferences-dialog header p, .trust-sheet > p { margin: .25rem 0 0; color: var(--ink-muted); font-size: var(--fs-meta); }
 .preferences-dialog button, .trust-sheet button, .view-error > button { min-height: 2.5rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); }
@@ -341,122 +457,21 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
      line instead. */
   .shortcut-sheet dl > div { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   /*
-   * "Done" stays on screen, because at this size it is the only dismissal a
-   * reader can see.
+   * The sheet's share of the held header, which is now a rule of the dialog at
+   * every width and lives with `.preferences-dialog` above.
    *
-   * Capped to a sheet the whole dialog is the scroll box, header included, so
-   * scrolling to the last row at 320 left "Reset preferences" as the one
-   * control in view and nothing at all that closes the dialog. Escape and a tap
-   * on the scrim both still work and neither is an affordance a phone can see —
-   * and the control the reader can see is the irreversible one.
+   * This is where the hold was first written, on the reading that a dialog
+   * capped to a bottom sheet is the one that scrolls. It was never only the
+   * sheet: the dialog is its own scroll box at 1024 and 1920 too, and there the
+   * header was `static` and Done scrolled 278px above the box that clips it.
+   * Moving the four rules to the base block gave the wide tiers the phone's
+   * behaviour and left this one untouched to the pixel — the phone's frames are
+   * the ones the comments up there are measured on.
    *
-   * Sticky rather than a fixed footer, because the rows are direct children of
-   * the dialog and there is no middle that could scroll on its own; this is the
-   * same trade the palette makes two rules below, keeping its legend and
-   * shortening its results. The cost is the header's own height, held back from
-   * the rows while scrolled, which is the price of the dialog having a way out
-   * — and it is now the *collapsed* header's height, roughly 61px rather than
-   * the 135px the whole header costs, because the `.is-scrolled` rules below
-   * drop the introduction the moment it stops being the thing on screen.
-   *
-   * The dialog hands its top padding to the header to carry. A sticky box
-   * sticks to the scrollport's padding edge, so leaving the 1rem on the dialog
-   * would park the header 1rem down and show a strip of rows sliding past above
-   * it; at rest the spacing is unchanged, because the header re-adds it.
-   *
-   * `scroll-padding-block-start` is the other half of that hold, and it is the
-   * half no amount of edge treatment can buy. The header occupies the top ~61px
-   * of the scrollport while `.is-scrolled`, and a browser scrolling a control
-   * into view — a Tab, an anchor, a select handing focus back to its trigger on
-   * close — aligns that control to the scrollport's padding edge, which is
-   * behind the header. Declared, the scroll simply stops 3.75rem lower, so
-   * nothing the keyboard reaches can come to rest in the band the header is
-   * holding. It moves no box and takes no width or height from anything at any
-   * width; it changes only where a scroll stops. 3.75rem is the *collapsed*
-   * header, which is the only one that can ever be doing the occluding: any
-   * scroll at all sets `.is-scrolled`.
+   * What is left here is the sheet's own: momentum scrolling on iOS, which is
+   * a property of a surface a thumb flicks and not of one a wheel turns.
    */
-  .preferences-dialog { padding-top: 0; scroll-padding-block-start: 3.75rem; -webkit-overflow-scrolling: touch; }
-  /*
-   * The header's own edge, because opaque chrome over live text has to say so —
-   * stated as depth, and only while there is something under it to say it about.
-   *
-   * Sticking the header gave it an opaque ground and no boundary, so the row it
-   * covers is shorn flat with nothing between the two. Measured at phone-430 on
-   * the tool-steps frame: `Active profile approvals` renders as a band of glyph
-   * bottoms at y=274 with nine clear rows of ground above it and not one pixel
-   * of rule — the same shape at 320 on `System sans`, at 390 on `Density`, and
-   * at landscape-932 where the Color mode select is reduced to a 1px line that
-   * belongs to nothing on screen. Every one of them reads as clipping rather
-   * than as content that has scrolled underneath.
-   *
-   * That was first answered with a hairline on the header — the first row's own
-   * `border-top`, moved up so it would travel, with the row dropping the border
-   * it no longer needed to draw. It bought the resting frame back to the pixel
-   * and it traded one misreading for another, because a 1px `--line` on the
-   * header is not distinguishable from the content rules travelling beneath it.
-   * Measured at 932x430 scrolled to the bottom: the header's edge at y=170 and
-   * the `--line-strong` rule of `.preferences-dialog__divider` at y=179, 9px of
-   * bare ground between them and not the same length — the header's spans the
-   * sheet, the divider's is inset by the sheet's 1rem. Two unequal parallel
-   * lines around an empty strip, directly above `STORAGE`, read as a mis-drawn
-   * border rather than as a section beginning.
-   *
-   * A shadow cannot double with a rule, because it is not one. The earlier
-   * objection to it — that it would assert depth at rest, where these two boxes
-   * genuinely sit in one plane — is answered by `.is-scrolled`, which did not
-   * exist when that was written. At scrollTop 0 there is no shadow, the first
-   * row draws its own `border-top` exactly where the header's edge used to be,
-   * and the resting frame is unchanged to the pixel at every width. The moment
-   * a row is actually underneath, the depth says so and the section rule stays
-   * the only line on screen. `box-shadow` paints outside the border box, so it
-   * moves nothing and the sheet is the same height it was.
-   *
-   * `var(--shadow)`, not a shadow of this rule's own: it is the product's one
-   * elevation and the only one the light-mode block remaps, so a bespoke value
-   * here would be the eleventh popover with its own drop shadow and a dark
-   * build's tint on a parchment page. `src/ui/view-stylesheet-contract.test.ts`
-   * holds that line.
-   */
-  .preferences-dialog > header {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    padding-top: 1rem;
-    background: var(--surface-raised);
-  }
-  .preferences-dialog.is-scrolled > header {
-    box-shadow: var(--shadow);
-  }
-  /*
-   * Held, the header keeps its job and drops its introduction.
-   *
-   * The rule above buys a permanent "Done" with the header's whole height, and
-   * the eyebrow and description ride along inside it: measured on the current
-   * shots, the pinned header is 135px of a 477px sheet at phone-320 and 101px
-   * of a 361px sheet at landscape-932 — 28% of the surface, held for two lines
-   * of prose whose only job is to introduce a dialog the reader is already
-   * inside and has already read past. Landscape is where it bites: with a
-   * select open, header plus listbox is the entire screen, so a reader changing
-   * Type scale can see no other setting while they do it.
-   *
-   * Only the introduction goes. The title stays, because it is what
-   * `aria-labelledby` names the dialog by, and Done stays, because it is the
-   * reason the header is held at all. Nothing is destroyed either — scrolling
-   * back to the top restores both, which is where a reader looks for an
-   * introduction anyway.
-   *
-   * This costs the resting frame nothing at any width: `.is-scrolled` is absent
-   * at scrollTop 0, and the whole block is inside the sheet breakpoint, so
-   * every viewport that never becomes a sheet is untouched. Nothing here
-   * changes a width, and the only height that moves is the header's own.
-   */
-  .preferences-dialog.is-scrolled > header .eyebrow,
-  .preferences-dialog.is-scrolled > header p { display: none; }
-  /* Padding sized to frame a three-line block is loose around one line. The
-     Done button keeps its own `--touch-target` floor, which padding cannot
-     shrink, so the collapsed header still lands 44px of tappable dismissal. */
-  .preferences-dialog.is-scrolled > header { padding-top: .5rem; padding-bottom: .5rem; }
+  .preferences-dialog { -webkit-overflow-scrolling: touch; }
   /* A capped sheet has to give the height back from the scrolling middle, not
      from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
      legend rather than shortening the results list. */

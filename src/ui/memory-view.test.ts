@@ -68,8 +68,24 @@ describe("unified Memory surface", () => {
     expect(source).toContain("groupMemoryRelationships(selectedEdges, relationshipLimit)");
     expect(source).toContain("<ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch}");
     expect(source).toContain("if (open) setIndexMounted(true)");
-    expect(source).toContain('indexRef.current?.scrollIntoView({ block: "start" })');
-    expect(source).toContain('onReady={initialTab === "index" ? alignIndex : undefined}');
+    /*
+     * The Index arrival opens a disclosure and folds another. It does not move
+     * the page, and this is the assertion that keeps it that way: the arrival
+     * used to run `scrollIntoView` on the section, which made `#context` the
+     * only one of the 14 routes that did not mount at `.main` scrollTop 0 —
+     * 1043 of 2695 at tablet-768, 936 of 2315 at laptop-1024, 828 at
+     * desktop-1440, 922 at phone-320, with the route's own `<h1>` at y=-962.
+     */
+    expect(source).toContain('detailExpanded={initialTab === "index"}');
+    // No ref on the section and no effect that could reach for one: the two
+    // halves of the arrival scroll, asserted gone rather than merely unused.
+    expect(source).toContain('<details\n        id="memory-index"');
+    expect(source).not.toContain("ref={indexRef}");
+    expect(source).not.toContain("requestAnimationFrame(alignIndex)");
+    expect(source).not.toContain("onReady=");
+    expect(contextSource).not.toContain("onReady");
+    // The one scroll-to-section this route keeps is the one a press asked for.
+    expect(source).toContain('scrollToMemorySection("memory-relationships")');
   });
 
   it("labels the shared control and every destination it updates", () => {
@@ -803,9 +819,17 @@ describe("memory as a corpus a person can act on", () => {
     expect(source).toContain('eyebrow={initialTab === "index" ? "Memory index · revision-bound local materialization"');
     expect(source).toContain("Opened at the on-device index:");
     // At `tool` density the eyebrow and description are the ⓘ panel's, so the
-    // arrival also states itself where the link actually lands, and the
-    // section's own control takes focus so the move is visible.
+    // arrival also states itself where the link actually lands.
     expect(source).toContain('<p class="memory-index-arrival" role="status">Opened from the Memory index destination.');
-    expect(source).toContain('indexRef.current?.querySelector("summary")?.focus({ preventScroll: true })');
+    /*
+     * And it states itself in words, not by moving the page or the keyboard.
+     * The arrival used to focus the section's own summary with
+     * `preventScroll: true`, which was coherent only alongside the
+     * `scrollIntoView` that went with it: without the scroll it parks the
+     * keyboard on a control ~900px below the fold, and with it the route mounts
+     * scrolled. Route arrival focus is `.main`, set by `app.tsx` for all 14
+     * routes, and this route is no longer the exception.
+     */
+    expect(source).not.toContain('?.focus({ preventScroll: true })');
   });
 });
