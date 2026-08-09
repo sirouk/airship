@@ -14,6 +14,7 @@ import {
   POPOVER_SHEET_MAX_WIDTH,
   popoverPlacement,
   popoverRoom,
+  popoverVerticalPlacement,
   popoverWidth,
 } from "./popover";
 
@@ -111,6 +112,70 @@ describe("the one anchored disclosure", () => {
     expect(popoverRoom({ anchorBottom: 900, clipBottom: 382 })).toBe(POPOVER_MIN_ROOM);
   });
 
+  it("opens upward when the room below cannot hold a panel and the room above can", () => {
+    /*
+     * The defect, in the numbers it was measured with. A `context` provenance
+     * chip parked 40px above the bottom of `.main` — where a reader scrolling
+     * to that row leaves it, and the only way these chips are reachable at all
+     * — took the `POPOVER_MIN_ROOM` floor as if it were room, laid out 172px
+     * tall, and ran 140.0px past the bottom of the pane and of the window at
+     * tablet-768 (140.1 at laptop-1024, 139.8 at desktop-1440, 139.7 at
+     * wide-1920). Twelve of 76 openings. Above those same triggers sat 870px of
+     * empty pane.
+     */
+    const low = popoverVerticalPlacement({
+      anchorTop: 940, anchorBottom: 984, clipTop: 58, clipBottom: 1024,
+    });
+    expect(low.side).toBe("above");
+    // The room reported is the room on the side that won, gutter deducted, and
+    // it is not floored: a flip only happens when this is genuinely available.
+    expect(low.room).toBe(940 - 58 - POPOVER_EDGE_GUTTER);
+  });
+
+  it("stays below while the room below is still usable, however much room is above", () => {
+    // The flip may not be a preference. A trigger halfway down a tall pane has
+    // more room above it than below and must not turn the panel over for it —
+    // downward is where a reader looks for a disclosure they just opened.
+    const middle = popoverVerticalPlacement({
+      anchorTop: 600, anchorBottom: 644, clipTop: 58, clipBottom: 1024,
+    });
+    expect(middle.side).toBe("below");
+    expect(middle.room).toBe(popoverRoom({ anchorBottom: 644, clipBottom: 1024 }));
+    // Exactly at the boundary, and one pixel either side of it.
+    const atFloor = 1024 - POPOVER_MIN_ROOM - POPOVER_EDGE_GUTTER;
+    expect(popoverVerticalPlacement({ anchorTop: atFloor - 44, anchorBottom: atFloor, clipTop: 58, clipBottom: 1024 }).side)
+      .toBe("below");
+    expect(popoverVerticalPlacement({ anchorTop: atFloor - 43, anchorBottom: atFloor + 1, clipTop: 58, clipBottom: 1024 }).side)
+      .toBe("above");
+  });
+
+  it("keeps a trigger with room on neither side pointing downward", () => {
+    /*
+     * A chip low in a pane that is itself short — under the floor below AND
+     * under it above. The panel overhangs either way, so it overhangs the end
+     * a reader can still read from: header, title and first lines beside the
+     * trigger, with the rest below the fold. Flipping would cut it off at the
+     * top, which is where it starts.
+     */
+    const cramped = popoverVerticalPlacement({
+      anchorTop: 200, anchorBottom: 244, clipTop: 58, clipBottom: 300,
+    });
+    expect(cramped.side).toBe("below");
+    expect(cramped.room).toBe(POPOVER_MIN_ROOM);
+    expect(Object.isFrozen(cramped)).toBe(true);
+  });
+
+  it("measures the flip against the pane, not the window", () => {
+    // Same trigger, same window; only the pane's top edge moves. A route whose
+    // pane starts under a fixed topbar has less room above than the window
+    // suggests, and a panel flipped on the window's answer is a panel cut off
+    // by the pane — the same mistake `popoverRoom` was written to stop making
+    // downward.
+    const deep = { anchorTop: 940, anchorBottom: 984, clipBottom: 1024 };
+    expect(popoverVerticalPlacement({ ...deep, clipTop: 0 }).room).toBe(928);
+    expect(popoverVerticalPlacement({ ...deep, clipTop: 800 }).side).toBe("below");
+  });
+
   it("spends the landscape phone's abundant axis on the one it has none of", () => {
     /*
      * 932x430. The panel is anchored partway down a `.main` pane that ends
@@ -173,6 +238,56 @@ describe("the one anchored disclosure", () => {
     // And the same number is what CSS lays the panel out at.
     expect(source).toContain('"--popover-width": `${panelWidth}px`');
     expect(source).toContain("setPanelWidth(opened)");
+  });
+
+  it("publishes the direction and the room from one measurement of the clipping box", () => {
+    /*
+     * The same failure mode as the width and the edge flip, on the other axis:
+     * the room the panel is capped at and the direction it opens in have to
+     * come from a single answer, or a panel told to open upward is bounded by
+     * the space below it and runs off the top of the pane instead. This reads
+     * the source because the wiring is the contract — the pure function is
+     * proved above.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const effect = source.slice(source.indexOf("const anchor = host.getBoundingClientRect()"));
+    const measured = effect.indexOf("const clip = clippingBox(host);");
+    expect(measured, "the clipping box is measured at open").toBeGreaterThan(-1);
+    const vertical = effect.slice(measured, effect.indexOf("function onPointerDown"));
+    expect(vertical).toContain("popoverVerticalPlacement({");
+    expect(vertical).toContain("clipTop: clip.top");
+    expect(vertical).toContain("clipBottom: clip.bottom");
+    // One answer, both consumers.
+    expect(vertical).toContain("setSide(vertical.side)");
+    expect(vertical).toContain("setRoom(vertical.room)");
+    // A sheet is pinned by its own insets and must never carry the flip.
+    expect(vertical).toContain('setSide("below")');
+    expect(source).toContain("data-side={side}");
+    // And the clipping box is read on both edges, or the flip is decided
+    // against the window while the panel is bounded by the pane.
+    const box = source.slice(source.indexOf("function clippingBox"));
+    expect(box.slice(0, box.indexOf("\n}"))).toContain("top = Math.max(top, rect.top)");
+  });
+
+  it("does not let a pending hover reopen the panel the reader just dismissed", () => {
+    /*
+     * A dismissal outranks an intent that has not fired yet: a press arriving
+     * inside the 150ms window would otherwise close the panel and then have the
+     * timer open it again, under a cursor that has moved on. And the host
+     * contains the panel as well as the trigger, so a pointer moving from the
+     * trigger onto the open panel re-enters the host and arms that timer on an
+     * already-open disclosure — where it must not rewrite a commitment as a
+     * glance and take the scrim away from a reader who is only reading.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const dismiss = source.slice(source.indexOf("function onPointerDown"), source.indexOf("function onFocusOut"));
+    expect(dismiss.indexOf("cancelIntent()")).toBeLessThan(dismiss.indexOf("setOpen(false)"));
+    // And the same movement may not rewrite what asked for an open panel: a
+    // commitment stays a commitment until it is dismissed.
+    const enter = source.slice(source.indexOf("onPointerEnter={"), source.indexOf("onPointerLeave={"));
+    expect(enter).toContain("if (!openRef.current) setOpenIntent(\"hover\");");
+    expect(source).toContain('setOpenIntent("commit");');
+    expect(source).toContain("data-intent={openIntent}");
   });
 
   it("returns a frozen placement so a caller cannot mutate the shared result", () => {
@@ -432,19 +547,155 @@ describe("the panel is the width of the box it is pinned to", () => {
      * header padding used to give and the 28px the same control is on a fine
      * pointer.
      */
-    const mark = block(sheet, ".popover__done::before");
+    const mark = block(sheet, ".popover__panel .popover__done::before");
     expect(mark).toContain("position: absolute");
     // 8px top and bottom, 0 inline: the pill is the full width of the target and
     // 16px shorter than it. A `--sp-1` retreat here would be a 36px pill.
     expect(mark).toContain("inset: var(--sp-2) 0");
     expect(mark).toContain("border: 1px solid var(--line-control)");
     // Off unless a scope switches it on, so the 28px fine-pointer button keeps
-    // its own border and no anchored desktop panel moves.
+    // its own border and takes the identical 8px as a margin instead.
     expect(mark).toContain("display: none");
-    expect(block(sheet, ".popover__done")).toContain("position: relative");
+    expect(block(sheet, ".popover__panel .popover__done")).toContain("position: relative");
     const done = /\.popover\[data-mode="sheet"\] \.popover__done \{([^}]*)\}/u.exec(sheet)?.[1];
     expect(done).toContain("border: 0");
     expect(sheet).toContain('.popover[data-mode="sheet"] .popover__done::before { display: block; }');
+  });
+
+  it("describes its own dismissal control, at a weight a route's `button` rule cannot outrank", () => {
+    /*
+     * The panel renders inside the route that owns the trigger, so every
+     * descendant rule that route writes for `button` is (0,1,1) against a bare
+     * `.popover__done` at (0,1,0) — and wins. Measured on the shipped build at
+     * desktop-1440: `.access-connection-view button` gave the connection
+     * panel's Done a 44px height and `9px 13px` of padding, `.terminal-route
+     * button` gave the terminal panel's a 44px height at a 17px font, and the
+     * `sources-view` rows did the same to all three context provenance panels,
+     * while capabilities and memory kept the 28px this file intends. That is
+     * the whole of the "1.0 / 8.5 / 9.0 / 16.0px of air" the sweep reported for
+     * one primitive: not four decisions, one decision overwritten four times.
+     *
+     * `.popover__panel .popover__done` is (0,2,0), the minimum weight at which
+     * this file can describe its own control. The scoped rules that follow are
+     * the same weight, so source order is what separates them and the pill has
+     * to be declared before both scopes that switch it on.
+     */
+    expect(sheet).toContain(".popover__panel .popover__done {");
+    expect(sheet).not.toMatch(/\n\.popover__done \{/u);
+    expect(sheet).not.toMatch(/\n\.popover__done::before \{/u);
+    const base = sheet.indexOf(".popover__panel .popover__done {");
+    const pill = sheet.indexOf(".popover__panel .popover__done::before {");
+    const coarse = sheet.indexOf("@media (pointer: coarse) {", base);
+    expect(base).toBeGreaterThan(-1);
+    expect(pill).toBeGreaterThan(base);
+    expect(coarse).toBeGreaterThan(pill);
+    // The floor that had never applied: it was (0,1,0) in the coarse block at
+    // the top of this file, above a (0,1,0) base that set 28px and won on order.
+    const floor = sheet.slice(coarse);
+    expect(floor.slice(0, floor.indexOf("\n}"))).toContain("min-height: 44px");
+    expect(floor).toContain(".popover__panel .popover__action {");
+    expect(floor).toContain(".popover__panel .popover__done::before { display: block; }");
+  });
+
+  it("gives Done the same air as the heading beside it, on a panel of any title length", () => {
+    /*
+     * `align-items: center` cannot hold a gap steady in a header whose height
+     * is set by a title that wraps. Measured across the 152 open panels in the
+     * sweep's geometry probe: a 28px button centred in a 43px content box sits
+     * 8.5px below the panel's top border, in a 44px box 9.0px, and in the 58px
+     * box a three-line title makes it 16.0px — with the four route-overridden
+     * 44px buttons welded at 1.0px. Four gaps for one control.
+     *
+     * The repair is the rhythm this file already had for the title: the heading
+     * carries `padding-block: var(--sp-2)`, so the button carries the identical
+     * 8px and starts where the heading starts. Both items begin at the same
+     * offset from the panel's top border whatever the title does, and Done sits
+     * on the title's first line rather than against the middle of three.
+     *
+     * The margin belongs only to the tier where the target IS the mark. Where
+     * the target is 44px the pill already spends this 8px inside it, so those
+     * two scopes zero the margin — and neither may take its air from the
+     * header, which is outside the 44px floor and would be charged to the route.
+     */
+    const base = block(sheet, ".popover__panel .popover__done");
+    expect(base).toContain("align-self: start");
+    expect(base).toContain("margin-block-start: var(--sp-2)");
+    expect(block(sheet, ".popover__header > strong")).toContain("padding-block: var(--sp-2)");
+    const coarse = sheet.slice(sheet.indexOf("@media (pointer: coarse) {", sheet.indexOf(".popover__panel .popover__done {")));
+    expect(coarse.slice(0, coarse.indexOf("\n}"))).toContain("margin-block-start: 0");
+    const done = /\.popover\[data-mode="sheet"\] \.popover__done \{([^}]*)\}/u.exec(sheet)?.[1];
+    expect(done).toContain("margin-block-start: 0");
+    // And the header still declares no vertical padding of its own.
+    expect(block(sheet, ".popover__header")).not.toMatch(/padding-block|padding-top|padding-bottom/u);
+  });
+
+  it("mirrors the panel when it opens upward, rather than only moving it", () => {
+    /*
+     * The upward tier is not `top: auto` alone. The panel hangs from the
+     * trigger's top edge now, so the 8px gap is measured from `bottom`, the
+     * transform origin moves to the corner the panel actually grows from, and
+     * `--popover-lift` changes sign — a panel that arrives from above while
+     * growing out of its bottom corner is the entrance saying it came from
+     * somewhere it did not.
+     */
+    const above = block(sheet, '.popover[data-side="above"] .popover__panel');
+    expect(above).toContain("top: auto");
+    expect(above).toContain("bottom: calc(100% + var(--sp-2))");
+    expect(above).toContain("--popover-lift: translateY(4px)");
+    expect(sheet).toContain('.popover[data-side="above"][data-align="start"] .popover__panel { --popover-origin: bottom left; }');
+    expect(sheet).toContain('.popover[data-side="above"][data-align="end"] .popover__panel { --popover-origin: bottom right; }');
+    // Reduced motion has to reach it at equal specificity, or the tier that
+    // travels in the opposite direction is the one tier still travelling.
+    const motion = sheet.slice(sheet.indexOf("@media (prefers-reduced-motion: reduce) {"));
+    expect(motion).toContain('.popover[data-side="above"] .popover__panel,');
+  });
+
+  it("dims the route under an anchored panel only once the reader has committed to it", () => {
+    /*
+     * The occlusion the sweep measured with `elementsFromPoint`: at every
+     * fine-pointer width the route-header ⓘ opens over the block it explains —
+     * `dd "0 concurrent"` on capabilities, `p.connect-lane__detail` on
+     * connection, the only sentence on account.
+     *
+     * Geometry cannot move it, which is why the flip above is not also this
+     * repair. Those triggers sit in the route header with the pane's top edge
+     * 24.6px above them at desktop-1440 against a panel 142–240px tall, and the
+     * route column spans 258→1414 of that 1440px viewport, so the widest gutter
+     * beside it is 26px against a 320px panel — 18px at tablet-768, 23px at
+     * laptop-1024, 264px at wide-1920. Every placement inside the pane lands on
+     * route content. What was missing was the panel admitting it is temporarily
+     * on top, which is what the sheet's scrim has always said.
+     *
+     * `[data-intent="commit"]` is what makes it affordable: these panels open on
+     * a 150ms hover, and dimming a route because a cursor crossed a chip would
+     * be the worse defect. A hover-open panel keeps the page bright and leaves
+     * with the pointer; a clicked one stays until it is dismissed, which is
+     * exactly when the page behind it has to read as waiting.
+     */
+    const scrim = block(sheet, '.popover[data-mode="anchored"][data-open="true"][data-intent="commit"]::before');
+    expect(scrim).toContain("position: fixed");
+    expect(scrim).toContain("inset: 0");
+    // The dim `.mobile-sheet-scrim` and the sheet tier already use.
+    expect(scrim).toContain("background: var(--scrim)");
+    // Under the anchored panel's own 60 and over every layer a route uses.
+    expect(scrim).toContain("z-index: 59");
+    /*
+     * A dim, not a barrier — the one place this differs from the sheet's scrim,
+     * and it differs because the two overlays are different objects. A sheet
+     * covers the route and takes the press so nobody fires a control they can
+     * only half see; an anchored panel covers a card's worth of a route that
+     * stays legible and operable around it, and pressing straight through is
+     * the behaviour this primitive has always had — `catalog-enrichment-retry`
+     * presses an embedding choice with the provenance panel open. It also keeps
+     * the host's hit area unchanged: a fixed pseudo that swallowed pointer
+     * events would put the whole viewport inside `.popover`, and the hover tier
+     * would lose the `pointerleave` it closes itself with.
+     */
+    expect(scrim).toContain("pointer-events: none");
+    expect(block(sheet, ".popover__panel")).toContain("z-index: 60");
+    expect(block(sheet, ".popover")).not.toContain("z-index");
+    // A hover is never scrimmed, and it is the selector that says so.
+    expect(sheet).not.toMatch(/data-intent="hover"/u);
   });
 
   it("puts the header's vertical air on the heading, where the 44px floor absorbs it", () => {
