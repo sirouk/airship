@@ -457,6 +457,15 @@ describe("route layout contract", () => {
   it("stands the fade down while a sheet is open inside the scroller it would mask", () => {
     const masked = /\.route-layout\[data-scroll-edges\]:not\(\[data-scroll-edges="none"\]\)([^{]*)\{([^}]+)\}/u.exec(styles);
     expect(masked?.[1], "the masking rule must carry the open-popover guard").toContain(':not(:has(.popover[data-open="true"]))');
+    /*
+     * And the other overlay primitive. A mask is a group effect over the whole
+     * painted subtree, so every `position: fixed` sheet that opens inside this
+     * scroller has to stand it down — measured at phone-320, nine open
+     * listboxes on #profiles, #skills and #vault overhang `main` by 56px, the
+     * band that holds `Done`. Naming only `.popover` was erasing them.
+     */
+    expect(masked?.[1], "the masking rule must also stand down for an open listbox")
+      .toContain(':not(:has(.menu-select-trigger[aria-expanded="true"]))');
     expect(masked?.[2]).toContain("mask-image: var(--route-scroll-fade)");
   });
 });

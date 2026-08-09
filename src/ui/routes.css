@@ -85,12 +85,27 @@
  * that sheet's last line, it would erase it. While a sheet is open the reader
  * is not reading the scroller behind it, so the fade has nothing to say and
  * stands down for as long as the panel is up.
+ *
+ * Both overlay primitives, because this product has two and they became the
+ * same shape in the same campaign. `MenuSelect` earned the bottom-sheet
+ * contract — header, scrim, `position: fixed` — after the popover did, and its
+ * panels open inside `main` on the routes that carry settings. Measured at
+ * phone-320 with the mask live: nine open listboxes on #profiles, #skills and
+ * #vault are `main`'s descendants and overhang its bottom edge by 56px each,
+ * so the guard that named only `.popover` was erasing the last 56px of a
+ * control the reader had just opened — the band holding `Done` and the
+ * home-indicator inset. A guard against a group effect has to name every
+ * group, and a second overlay is not a special case of the first.
+ *
+ * `aria-expanded` on the trigger rather than a state attribute on the panel,
+ * because that is the marker `MenuSelect` already publishes; asking the DOM
+ * for something it does not write would be a guard that silently never fires.
  */
 .route-layout[data-scroll-edges="start"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px); }
 .route-layout[data-scroll-edges="end"] { --route-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%); }
 .route-layout[data-scroll-edges="both"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
 
-.route-layout[data-scroll-edges]:not([data-scroll-edges="none"]):not(:has(.popover[data-open="true"])) {
+.route-layout[data-scroll-edges]:not([data-scroll-edges="none"]):not(:has(.popover[data-open="true"])):not(:has(.menu-select-trigger[aria-expanded="true"])) {
   -webkit-mask-image: var(--route-scroll-fade);
   mask-image: var(--route-scroll-fade);
 }
