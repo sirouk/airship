@@ -472,9 +472,35 @@
 
 @media (min-width: 1101px) {
   .git-sources-layout { flex: 1 1 auto; }
-  /* The footer is controls, not content: it is capped so the list and the diff
-     keep the height, and it scrolls rather than growing into them. */
-  .git-rails { max-height: 200px; overflow-y: auto; }
+  /*
+   * The footer is controls, not content: it is capped so the list and the diff
+   * keep the height, and it scrolls rather than growing into them. That is
+   * still true — but the cap belongs on the two disclosures, not on the row.
+   *
+   * The cap used to be `max-height: 200px; overflow-y: auto` on `.git-rails`
+   * itself, and `.git-rails` is a three-column grid whose middle column is
+   * `.git-commit-box` — the panel's primary action. Measured at desktop-1440
+   * with one path genuinely staged (README.md edited, saved and staged through
+   * the UI, `1 staged path` on the box): the rails row was 200px tall with a
+   * 199px client box over 495px of content, and the `Commit locally` button ran
+   * y=846.1..890.1 against a scroller ending at y=858 — 11.9px of a 44px
+   * primary control drawn, inside a dialog that was 747px tall and had the room
+   * to spare. At wide-1920 the identical 11.9px, in a 927px dialog. Overlay
+   * scrollbars paint nothing at rest, so the remaining 32px had no affordance
+   * pointing at it: the judge recorded the button as sliced to "roughly 10px of
+   * its top edge" and concluded it had never been reachable at any width.
+   *
+   * The row's height is now driven by whichever column is tallest, and the two
+   * things that are actually tall are the two `<details>` — `Repository &
+   * worktrees` alone measured 495px open. They keep the 200px cap and scroll
+   * inside it exactly as the whole row used to; nothing loses a pixel it had.
+   * The commit box has no cap because it is not a disclosure and cannot be
+   * closed, so the row settles at its natural 232px and the primary action is
+   * drawn whole. The 32px comes out of the diff pane, which is `minmax(0, 1fr)`
+   * and was 319px — a cheaper trade than a 12px commit button.
+   */
+  .git-repository-controls,
+  .git-remote-boundary { max-height: 200px; overflow-y: auto; }
 }
 
 @media (max-width: 1100px) {

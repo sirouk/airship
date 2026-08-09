@@ -247,6 +247,35 @@
 }
 
 .vault-view__attached li strong { color: var(--v-caution); overflow-wrap: anywhere; text-align: end; }
+
+/*
+ * A label and the state it names stay next to each other once the row is wider
+ * than the pair needs.
+ *
+ * `justify-content: space-between` is the right instinct on a phone-width row,
+ * where the two ends are 40px apart. On a desktop row it is a leaderless index:
+ * measured on the attached-prerequisites list at desktop-1440, each `li` was
+ * 1084px wide and the gap between the label and its value was 981.9px
+ * (`Endpoint` → `None`), 912.5px (`Credential authority` → `None`) and 941.9px
+ * (`Workspace key` → `None`); at wide-1920 the same three rows measured 1088px
+ * with 985.9 / 916.5 / 945.9px of gap. Three consecutive rows of that, with a
+ * hairline rule and no zebra banding, means binding a state to its name is a
+ * full-card eye traverse and a rule count — and `Not enrolled` / `Not created`
+ * are precisely the values a reader opens this list to find.
+ *
+ * So above the width where the pair fits comfortably, the value column starts
+ * at a fixed 13rem instead of at the row's far end. 13rem = 208px at the
+ * default scale, which clears the longest label in `attachedRows`
+ * (`Encrypted object store`) with room to spare, and the track is font-relative
+ * so a larger type scale widens it rather than colliding. Below 1100px the row
+ * keeps `space-between` untouched — that band is the 320px tier's argument,
+ * not this one's, and this rule deliberately does not reach into it.
+ */
+@media (min-width: 1101px) {
+  .vault-view__attached li { justify-content: flex-start; }
+  .vault-view__attached li > span { flex: 0 0 13rem; }
+  .vault-view__attached li > strong { flex: 1 1 auto; min-width: 0; text-align: start; }
+}
 .vault-view__attached li[data-attached="true"] strong { color: var(--v-verified); }
 /* Caution is reserved for a prerequisite Airship can see is missing. The
    recovery key's custody is unknowable, so painting it amber on a fully

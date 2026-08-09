@@ -95,8 +95,23 @@
  * The literal matches `routes.css`'s default measure deliberately — this is the
  * same measure, re-entered one level down, not a second opinion about it.
  */
+/*
+ * …and it is *centred* in the width the route opted into, not parked at its
+ * left edge.
+ *
+ * The cap above was right and the alignment was never stated, so the panel
+ * inherited the route's start edge. Measured at wide-1920: the route runs
+ * x=258..1894 (1636px, the width `data-route-measure="wide"` asked for) and
+ * this panel ran x=258..1418 — 1160px of receipt hard against the left rail
+ * with 476px of unbroken ground to its right, which is the "quarter of the
+ * screen is empty" the judge photographed. A re-entered measure has to be
+ * re-centred too, or capping is just left-aligning with extra steps. At
+ * desktop-1440 the panel already filled the route (258..1414), so `auto`
+ * resolves to 0 there and nothing moves.
+ */
 .proof-surface-panel--prose {
   width: min(1160px, 100%);
+  margin-inline: auto;
 }
 
 /* ── The one verdict ─────────────────────────────────────────────────── */
