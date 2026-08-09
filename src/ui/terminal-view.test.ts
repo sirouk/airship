@@ -1001,6 +1001,40 @@ describe("the drift a sync button used to ask the reader to guess at", () => {
   });
 });
 
+describe("the setup disclosure's marker", () => {
+  /*
+   * An absolutely positioned marker asks for no room, so the padding has to
+   * hold its place.
+   *
+   * At the wide shape the chevron is a flex item with `margin-left: auto` and
+   * the row cannot help but make room for it. Below the phone breakpoint the
+   * summary becomes a grid and the chevron becomes absolute at `right: 11px`,
+   * while the caption was allowed to run to `right-10px` — so the ~8px glyph
+   * occupying `right-19px..right-11px` shared columns with the text and painted
+   * straight across its truncation ellipsis. Measured at phone-320 and again at
+   * phone-430: "or a device shell.⌄." with the chevron's strokes crossing the
+   * dots. The ellipsis is the one signal that the caption was truncated at all,
+   * and it was the thing being drawn over.
+   */
+  it("reserves the chevron's own width so it never shares a column with the caption", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const summary = /\.terminal-route__setup>summary\{display:grid;[^}]*\}/u.exec(css)?.[0] ?? "";
+    expect(summary, "the phone-shape summary rule").not.toBe("");
+
+    const right = /\.terminal-route__setup>summary::after\{position:absolute;right:(\d+)px/u.exec(css)?.[1];
+    const padding = /padding:7px (\d+)px 7px 10px/u.exec(summary)?.[1];
+    expect(right).toBe("11");
+
+    // 11px offset + an ~8px glyph + a gutter. Asserted as "clears the marker"
+    // rather than as the literal, so the two can only move together.
+    expect(Number(padding)).toBeGreaterThanOrEqual(Number(right) + 8);
+
+    // Only the right side moves: the left inset is the summary's alignment with
+    // the body below it and has nothing to do with the marker.
+    expect(summary).toContain("7px 10px");
+  });
+});
+
 describe("who owns the keyboard inside a terminal", () => {
   it("names the chords that stop firing and the key that leaves", () => {
     // Measured: after clicking the xterm, `g` then `s` left the hash at

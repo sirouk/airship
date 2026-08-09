@@ -223,27 +223,23 @@ describe("the method tab's sub-label", () => {
   });
 
   /*
-   * The basis is a measurement, not a taste.
+   * The sub-label has one shape at every phone width, and that is the claim.
    *
-   * Flex drops the sub-label onto its own row exactly when its basis will not
-   * fit the space the label left, so the basis has to be the width of the
-   * longest word any sub-label can contain — below that a word splits mid-
-   * syllable on the shared row, which is the defect `break-word` above exists to
-   * prevent, and above it the tab stacks at widths that had room to share.
+   * This test used to pin a wrap *threshold*: a `ch` basis wide enough for the
+   * longest word any sub-label could contain, on the reasoning that flex would
+   * then share the row wherever the word fitted and stack wherever it did not.
+   * The rewrite below records why that reasoning did not survive contact with
+   * phone-430 — briefly, the thing that must fit beside the label is the whole
+   * sub-label and not its longest word — and pins the shape instead.
    *
-   * `ch` is the unit because it is the only one that stays correct: the strip's
-   * `small` is `--font-mono`, where `ch` is exactly one character, and it is
-   * sized by `--fs-micro`, which the phone ramp raises, `data-density="compact"`
-   * raises again, and the reader's own Type scale preference multiplies on top.
-   * A px basis would be right at one of those settings and wrong at the others.
-   *
-   * This reads both writers of the strip. `access-view.tsx` builds its own
-   * `.connect-method__switch` for the Chutes lane, and its "Unavailable in this
-   * build" is longer than anything in `METHOD_SUBLABELS` — the string that made
-   * the original assumption false. Adding a longer word to either file fails
-   * here rather than at 390px on somebody's phone.
+   * It still reads both writers of the strip, because that is the part that was
+   * always right. `access-view.tsx` builds its own `.connect-method__switch`
+   * for the Chutes lane, and its "Unavailable in this build" is longer than
+   * anything in `METHOD_SUBLABELS` — the string that made the original
+   * assumption false. Either file gaining a sub-label the control cannot show
+   * is caught here rather than at 430px on somebody's phone.
    */
-  it("sizes the wrap threshold to the longest word either writer of the strip can put in a sub-label", () => {
+  it("gives the sub-label its own row at every phone width rather than a width-dependent one", () => {
     const accessView = readFileSync(new URL("../access-view.tsx", import.meta.url), "utf8");
     // `<small>` is used elsewhere in that file for prose; only the strip's own
     // tablist counts, so the slice ends at the first panel it controls.
@@ -263,20 +259,72 @@ describe("the method tab's sub-label", () => {
         .map((match) => match[1] ?? ""),
       ...[...strip.matchAll(/<small>([\s\S]*?)<\/small>/gu)].flatMap((match) => rendered(match[1] ?? "")),
     ].join(" ");
-    const longestWord = Math.max(...sublabels.split(/[^A-Za-z]+/u).map((word) => word.length));
-
     expect(sublabels).toContain("Unavailable in this build");
     expect(sublabels).toContain("Needs the extension");
 
-    expect(longestWord).toBe("Unavailable".length);
-
     const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
     const small = /\.connect-method__switch small\s*\{([^}]+)\}/u.exec(narrow)?.[1] ?? "";
-    const basis = Number(/flex:\s*1 1 (\d+)ch/u.exec(small)?.[1]);
 
-    // One character of slack over the longest word, against sub-pixel rounding
-    // deciding a line break the arithmetic says fits exactly.
-    expect(basis).toBe(longestWord + 1);
+    /*
+     * The threshold used to be `12ch` — one character of slack over
+     * "Unavailable", the longest single word either writer can put here — on
+     * the reasoning that flex would drop the sub-label to its own row exactly
+     * when that word would not have fitted beside the label.
+     *
+     * It was the right quantity for the wrong question. What has to fit beside
+     * the label is not the longest *word*, it is the whole sub-label, and a
+     * basis narrow enough to fit is a basis flex will happily share a line
+     * with. Measured at phone-430, where the tab column is 178px: "OAuth"
+     * takes 40px, a 12ch basis still fitted in the remainder, and line 1 read
+     * "OAuth Unavailable" with "in this build" hanging indented underneath —
+     * while "API key" beside it kept its break. The two tiles of one control
+     * disagreed at exactly one width, which 320 and 390 never revealed.
+     *
+     * `100%` stops asking the question, so there is no longer a longest word
+     * for this test to measure: the sub-label owns its row at every phone
+     * width and at every type scale, which is what the sheet's own comment
+     * always said the control intended. A `ch` basis returning here would mean
+     * the width-dependent shape came back with it.
+     */
+    expect(small).toMatch(/flex:\s*1 1 100%/u);
+    expect(small).not.toMatch(/flex:\s*1 1 \d+ch/u);
+  });
+
+  /*
+   * The lane header is a button, and it was being centred as one.
+   *
+   * `.connect-surface button { justify-content: center }` is right for a
+   * full-width action whose whole content is one word. The lane header is a row
+   * — icon, name, subtitle, caret, state chip — and it wraps, and centring a
+   * wrapping flex container centres each line independently. Measured at
+   * phone-320 inside a card whose content box is 38..282: the wifi glyph sat at
+   * x=150..170 and the caret at x=156..164, both centred on the midline of 160,
+   * while the identity and the seal chip started at x=38. Three items on three
+   * axes in one card, with the caret orphaned between the subtitle and the chip.
+   *
+   * `flex: 1 1 0` on the identity is what lets it be one row rather than three:
+   * at `auto` the identity sized from its own content — 244px inside a 246px
+   * box — so it could never share a line with a 20px glyph, and the glyph and
+   * caret each took a line of their own. After: glyph at 38, identity 70..262,
+   * caret docked at 274..282, seal on the separate row it was already given.
+   */
+  it("reads the lane header down one left edge with the caret docked at the other", () => {
+    const narrow = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
+
+    // `button` is in the selector to outrank `.connect-surface button` on its
+    // own terms, the same collision `.connect-method__switch > button` resolves.
+    expect(/button\.connect-lane__header \{([^}]+)\}/u.exec(narrow)?.[1]).toContain("justify-content: flex-start");
+
+    // Both selectors are declared twice inside this band — once for the wrap
+    // order the block above sets up, once here — so every body is read.
+    const bodies = (selector: string) => [...narrow.matchAll(new RegExp(`\\n\\s*\\.${selector} \\{([^}]+)\\}`, "gu"))]
+      .map((match) => match[1] ?? "").join(" ");
+    expect(bodies("connect-lane__identity")).toContain("flex: 1 1 0");
+    expect(bodies("connect-lane__chevron")).toContain("margin-inline-start: auto");
+
+    // The seal keeps the full-width row the block above it argues for; this
+    // repair moves the other three items onto one line, not the chip.
+    expect(/\.connect-lane__seal-row \{([^}]+)\}/u.exec(narrow)?.[1]).toContain("flex: 0 0 100%");
   });
 
   it("stacks the two rows down one edge rather than one centred and one flush left", () => {

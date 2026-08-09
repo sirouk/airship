@@ -20,6 +20,19 @@ import { describe, expect, it } from "vitest";
 const RETIRED_SELECTORS = Object.freeze([
   "compact-profile-select",
   "mobile-navigation",
+  /*
+   * `profile-governs*` was the whole vocabulary of `profiles-governance.tsx`
+   * and its sheet — a fully built, styled component with no caller anywhere,
+   * beside a `profiles-governance.ts` label module that is very much alive and
+   * that the specifier `"./profiles-governance"` was always resolving to. The
+   * component and its sheet contributed nothing to `dist`, but one fragment of
+   * them did ship: `shell.css` carried `profile-governs__cell small` in its
+   * shared eyebrow list, which was the only `profile-governs` selector in any
+   * built stylesheet and could only ever have matched the deleted component's
+   * own element. All three are gone; this keeps the name from creeping back
+   * into a sheet as a rule for an element that does not exist.
+   */
+  "profile-governs",
 ] as const);
 
 const ROOTS = Object.freeze(["../../src", "../../e2e"] as const);

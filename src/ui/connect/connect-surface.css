@@ -768,6 +768,50 @@
     justify-content: center;
   }
 
+  /*
+   * The lane header is a button, and it was being centred as one.
+   *
+   * The rule directly above centres the full-width action buttons, which is
+   * right for a button whose whole content is one word. The lane header is a
+   * *row* — an icon, a name, a subtitle, a caret and a state chip — and it
+   * wraps. Centring a wrapping flex container centres each line independently,
+   * so measured at phone-320 the wifi glyph sat at x=150..170 and the caret at
+   * x=156..164, both centred on the card's midline of 160, while the identity
+   * and the seal chip started at x=38 against the card's left edge. Three
+   * items on three axes inside one card, and the caret orphaned between the
+   * subtitle and the chip with nothing to belong to.
+   *
+   * This is the same collision `.connect-method__switch > button` resolves
+   * fourteen rules down, and it is resolved the same way and for the same
+   * reason: the tab restates the edge its contents agree on. `button` is in
+   * the selector to outrank `.connect-surface button` on its own terms rather
+   * than by reaching for a parent class this element does not need.
+   */
+  button.connect-lane__header {
+    justify-content: flex-start;
+  }
+
+  /*
+   * With one axis agreed, the row can be one row. `flex: 1 1 auto` sized the
+   * identity from its own content — 244px of name and subtitle inside a 246px
+   * content box — so it could never share a line with the 20px glyph, and the
+   * glyph and the caret each took a line of their own. A zero basis lets flex
+   * place all three on line 1 and hand the identity everything the other two
+   * did not need (192px at phone-320, against the ~70px the longest name
+   * needs), so the header reads down one left edge with one right-hand
+   * affordance and the seal keeps the separate row it was given above.
+   */
+  .connect-lane__identity {
+    flex: 1 1 0;
+  }
+
+  /* Docked, not floated. The caret is the only thing in this header that
+     speaks for the row rather than about the provider, so it sits at the far
+     edge where a disclosure caret is looked for. */
+  .connect-lane__chevron {
+    margin-inline-start: auto;
+  }
+
   .connect-method__switch {
     max-width: none;
   }
@@ -864,7 +908,29 @@
      * a shrink when a single item overflows the line on its own, and this one
      * wraps first.
      */
-    flex: 1 1 12ch;
+    /*
+     * `12ch` was the threshold, and the threshold was measured one width short.
+     *
+     * The reasoning above is right that the quantity deciding this is the width
+     * of one mono word and that no px breakpoint can name it. What it got wrong
+     * is which word has to fit. `12ch` covers "Unavailable" — the longest single
+     * word — but the sub-label is a *sentence*, and a basis that fits beside the
+     * label is a basis flex will place beside the label. Measured at phone-430,
+     * where the tab column is 178px: "OAuth" takes 40px and 12ch still fits in
+     * what is left, so line 1 read "OAuth Unavailable" with "in this build"
+     * hanging indented below it, while the "API key" tab beside it kept its
+     * break. One control, two tiles, two different shapes — at 430 alone; 320
+     * and 390 stacked, and the wide grid uses its own deliberate pattern.
+     *
+     * `100%` stops asking. The sub-label takes its own row at every phone width
+     * because that is what the surrounding comment already says this control
+     * intends, and a rule that is true at one width and false at the next is not
+     * a rule. It costs nothing the stack did not already cost at 320 and 390:
+     * `1 1` still lets the row it lands on be the tab's full width, the tabs are
+     * `minmax(0, 1fr)` in a strip that is already `max-width: none` here, and no
+     * tab, neighbour or row changes width.
+     */
+    flex: 1 1 100%;
     text-align: left;
   }
 

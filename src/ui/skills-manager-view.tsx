@@ -463,7 +463,16 @@ export function SkillsManagerView({
           );
         })}
       </div>
-      {status ? <p role="status" aria-live="polite">{status}</p> : null}
+      {/* The only in-page record that an authored skill was destroyed. It was a
+          class-less <p> at default route ink, floating in the gutter between
+          the card grid and the boundary callout — the least emphasised text on
+          a screen otherwise made of bordered panels, saying the most
+          irreversible thing on it. `.skills-action-status` is the chip recipe
+          the rest of the product uses for a status that has to be found rather
+          than merely announced; the topbar toast still fires in parallel and is
+          still the thing that catches the eye, and this is what remains after
+          it has gone. */}
+      {status ? <p class="skills-action-status" role="status" aria-live="polite"><Icon name="trash" />{status}</p> : null}
       <details class="callout compact-callout"><summary><Icon name="lock" /><strong>Conversation boundary</strong></summary><p>Changes affect future resolution only. Running conversations keep their pinned prompt and skill-set digests.</p></details>
     </section>
   );

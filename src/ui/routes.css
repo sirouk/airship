@@ -54,6 +54,57 @@
     var(--route-gutter-inline-start);
 }
 
+/*
+ * The route scroller's own edges, faded rather than guillotined.
+ *
+ * `.route-layout` is `.main`, and `.main` is one `overflow: auto` scroller
+ * whose box is bounded above by the topbar and below by the mobile navigation
+ * band. A scroller ends its content on a hard pixel line, so at a short
+ * viewport every resting scroll position terminates some row in the middle of
+ * its letterforms: measured at landscape-932 on #capabilities with all
+ * boundaries open, 11 of 13 resting stops cut at least one text leaf, and at
+ * scrollTop 0 — the state a reader actually arrives in — both "Live
+ * page-memory probe" and the amber performance-schedule pill are sliced
+ * through their midline by the tab bar. #skills with the editor open is 8 of
+ * 12. A half-drawn glyph reads as a broken layout, not as "there is more".
+ *
+ * This is the `data-scroll-edges` recipe `.primary-nav` has carried since the
+ * rail could overflow (shell.css), applied to the only other scroller in the
+ * shell. It is measured, never assumed: `useScrollEdges` writes the attribute
+ * from the live overflow, so a route that fits keeps a hard edge and nothing
+ * is asserted about content that is not there.
+ *
+ * The `:has()` guard is what makes it safe here, and it is the difference
+ * between this scroller and the rail. A mask is a group effect: it applies to
+ * the element's whole painted subtree, including `position: fixed`
+ * descendants, which is exactly the capture `.main`'s own `position: relative`
+ * comment took care to avoid. Popovers open *inside* `main` and in sheet mode
+ * are `position: fixed` against the viewport — measured at phone-320, the
+ * proof claim-stack sheet is `main`'s descendant and its box runs to y=568
+ * while `main`'s own bottom is y=512, so an unguarded mask would not soften
+ * that sheet's last line, it would erase it. While a sheet is open the reader
+ * is not reading the scroller behind it, so the fade has nothing to say and
+ * stands down for as long as the panel is up.
+ */
+.route-layout[data-scroll-edges="start"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px); }
+.route-layout[data-scroll-edges="end"] { --route-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%); }
+.route-layout[data-scroll-edges="both"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
+
+.route-layout[data-scroll-edges]:not([data-scroll-edges="none"]):not(:has(.popover[data-open="true"])) {
+  -webkit-mask-image: var(--route-scroll-fade);
+  mask-image: var(--route-scroll-fade);
+}
+
+/* A fade carries no forced-colors equivalent; keep every row at full contrast
+   and let the scrollbar carry the affordance instead. Same escape hatch, and
+   for the same reason, as the rail's. */
+@media (forced-colors: active) {
+  .route-layout[data-scroll-edges]:not([data-scroll-edges="none"]) {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
 .route-layout > * {
   width: min(1160px, 100%);
   margin-inline: auto;
@@ -1301,9 +1352,37 @@
 .posture-chip { display: grid; gap: var(--sp-1); min-width: 0; justify-items: start; }
 .posture-chip > small { color: var(--ink-faint); font-size: var(--fs-micro); }
 
+/*
+ * Three named tracks could not say how many actions this row has.
+ *
+ * `auto minmax(190px, 0.55fr) minmax(0, 1fr)` described the two-button rest
+ * state and left the third action holding whatever was left over. Measured at
+ * tablet-768 with a theme preview armed, that leftover was 52.69px: "Save new
+ * revision" took its 130.78px and "Switch to this profile" took its 190px
+ * floor, and "Cancel preview" — the control that abandons the preview, so the
+ * one a reader reaches for when they have changed their mind — stacked into
+ * "Cancel" / "preview" inside a 53px slot. The same template overshot in the
+ * other direction at desktop-1440, where the leftover made that button 385px
+ * wide beside a 131px sibling.
+ *
+ * The row does not fit at 768, and that is a fact about the labels rather than
+ * a thing to argue with: the three buttons want ~131 + ~164 + ~115px plus two
+ * 8px gaps against a 389px row. So the row is told to wrap instead of told how
+ * to divide. `max-content` as each track's maximum is the whole repair — a
+ * track can never be narrower than the label standing in it, at any type scale
+ * or Density, so no button in this row can be crushed again no matter how many
+ * arrive or how long their words are. The 150px minimum decides only how many
+ * columns fit before wrapping, and `auto-fit` collapses the ones nothing lands
+ * in, so the two-button rest state keeps two tracks and does not stretch to
+ * fill the route.
+ *
+ * The phone band below still restates `1fr`, and still means it: at 320px the
+ * answer is one full-width action per row, which is a different statement from
+ * this one rather than a special case of it.
+ */
 .profile-actions {
   display: grid;
-  grid-template-columns: auto minmax(190px, 0.55fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
   gap: var(--sp-2);
   align-items: center;
 }
@@ -1316,7 +1395,11 @@
   cursor: pointer;
 }
 
+/* The spans in this row — "Previewing — not saved" and the save status — are
+   claims about the row, not a fourth action in it. Pinned across every track so
+   they cannot be dealt into a button-sized cell as the column count changes. */
 .profile-actions > span {
+  grid-column: 1 / -1;
   color: var(--ink-muted);
   font-size: var(--fs-micro);
   line-height: 1.45;
@@ -1502,6 +1585,49 @@
 
 .skills-toolbar > .skills-toolbar-status.failure {
   color: var(--v-failed);
+}
+
+/*
+ * What is left on the page after a skill has been destroyed.
+ *
+ * The removal confirmation used to be an unclassed paragraph inheriting the
+ * route's body ink — 17px at `--ink`, the same type as ordinary prose, on a
+ * transparent ground with no border and no padding, sitting in the gap between
+ * the card grid and the Conversation boundary callout. Measured at
+ * desktop-1440 it was a 1156px-wide line reading "Audit probe removed." with
+ * nothing around it, which is how a page renders text it has no opinion about.
+ * The one sentence recording an irreversible act should not be the one piece of
+ * type on the route that was never given a box.
+ *
+ * The recipe is `.attestations-alert`'s, because that is already this product's
+ * word for "a status you may need to come back and read": bordered, inset,
+ * caption-sized, with a glyph carrying the kind of event so the meaning is not
+ * left to the sentence alone. Neutral `--line`/`--surface-soft` rather than a
+ * danger colour — the destruction already happened and succeeded, and painting
+ * a completed action in alarm ink is how alarm ink stops being read. `justify-
+ * self: start` keeps it the width of its own sentence: a chip stretched across
+ * a 1160px measure is a banner, and a banner is what the toast already was.
+ */
+.skills-action-status {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-self: start;
+  /* The floor has one name, and this sheet is one of the two that may not
+     spell it as a number — see `token-vocabulary.test.ts`. */
+  min-height: var(--touch-target);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: var(--fs-caption);
+}
+
+.skills-action-status svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
 }
 
 .skill-grid {
@@ -3521,6 +3647,13 @@
      * thing on the bar to give back.
      */
     padding-block: 0;
+  }
+
+  /* The runtime eyebrow rides this gutter with the bar — see the shared base
+     declaration in `chat.css`. Restated as one rule for both so the tag cannot
+     be left behind at a width where the header moved. */
+  .session-bar,
+  .chat-stage > .agent-runtime-status {
     padding-inline-start: max(var(--sp-3), env(safe-area-inset-left));
     padding-inline-end: max(var(--sp-3), env(safe-area-inset-right));
   }
@@ -4567,7 +4700,13 @@
      only the title, which the conversation list and `title` still carry. */
   :root[data-density] .session-bar {
     min-height: 48px;
-    padding: 0 max(9px, env(safe-area-inset-right)) 0 max(9px, env(safe-area-inset-left));
+    padding-block: 0;
+  }
+
+  /* Same gutter, same declaration, third and last width band. */
+  :root[data-density] .session-bar,
+  :root[data-density] .chat-stage > .agent-runtime-status {
+    padding-inline: max(9px, env(safe-area-inset-left)) max(9px, env(safe-area-inset-right));
   }
 
   .session-bar__identity.is-renaming { grid-column: 1 / -1; }
@@ -5292,5 +5431,29 @@
 
   .metric-strip__cell:nth-child(n + 3) {
     border-top: 1px solid var(--line);
+  }
+
+  /*
+   * A two-column grid holding an odd number of cells leaves the last row half
+   * empty, and rules drawn per cell then stop where the cells stop.
+   *
+   * Account renders five. Measured at phone-430: "Live headroom" sat alone in
+   * row 3, so the rule closing the CHARGED/TOKENS row was painted only under
+   * column 1 (x 39..215 of a 39..391 strip), the TOKENS cell above it got no
+   * bottom edge at all, and the column divider carried down by cells 2 and 4
+   * terminated in mid-air at y=619. It reads as a table that stopped being
+   * drawn, not as a merged cell — and the reader has no way to tell those two
+   * apart, which is the actual cost: an unfinished rule under a spend figure
+   * invites the question of whether the figure is unfinished too.
+   *
+   * The tail cell spans the row instead. Stated as `last-child:nth-child(odd)`
+   * rather than as `:nth-child(5)` because the strip is a shared primitive and
+   * the count is the caller's business: four cells (Billing) are untouched, and
+   * three, five or seven all close correctly without this sheet being told how
+   * many arrived. `:nth-child(2n)` cannot match an odd cell, so the spanning
+   * cell keeps no left rule and its `border-top` now runs the full width.
+   */
+  .metric-strip__cell:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }

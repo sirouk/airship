@@ -63,6 +63,38 @@
 }
 
 /*
+ * The engine claim is the session bar's eyebrow, so it starts where the bar's
+ * own title starts — and it is declared in the same breath so it cannot stop.
+ *
+ * `.chat-stage` is a bare grid with no padding of its own: every other child
+ * brings its gutter with it, the bar in this rule and the transcript in its
+ * own. The runtime tag arrived as an `.eyebrow` span with neither, so it
+ * inherited a zero-padding stage and ran the full width of it. Measured at
+ * phone-320, `engine: airship-core (default)` had its E-stem on the viewport
+ * edge at x=0 while the conversation title beneath it sat at 12; at
+ * desktop-1440 it began at x=232, flush on the rail seam, with the title it
+ * belongs to at 256. A band starting outside every neighbour reads as a stripe
+ * of chrome rather than as a fact about the row below it.
+ *
+ * Naming a token here instead would have been a guess dressed as a match: this
+ * gutter is not one value. `routes.css` re-states it twice — 12px in the phone
+ * band and 9px in the ≤500px-tall landscape band, both against a safe-area
+ * floor — because the header's inset is a function of how much width the
+ * device has, not of a constant. A `var(--sp-5)` on the eyebrow was measured
+ * doing exactly the harm it was meant to repair: correct at desktop, 12px
+ * past the title at phone-320, and wide enough there to wrap the tag onto a
+ * second line on the shortest viewport in the product.
+ *
+ * So the two elements share one declaration rather than agreeing by
+ * coincidence, here and at both overrides. Inline only — the row's height is
+ * the eyebrow's own line box, and the stage grid still owns the rhythm.
+ */
+.session-bar,
+.chat-stage > .agent-runtime-status {
+  padding-inline: var(--sp-5);
+}
+
+/*
  * One 40px row for everything that is true of this conversation.
  *
  * It replaces an 88px two-column header, a 42px guidance band and a phone-only
@@ -76,7 +108,7 @@
   gap: var(--sp-2) var(--sp-4);
   align-items: center;
   min-height: 40px;
-  padding: var(--sp-1) var(--sp-5);
+  padding-block: var(--sp-1);
   border-bottom: 1px solid var(--line);
 }
 

@@ -259,7 +259,22 @@
   .terminal-route__actions button{min-width:0;min-height:var(--touch-target);padding-inline:8px;font-size:var(--fs-micro);white-space:normal}
   /* The summary keeps its stacked label/detail shape on a phone: the runtime
      name on one line, what it is not on the next, then the fact chips. */
-  .terminal-route__setup>summary{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;padding:7px 10px}
+  /* The marker leaves the flow here, so the padding has to hold its place.
+     At the wide shape the chevron is a flex item with `margin-left:auto` and
+     the row cannot help but make room for it. Below this breakpoint the summary
+     becomes a grid and the chevron becomes absolute, and an absolute box asks
+     for no room at all: the caption was allowed to run to `right-10px` while
+     the ~8px glyph pinned at `right:11px` occupied `right-19px..right-11px`, so
+     the two shared columns and the disclosure painted straight across the
+     caption's own truncation ellipsis — "or a device shell.⌄." at phone-320,
+     the chevron's strokes crossing the dots, identical at phone-430. The
+     ellipsis is what tells the reader there is more text; a glyph drawn over it
+     removes the one signal the truncation existed to give.
+     28px is the marker's own geometry restated as space: 11px offset + 8px
+     glyph + a 9px gutter, so the two can never share a column again. Only the
+     right side moves — the left inset is the summary's alignment with the body
+     below it and has nothing to do with the marker. */
+  .terminal-route__setup>summary{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;padding:7px 28px 7px 10px}
   .terminal-route__setup>summary::after{position:absolute;right:11px;margin:0}
   .terminal-route__setup{position:relative}
   .terminal-route__setup>summary>small{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}

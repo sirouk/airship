@@ -212,13 +212,22 @@ describe("the editor's own labels", () => {
 /**
  * The theme card's captions, un-clamped.
  *
- * The rules are asserted against `routes.css` rather than this module's own
- * sheet, and that is a finding rather than a convenience: `profiles-governance.
- * css` is imported only by `profiles-governance.tsx`, whose `ProfileGovernance
- * Strip` has no caller — `app.tsx` imports the label module beside it and
- * renders the strip inline. Nothing in that sheet reaches the bundle; `grep
- * profile-governs dist/assets/*.css` finds one selector, and it is routes.css's.
- * A fix written there would have passed every test and shipped nothing.
+ * The rules are asserted against `routes.css` rather than against a sheet named
+ * after this module, and that used to be a finding: `profiles-governance.css`
+ * was imported only by `profiles-governance.tsx`, whose `ProfileGovernanceStrip`
+ * had no caller — `app.tsx` imports the label module beside it (the `.ts`, which
+ * is very much alive) and renders its own strip inline from `routes.css`'s
+ * vocabulary. Nothing in that sheet reached the bundle, so a fix written there
+ * would have passed every test and shipped nothing.
+ *
+ * Both files are now deleted, along with the one fragment of them that did
+ * ship: `shell.css` carried `profile-governs__cell small` in its shared eyebrow
+ * list, which was the sole `profile-governs` selector in `dist/assets/*.css`
+ * and matched only the `<small>` inside the component that no longer exists.
+ * The name is now pinned in `dead-selector-contract.test.ts` so it cannot
+ * return as a rule for an element nothing renders. `routes.css` is therefore
+ * not a second-best target here — it is the only sheet this surface has ever
+ * been drawn from.
  *
  * A theme card carries a swatch and two `<small>`s: `theme.description`, which
  * is the only place the card says what the theme IS, and the presentation
