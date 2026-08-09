@@ -10,6 +10,9 @@ import {
   fitMemoryGraphViewport,
   graphToCanvasPoint,
   hitTestMemoryNode,
+  labelBandFor,
+  labelRectsOverlap,
+  labelSlotsFor,
   memoryGraphViewportBounds,
   panMemoryGraphViewport,
   queryMemoryNodeSpatialIndex,
@@ -193,11 +196,16 @@ describe("Canvas memory graph gestures", () => {
  * `fillText` are needed — so these drive `drawNodeLabels` directly.
  */
 describe("Canvas memory graph labels", () => {
-  it("drops the second of two labels whose ink overlaps, rather than printing them through each other", () => {
+  it("sends the second of two labels whose ink overlaps to the node's other side", () => {
     // The #context frame this is written from: "notes/retrieval.md" was drawn
     // four pixels below "README.md" with their spans overlapping, and both
     // words became unreadable. Four pixels is one row apart under the old
     // quantisation and no overlap at all under it.
+    //
+    // Refusing the second was the first answer and it is not the best one: the
+    // node has a whole free side, and a name moved there is a name kept. The
+    // collision itself is still what decides — the label only moves because the
+    // rectangles really do share ink.
     const harness = labelHarness([
       node("README.md", 0, 0, 8),
       node("notes/retrieval.md", -3, 4, 6),
@@ -205,7 +213,53 @@ describe("Canvas memory graph labels", () => {
 
     drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
 
+    expect(harness.drawn).toEqual(["README.md", "notes/retrieval.md"]);
+    const [first, second] = harness.calls;
+    // Right of its node at 400, and left of its own node at 397: the flip.
+    expect(first!.x).toBe(414);
+    expect(second!.x + second!.width).toBe(385);
+    expect(second!.x + second!.width).toBeLessThanOrEqual(first!.x);
+  });
+
+  it("drops a label outright when neither side of its node can hold one", () => {
+    // The other half of the same bargain. This node stands 40px from the
+    // canvas's left edge, so its left slot is 22px wide — under the floor — and
+    // "README.md" already holds the room on its right. Nothing legible fits on
+    // either side, so nothing is drawn: the graph declining to draw a label it
+    // cannot draw legibly, rather than printing one through a neighbour.
+    const harness = labelHarness([
+      node("README.md", -340, 0, 8),
+      node("notes/retrieval.md", -360, 0, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
     expect(harness.drawn).toEqual(["README.md"]);
+  });
+
+  it("flips a label pressed against the canvas edge instead of letting the edge shear it", () => {
+    /*
+     * SO018, measured on the shipped build at phone-320 (canvas x 23..297):
+     * "Memory gardener" was painted as "Memory gard", "Concise handoff" as
+     * "Concise h", "Developer" as "Develope" — cut flat by the canvas, mid-glyph
+     * and without an ellipsis, because the fitter was handed a flat 190px
+     * regardless of how little room stood between the node and the edge.
+     *
+     * The canvas here is 274px wide, the phone-320 measure, and the node sits
+     * 24px from its right edge. Nothing legible fits there, and the whole name
+     * fits on the left, so the whole name is what the reader gets.
+     */
+    const harness = labelHarness([node("Memory gardener", 113, 0, 6)], 274);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["Memory gardener"]);
+    const drawn = harness.calls[0]!;
+    expect(drawn.x).toBe(148);
+    expect(drawn.x + drawn.width).toBe(238);
+    // The node stands at 250. Its name ends 6px clear of it and never reaches
+    // the 274px edge, which is the shear this test exists to refuse.
+    expect(drawn.x + drawn.width).toBeLessThanOrEqual(274);
   });
 
   it("keeps both labels once their ink no longer overlaps, which one row per centre could not tell", () => {
@@ -232,15 +286,21 @@ describe("Canvas memory graph labels", () => {
     // three workspace files as bare squares with no name anywhere on screen. It
     // is the CROSSING that has to stop, not the naming, so the label is cut to
     // the room in front of the disc and keeps saying which file this is.
+    //
+    // "Research" is here to spend the left side. Without it the label simply
+    // flips and keeps its whole name, which is the better answer whenever it is
+    // available and is asserted a few tests up; the stub is what is left when
+    // BOTH sides are spoken for, and the stub's arithmetic is what this pins.
     const harness = labelHarness([
       node("General session", 0, 0, 10),
+      node("Research", -300, 0, 8),
       node("docs/architecture.md", -136, 0, 6),
     ]);
 
     drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
 
-    expect(harness.drawn).toEqual(["General session", "docs/architecture…"]);
-    const stub = harness.calls[1]!;
+    expect(harness.drawn).toEqual(["General session", "Research", "docs/architecture…"]);
+    const stub = harness.calls[2]!;
     /*
      * Ends at 384: the disc's own left edge at 390, less the 6px gutter a label
      * already keeps from its own node, so it stops clear of the circle rather
@@ -254,6 +314,33 @@ describe("Canvas memory graph labels", () => {
      * node. A drift back to a column boundary fails this number.
      */
     expect(stub.x + stub.width).toBe(384);
+  });
+
+  it("keeps a label off a node that has not been named yet", () => {
+    /*
+     * desktop-1440: "notes/retrieval.md" was painted straight through the
+     * workspace square beside it, and that square carries a label of its own —
+     * it just had not been drawn yet. While a node claimed its shape at the
+     * moment its own name went down, the protection ran in priority order, and
+     * priority order is not something a reader can see on a still frame.
+     *
+     * Here the crossed node is the LOWER-priority one, so nothing about the
+     * order can save it: the higher-priority name has to flip to its own left,
+     * which is the side no mark is standing on.
+     */
+    const harness = labelHarness([
+      node("notes/retrieval.md", -50, 0, 8),
+      node("docs/architecture.md", 30, 0, 6),
+    ]);
+
+    drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
+
+    expect(harness.drawn).toEqual(["notes/retrieval.md", "docs/architecture.md"]);
+    // 228..336, ending 6px clear of its own node at 350 and never reaching the
+    // 424..436 square it used to be printed across.
+    expect(harness.calls[0]!.x).toBe(228);
+    expect(harness.calls[0]!.x + harness.calls[0]!.width).toBe(336);
+    expect(harness.calls[1]!.x).toBe(442);
   });
 
   it("cuts an oversized label to fit rather than condensing it into micro-type", () => {
@@ -288,39 +375,114 @@ describe("Canvas memory graph labels", () => {
      * to the lattice — which is why the losses looked like force-graph jitter
      * rather than like a rule, and why the sweep runs every phase rather than
      * one convenient alignment.
+     *
+     * The pair now says the same thing in x rather than in presence: a second
+     * label the grid finds clear stays on the right where it is read in order,
+     * and one the grid finds overlapping moves. Whether it moved is the same
+     * measurement, read off a coordinate instead of off a missing word.
      */
     for (const phase of [0, 1, 2, 3]) {
-      const kept = (gap: number): number => {
+      const placedAt = (gap: number): number[] => {
         const harness = labelHarness([
           node("Source reviewer", 0, phase, 7),
           node("Evidence first", 0, phase + gap, 7),
         ]);
         drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
-        return harness.drawn.length;
+        expect(harness.drawn.length, `phase ${phase}: gap ${gap}`).toBe(2);
+        return harness.calls.map((call) => call.x);
       };
       // Bands meeting edge to edge is adjacent lines of text, which is what
-      // every paragraph is: kept.
-      expect(kept(12), `phase ${phase}: 12px apart, ink disjoint`).toBe(2);
-      // One pixel closer and the ink really does share a row: dropped.
-      expect(kept(11), `phase ${phase}: 11px apart, ink overlaps`).toBe(1);
+      // every paragraph is: both stay on the right, at the same x.
+      expect(placedAt(12), `phase ${phase}: 12px apart, ink disjoint`).toEqual([413, 413]);
+      // One pixel closer and the ink really does share a row: the second moves
+      // to its node's left, ending 6px clear of the node at 400.
+      expect(placedAt(11), `phase ${phase}: 11px apart, ink overlaps`).toEqual([413, 303]);
     }
   });
 
   it("never lets a cut-down label take room from one already placed at full width", () => {
     // The cost of the second pass, measured rather than asserted. "term" is the
     // lowest-priority node here and its full label lands inside the gap the
-    // refused "docs/architecture.md" would want. The full-width pass finishes
-    // first, so "term" is placed whole and the gap left for the stub is 3px —
-    // under the floor, so no stub is drawn. Recovering a name never costs one.
+    // refused "docs/architecture.md" would want on the right, while "Research"
+    // holds the room it would want on the left. The full-width pass finishes
+    // first, so "term" is placed whole and "docs/architecture.md" takes only
+    // what is left over after it — a stub on its left, three characters shorter
+    // than the one it gets when "term" is not there. Recovering a name never
+    // costs one.
     const harness = labelHarness([
       node("General session", 0, 0, 10),
+      node("Research", -300, 0, 8),
       node("docs/architecture.md", -136, 0, 7),
       node("term", -111, 0, 6),
     ]);
 
     drawNodeLabels(harness.engine, harness.nodes, undefined, new Set(), false);
 
-    expect(harness.drawn).toEqual(["General session", "term"]);
+    expect(harness.drawn).toEqual(["General session", "Research", "term", "docs/archite…"]);
+    const stub = harness.calls[3]!;
+    // Ends 6px clear of its own node at 264, and starts clear of "Research".
+    expect(stub.x + stub.width).toBe(251);
+  });
+});
+
+/**
+ * Where a name may sit, decided without a canvas.
+ *
+ * Both halves of SO018 are arithmetic — how much room stands between a node and
+ * the edge of the paint, and which of a node's two sides shows more of its name
+ * — so both are settled here, where the numbers are the phone-320 numbers and
+ * no browser is needed to read them.
+ */
+describe("Memory graph label slots", () => {
+  const slots = (nodeX: number, labelWidth: number, canvasWidth = 274) =>
+    labelSlotsFor({ nodeX, radius: 6, canvasWidth, labelWidth, maxWidth: 190, minWidth: 44, gutter: 6 });
+
+  it("measures each side's budget to the edge it actually ends at", () => {
+    // Node at 120 on a 274px canvas: 136px of paint to its right before the
+    // gutter and the edge, 102px to its left. Neither is the flat 190 the
+    // fitter used to be handed, and 190 is what sheared "Memory gard".
+    expect(slots(120, 90)).toEqual([
+      { side: "right", anchorX: 132, budget: 136 },
+      { side: "left", anchorX: 108, budget: 102 },
+    ]);
+    // Far from both edges the cap is the cap again.
+    expect(slots(400, 90, 800)).toEqual([
+      { side: "right", anchorX: 412, budget: 190 },
+      { side: "left", anchorX: 388, budget: 190 },
+    ]);
+  });
+
+  it("keeps reading order whenever the right side shows as much of the name", () => {
+    // 90px of name, and both sides can show all of it: no reason to move.
+    expect(slots(120, 90).map((slot) => slot.side)).toEqual(["right", "left"]);
+    // 200px of name, and the right still shows more of it than the left.
+    expect(slots(120, 200).map((slot) => slot.side)).toEqual(["right", "left"]);
+  });
+
+  it("flips to the left when the right cannot show as much of the name", () => {
+    // Node at 180: 76px to the right, 162 to the left, and a 120px name. The
+    // right side would have to cut; the left says the whole thing.
+    expect(slots(180, 120).map((slot) => slot.side)).toEqual(["left", "right"]);
+  });
+
+  it("offers no slot at all below the floor a name can be read at", () => {
+    // Node at 250 on the 274px canvas — the "Memory gardener" of the audit.
+    // 18px stand to its right, which is an ellipsis with a letter in front.
+    expect(slots(250, 90)).toEqual([{ side: "left", anchorX: 238, budget: 190 }]);
+    // And a node with no room on either side keeps its shape and no name.
+    expect(slots(40, 90, 100)).toEqual([]);
+  });
+
+  it("bands text from the anchor in the direction the slot reads", () => {
+    expect(labelBandFor({ side: "right", anchorX: 132, budget: 136 }, 90)).toEqual({ minX: 132, maxX: 222 });
+    expect(labelBandFor({ side: "left", anchorX: 108, budget: 102 }, 90)).toEqual({ minX: 18, maxX: 108 });
+  });
+
+  it("calls edge-to-edge rectangles clear and any shared area taken", () => {
+    const band = { minX: 100, maxX: 200, minY: 0, maxY: 12 };
+    expect(labelRectsOverlap(band, { minX: 200, maxX: 300, minY: 0, maxY: 12 })).toBe(false);
+    expect(labelRectsOverlap(band, { minX: 100, maxX: 200, minY: 12, maxY: 24 })).toBe(false);
+    expect(labelRectsOverlap(band, { minX: 199, maxX: 300, minY: 11, maxY: 24 })).toBe(true);
   });
 });
 
@@ -329,7 +491,7 @@ describe("Canvas memory graph labels", () => {
  * returns six pixels per character — close enough to the 11px face to make the
  * spans in these cases the spans the product had.
  */
-function labelHarness(nodes: readonly MemoryGraphNode[]) {
+function labelHarness(nodes: readonly MemoryGraphNode[], width = 800) {
   const drawn: string[] = [];
   // Where each label landed and how it was asked for: a fourth argument to
   // `fillText` is the condensing one, so the count is worth keeping.
@@ -350,7 +512,7 @@ function labelHarness(nodes: readonly MemoryGraphNode[]) {
     context,
     graph: { nodes } as never,
     palette: { inkMuted: "#fff" } as never,
-    viewport: { centerX: 0, centerY: 0, scale: 1, width: 800, height: 600 },
+    viewport: { centerX: 0, centerY: 0, scale: 1, width, height: 600 },
     hoverId: undefined,
   } as unknown as CanvasEngine;
   return { engine, nodes, drawn, calls };
