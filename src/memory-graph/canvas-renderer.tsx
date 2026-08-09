@@ -830,6 +830,96 @@ export function fitLabelToWidth(
   return { text, width: context.measureText(text).width };
 }
 
+/** Which side of its node a name is sitting on. */
+export type LabelSide = "right" | "left";
+
+/**
+ * A place a name may sit, and how much room it has there.
+ *
+ * `anchorX` is the edge of the band the label is pinned to: its left edge on
+ * the right of a node, its right edge on the left of one. The band itself
+ * follows from the width the text turns out to be, which is why it is
+ * `labelBandFor`'s answer rather than a field here.
+ */
+export type LabelSlot = Readonly<{ side: LabelSide; anchorX: number; budget: number }>;
+
+export type LabelBand = Readonly<{ minX: number; maxX: number }>;
+
+export type LabelRect = Readonly<{ minX: number; maxX: number; minY: number; maxY: number }>;
+
+/**
+ * The places a name of `labelWidth` could sit beside its node, best first.
+ *
+ * Two facts decide this, and neither was being asked before.
+ *
+ * The first is the canvas's own right edge. `fitLabelToWidth` was handed a flat
+ * 190px no matter where the node stood, so a node in the right margin was told
+ * it had room it did not have and the surplus was cut off by the canvas rather
+ * than by the fitter — a flat vertical shear through the middle of a glyph, with
+ * no ellipsis to say anything was missing. Measured on the shipped build at
+ * phone-320, canvas x 23..297: `Memory gardener` rendered as `Memory gard`,
+ * `Concise handoff` as `Concise h`, `Developer` as `Develope`. A budget is only
+ * true if it stops where the paint does, so each side's budget is measured to
+ * the edge it actually ends at, less the same gutter a label already keeps from
+ * its own node's shape.
+ *
+ * The second is that a node has two sides. Clamping alone answers the shear by
+ * cutting the name shorter — `Memory garde…` instead of `Memory gard` — which
+ * declares the loss but still takes it, while 190px of empty canvas sits on the
+ * node's other side. So both sides are offered and they are ordered by how much
+ * of the name each can actually show: `Math.min(budget, labelWidth)`, right
+ * winning ties. A node with room on the right keeps the left-to-right reading
+ * order the graph has always had; a node pressed against the right edge flips
+ * and is read whole. Ordering by the name shown rather than by raw room is what
+ * keeps the flip from firing on nodes that never needed it.
+ *
+ * A slot narrower than `minWidth` is not returned at all. Below that floor the
+ * text is an ellipsis with a letter in front of it, which spends ink, a
+ * reservation and the reader's attention to say nothing the node's own shape
+ * and colour had not already said.
+ */
+export function labelSlotsFor(input: Readonly<{
+  nodeX: number;
+  radius: number;
+  canvasWidth: number;
+  labelWidth: number;
+  maxWidth: number;
+  minWidth: number;
+  gutter: number;
+}>): readonly LabelSlot[] {
+  const rightAnchor = input.nodeX + input.radius + input.gutter;
+  const leftAnchor = input.nodeX - input.radius - input.gutter;
+  const slots: LabelSlot[] = [
+    { side: "right", anchorX: rightAnchor, budget: Math.min(input.maxWidth, input.canvasWidth - input.gutter - rightAnchor) },
+    { side: "left", anchorX: leftAnchor, budget: Math.min(input.maxWidth, leftAnchor - input.gutter) },
+  ];
+  return Object.freeze(
+    slots
+      .filter((slot) => slot.budget >= input.minWidth)
+      // Stable, so the right slot stays ahead of the left whenever both show
+      // the same amount of the name — including when both show all of it.
+      .sort((left, right) => Math.min(right.budget, input.labelWidth) - Math.min(left.budget, input.labelWidth))
+      .map((slot) => Object.freeze(slot)),
+  );
+}
+
+/** The horizontal extent text of `width` occupies in `slot`. */
+export function labelBandFor(slot: LabelSlot, width: number): LabelBand {
+  return slot.side === "right"
+    ? Object.freeze({ minX: slot.anchorX, maxX: slot.anchorX + width })
+    : Object.freeze({ minX: slot.anchorX - width, maxX: slot.anchorX });
+}
+
+/**
+ * Whether two reserved rectangles share any area.
+ *
+ * Touching edges do not collide. Two ±6 bands that meet edge to edge are 12px
+ * apart — adjacent lines of text, which is what every paragraph is.
+ */
+export function labelRectsOverlap(left: LabelRect, right: LabelRect): boolean {
+  return left.minX < right.maxX && right.minX < left.maxX && left.minY < right.maxY && right.minY < left.maxY;
+}
+
 export function drawNodeLabels(
   engine: CanvasEngine,
   visibleNodes: readonly MemoryGraphNode[],
@@ -872,7 +962,7 @@ export function drawNodeLabels(
    * refuses any pair that shares area. It only stops refusing pairs that never
    * shared any.
    */
-  type Reservation = { minX: number; maxX: number; minY: number; maxY: number };
+  type Reservation = LabelRect;
   const occupied = new Map<string, Reservation[]>();
   const context = engine.context;
   context.font = "500 11px ui-sans-serif, system-ui, sans-serif";
@@ -881,12 +971,6 @@ export function drawNodeLabels(
   context.globalAlpha = 0.92;
   const columnWidth = 20;
   const rowHeight = 4;
-  /*
-   * Touching edges do not collide. Two ±6 bands that meet edge to edge are 12px
-   * apart — adjacent lines of text, which is what every paragraph is.
-   */
-  const intersects = (left: Reservation, right: Reservation): boolean =>
-    left.minX < right.maxX && right.minX < left.maxX && left.minY < right.maxY && right.minY < left.maxY;
   /*
    * The label is drawn `textBaseline: middle` at 11px, so its ink covers about
    * six pixels either side of the node's y. Reserving that band is what makes
@@ -908,7 +992,7 @@ export function drawNodeLabels(
     for (const cell of cellsWithin(area)) for (const taken of occupied.get(cell) ?? []) found.add(taken);
     return [...found];
   };
-  const isClear = (area: Reservation): boolean => !nearby(area).some((taken) => intersects(area, taken));
+  const isClear = (area: Reservation): boolean => !nearby(area).some((taken) => labelRectsOverlap(area, taken));
   const reserve = (area: Reservation): void => {
     for (const cell of cellsWithin(area)) {
       const bucket = occupied.get(cell);
@@ -919,73 +1003,134 @@ export function drawNodeLabels(
   /**
    * The air a label keeps between itself and whatever it stands next to.
    *
-   * `anchorOf` already spends it on the left, holding a name off its own node's
-   * shape. A stub cut to fit a gap spends the same on the right, so it stops
-   * short of the thing that stopped it rather than resting against it: text
-   * abutting a disc reads as text printed on a disc, which is the failure the
-   * cut exists to avoid in the first place.
+   * A slot already spends it on the near side, holding a name off its own
+   * node's shape. A stub cut to fit a gap spends the same on the far side, so
+   * it stops short of the thing that stopped it rather than resting against it:
+   * text abutting a disc reads as text printed on a disc, which is the failure
+   * the cut exists to avoid in the first place. `labelSlotsFor` spends it a
+   * third time, against the canvas edge, so a name never rests on the frame.
    */
   const labelGutter = 6;
+  /** The paint's own right edge, in the CSS pixels every canvas point is in. */
+  const canvasWidth = engine.viewport.width;
   /*
-   * How far right of `startX` the label band stays clear, capped at `limit`.
+   * How far into `slot` the label band stays clear, capped at the slot's budget.
    *
    * The second pass asks this rather than retrying a ladder of guessed widths:
    * the stub it then paints is exactly as long as the room the first pass left
    * beside the node, and cannot reach into a neighbour.
    *
-   * The room is measured to the blocking rectangle's own left edge, less the
+   * The room is measured to the blocking rectangle's own near edge, less the
    * gutter — not back to the start of the lattice column that rectangle happens
    * to sit in. Rounding down to the column threw away up to 19px on every stub,
    * which is the difference between a name and the `MIN_LABEL_WIDTH` floor
-   * declining to draw one.
+   * declining to draw one. It runs in whichever direction the slot reads, so a
+   * flipped label is cut by what is to its left exactly as a right-hand one is
+   * cut by what is to its right.
    */
-  const clearWidthFrom = (startX: number, minY: number, maxY: number, limit: number): number => {
-    const band = { minX: startX, maxX: startX + limit, minY, maxY };
-    let room = limit;
-    for (const taken of nearby(band)) {
-      if (taken.maxY <= minY || taken.minY >= maxY || taken.maxX <= startX) continue;
-      room = Math.min(room, Math.max(0, taken.minX - labelGutter - startX));
+  const clearRoomIn = (slot: LabelSlot, minY: number, maxY: number): number => {
+    const band = labelBandFor(slot, slot.budget);
+    let room = slot.budget;
+    for (const taken of nearby({ minX: band.minX, maxX: band.maxX, minY, maxY })) {
+      if (taken.maxY <= minY || taken.minY >= maxY) continue;
+      if (slot.side === "right") {
+        if (taken.maxX <= slot.anchorX) continue;
+        room = Math.min(room, Math.max(0, taken.minX - labelGutter - slot.anchorX));
+      } else {
+        if (taken.minX >= slot.anchorX) continue;
+        room = Math.min(room, Math.max(0, slot.anchorX - labelGutter - taken.maxX));
+      }
     }
     return room;
   };
-  /** Where a node's label starts: clear of the node's own shape, on its right. */
-  const anchorOf = (node: MemoryGraphNode) => {
-    const point = graphToCanvasPoint(node, engine.viewport);
-    const radius = Math.max(2.5, node.size);
-    return { point, radius, labelX: point.x + radius + labelGutter };
-  };
-  /** Draws one label at no more than `budget` pixels, reporting whether it went down. */
-  const place = (node: MemoryGraphNode, budget: number, forced: boolean): boolean => {
-    const fitted = fitLabelToWidth(context, node.label, budget);
-    if (!fitted) return false;
-    const { point, radius, labelX } = anchorOf(node);
+  /** Where a node stands and how big it draws, in canvas pixels. */
+  const anchorOf = (node: MemoryGraphNode) => ({
+    point: graphToCanvasPoint(node, engine.viewport),
+    radius: Math.max(2.5, node.size),
+  });
+  const commit = (point: CanvasPoint, text: string, area: Reservation): void => {
     // Reserve the label's ACTUAL drawn footprint (not a coarse fixed bucket)
     // so wide labels block later ones instead of overlapping into unreadable soup.
-    const labelArea = {
-      minX: labelX,
-      maxX: labelX + fitted.width,
-      minY: point.y - labelHalfHeight,
-      maxY: point.y + labelHalfHeight,
-    };
-    if (!forced && !isClear(labelArea)) return false;
-    reserve(labelArea);
-    /*
-     * A drawn label also spends its own node's shape, because text is painted
-     * after every node: a later label crossing an earlier node lands on the
-     * glyph as well as beside the word, which is how "docs/architecture.md"
-     * came to be drawn through the "General session" node that already carried
-     * a label of its own.
-     *
-     * Only *labelled* nodes claim their shape. Reserving all 152 was measured
-     * and rejected — at this graph's density a 130px label sweeps about 1.6
-     * node centres, so blanket reservation deletes most of the labels the panel
-     * exists to show. Small unlabelled dots may still be clipped by a passing
-     * label; a label lost is worse than a dot touched.
-     */
-    reserve({ minX: point.x - radius, maxX: point.x + radius, minY: point.y - radius, maxY: point.y + radius });
-    context.fillText(fitted.text, labelX, point.y);
+    reserve(area);
+    // Drawn from the band's own left edge in both directions, so a flipped
+    // label needs no `textAlign` state and reserves exactly what it paints.
+    context.fillText(text, area.minX, point.y);
+  };
+  /**
+   * Draws one label on the best side that will actually hold it.
+   *
+   * `roomFor`, when given, is the second pass asking for a stub: the slot's
+   * budget is then narrowed to what its neighbours left, and a slot with less
+   * than `MIN_LABEL_WIDTH` of that is skipped rather than crammed.
+   *
+   * `forced` is the selected or hovered node, whose name the reader has just
+   * asked for by name. It is still bound by the canvas edge and by the floor —
+   * a name off the edge is not an answer — but it may overlap, and it is placed
+   * first, so what it overlaps is nothing yet.
+   */
+  const place = (
+    node: MemoryGraphNode,
+    forced: boolean,
+    roomFor?: (slot: LabelSlot, minY: number, maxY: number) => number,
+  ): boolean => {
+    const { point, radius } = anchorOf(node);
+    const minY = point.y - labelHalfHeight;
+    const maxY = point.y + labelHalfHeight;
+    const slots = labelSlotsFor({
+      nodeX: point.x,
+      radius,
+      canvasWidth,
+      labelWidth: context.measureText(node.label).width,
+      maxWidth: MAX_LABEL_WIDTH,
+      minWidth: MIN_LABEL_WIDTH,
+      gutter: labelGutter,
+    });
+    let crowded: { text: string; area: Reservation } | undefined;
+    for (const slot of slots) {
+      const budget = roomFor ? Math.min(slot.budget, roomFor(slot, minY, maxY)) : slot.budget;
+      if (budget < MIN_LABEL_WIDTH) continue;
+      const fitted = fitLabelToWidth(context, node.label, budget);
+      if (!fitted) continue;
+      const band = labelBandFor(slot, fitted.width);
+      const area = { minX: band.minX, maxX: band.maxX, minY, maxY };
+      if (isClear(area)) {
+        commit(point, fitted.text, area);
+        return true;
+      }
+      crowded ??= { text: fitted.text, area };
+    }
+    if (!forced || !crowded) return false;
+    commit(point, crowded.text, crowded.area);
     return true;
   };
+
+  /*
+   * Every node that may be named claims its own shape first, before any name is
+   * placed.
+   *
+   * Text is painted after every node, so a label crossing a node lands on the
+   * glyph as well as beside the word — which is how "docs/architecture.md" came
+   * to be drawn through the "General session" node that already carried a label
+   * of its own. Claiming the shape at the moment its label went down was not
+   * enough: it only protected nodes named EARLIER, and "notes/retrieval.md" was
+   * still printed straight across the neighbouring workspace square at
+   * desktop-1440 because that square's own name had not been placed yet.
+   * Priority order is not a drawing order the reader can see, so it cannot be
+   * what decides which marks are protected.
+   *
+   * Only *candidates* claim their shape. Reserving all 152 was measured and
+   * rejected — at this graph's density a 130px label sweeps about 1.6 node
+   * centres, so blanket reservation deletes most of the labels the panel exists
+   * to show. The candidates are the dozen or so nodes big enough, selected, or
+   * adjacent enough to be named, and they are the marks a reader is looking at.
+   * Small unlabelled dots may still be clipped by a passing label; a label lost
+   * is worse than a dot touched. A node never blocks its own name: a slot
+   * starts a full radius plus the gutter clear of the shape it belongs to.
+   */
+  for (const node of candidates) {
+    const { point, radius } = anchorOf(node);
+    reserve({ minX: point.x - radius, maxX: point.x + radius, minY: point.y - radius, maxY: point.y + radius });
+  }
 
   /*
    * First pass: every candidate at its full width, highest priority first. This
@@ -996,7 +1141,7 @@ export function drawNodeLabels(
   const anonymous: MemoryGraphNode[] = [];
   for (const node of candidates) {
     const forced = node.id === selected || node.id === engine.hoverId;
-    if (!place(node, MAX_LABEL_WIDTH, forced)) anonymous.push(node);
+    if (!place(node, forced)) anonymous.push(node);
   }
 
   /*
@@ -1007,17 +1152,14 @@ export function drawNodeLabels(
    * nodes into bare teal squares at once — nothing on screen said which file any
    * of them was, and a still frame has no hover to fall back on. So each refused
    * node is offered whatever horizontal room the first pass happened to leave
-   * beside it: enough for a readable stub of its name and the stub is drawn,
-   * not enough and the node stays anonymous rather than gaining ink nobody can
-   * read. Showing some of the names beats showing none of them, and the room
-   * spent here is by construction room no drawn label wanted.
+   * beside it, on either side: enough for a readable stub of its name and the
+   * stub is drawn, not enough on either side and the node stays anonymous
+   * rather than gaining ink nobody can read. Showing some of the names beats
+   * showing none of them, the room spent here is by construction room no drawn
+   * label wanted, and a graph declining to draw a label it cannot draw legibly
+   * is the bargain this whole pass is built on.
    */
-  for (const node of anonymous) {
-    const { point, labelX } = anchorOf(node);
-    const room = clearWidthFrom(labelX, point.y - labelHalfHeight, point.y + labelHalfHeight, MAX_LABEL_WIDTH);
-    if (room < MIN_LABEL_WIDTH) continue;
-    place(node, room, false);
-  }
+  for (const node of anonymous) place(node, false, clearRoomIn);
 }
 
 function labelPriority(
