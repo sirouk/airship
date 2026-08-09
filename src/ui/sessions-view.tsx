@@ -863,7 +863,12 @@ export function SessionsView({
                           hides this copy and why. */}
                       {active ? <em class="session-library-card-active">Active</em> : null}
                       {lineage ? <em class="session-library-card-lineage">↳ from {lineage.label}</em> : null}
-                      <span>{sessionEventCount(item.headSequence)}</span>
+                      {/* Classed so the stylesheet can name it in the line's
+                          shrink order: it is the fact that yields first, and an
+                          unclassed span could only have been reached by a
+                          positional selector that renaming anything would
+                          silently repoint. */}
+                      <span class="session-library-card-events">{sessionEventCount(item.headSequence)}</span>
                       {item.profileId ? <span class="session-library-card-profile">{item.profileId}</span> : null}
                       <span class="session-library-card-model" title={`${item.providerId} · ${item.model}`}>{item.model}</span>
                     </span>
