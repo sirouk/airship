@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   MemoryGraphRenderer,
   deriveMemoryRelationshipGraph,
@@ -571,18 +571,47 @@ export function MemoryView({
   });
   const priorInitialTab = useRef(initialTab);
   presentationRef.current = { query, relationshipsExpanded, indexExpanded, indexMounted };
-  const indexRef = useRef<HTMLDetailsElement>(null);
   /*
-   * A deep link has to land somewhere a person can see it landed. The palette's
-   * "Memory index" destination scrolled this section into view and changed
-   * nothing else, on a page whose every visible word above was identical — so
-   * the arrival read as a no-op. The section's own control takes focus, which
-   * draws the ring, and is where a keyboard or screen-reader arrival belongs.
+   * A deep link has to land somewhere a person can see it landed — and it must
+   * still land at the top of its own route, which is where this stopped doing.
+   *
+   * The Index arrival used to run `indexRef.current?.scrollIntoView({ block:
+   * "start" })` plus a focus on the section's summary, written when the only
+   * thing that changed on arrival was which disclosure was open: the palette's
+   * "Memory index" destination re-rendered a page whose every visible word
+   * above was identical, so without the scroll the arrival read as a no-op.
+   *
+   * What that bought is not worth what it costs. Measured on arrival at
+   * `#context`, `.main` scrollTop was 1043 of 2695 at tablet-768, 936 of 2315
+   * at laptop-1024, 828 at desktop-1440 and 922 at phone-320 — the only one of
+   * the 14 routes that does not mount at 0 — with this route's `<h1>` at y=-962
+   * and the ⓘ that carries its sentence at y=-968, i.e. off the top of the
+   * window. `app.tsx` resets `.main` to 0 on every view change; this ran after
+   * it and undid it. A route that opens with its own head above the window is a
+   * worse first frame than a section that has to be scrolled to.
+   *
+   * What still says the arrival happened, stated honestly because it is less
+   * than it was: the eyebrow becomes "Memory index · revision-bound local
+   * materialization" and the description becomes the index's, which at `tool`
+   * density is the ⓘ's heading and body rather than visible prose (see
+   * `route-header.tsx`) — so it names the arrival in the ⓘ trigger's accessible
+   * name and behind one press for everyone else; the relationship graph folds
+   * and the Index opens, which is a change in the page's shape; and the Index
+   * carries `.memory-index-arrival`, which states it in words where the link
+   * points. The quiet arrival is the accepted cost here, and it is the one that
+   * can be paid back later — by this route eventually titling itself Context
+   * rather than borrowing Memory's `<h1>` — without moving the page again.
+   *
+   * The focus went with it, and for the same reason rather than as collateral:
+   * it was `preventScroll: true`, so dropping the scroll alone would have left
+   * the keyboard on a control 900px below the fold, which is worse than either.
+   * Route arrival focus is `.main`, set by `app.tsx` for all 14 routes, and
+   * this route is no longer the exception to that either.
+   *
+   * `revealGraphMatches` still scrolls to `#memory-relationships`: that is a
+   * scroll a reader asked for by pressing something, which is the only kind
+   * this route has left.
    */
-  const alignIndex = useCallback(() => {
-    indexRef.current?.scrollIntoView({ block: "start" });
-    indexRef.current?.querySelector("summary")?.focus({ preventScroll: true });
-  }, []);
   const workspaceAuthority = indexMounted ? contextGeneration : files;
   /*
    * `messages` gets a fresh identity per stream delta, so neither derivation
@@ -646,17 +675,17 @@ export function MemoryView({
       setIndexExpanded(true);
       setIndexMounted(true);
       // A deep link to the Index asks for the Index. Collapsing the graph
-      // disclosure is what lets the requested section actually reach the top
-      // of the scroller now that the route is a third of its former height —
+      // disclosure is what shortens the page above the requested section —
       // and it is one click from being open again, which is the disclosure
-      // model doing its job rather than a section being taken away.
+      // model doing its job rather than a section being taken away. It is also
+      // the whole of what this arrival does now: opening what was asked for and
+      // folding what was not is a change a reader can see from scrollTop 0,
+      // which is where every route mounts and where this one now mounts too.
       setRelationshipsExpanded(false);
-      const frame = window.requestAnimationFrame(alignIndex);
-      return () => window.cancelAnimationFrame(frame);
     } else if (changed) {
       setRelationshipsExpanded(true);
     }
-  }, [alignIndex, initialTab]);
+  }, [initialTab]);
   /*
    * The witness is written on every mount, not only when it changes: a second
    * reload must inherit the first reload's count rather than recompute it from
@@ -1148,7 +1177,6 @@ export function MemoryView({
       </details>
 
       <details
-        ref={indexRef}
         id="memory-index"
         class="memory-disclosure memory-index-disclosure"
         open={indexExpanded}
@@ -1167,7 +1195,7 @@ export function MemoryView({
             <p class="memory-index-arrival" role="status">Opened from the Memory index destination. Search, this profile's records and the relationship graph are on this same page, above.</p>
           ) : null}
           {indexMounted ? workspace
-            ? <ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch} renderProvenance={(subject, rows) => <ProvenanceChip subject={subject} rows={rows} />} onGenerationChange={setContextGeneration} onReady={initialTab === "index" ? alignIndex : undefined} detailExpanded={initialTab === "index"} onOpenFile={onOpenSource ? (path) => onOpenSource({ kind: "file", path }) : undefined} />
+            ? <ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch} renderProvenance={(subject, rows) => <ProvenanceChip subject={subject} rows={rows} />} onGenerationChange={setContextGeneration} detailExpanded={initialTab === "index"} onOpenFile={onOpenSource ? (path) => onOpenSource({ kind: "file", path }) : undefined} />
             : <section class="empty-state"><Icon name="context" /><h2>Index unavailable</h2><p>The browser workspace is not ready, so indexing did not start.</p></section>
             : <p class="memory-deferred-note" role="status">Open to load on-device indexing. Source files remain unchanged.</p>}
         </div>

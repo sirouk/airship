@@ -23,7 +23,6 @@ export type ContextViewProps = Readonly<{
   searchQuery?: string;
   sharedSearch?: FederatedMemorySearchState;
   onGenerationChange?: (generationDigest?: string) => void;
-  onReady?: () => void;
   /** Opens an indexed source in the editor. Unwired hosts get no button. */
   onOpenFile?: (path: string) => void;
   /**
@@ -48,7 +47,7 @@ export type ContextViewProps = Readonly<{
   detailExpanded?: boolean;
 }>;
 
-export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false, searchQuery, sharedSearch, onGenerationChange, onReady, onOpenFile, renderProvenance, detailExpanded = false }: ContextViewProps) {
+export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false, searchQuery, sharedSearch, onGenerationChange, onOpenFile, renderProvenance, detailExpanded = false }: ContextViewProps) {
   const runtime = useMemo(() => getClientContextRuntime(workspace, { dimensions }), [dimensions, workspace]);
   const semanticPackAvailable = runtime.semanticPackAvailable;
   const [engineState, setEngineState] = useState<ClientContextEngineState>(() => runtime.getState());
@@ -108,12 +107,6 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     setConfidentialAvailable(hasConfidentialAuthority());
     return subscribeConfidentialAuthority(setConfidentialAvailable);
   }, []);
-  useEffect(() => {
-    if (!onReady) return;
-    const frame = window.requestAnimationFrame(onReady);
-    return () => window.cancelAnimationFrame(frame);
-  }, [onReady]);
-
   useEffect(() => {
     void runtime.updateWorkspace(entries).catch((error: unknown) => {
       if (!isContextSupersession(error)) setLocalSearchError(undefined);
