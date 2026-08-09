@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { MENU_SELECT_EDGE_GUTTER, menuSelectShift, moveMenuSelection } from "./menu-select";
+import {
+  MENU_SELECT_EDGE_GUTTER,
+  MENU_SELECT_SHEET_TOLERANCE,
+  menuSelectIsSheet,
+  menuSelectShift,
+  moveMenuSelection,
+} from "./menu-select";
 
 describe("menu selection keyboard movement", () => {
   const options = [{ disabled: false }, { disabled: true }, { disabled: false }];
@@ -92,6 +98,16 @@ describe("an anchored listbox ends up on the screen, whichever way it opens", ()
     expect(-50 + shifted).toBe(MENU_SELECT_EDGE_GUTTER);
   });
 
+  it("skips the horizontal pass for the sheet and measures the sheet instead", () => {
+    const source = readFileSync(new URL("./menu-select.tsx", import.meta.url), "utf8");
+    const effect = source.slice(source.indexOf("useLayoutEffect(() => {\n    if (!open"));
+    // The two branches are exclusive: a panel pinned to both viewport edges has
+    // nothing to shift, and an anchored one has no sheet contract to earn.
+    const compact = effect.slice(effect.indexOf("} else {"), effect.indexOf('if (placement !== "down") return;'));
+    expect(compact).toContain("menuSelectIsSheet");
+    expect(compact).toContain("setSheet(");
+  });
+
   it("runs the horizontal pass for both placements and measures a clean panel", () => {
     const source = readFileSync(new URL("./menu-select.tsx", import.meta.url), "utf8");
     const effect = source.slice(source.indexOf("useLayoutEffect(() => {\n    if (!open"));
@@ -112,5 +128,177 @@ describe("an anchored listbox ends up on the screen, whichever way it opens", ()
     // And the sheet tier is pinned to both viewport edges by CSS, so it is not
     // measured at all.
     expect(effect.indexOf("narrowViewport")).toBeLessThan(effect.indexOf("menuSelectShift"));
+  });
+});
+
+describe("the compact shell's sheet is recognised from the box the stylesheet gave it", () => {
+  /*
+   * `popover.tsx` decides its own mode from the viewport, because nothing but
+   * `popover.css` positions a popover. `MenuSelect` cannot: the composer's
+   * approval chooser is handed to `.composer` and anchored above the input
+   * (`routes.css:3884`) and the session switcher is pinned under the session bar
+   * (`routes.css:3498`), both from stylesheets this component never sees, and
+   * both would be ruined by a header, a scrim and a 64px landscape inset.
+   *
+   * So the question is asked of the rendered box, and these are the two
+   * populations it has to separate — every number measured on the shipped build.
+   */
+  const phone = { viewportWidth: 430, viewportHeight: 932 };
+  const landscape = { viewportWidth: 932, viewportHeight: 430 };
+
+  it("calls the shared narrow rule's panel a sheet at both compact tiers", () => {
+    // Preferences, profiles, vault, skills, sessions: x=8, right vw-8, bottom vh-8.
+    expect(menuSelectIsSheet({ panelLeft: 8, panelRight: 422, panelBottom: 924, ...phone })).toBe(true);
+    expect(menuSelectIsSheet({ panelLeft: 8, panelRight: 924, panelBottom: 422, ...landscape })).toBe(true);
+  });
+
+  it("leaves the panels a route stylesheet places itself alone", () => {
+    // The composer's approval policy, anchored above the input: 400px wide at
+    // x=20, ending 161px short of the bottom edge. It reads whole, it hits, and
+    // `e2e/composer-layout.spec.ts` measures all of that.
+    expect(menuSelectIsSheet({ panelLeft: 20, panelRight: 420, panelBottom: 771, ...phone })).toBe(false);
+    // The session switcher: full width, but hung under the bar at the top.
+    expect(menuSelectIsSheet({ panelLeft: 8, panelRight: 422, panelBottom: 269.3, ...phone })).toBe(false);
+    // The topbar profile menu: `top: 58px`, 320px wide, neither edge nor bottom.
+    expect(menuSelectIsSheet({ panelLeft: 8, panelRight: 328, panelBottom: 220, ...phone })).toBe(false);
+    // An anchored desktop listbox is not a sheet however tall the panel is.
+    expect(menuSelectIsSheet({ panelLeft: 640, panelRight: 980, panelBottom: 900, viewportWidth: 1_440, viewportHeight: 900 }))
+      .toBe(false);
+  });
+
+  it("separates the two populations by the same gutter the sheet rule uses", () => {
+    expect(MENU_SELECT_SHEET_TOLERANCE).toBeGreaterThanOrEqual(MENU_SELECT_EDGE_GUTTER);
+    // The nearest opt-out clears the bottom edge by 161px and the nearest sheet
+    // sits 8px inside it, so the threshold is nowhere near either population.
+    const edge = { panelLeft: 8, panelRight: 422, ...phone };
+    expect(menuSelectIsSheet({ ...edge, panelBottom: 932 - MENU_SELECT_SHEET_TOLERANCE })).toBe(true);
+    expect(menuSelectIsSheet({ ...edge, panelBottom: 932 - MENU_SELECT_SHEET_TOLERANCE - 1 })).toBe(false);
+  });
+});
+
+describe("a sheet says whose it is, and can be left", () => {
+  const source = readFileSync(new URL("./menu-select.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("./menu-select.css", import.meta.url), "utf8");
+
+  /*
+   * The defect, in one sentence: at 430x932 the Preferences `Color mode` listbox
+   * opened 221.6px from its own trigger with `Corners` — a different setting —
+   * as the nearest label above it, and in 14 recorded opens the panel covered
+   * the control it belonged to. A panel pinned across the bottom of a phone has
+   * stopped pointing at anything; the header is what puts the name back.
+   */
+  it("gives the sheet a header carrying the trigger's own accessible name", () => {
+    expect(source).toContain('<div class="menu-select-sheet-header">');
+    expect(source).toMatch(/\{sheet \? \(\s*<div class="menu-select-sheet-header">\s*<strong>\{ariaLabel\}<\/strong>/u);
+    // The same string the trigger publishes, so the two cannot drift.
+    expect(source).toContain("aria-label={ariaLabel}");
+  });
+
+  it("keeps the listbox owning options and nothing else", () => {
+    // A heading and a Done button inside `role="listbox"` are two nodes an
+    // assistive technology has no slot for, so the panel is the box and the
+    // list is the role — the arrangement `popover.tsx` already uses.
+    expect(source).toContain('<div id={listboxId} class="menu-select-list" role="listbox" aria-label={ariaLabel}>');
+    expect(source).toContain('<div ref={popover} class="menu-select-popover">');
+    // `aria-controls` still names the node that carries the role.
+    expect(source).toContain("aria-controls={open ? listboxId : undefined}");
+  });
+
+  it("hangs the scrim on the host and asks the two pressable boxes about dismissal", () => {
+    // Hit-testing a pseudo-element reports its originating element, so
+    // `root.contains(target)` answered "inside the menu" for a press on the dim
+    // and left the sheet standing over the route with no way out.
+    const dismissal = source.slice(source.indexOf("const handleOutsidePointer"), source.indexOf("const handleSheetEscape"));
+    expect(dismissal).toContain("trigger.current?.contains(target)");
+    expect(dismissal).toContain("popover.current?.contains(target)");
+    expect(dismissal).not.toContain("root.current?.contains(event.target");
+    expect(styles).toContain('.menu-select[data-sheet="true"]::before { content:""; position:fixed; z-index:319;');
+    expect(styles).toContain("background:var(--scrim);");
+    // One under the panel, so whatever stacking context the pair resolves
+    // against, the panel is the one on top.
+    expect(styles).toContain("z-index:320;");
+  });
+
+  it("lets Escape reach a sheet from anywhere without taking the key from anyone else", () => {
+    const escape = source.slice(source.indexOf("const handleSheetEscape"), source.indexOf('document.addEventListener("pointerdown"'));
+    // Sheets only: an anchored panel sits beside its trigger and takes no room.
+    expect(escape).toContain('if (event.key !== "Escape" || !sheet) return;');
+    // A keypress from inside the menu still belongs to the option handler, which
+    // is the branch that stops propagation and restores focus.
+    expect(escape).toContain("if (root.current?.contains(document.activeElement)) return;");
+    expect(escape).not.toContain("stopPropagation");
+    expect(escape).toContain("close(false)");
+  });
+
+  it("measures each open against the stylesheet's own answer", () => {
+    // A panel already wearing the sheet contract sits 64px above the bottom edge
+    // on the short shape — the one answer that would make the measurement say
+    // no. So the flag is false on the way in, by both routes into an open.
+    const openAt = source.slice(source.indexOf("const openAt ="), source.indexOf("useEffect(() => {"));
+    expect(openAt).toContain("setSheet(false);");
+    const close = source.slice(source.indexOf("const close ="), source.indexOf("const openAt ="));
+    expect(close).toContain("setSheet(false);");
+    // And the dim cannot outlive the panel it explains.
+    expect(source).toContain('data-sheet={open && sheet ? "true" : undefined}');
+  });
+});
+
+describe("the sheet's own geometry, and the two numbers it borrows", () => {
+  const styles = readFileSync(new URL("./menu-select.css", import.meta.url), "utf8");
+
+  it("is flush with the bottom edge on an upright phone", () => {
+    expect(styles).toContain('.menu-select[data-sheet="true"] .menu-select-popover { inset:auto 0 0 0;');
+    expect(styles).toContain("border-radius:var(--radius-panel) var(--radius-panel) 0 0;");
+    // The flush sheet ends at the screen's edge, so it pays for the home indicator.
+    expect(styles).toContain("padding-bottom:calc(var(--sp-4) + env(safe-area-inset-bottom));");
+  });
+
+  /*
+   * Measured at 932x430 on the shipped build: every menu sheet was a 916px strip
+   * running to y=422 across a navigation band at y=386..430, so 19 of the
+   * landscape opens covered the one control that answers "can I go somewhere
+   * else". The repair is not invented here — it is `.mobile-sheet-scrim`'s own
+   * reservation in `routes.css`, which `popover.css` also took, and it lands the
+   * panel at y=115..366 with the band untouched below it.
+   */
+  it("becomes a centred card clear of the navigation band on the short shape", () => {
+    const landscape = styles.slice(styles.indexOf('@media (max-width:950px) and (max-height:500px) {\n  .menu-select[data-sheet'));
+    expect(landscape).toContain("bottom:calc(64px + env(safe-area-inset-bottom));");
+    expect(landscape).toContain("width:min(100% - (2 * var(--sp-3)),640px);");
+    expect(landscape).toContain("max-height:min(72dvh,680px);");
+    expect(landscape).toContain("margin-inline:auto;");
+    // A scrim that covered the band would take back exactly the reachability
+    // the panel gave up height to preserve.
+    expect(landscape).toContain('.menu-select[data-sheet="true"]::before { bottom:calc(64px + env(safe-area-inset-bottom)); }');
+  });
+
+  it("keeps Done a 44px target with a 28px mark inside it, whatever the route says about buttons", () => {
+    // `.session-library-toolbar button` is (0,2,0) and gives every button in
+    // that toolbar `min-height: 42px`, a border and a fill — measured at 42px on
+    // the sessions filter sheets before this rule was scoped through the host.
+    expect(styles).toContain('.menu-select[data-sheet="true"] .menu-select-done { position:relative; flex:none; min-width:64px; min-height:44px;');
+    expect(styles).toContain("border:0;");
+    // The pill retreats inside the target rather than the target shrinking, so
+    // the button's border stops sharing an edge with the sheet's own frame.
+    expect(styles).toContain('.menu-select[data-sheet="true"] .menu-select-done::before { content:""; position:absolute; inset:var(--sp-2) 0;');
+  });
+
+  it("does not let a declared min-width replace the label's own floor", () => {
+    // `min-width: <length>` on a flex item REPLACES `min-width: auto` and so
+    // removes the min-content floor — that is how the popover's `Done` came to
+    // ride its own border at three phone widths. `flex: none` is the repair that
+    // outlives any number the Type scale or a translation produces.
+    const rule = styles.slice(styles.indexOf('.menu-select[data-sheet="true"] .menu-select-done {'));
+    const declarations = rule.slice(0, rule.indexOf("}"));
+    expect(declarations.indexOf("flex:none")).toBeLessThan(declarations.indexOf("min-width:64px"));
+  });
+
+  it("shows the header in the sheet tier and nowhere else", () => {
+    expect(styles).toContain(".menu-select-sheet-header { display:none; }");
+    expect(styles).toContain('.menu-select[data-sheet="true"] .menu-select-sheet-header { display:flex; position:sticky; top:0;');
+    // The title is the only statement of which control the sheet belongs to, so
+    // it wraps rather than ellipsising: half of `Profile minimum proof posture`
+    // names nothing.
+    expect(styles).toContain("overflow-wrap:anywhere;");
   });
 });
