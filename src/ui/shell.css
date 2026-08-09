@@ -139,6 +139,41 @@
 .topbar-posture-chip[data-state="failed"] { color: var(--v-failed); }
 .topbar-posture-chip[data-state="attention"] { color: var(--v-caution); }
 
+/*
+ * The floor for the two topbar controls, keyed on the pointer rather than on
+ * the viewport.
+ *
+ * Both already carried a correct 44px rule — inside
+ * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`, the compact
+ * shell pair. That query answers "is this shell narrow or short", which is a
+ * layout question, and it was being asked in place of "is a finger doing the
+ * pointing", which is not the same question and has a different answer on a
+ * tablet. Measured on the built tree at 768×1024 with `hasTouch`/`isMobile` and
+ * `(pointer: coarse)` matching true: `.topbar-posture-chip` 214.5×28 and
+ * `.topbar-connect-action` 130.8×32, on all fourteen routes — the shell chrome
+ * every route shows, 16px and 12px under the floor, on the one viewport class
+ * that is both touch-driven and wider than every phone breakpoint. The same two
+ * controls measure 44px at 932×430 only because a landscape phone happens to be
+ * 430px tall and trips the second arm of that pair.
+ *
+ * `popover.css:44` has keyed its floor this way since the primitive took the
+ * rule off the routes; this is the same move for the chrome around it.
+ *
+ * Added rather than moved. The width-scoped copies also floor a *narrow
+ * desktop* window, where a resized mouse-driven viewport keeps
+ * `(pointer: coarse)` false — the same argument `tokens.css:660` makes for
+ * keeping the density floor in both places.
+ *
+ * Height only. `min-width` stays where it is: the chip is `min-width: 0` so its
+ * label may ellipsize inside a crowded topbar, and both controls measure well
+ * over 44px wide at every viewport that reaches this rule. A `min-width` here
+ * would buy nothing and would replace the min-content floor these flex items
+ * lay out against.
+ */
+@media (pointer: coarse) {
+  .topbar-posture-chip { min-height: var(--touch-target); }
+}
+
 .topbar-posture-chip__count {
   flex: 0 0 auto;
   color: var(--ink-faint);
@@ -514,6 +549,14 @@
 }
 
 .topbar-connect-action:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface-soft)); }
+
+/* The other half of the topbar floor — see the long note beside
+   `.topbar-posture-chip` above for why the pointer and not the width. Measured
+   130.8×32 at 768×1024 on all fourteen routes; this is the topbar's primary
+   action and the only route into a model. */
+@media (pointer: coarse) {
+  .topbar-connect-action { min-height: var(--touch-target); }
+}
 
 /* The native `<select>` wrapper this block styled was retired when the topbar
    switcher became a `MenuSelect`. No element has carried its class since, and
@@ -1069,6 +1112,38 @@
  */
 :root[data-density] .nav-item.nav-item--nested {
   min-height: var(--rail-item-height);
+}
+
+/*
+ * And the decision `tokens.css:667` deferred: on a coarse pointer the floor
+ * outranks the hierarchy signal.
+ *
+ * That comment left `.nav-item--nested` out of the density floor on purpose —
+ * "whether the hierarchy signal outranks the floor is a separate decision" —
+ * and the sweep has now measured what deferring it ships as. At 768×1024 with
+ * `(pointer: coarse)` true, `Editor` and `Terminal` render 71×36 in the rail on
+ * workspace, editor and terminal: 8px under the floor, in the primary
+ * navigation, on the only viewport in the product that has both a rail and a
+ * finger. Phones never showed it because `.sidebar` is `display: none` there,
+ * which is exactly why a width query was the wrong instrument.
+ *
+ * The signal survives the change intact, because height was never carrying it:
+ * `.nav-item--nested` above says so in as many words — "nesting is carried by
+ * the indent, the 1px rule and `aria-level`" — and it also spends a
+ * `--fs-caption` type step and `--ink-faint` on the same job. Measured after:
+ * a nested row is 44px against a primary destination's 46px at Comfortable, so
+ * it still reads shorter, and it reads shorter on a mouse by the full 10px
+ * because nothing below reaches a fine pointer.
+ *
+ * (0,4,0) and placed after, to match the rule above it: `--rail-item-height` is
+ * read by three selectors at three specificities in this sheet, so a floor that
+ * did not restate the whole chain would lose to one of them the way the
+ * variable alone lost to `:root[data-density] .nav-item`.
+ */
+@media (pointer: coarse) {
+  :root[data-density] .nav-item.nav-item--nested {
+    min-height: var(--touch-target);
+  }
 }
 
 .nav-item.active {
