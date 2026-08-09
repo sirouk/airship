@@ -425,6 +425,161 @@ describe("conversation library space budget", () => {
   });
 
   /*
+   * The conversation that had no name.
+   *
+   * Measured on the shipped build at 320x568, after pressing the star on row 1:
+   * `.session-library-card` was 83.9x65 at x=24, and the `<strong>` holding
+   * `Investigate the flaky kitten pipeline test` reported clientWidth 0 against
+   * scrollWidth 280 — an ellipsis with nothing in front of it — while `just now`
+   * (28/28) and `3 events` (59/59) beside it rendered whole. The model id was
+   * 0 of 115 in the same card. The same press cost the title 84px at 390, 84px
+   * at 430, 66px at 932x430 (99 -> 33) and 66px at 1024x768 (124 -> 58).
+   *
+   * The row is not short of width by accident: 60px of opener, 84px of reorder
+   * arrows and a 44px star are each at or under the touch floor and none of them
+   * can give a pixel back. Only the arrows can move, and the only place they can
+   * move to is a line of their own — which is what these four rules do, keyed to
+   * the width of the list column rather than of the viewport, because 330px of
+   * list exists at 932x430, at 1024x768 and at 1440x900 alike.
+   */
+  it("moves the reorder arrows out of the title's band wherever the list column is narrow", () => {
+    // The container has to exist before a container query can mean anything,
+    // and it has to be the list column — the panel whose width the two-pane
+    // clamp sets — not the route and not the viewport.
+    expect(ruleBody(".session-library-list-panel")).toContain("container: session-list / inline-size;");
+
+    const narrowColumn = styles.slice(styles.indexOf("@container session-list (max-width: 560px) {"));
+    expect(narrowColumn, "the query has to be a real block, not a comment about one").not.toBe("");
+    const block = narrowColumn.slice(0, narrowColumn.indexOf("\n}\n"));
+
+    // Four tracks and a second row: the arrows come out of the band and the
+    // star closes it up, so the card's track is 84px wider than it was.
+    expect(block).toContain("grid-template-columns: minmax(0, 1fr) auto auto auto;");
+    expect(block).toContain("grid-template-rows: auto auto;");
+    expect(block).toContain(".session-library-row > .session-library-pin { grid-area: 1 / 4; }");
+
+    const stacked = block.slice(block.indexOf(".session-library-row > .session-library-favorite-order {"));
+    expect(stacked).toContain("grid-area: 2 / 1 / 3 / -1;");
+    expect(stacked).toContain("justify-self: end;");
+    /*
+     * And on its own line the cluster is simply visible. The collapse above
+     * exists to stop it holding width in the title's band; a strip that is
+     * already outside that band gains nothing by being invisible, and hiding it
+     * there would reserve the height anyway or make the row jump 44px under the
+     * pointer.
+     */
+    expect(stacked).toContain("width: auto;");
+    expect(stacked).toContain("opacity: 1;");
+  });
+
+  /*
+   * …and the reason that works is that every control names its own column.
+   *
+   * Two of the row's five children are conditional — the lineage jump and the
+   * reorder cluster — so under auto-placement the column a control landed in
+   * depended on which of its siblings had rendered. Moving one item would then
+   * slide the rest along behind it. An empty `auto` track is zero pixels wide,
+   * so naming a column for an absent control costs nothing at any width.
+   */
+  it("names the column of every control on the row rather than filling them in order", () => {
+    expect(ruleBody(".session-library-card")).toContain("grid-area: 1 / 1;");
+    expect(ruleBody(".session-library-open")).toContain("grid-area: 1 / 2;");
+    expect(ruleBody(".session-library-lineage-jump")).toContain("grid-area: 1 / 3;");
+    expect(ruleBody(".session-library-favorite-order")).toContain("grid-area: 1 / 4;");
+    expect(ruleBody(".session-library-pin")).toContain("grid-area: 1 / 5;");
+    // Five names for five columns, in the order the base template declares them.
+    expect(ruleBody(".session-library-row")).toContain("grid-template-columns: minmax(0, 1fr) auto auto auto auto;");
+  });
+
+  /*
+   * The floor under the name, and the one thing on its line allowed to yield.
+   *
+   * `minmax(0, 1fr)` was not a guarantee of anything: an `fr` is handed only the
+   * *free* space, so once a 16px mark, a 50px `just now` and two 8px gaps had
+   * taken a 60px lane, the free space was zero and the title got exactly zero.
+   * The floor is what makes the track flexible rather than expendable.
+   *
+   * The relative time is the escape rather than the title because it is the one
+   * fact on this line stated somewhere else as well — in the row's `title`, in
+   * the card's accessible name, and in the pane's `Created … · updated …` line.
+   * The conversation's name is stated nowhere else in the row.
+   */
+  it("gives the title a floor and makes the timestamp the thing that yields", () => {
+    const top = ruleBody(".session-library-card-top") ?? "";
+    expect(top).toContain("grid-template-columns: 16px minmax(8ch, 1fr) minmax(0, auto);");
+    /*
+     * `ch`, not px: this route is reachable at 200% zoom, where a px floor stops
+     * being eight characters and starts being four.
+     */
+    expect(top).toMatch(/minmax\(8ch,/u);
+    // Without this the floor is bought by laying the name over the opener beside
+    // it rather than by the time abbreviating.
+    expect(top).toContain("overflow: hidden;");
+
+    const time = ruleBody(".session-library-card-top time") ?? "";
+    expect(time).toContain("min-width: 0;");
+    expect(time).toContain("text-overflow: ellipsis;");
+    // The abbreviation has to be visible. A clip with no ellipsis is the reading
+    // this whole line is written against.
+    expect(time).toContain("overflow: hidden;");
+    expect(time).not.toContain("flex: 0 0 auto;");
+  });
+
+  /*
+   * Measured at 320x568 on a favourited row: `3 events` rendered 59 of 59 while
+   * `general` was 32 of 45 and `airship/demo-v1` was 0 of 115. The count had no
+   * rule at all, which in flex is `flex: 0 1 auto` with an automatic min-content
+   * minimum — a word that cannot be shrunk by a pixel — so the whole deficit
+   * fell on the two facts that tell one conversation from another.
+   */
+  it("takes the row's last line from the count before it takes it from the identity", () => {
+    // The hook first: without the class the rule below would be unreachable and
+    // this guard would pass for the wrong reason.
+    expect(source).toContain('<span class="session-library-card-events">{sessionEventCount(item.headSequence)}</span>');
+
+    const events = ruleBody(".session-library-card-events") ?? "";
+    // Eight against the profile's and the model's one: first to be taken from,
+    // last to be protected.
+    expect(events).toContain("flex: 0 8 auto;");
+    // …and never all the way to a bare ellipsis, so the row still says a count
+    // exists. The number itself survives in the card's accessible name.
+    expect(events).toContain("min-width: 4ch;");
+    expect(events).toContain("text-overflow: ellipsis;");
+    expect(ruleBody(".session-library-card-profile")).toContain("flex: 0 1 auto;");
+    expect(ruleBody(".session-library-card-model")).toContain("flex: 0 1 auto;");
+  });
+
+  /*
+   * A grid template names positions, not elements.
+   *
+   * `minmax(260px, 1fr)` was written as the search's track, back when the search
+   * was the first thing in this row. `Profile · General` was later added ahead
+   * of it in the DOM and inherited the flexible column without a word being
+   * changed. Measured at 1440x900 and 1920x1080: the scope chip rendered 389.2px
+   * and 393.2px around a 121px nowrap label, while the search input reported
+   * clientWidth 189 against a placeholder that needs 252px — the one control
+   * that says what this row is for could not say its own name at either width.
+   */
+  it("spends the toolbar's flexible track on the search, not on a nowrap chip", () => {
+    const toolbar = ruleBody(".session-library-toolbar") ?? "";
+    expect(toolbar).toContain("grid-template-columns: auto minmax(16rem, 1fr) repeat(3, minmax(126px, auto)) auto auto;");
+    // The chip is sized to its content and nothing else.
+    expect(toolbar).not.toContain("minmax(260px, 1fr)");
+    /*
+     * The search's floor is deliberately under the placeholder's own 252px: the
+     * sum of every track's minimum has to stay inside the narrowest grid this
+     * rule ever runs in, which is 1181px — the first pixel above the block that
+     * turns this row into a wrapping flex line. Above that the `1fr` does the
+     * work, and it is measured: 369px of field at 1181, 456px at 1440.
+     */
+    expect(toolbar).toMatch(/minmax\(16rem, 1fr\)/u);
+    expect(styles).toContain("@media (max-width: 1180px)");
+    // The scope chip still may not wrap; sizing it to content is only honest if
+    // the content is whole.
+    expect(ruleBody(".session-library-profile-scope")).toContain("white-space: nowrap;");
+  });
+
+  /*
    * Measured at 320px: an input's min-content width is its own `size`, and
    * `min-width: 0` permits flexing below it without lowering it — so the nowrap
    * rename row demanded about 345px, the detail card grew to match, and

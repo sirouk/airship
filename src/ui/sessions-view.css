@@ -68,9 +68,39 @@
   line-height: 1.65;
 }
 
+/*
+ * The flexible track belongs to the field that has something to say.
+ *
+ * The template was written when the search was the first thing in this row, so
+ * `minmax(260px, 1fr)` was the search's track and everything after it was a
+ * fixed-ish chip. Then `Profile · General` was added ahead of it in the DOM and
+ * silently inherited the flexible column, because a grid template names
+ * positions and not the elements standing in them.
+ *
+ * Measured on the shipped build at 1440x900 and 1920x1080: the scope chip
+ * rendered 389.2px and 393.2px wide — a nowrap label whose own text is 121px,
+ * padded out with 270px of nothing — while `.session-library-search input`
+ * reported clientWidth 189 against a placeholder ("Search titles, models and
+ * profiles") that needs 252px to render. The one control that tells a reader
+ * what this row does could not say its own name at either width, and the chip
+ * beside it was three times its content.
+ *
+ * So the chip is sized to its content and the search takes the free space. The
+ * `16rem` floor is the search's, not the chip's: it is what the field is
+ * guaranteed before the fr has anything to distribute, and it is deliberately
+ * below the placeholder's own width because the sum of every track's minimum
+ * has to stay inside the narrowest grid this rule ever runs in (1181px, the
+ * first pixel above the `max-width: 1180px` block that turns this row into a
+ * wrapping flex line). Above that the fr does the work: at 1440 the search
+ * clears 500px.
+ *
+ * Seven tracks for at most seven items — scope, search, three filter menus, the
+ * conditional `Clear`, and `Refresh`. When `Clear` is absent, `Refresh` sits in
+ * track 6 and the empty `auto` in track 7 costs nothing.
+ */
 .session-library-toolbar {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) repeat(4, minmax(126px, auto)) auto auto;
+  grid-template-columns: auto minmax(16rem, 1fr) repeat(3, minmax(126px, auto)) auto auto;
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
@@ -323,7 +353,22 @@
   box-shadow: var(--shadow);
 }
 
+/*
+ * The rows lay themselves out on this column's width, not the viewport's.
+ *
+ * The same 330px list column exists at 932x430, at 1024x768 and at 1440x900 —
+ * three viewports a media query cannot say the same thing about — while at
+ * 768x1024 the identical markup gets 647px. A row deciding whether its controls
+ * fit beside its name has to ask the box it is actually standing in; every
+ * attempt to key that to `@media` either starved the tablet or left the laptop
+ * broken. Same reason `.composer` in chat.css is a container.
+ *
+ * `container-type: inline-size` is safe here because this panel never sizes to
+ * its contents: its width is a grid track — `minmax(260px, clamp(330px, 38%,
+ * 430px))` in the two-pane layout and `1fr` below 861px.
+ */
 .session-library-list-panel {
+  container: session-list / inline-size;
   min-width: 0;
   border-right: 1px solid var(--line, rgba(225, 217, 200, 0.105));
   background: var(--surface-soft, #14191c);
@@ -381,6 +426,17 @@
  * nested inside a `<button>`, which is two controls occupying one accessible
  * node.
  */
+/*
+ * Five tracks, and every one of them is named rather than filled in order.
+ *
+ * Auto-placement was doing the assigning, which meant the row's shape depended
+ * on which of its two conditional controls happened to render — the lineage
+ * jump and the reorder cluster. Stating the column each control belongs to is
+ * what lets the narrow-container block below move exactly one of them without
+ * the other four sliding along behind it. An `auto` track with nothing in it is
+ * zero pixels wide, so naming a column for a control that is absent costs
+ * nothing at any width.
+ */
 .session-library-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto auto;
@@ -394,6 +450,7 @@
    was a list that could not be opened at all on a touch device, where there is
    no hover to reveal anything. */
 .session-library-open {
+  grid-area: 1 / 2;
   min-width: 56px;
   min-height: var(--touch-target, 44px);
   padding: 0 var(--sp-2, 8px);
@@ -432,6 +489,7 @@
 }
 
 .session-library-card {
+  grid-area: 1 / 1;
   display: grid;
   gap: var(--sp-1, 4px);
   width: 100%;
@@ -446,12 +504,37 @@
   text-align: left;
 }
 
+/*
+ * The name is the last thing on this line allowed to yield.
+ *
+ * Three tracks, ranked: a 16px mark that is a fixed adornment and is sized as
+ * one; the title, flexible but with a floor; and the relative time, which is
+ * the only thing here that can be given up, because it is repeated verbatim in
+ * the row's `title`, in the card's accessible name and in the detail pane's
+ * `Created … · updated …` line, whereas the conversation's name is stated
+ * nowhere else in this row.
+ *
+ * `minmax(0, 1fr)` was the old title track, and a `1fr` is only ever handed the
+ * *free* space — so when the mark's 16px, the time's 50px and two 8px gaps came
+ * out of a 60px lane first, the free space was zero and the title got exactly
+ * that. The floor is what stops "flexible" from meaning "expendable"; `8ch` is
+ * about 58px at the default type scale, which is a readable stub plus its
+ * ellipsis rather than a bare glyph, and it scales with the reader's own type
+ * size instead of pinning a px count that clips at 200% zoom.
+ *
+ * `minmax(0, auto)` on the time is the escape that keeps the floor from ever
+ * overflowing the card: the time takes its content width whenever there is room
+ * for it — every viewport in the sweep — and abbreviates behind its own
+ * ellipsis before the title is touched. `overflow: hidden` is what makes that a
+ * clip of this line rather than text laid over the opener beside it.
+ */
 .session-library-card-top {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(8ch, 1fr) minmax(0, auto);
   gap: var(--sp-2, 8px);
   align-items: center;
   min-width: 0;
+  overflow: hidden;
 }
 
 .session-library-card-mark {
@@ -486,11 +569,20 @@
   white-space: nowrap;
 }
 
+/* `flex: 0 0 auto` was inert — this is a grid item, and the declaration it
+   looked like a floor for was doing nothing. The floor that mattered was
+   `min-width: auto`, the automatic min-content minimum, which is what kept the
+   time whole while the title went to zero. Lowered to 0 so the track's own
+   `minmax(0, auto)` can actually reach its minimum, with the ellipsis stated
+   here so the yielding is visible rather than a silent clip. */
 .session-library-card-top time {
-  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--ink-faint, #858d8a);
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*
@@ -566,6 +658,30 @@
   }
 }
 
+/*
+ * The event count yields before anything else on this line, because it is the
+ * one fact here that discriminates nothing.
+ *
+ * It had no rule at all, which in flex means `flex: 0 1 auto` with an automatic
+ * min-content minimum — a 59px word that could not be shrunk by a pixel. So on
+ * a narrow column the deficit fell entirely on the two facts that do tell one
+ * conversation from another: measured at 320x568 on a favourited row,
+ * `3 events` rendered whole at 59/59 while `general` was 32 of 45 and
+ * `airship/demo-v1` was 0 of 115 — the count kept, the identity gone.
+ *
+ * A shrink factor of 8 against the profile's and the model's 1 makes it the
+ * first item the line takes from and the last one it protects; `4ch` stops that
+ * from becoming a bare ellipsis, so the row still says a count exists. The
+ * number itself is never lost — it is in the card's accessible name and in the
+ * detail pane's runtime record.
+ */
+.session-library-card-events {
+  flex: 0 8 auto;
+  min-width: 4ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .session-library-card-lineage {
   /* Lineage yields before the model id does: the parent's name is recoverable
      from the row's own title and from the jump control beside it, whereas the
@@ -608,6 +724,17 @@
   text-overflow: ellipsis;
 }
 
+/* The lineage jump renders on a fork's row and nowhere else, so its column is
+   empty — and therefore zero pixels wide — on most rows. Naming it anyway is
+   what keeps the star in column 5 whether or not this button exists. */
+.session-library-lineage-jump {
+  grid-area: 1 / 3;
+}
+
+.session-library-pin {
+  grid-area: 1 / 5;
+}
+
 .session-library-lineage-jump,
 .session-library-pin {
   display: inline-grid;
@@ -640,6 +767,7 @@
  * without hover at all through the Alt+↑/Alt+↓ shortcuts the card announces.
  */
 .session-library-favorite-order {
+  grid-area: 1 / 4;
   display: inline-flex;
   align-items: center;
   width: 0;
@@ -684,6 +812,63 @@
 .session-library-favorite-order button:disabled {
   color: var(--ink-disabled);
   cursor: default;
+}
+
+/*
+ * Where the column is narrow, the reorder cluster stops standing in the name's
+ * lane and takes a strip of its own beneath the row.
+ *
+ * The rule above collapses the cluster to zero at rest, and two later blocks —
+ * `max-width: 560px` and `pointer: coarse` — hand the box straight back,
+ * because a touch device has no hover to expand it with. So on every device a
+ * person actually holds, the cluster is permanently open and permanently in the
+ * band, and the band is the only place the title can come from.
+ *
+ * Measured on the shipped build, pinning row 1 and reading
+ * `.session-library-card-top strong`:
+ *
+ *   320x568   card 167.9 -> 83.9px   title 62 -> 0 of 280   model 13 -> 0 of 115
+ *   390x844   card 237.9 -> 153.9    title 132 -> 48
+ *   430x932   card 277.9 -> 193.9    title 172 -> 88
+ *   932x430   card 204.9 -> 138.9    title 99 -> 33         model 50 -> 0
+ *   1024x768  card 225.6 -> 159.6    title 124 -> 58        (focus-within, after the press)
+ *
+ * At 320 that is a conversation with no name at all: `clientWidth` 0 against a
+ * `scrollWidth` of 280, an ellipsis with nothing in front of it, beside a
+ * `just now` and a `3 events` that both rendered whole. The row's own opener,
+ * the star and the two arrows held 188px of a 272px band and the one fact that
+ * says which conversation this is held none of it. Favouriting a row is a
+ * reader saying "keep this one where I can find it"; it must not be the gesture
+ * that deletes its name.
+ *
+ * Height is the only currency left. The band cannot pay: 60px of opener, 44px
+ * of star and 84px of arrows are all at or under the touch floor and none of
+ * them can shrink. So the arrows take the row's second line — 44px on a
+ * favourited row, and nothing at all on any other, since a grid row with no
+ * items in it has no height. What that buys is that the pinned answer and the
+ * unpinned answer are now the same number at every width: 62px of title at 320
+ * whether or not the row is a favourite, where before the difference was the
+ * whole name.
+ *
+ * 560px is the list column, not the viewport. It stacks the 292px, 330px,
+ * 348px, 402px and 430px columns — every two-pane width and every phone — and
+ * leaves the 647px column at 768x1024 alone, where the cluster and a whole
+ * 424px title already share one line with 66px to spare.
+ */
+@container session-list (max-width: 560px) {
+  .session-library-row {
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-rows: auto auto;
+  }
+
+  .session-library-row > .session-library-pin { grid-area: 1 / 4; }
+
+  .session-library-row > .session-library-favorite-order {
+    grid-area: 2 / 1 / 3 / -1;
+    justify-self: end;
+    width: auto;
+    opacity: 1;
+  }
 }
 
 .session-library-pin[aria-pressed="true"] {
