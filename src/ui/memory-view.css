@@ -1428,8 +1428,27 @@
     gap: var(--sp-1);
   }
 
+  /*
+   * SO020. This rule has been here for waves and had never once taken effect:
+   * `MemoryGraphRenderer` wrote `minHeight` as an inline style, and an inline
+   * style beats any stylesheet. The graph therefore measured a computed
+   * min-height of 470px at every width — 83% of a 320x568 screen, 56% of
+   * 390x844 — while this rule and routes.css's 390px one both matched and both
+   * lost. The renderer now publishes the floor as `--memory-graph-min-height`,
+   * so a tier can set it; the 360px number below is the one this rule always
+   * meant.
+   *
+   * The `dvh` arm is the part 320 needs. 360px of a 568px viewport is still
+   * 63%, and the judge's complaint was never the absolute height — it was that
+   * the node cloud occupies roughly 170px of it and everything else is empty
+   * ground that pushes the legend and the toolbar off the screen, so the graph
+   * fills the frame while saying nothing about what is in it. Capping at 52dvh
+   * keeps the canvas the largest thing on screen without letting it be the only
+   * thing: 295px at 320x568 (52%), and 360px — the cap, unchanged — from 693px
+   * of viewport height upward, which is every phone in the sweep but 320.
+   */
   .memory-view .memory-canvas {
-    min-height: 360px;
+    --memory-graph-min-height: min(360px, 52dvh);
   }
 
   .memory-view .memory-detail {

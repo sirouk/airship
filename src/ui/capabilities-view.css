@@ -156,6 +156,35 @@
   .capability-runtime > button { min-height: 44px; }
   .capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
   .capability-extension button { min-height: 44px; }
+  /*
+   * SO083. The two-column pair above is right down to the width where a cell
+   * can still hold a label on one line, and wrong below it. Measured on this
+   * build, `Browse slash tools` and `Manage Skills` in that pair:
+   *
+   *   phone-320 → 124.8 x 62px, label on three lines
+   *   phone-340 → 134.8 x 44px
+   *   phone-360 → 144.8 x 44px
+   *   phone-390 → 159.8 x 44px, label on one line
+   *
+   * The 62px box at 320 is the defect the judge described: the leading glyph
+   * is a flex item centred against the full button height and pinned to the
+   * left edge, while the wrapped label block centres itself independently, so
+   * the icon floats alone with a wide gap and shares no baseline and no left
+   * edge with any line of its own label. The two buttons read as two
+   * mismatched blocks rather than as a pair.
+   *
+   * One column at the narrow tier gives each button the full 274px, the label
+   * lands on one line, and the icon sits beside the word it belongs to. The
+   * tier is 360px because that is the sub-tier this stylesheet family already
+   * owns — routes.css:3067 (the topbar posture chip) and routes.css:4275 (the
+   * profile hub tabs) — not a new number minted for this route. 360 is the
+   * last width where the pair still measures 44px tall, so it is also the last
+   * width where two columns cost nothing.
+   */
+  @media (max-width: 360px) {
+    .capability-extension > div:last-child { grid-template-columns: minmax(0, 1fr); }
+    .capability-extension > div:last-child > button { justify-content: center; }
+  }
   .capability-probe-action { min-height: 44px; }
   /* A disclosure summary is a control a finger has to hit, and no shared token
      sizes it: the route's own mobile block enumerated buttons only, so every

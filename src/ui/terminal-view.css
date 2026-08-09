@@ -64,6 +64,18 @@
    the strip's own 2px of padding. The short-viewport block used to state this
    floor for itself; it belongs at every width, so it is stated once. */
 .terminal-tabs{display:flex;gap:5px;min-height:calc(var(--touch-target) + 2px);overflow-x:auto;padding:0 2px 2px}
+/* SO090: with two terminals open at phone-320 the strip measured scrollWidth
+   319 against clientWidth 294 and painted the second tab as "Termina", cut
+   dead at the frame edge with no chevron, fade or gutter to say the strip
+   scrolls. The fade is the recipe `.tabs__strip` already uses (routes.css:4753)
+   and `.git-posture-chips` before it (sources-view.css:514) — same 24px ramp,
+   same `data-scroll-edges` attribute, which terminal-view.tsx now measures on
+   the inline axis. It paints only on the side that genuinely hides a tab: at
+   phone-390 the same two tabs measure scrollWidth 364 === clientWidth 364, the
+   attribute reads "none", and no fade is drawn. */
+.terminal-tabs[data-scroll-edges=start]{mask-image:linear-gradient(to right, transparent 0, #000 24px)}
+.terminal-tabs[data-scroll-edges=end]{mask-image:linear-gradient(to left, transparent 0, #000 24px)}
+.terminal-tabs[data-scroll-edges=both]{mask-image:linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%)}
 .terminal-tab{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;flex:0 0 auto;min-width:9rem;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);overflow:hidden}
 .terminal-tab[data-active=true]{border-color:var(--accent);background:var(--surface-raised)}
 .terminal-tab>button{min-width:0;border:0;border-radius:0;background:transparent}
@@ -264,12 +276,51 @@
      screen the action group collapsed to 110px for four 44px controls:
      "Restart" sat at 352..396 and "Close terminal tab" at 400..444 — ending a
      live process was a gesture you had to find by scrubbing a strip with no
-     scrollbar. Four squares and their gaps are 188px, which fits. The base
-     rule now states that decision for every width; what stays phone-specific
-     is undoing the full-row `flex` two rules above and tightening the gap so
-     the four squares clear a 320px bar. */
-  .terminal-panel__bar>div:first-child{display:flex;flex:1 1 auto;min-width:0}
-  .terminal-panel__bar>div:last-child{flex:0 0 auto;gap:4px}
+     scrollbar. The wave that fixed that bought the four squares by shedding
+     their words, and SO088 is the bill: at phone-320 the row read `⌃C`, `＋`,
+     `` and `×` — Restart's box measured 44x44 with an empty `visibleText`,
+     because its mark is an `<Icon>` and the rule below hid the only word it
+     had. Four unlabelled boxes, one of them blank, is not four controls.
+
+     The words come back, and the row that carries them is the decision. The
+     numbers, measured on this build with the labels forced visible:
+
+       Interrupt 99.1  ·  New here 96.2  ·  Restart 83.9  ·  Close 68.5
+       four in a row = 347.7 + 12px of gaps = 359.7px
+       bar content   = viewport - 48px  →  272 @320, 342 @390, 382 @430
+
+     So one labelled row needs a 407.7px viewport. No phone in the sweep but
+     430 has it, and a rule that reshuffles between two phones a person might
+     be holding is worse than a rule that does the same thing on both. Two
+     columns instead: the widest pair is Interrupt + New here at 195.3 + 4 =
+     199.3px, which clears 272px with 72.7px to spare, so the same 2x2 block
+     lands at 320, 390 and 430 alike.
+
+     Rejected: two most-used visible with the rest folded into MenuSelect. It
+     is one tap cheaper to draw and two taps more expensive to use, and there
+     is no honest way to rank Interrupt, New here, Restart and Close — the two
+     that matter are whichever two this process needs, and a menu names them
+     only after you have opened it. The 44px squares were bought once already
+     by hiding the words; buying them again by hiding the controls repeats the
+     trade this defect exists to undo.
+
+     Cost: one 44px row. The full route is `height:auto` on a phone (see the
+     block head), so it is paid out of the page scroll, not out of the
+     emulator. The dock keeps the single glyph row — its emulator track is
+     height-locked at `minmax(5.5rem,1fr)` inside the workspace pane, so this
+     row would come straight out of the transcript, and the full Terminal view
+     where process control is the job is one tap away. */
+  .terminal-panel__bar>div:first-child{display:flex;flex:1 1 100%;min-width:0}
+  .terminal-panel__bar>div:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));flex:1 1 100%;gap:4px}
+  .terminal-panel__bar>div:last-child>button{min-width:0;padding-inline:6px;white-space:nowrap}
+  /* The status word stands in for Interrupt while the process is starting, so
+     it takes that cell rather than collapsing the grid to three. */
+  .terminal-panel__starting{display:inline-flex;align-items:center;min-height:var(--touch-target)}
+  /* The dock keeps the pre-SO088 row: see the trade stated above. */
+  .terminal-route--dock .terminal-panel__bar>div:first-child{flex:1 1 auto}
+  .terminal-route--dock .terminal-panel__bar>div:last-child{display:flex;flex:0 0 auto;gap:4px}
+  .terminal-route--dock .terminal-panel__bar button span:not([aria-hidden="true"]){display:none}
+  .terminal-route--dock .terminal-panel__bar button{min-width:var(--touch-target)}
   /* 362px of bar cannot hold four 44px controls, the shell path and the
      `= /workspace` mirror on one line, and the route's grid is height-locked
      so a second line is taken out of the emulator rather than added (measured:
@@ -281,12 +332,12 @@
      spellings of the one directory. Nothing is clipped and no claim is lost. */
   .terminal-panel__mirror{display:none}
   .terminal-panel__bar code{flex:1 1 auto;min-width:2.5rem}
-  /* Sheds the words, not the glyphs. Written against `button span` this also
-     hid the `＋` of "New here", whose mark happens to live in a span, leaving
-     an empty 44px box on every phone. The decorative marks are already
-     aria-hidden, so the exception is exactly the set that must survive. */
-  .terminal-panel__bar button span:not([aria-hidden="true"]){display:none}
-  .terminal-panel__bar button{min-width:var(--touch-target);min-height:var(--touch-target)}
+  /* The height floor is the touch decision and it holds for every variant; the
+     width floor belongs only to the dock's glyph row, where a button with no
+     word has nothing else to give it a target. In the labelled grid the track
+     is the floor — 134px a side at 320 — so a stated `min-width` there would
+     only fight the columns. */
+  .terminal-panel__bar button{min-height:var(--touch-target)}
   /* 44px square like every other phone control in this block: the rename
      glyph was min-width:34px with no min-height at all, the one tab action
      a thumb could miss. Opacity rises with it — see the coarse-pointer rule
@@ -323,10 +374,17 @@
      bottom of the dock. The 761–1024 band already reached this conclusion for
      both variants and states the trade — a truncated id is still that id, and
      the whole of it is the chip's `title` — so this is that decision carried
-     down to the widths below it, scoped to the dock because the full route is
-     another surface's this pass. It costs no height: it removes two lines the
-     bar was never tall enough to hold. */
-  .terminal-route--dock .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+     down to the widths below it. It costs no height: it removes two lines the
+     bar was never tall enough to hold.
+
+     SO012 is the half that rule left behind. It was scoped to the dock on the
+     grounds that "the full route is another surface's pass", and this is that
+     pass: with two terminals open at phone-320 the full route's identity row
+     printed "thread" / "fed853f…" / "fc8e1" as a three-line tower beside a
+     one-line state group, setting the whole row's height off the least
+     identifying field on it. Same conclusion, same trade, now stated for both
+     variants — the dock arm above is kept only for its own padding rules. */
+  .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 
 /* Between the phone block and a desktop row, five state fields are asked to
@@ -527,4 +585,11 @@
   .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:100%;min-height:0;overflow:auto}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}
   .terminal-emulator{padding:6px}
+}
+
+/* A mask is a paint the high-contrast user asked us not to make. Same escape
+   hatch the two strips this fade was borrowed from already carry
+   (routes.css:4765, shell.css:657). */
+@media(forced-colors:active){
+  .terminal-tabs{mask-image:none}
 }
