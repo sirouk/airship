@@ -1181,15 +1181,56 @@
   font-size: var(--fs-micro);
 }
 
+/* The card is the size of the sentence that tells the themes apart.
+ *
+ * Each card carries a swatch and two of these: `theme.description`, which is
+ * the only place the card says what the theme IS ("Curated · warm cocoa
+ * surfaces with a soft mauve accent"), and the presentation summary, which
+ * names the typography and layout activation will change and that a 32×43
+ * swatch cannot show. Both were clamped to two lines here and to one below
+ * 861px, and neither number survives contact with the width the card gets.
+ *
+ * Measured on the shipped build. At 1024 the library is three columns of 123px
+ * and a caption at that width is three lines: 26 of the 27 captions on the
+ * route read clientHeight 32 against scrollHeight 47, one 32 against 63, every
+ * one cut at the end of line two — no ellipsis reaches the reader's eye as an
+ * invitation when the cut lands mid-phrase in the middle of a card. At 768 the
+ * library is a single column and the clamp dropped to one line, so a full-width
+ * 307px card showed 16px of 32: "Curated · warm cocoa surfaces with a", and the
+ * rest of the sentence was not anywhere on the route. The three phone widths
+ * showed the same single line, 17 of 34, across 26 captions.
+ *
+ * That is the proof the clamp was arbitrary rather than a budget: it clipped
+ * hardest at 768, where the card is at its WIDEST and there is the most room to
+ * simply print the sentence. There is no height budget here to defend — the
+ * library is a `repeat(3, minmax(0,1fr))` grid inside a disclosure inside a
+ * route `main` already scrolls, and the cards are `min-height:67px` with
+ * `align-items:center`, so a third line costs 15px of a scroll the reader is
+ * taking anyway. Nor is a scroll affordance the answer: a two-line sentence
+ * inside its own 32px scroller would read worse than the ellipsis it replaced.
+ *
+ * So the cap goes and the caption wraps. `display:-webkit-box` stays because
+ * that box is what lays the caption out and unwinding it would be a second,
+ * unrelated change to how the card flows; the clamp is what was doing the
+ * hiding, and `overflow` goes back to visible so this element cannot clip in
+ * silence again. Re-measured at all eight device classes: no caption on the
+ * route is short of its own content.
+ *
+ * `.profile-prompt-preview` above is deliberately NOT part of this: it clamps a
+ * system prompt to two lines and measured 35px of 123, but it is the summary OF
+ * a disclosure — `[open]` withdraws it, the full prompt is in the textarea
+ * underneath, and the summary carries a `›`. A cap that hides content with no
+ * way to reach it is a defect; a cap that summarises content with the way to
+ * the rest attached to it is a summary. */
 .theme-option small {
   display: -webkit-box;
   margin-top: var(--sp-1);
-  overflow: hidden;
+  overflow: visible;
   color: var(--ink-faint);
   font-size: var(--fs-micro);
   line-height: 1.35;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: none;
 }
 
 .theme-swatch {
@@ -2770,13 +2811,15 @@
     align-items: stretch;
   }
 
+  /* One column, which is the whole reason the clamp that used to stand under
+     this rule had to go. It dropped the theme caption to a single line at
+     exactly the breakpoint where the card stops being 123px of a three-column
+     grid and becomes the full width of the route — so the caption was cut
+     hardest ("Curated · warm cocoa surfaces with a", 16px of 32 at 768) on the
+     widest card the library ever draws. The base rule carries the reasoning. */
   .theme-options,
   .skill-grid {
     grid-template-columns: 1fr;
-  }
-
-  .theme-option small {
-    -webkit-line-clamp: 1;
   }
 }
 

@@ -1132,6 +1132,50 @@
   padding: var(--sp-2) var(--sp-3);
 }
 
+/*
+ * And the cap that the rule above turned into a hidden control.
+ *
+ * `routes.css` caps this legend at `max-height:92px` below 641px, with
+ * `overflow-y:auto` behind it. 92px was two rows of the 32px chips the rule
+ * above replaced, plus the row gap and the band's own 9px padding — an exact
+ * fit for the legend as it stood when that cap was written. Raising the chips
+ * to the 44px touch floor made every row 12px taller and the cap did not
+ * move, so the box that used to hold two whole rows now holds one and a slice.
+ *
+ * Measured on the shipped build at phone-320: `.memory-legend` clientHeight 91
+ * against scrollHeight 218 — six chips over four rows, of which "session" and
+ * "message" are inside the box and "workspace-file", "profile", "skill" and
+ * "term" are not, with the third row sliced through the middle of its glyphs.
+ * At phone-390 and phone-430 the wrap is three rows, 91 of 166, and four of the
+ * six are still out. Four of six, not two: the count in the triage was taken
+ * against a narrower chip set than the route ships.
+ *
+ * These are not decorations. Every chip in this band is a `<button>` with
+ * `aria-pressed`, and the band is the graph's only filter — hiding four of them
+ * removes four of the six ways to interrogate the graph, on the class of device
+ * that has the least screen to interrogate it with. `overflow-y:auto` is not an
+ * answer: overlay scrollbars paint nothing at rest, so there is no mark on the
+ * frame that says a control exists past the edge, and the chip row that is cut
+ * mid-glyph reads as a rendering fault rather than as an invitation to scroll.
+ *
+ * So the cap goes rather than growing a scroll affordance behind it. The test
+ * `popover.css` applies to a bounded box — does the surface have a height
+ * budget it must honour? — this one fails: the legend sits at y=1971 inside a
+ * 2600px route that `main` already scrolls, so the 126px the cap "saves" is
+ * 126px of a scroll the reader is taking anyway, bought with four filters. A
+ * cap that defends nothing is not defensible, and the repair for an arbitrary
+ * cap is to let the box be the size of what it holds.
+ *
+ * Scoped `.memory-view` for the same reason the touch floor above is: the
+ * legend renders on this route and nowhere else, so the correction lands here
+ * instead of reaching into a sheet another package owns. 0,2,0 outranks the
+ * 0,1,0 in the media block regardless of which sheet loads first.
+ */
+.memory-view .memory-legend {
+  max-height: none;
+  overflow: visible;
+}
+
 .memory-filter-note {
   margin: 0;
   padding-top: var(--sp-2);

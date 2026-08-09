@@ -133,6 +133,49 @@ describe("unified Memory surface", () => {
   });
 
   /*
+   * The cost of the 44px floor above, on the one control that had a cap over
+   * it, and the second half of the same repair.
+   *
+   * `routes.css` caps `.memory-legend` at `max-height:92px` below 641px. 92px
+   * was two rows of the 32px chips the floor above replaced, plus the row gap
+   * and the band's 9px padding — an exact fit for the legend as it stood. The
+   * chips grew 12px and the cap did not move.
+   *
+   * Measured on the shipped build at phone-320: clientHeight 91 against
+   * scrollHeight 218, six chips over four rows, "session" and "message" inside
+   * the box and "workspace-file", "profile", "skill" and "term" outside it,
+   * with the third row sliced mid-glyph. At phone-390 and phone-430 the wrap is
+   * three rows, 91 of 166, and four of the six are still out.
+   *
+   * Every chip in this band is a `<button>` with `aria-pressed`, and the band
+   * is the graph's only filter. So this is not clipped decoration: it is four
+   * of the six ways to interrogate the graph, removed on the device class with
+   * the least screen to interrogate it with. `overflow-y:auto` does not answer
+   * it — overlay scrollbars paint nothing at rest, so nothing on the frame says
+   * a control exists past the edge.
+   *
+   * The cap goes rather than growing a scroll affordance behind it: the legend
+   * sits at y=1971 inside a route `main` already scrolls, so the 126px it saved
+   * was 126px of a scroll the reader was taking anyway, bought with four
+   * filters. Re-measured after: max-height `none` and all six chips inside the
+   * band's own box at every one of the eight device classes.
+   */
+  it("never puts a cap over the graph's only filter", () => {
+    const legend = cssRule(styles, ".memory-view .memory-legend");
+    expect(legend).toContain("max-height: none");
+    expect(legend).toContain("overflow: visible");
+    // A scoped cap here would be the same defect written closer to home, and a
+    // clamp would be it written in lines instead of pixels. Read off the rules
+    // rather than the sheet: this file's prose quotes the cap it removed.
+    const legendRules = [...styles.replace(/\/\*[\s\S]*?\*\//gu, "").matchAll(/([^{}]*\.memory-legend[^{}]*)\{([^}]*)\}/gu)];
+    expect(legendRules.length).toBeGreaterThan(0);
+    for (const [, selector, body] of legendRules) {
+      for (const [, value] of body.matchAll(/max-height:\s*([^;]+)/gu)) expect(value.trim(), `capped by ${selector.trim()}`).toBe("none");
+      expect(body, `clamped by ${selector.trim()}`).not.toMatch(/line-clamp/u);
+    }
+  });
+
+  /*
    * The rule this replaces was `.memory-summary-meta { font-size: 0 }` below
    * 620px, which did not compress "647 relationships" — it deleted it, on the
    * route whose entire argument is that it never hides anything.
