@@ -298,9 +298,24 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
   await provider.click();
   const providerList = page.getByRole("listbox", { name: "Filter by provider" });
   await expect(providerList).toBeVisible();
+  // AMENDED: measured on the menu's own painted surface rather than on the
+  // `listbox` node, because those stopped being the same box when `MenuSelect`
+  // took the bottom-sheet contract. A sheet has a header naming the control it
+  // belongs to and a `Done` button, and neither is an option — so `role=
+  // listbox` moved onto an inner `.menu-select-list` that owns nothing but the
+  // options, which is what the role promises. The panel kept the background,
+  // the positioning and the box.
+  //
+  // Reached with `closest` from the listbox rather than by naming a second
+  // selector: the assertion is "the menu this listbox is rendered in is
+  // painted, positioned and on the screen", and resolving it through the
+  // element under test keeps that true if the nesting changes again. The
+  // fallback to the element itself is what keeps this honest for any menu that
+  // is still its own panel.
   const providerMenuStyle = await providerList.evaluate((element) => {
-    const style = getComputedStyle(element);
-    const box = element.getBoundingClientRect();
+    const panel = element.closest(".menu-select-popover") ?? element;
+    const style = getComputedStyle(panel);
+    const box = panel.getBoundingClientRect();
     return { background: style.backgroundColor, position: style.position, left: box.left, right: box.right, viewport: innerWidth };
   });
   expect(providerMenuStyle.background).not.toBe("rgba(0, 0, 0, 0)");
@@ -309,10 +324,16 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
   expect(providerMenuStyle.right).toBeLessThanOrEqual(providerMenuStyle.viewport + 1);
   if (!mobile) {
     const triggerBox = await provider.boundingBox();
-    const listBox = await providerList.boundingBox();
+    // The same panel, for the same reason: "the menu hangs below its trigger"
+    // is a claim about the box that is positioned, and an inner options list
+    // sits inside whatever padding that box carries.
+    const listBox = await providerList.evaluate((element) => {
+      const panel = element.closest(".menu-select-popover") ?? element;
+      const box = panel.getBoundingClientRect();
+      return { y: box.y };
+    });
     expect(triggerBox).not.toBeNull();
-    expect(listBox).not.toBeNull();
-    expect(listBox!.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height - 1);
+    expect(listBox.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height - 1);
   }
   await providerList.getByRole("option", { name: "airship-demo" }).click();
   await expect(provider).toContainText("airship-demo");
