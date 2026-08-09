@@ -76,3 +76,7 @@ next-env.d.ts
 # Editor tooling that is not a repository-level decision.
 /.kilo/
 /.playwright-mcp/
+
+# Sweep captures are evidence for a review, not source. They live in the
+# scratchpad beside the rest of the campaign's screenshots.
+shots/
