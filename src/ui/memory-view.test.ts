@@ -876,3 +876,36 @@ describe("memory as a corpus a person can act on", () => {
     expect(source).not.toContain('?.focus({ preventScroll: true })');
   });
 });
+
+/*
+ * SO020. The graph's height floor was written three times and had never once
+ * taken effect. `MemoryGraphRenderer` set `minHeight` as an inline style, and
+ * an inline style beats any stylesheet, so this file's 360px compact rule and
+ * routes.css's 390px one both matched at phone widths and both lost: the
+ * canvas measured a computed 470px at every viewport — 83% of a 320x568
+ * screen. The renderer now publishes the floor as `--memory-graph-min-height`,
+ * with the prop as the default for any caller that does not set it, and the
+ * tiers set the property instead of a losing `min-height`.
+ *
+ * The `dvh` arm is the part 320 needs. The complaint was never the absolute
+ * height — it is that the node cloud occupies ~170px of it and the rest is
+ * empty ground that pushes the legend and the toolbar off the screen, so the
+ * graph fills the frame while saying nothing about what is in it. Measured
+ * after, with the disclosure open: 295px at 320x568 (52%), 224px at 932x430
+ * (52%), 360px at 430x932, and legend and toolbar in view at all three.
+ */
+describe("the graph canvas's height floor", () => {
+  it("is a property a viewport tier can lower, not an inline style that outranks every tier", async () => {
+    const renderer = await readFile(new URL("../memory-graph/renderer.tsx", import.meta.url), "utf8");
+    expect(renderer).toContain("minHeight: `var(--memory-graph-min-height, ${Math.max(160, minHeight)}px)`");
+    expect(renderer).not.toMatch(/minHeight: Math\.max\(160, minHeight\),/u);
+  });
+
+  it("caps the canvas against the viewport it is drawn in, not against a fixed number", () => {
+    const compact = styles.slice(styles.indexOf("@media (max-width: 620px)"));
+    expect(compact).toMatch(/\.memory-view \.memory-canvas \{\s*--memory-graph-min-height: min\(360px, 52dvh\);/u);
+    // A losing `min-height` left beside the property would read as the rule in
+    // force, which is exactly how this defect survived four waves.
+    expect(compact).not.toMatch(/\.memory-view \.memory-canvas \{\s*min-height:/u);
+  });
+});

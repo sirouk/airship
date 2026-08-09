@@ -4389,8 +4389,13 @@
     margin-top: 10px;
   }
 
+  /* Also never applied until the renderer stopped writing this floor inline —
+     see the note on `.memory-view .memory-canvas` in memory-view.css. This arm
+     of the compact pair is the one that owns a rotated phone, where 390px of a
+     430px-tall viewport would be the entire screen; 52dvh puts it at 224px and
+     leaves the legend and the toolbar in frame. */
   .memory-canvas {
-    min-height: 390px;
+    --memory-graph-min-height: min(390px, 52dvh);
   }
 
   .memory-toolbar > span {

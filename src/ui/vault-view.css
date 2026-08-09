@@ -641,15 +641,67 @@
   .vault-view__context > button { width: 100%; }
   .vault-provider-selector { grid-template-columns: 1fr; }
   .vault-provider-selector .menu-select-trigger { width: 100%; }
-  /* A six-by-four matrix cannot be read at 430px. The same rows become one
-     block per provider, with every value kept.
 
-     `caption` is in this list for a reason it took a phone to see: left at
-     `display: table-caption` it stays bound to a table whose own boxes are no
-     longer table boxes, so it shrink-wrapped to the collapsed table's intrinsic
-     width and printed the sentence that tells you how to read the comparison —
-     "Every provider answers the same six questions" — one word per line down a
-     90px column, with two thirds of the row beside it empty. */
+  /* SO030: this list kept a two-column `space-between` row with `text-align:
+     end` on the value at every width, and at phone-320 that left the value
+     column about 110px wide. Reading down the open card, measured: `Device
+     key` opposite `Not enrolled` (one line, fine); `Encrypted object / store`
+     opposite `Not / created`; and `Recovery / key` — two words — opposite
+     `Shown once / when you / create the / Vault, then / never again`, five
+     right-aligned lines with a ragged LEFT edge. A two-word label against a
+     five-line block with no rule, no shared baseline and no common edge is not
+     a pair a reader can bind, and the ragged edge is on the side the eye
+     returns to.
+
+     One column, label over value, both starting at the same left edge. This is
+     the same shape `.vault-view__configuration` twelve rules up already takes
+     on a phone, and the same shape the STORED / OBJECTS / STATE rows take at
+     the top of this route — the list was the one holdout. */
+  .vault-view__attached li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-1);
+  }
+  .vault-view__attached li strong { text-align: start; }
+}
+
+/* A six-by-four matrix cannot be read at 430px. The same rows become one block
+   per question, with every value kept and each one named by the provider it
+   belongs to.
+
+   Question-major, not provider-major, and deliberately: the caption this table
+   carries says "Every provider answers the same six questions, so the columns
+   can be read across", and a reader who opens a comparison is choosing between
+   providers on one axis at a time. Stacking by provider would give four
+   self-contained brochures and no comparison at all.
+
+   `caption` is in this list for a reason it took a phone to see: left at
+   `display: table-caption` it stays bound to a table whose own boxes are no
+   longer table boxes, so it shrink-wrapped to the collapsed table's intrinsic
+   width and printed the sentence that tells you how to read the comparison —
+   "Every provider answers the same six questions" — one word per line down a
+   90px column, with two thirds of the row beside it empty.
+
+   SO035 is why this block is no longer nested in the 680px one above it. The
+   stacked shape was right and its threshold was wrong: it stopped at 680 while
+   the five columns stayed starved well past it. Measured on this build, column
+   width and the longest cell ("A recovery key and an encrypted backup file —
+   the key alone cannot rebuild an evicted store"):
+
+     768  → 124.7px/col, 8 lines, rows 49..129px    ← the filed defect
+     900  → 120.3px/col, 8 lines, rows 49..129px    ← narrower than 768
+     1024 → 144.0px/col, 7 lines, rows 47..113px
+     1280 → 194.0px/col, 5 lines, rows 33..81px
+     1440 → 226.0px/col, 4 lines, rows 33..65px
+
+   At 768 one cell inflates its row to 129px against 49px neighbours — 2.6x —
+   and the `S3-compatible / MinIO` header spends three lines on four words. 900
+   is worse than 768 because the route's own measure narrows the table faster
+   than the viewport widens it. The line is drawn at 1023 so the whole starved
+   band stacks and laptop-1024 up keeps its columns; 1024 is still 7 lines in a
+   144px column, and that is a wide-viewport measure decision (the sweep's D3),
+   not this tier's to make. */
+@media (max-width: 1023px) {
   .vault-provider-compare table,
   .vault-provider-compare thead,
   .vault-provider-compare tbody,
@@ -666,7 +718,29 @@
   .vault-provider-compare tbody th { border-top: 0; color: var(--ink); font-weight: var(--fw-strong); }
   .vault-provider-compare td::before {
     display: block;
+    color: var(--ink-faint);
+    font-size: var(--fs-caption);
     content: attr(data-provider);
+  }
+
+  /* The tier says a column has to be affordable, not that columns are wrong.
+     Stacked all the way to 1023 the six cards ran 226px each and the whole
+     comparison stood 1356px tall on a 1024px-tall tablet — four provider
+     answers in a single file down a 623px table, most of the width unused. So
+     the same test the whole tier is built on gets applied here too: 641px up,
+     a question card holds two provider answers a side at about 300px each, and
+     the longest cell in the set lands in two lines rather than eight. Below
+     641 it stays one file per question, because 320 cannot afford the pair —
+     that is the compact-shell boundary this stylesheet family already uses,
+     not a number chosen for this table. */
+  @media (min-width: 641px) {
+    .vault-provider-compare tbody tr {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 var(--sp-2);
+      padding-bottom: var(--sp-2);
+    }
+    .vault-provider-compare tbody th { grid-column: 1 / -1; }
   }
 }
 

@@ -369,3 +369,32 @@ describe("probe evidence a reader can act on", () => {
     expect(source).toContain("probeAction(observation, onReprobe)");
   });
 });
+
+/*
+ * SO083. The route's phone block pairs the two agent-layer actions into two
+ * columns, which is right down to the width where a cell can still hold a
+ * label on one line and wrong below it. Measured on the shipped build:
+ *
+ *   phone-320 → 124.8 x 62px, label over three lines
+ *   phone-340 → 134.8 x 44px
+ *   phone-360 → 144.8 x 44px   ← last width where the pair costs nothing
+ *   phone-390 → 159.8 x 44px, label on one line
+ *
+ * The 62px box is the defect: the leading glyph is a flex item centred against
+ * the full button height and pinned left while the wrapped label centres
+ * itself independently, so the icon floats alone and shares neither a baseline
+ * nor a left edge with any line of its own label. Measured after at phone-320:
+ * 258 x 44px, one line, icon beside its word.
+ */
+describe("the agent-layer actions at the narrow tier", () => {
+  it("takes one column where two cannot hold a label on one line", () => {
+    const tier = styles.slice(styles.indexOf("@media (max-width: 760px)"));
+    expect(tier).toMatch(/@media \(max-width: 360px\) \{\s*\.capability-extension > div:last-child \{ grid-template-columns: minmax\(0, 1fr\); \}/u);
+    // The icon rejoins its label rather than floating at the far edge.
+    expect(tier).toContain(".capability-extension > div:last-child > button { justify-content: center; }");
+    // 360 is the sub-tier this stylesheet family already owns (routes.css:3067
+    // for the topbar posture chip, routes.css:4275 for the profile hub tabs),
+    // not a number minted for this route. The pair survives above it.
+    expect(tier).toContain(".capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }");
+  });
+});

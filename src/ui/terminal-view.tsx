@@ -14,6 +14,7 @@ import { durabilityLabel, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { densityAllows, usePresentationDensity } from "./density";
 import { RouteHeader } from "./route-header";
+import { useScrollEdges } from "./scroll-affordance";
 import { Seal, type SealState } from "./seal";
 import { readTerminalDockState, terminalDockStorageKey, terminalOpenRequestForAuthority, updateTerminalDockState, type TerminalOpenRequest } from "./terminal-dock-state";
 import "./terminal-view.css";
@@ -347,6 +348,26 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   workspaceChanged.current = onWorkspaceChanged;
   const openRequestHandled = useRef(onOpenRequestHandled);
   openRequestHandled.current = onOpenRequestHandled;
+
+  /*
+   * SO090, phone-320 with two terminals open: the strip measured scrollWidth
+   * 319 against clientWidth 294 — 25px of the second tab hidden — with
+   * `mask-image: none` and no `data-scroll-edges` attribute at all. It scrolls
+   * (`overflow-x: auto`, terminal-view.css:66) and nothing on screen says so,
+   * so the second tab read as a word cut off at the frame edge: "Termina".
+   *
+   * The affordance is not invented here. `.tabs__strip` (tabs.tsx:336,
+   * routes.css:4753) and `.git-posture-chips` (sources-view.css:514) both
+   * already paint a measured edge fade from this exact hook; this strip is the
+   * one horizontal scroller in the route that never adopted it, because it
+   * cannot adopt `Tabs` itself (a tab being renamed becomes a text input).
+   * `revision` is the session count so a strip that stops overflowing when a
+   * terminal is closed cannot leave a stale fade painted.
+   *
+   * Measured after: 320 reports edges, 390 reports none (scrollWidth 364 ===
+   * clientWidth 364) — the fade appears only while content is genuinely hidden.
+   */
+  useScrollEdges(strip, sessions.length, "inline");
 
   useEffect(() => {
     updateTerminalDockState(browserSessionStorage(), workspaceIdentity, profileId ?? "legacy-unscoped", { selectedSessionId: activeId ?? "" });

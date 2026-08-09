@@ -218,12 +218,70 @@ describe("the terminal's process verbs report their own refusals", () => {
 });
 
 describe("terminal panel bar at phone width", () => {
-  it("sheds the labels without shedding the glyph that stands in for them", () => {
-    // `button span` also hid the `＋` of "New here", whose mark happens to live
-    // in a span — an empty 44px box on every phone and in the workspace dock.
+  /*
+   * SO088. The label-shedding rule this describe block was written for used to
+   * apply to every phone surface, and the bill came due at phone-320: the row
+   * read `⌃C`, `＋`, `` and `×`, with Restart's box measuring 44x44 around an
+   * `<Icon>` and an empty `innerText`, because the only word it had was the one
+   * the rule hid. Four unlabelled boxes, one of them blank.
+   *
+   * The words are back in the full route and the shedding survives only in the
+   * dock, whose emulator track is height-locked at `minmax(5.5rem,1fr)` inside
+   * the workspace pane. Both halves are asserted, because "the labels are back"
+   * and "the dock still sheds them" are two different promises and a substring
+   * check on the unscoped selector would pass on the dock's rule alone.
+   */
+  it("keeps its labels in the route and sheds them only in the height-locked dock", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    expect(css).toContain('.terminal-panel__bar button span:not([aria-hidden="true"]){display:none}');
+    expect(css).toContain('.terminal-route--dock .terminal-panel__bar button span:not([aria-hidden="true"]){display:none}');
+    expect(css).not.toMatch(/^\s*\.terminal-panel__bar button span:not\(\[aria-hidden="true"\]\)\{display:none\}/mu);
     expect(css).not.toMatch(/\.terminal-panel__bar button span\{display:none\}/u);
+  });
+
+  /*
+   * And the shape that pays for them. Measured on the shipped build with the
+   * labels forced visible: Interrupt 99.1, New here 96.2, Restart 83.9, Close
+   * 68.5 — 347.7px, or 359.7px with the three 4px gaps — against a bar content
+   * width of viewport-48, which is 272px at 320, 342 at 390 and 382 at 430. One
+   * labelled row therefore needs a 407.7px viewport, which no phone in the
+   * sweep but 430 has. Two columns seat the widest pair (Interrupt + New here,
+   * 199.3px) inside 272px with 72.7px to spare, so the same 2x2 lands on every
+   * phone instead of reshuffling between two a person might be holding.
+   *
+   * The `minmax(0, 1fr)` floor is the load-bearing half: with `1fr` alone each
+   * track keeps its min-content width and the pair adds back up to the 359.7px
+   * that did not fit in the first place.
+   */
+  it("seats four labelled controls as two columns rather than one starved row", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const phone = css.slice(css.indexOf("@media(max-width:760px)"), css.indexOf("@media(min-width:761px)"));
+    expect(phone).toContain(".terminal-panel__bar>div:last-child{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));flex:1 1 100%;gap:4px}");
+    // The identity group takes its own row, so the controls own the full width.
+    expect(phone).toContain(".terminal-panel__bar>div:first-child{display:flex;flex:1 1 100%;min-width:0}");
+    // The status word stands in for Interrupt while starting; it takes that
+    // cell at the same 44px floor rather than collapsing the grid to three.
+    expect(phone).toContain(".terminal-panel__starting{display:inline-flex;align-items:center;min-height:var(--touch-target)}");
+  });
+});
+
+/*
+ * SO090. The strip scrolls (`overflow-x:auto`) and said so nowhere: with two
+ * terminals open at phone-320 it measured scrollWidth 319 against clientWidth
+ * 294 and painted the second tab as "Termina", cut dead at the frame edge with
+ * mask-image none and no `data-scroll-edges` attribute at all.
+ */
+describe("the terminal tab strip's overflow affordance", () => {
+  it("borrows the measured edge fade the other two strips already paint", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const source = terminalViewCode();
+    // Measured, not assumed: an always-on chevron asserts an overflow that at
+    // phone-390 does not exist (scrollWidth 364 === clientWidth 364).
+    expect(source).toContain('useScrollEdges(strip, sessions.length, "inline")');
+    expect(css).toContain(".terminal-tabs[data-scroll-edges=start]{mask-image:linear-gradient(to right, transparent 0, #000 24px)}");
+    expect(css).toContain(".terminal-tabs[data-scroll-edges=end]{mask-image:linear-gradient(to left, transparent 0, #000 24px)}");
+    expect(css).toContain(".terminal-tabs[data-scroll-edges=both]{mask-image:linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%)}");
+    // A mask is a paint the high-contrast user asked us not to make.
+    expect(css).toMatch(/@media\(forced-colors:active\)\{\s*\.terminal-tabs\{mask-image:none\}/u);
   });
 });
 
@@ -632,19 +690,22 @@ describe("the full-view control a thumb has to hit", () => {
 /*
  * The process card's status row, and which of its fields pays for a narrow one.
  */
-describe("the dock's process row", () => {
+describe("the process row, in the dock and in the route", () => {
   it("truncates the thread id rather than tower it through the card's own divider", () => {
     const route = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const routePhone = route.slice(route.indexOf("@media(max-width:760px)"), route.indexOf("@media(min-width:761px)"));
-    expect(routePhone).toContain(".terminal-route--dock .terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
     /*
-     * Scoped to the dock, and asserted as scoped. The full route reaches the
-     * same row through the same markup and is a separate surface with a
-     * separate scroll model — it scrolls its own box below 500px of height,
-     * where the dock is height-bound inside the workbench panel — so the two
-     * are not one decision and an unscoped rule here would make them one.
+     * This assertion used to read `.terminal-route--dock .terminal-panel__thread`
+     * and then assert that the unscoped form was ABSENT, on the grounds that
+     * the full route was "another surface's pass". SO012 is that pass, and it
+     * found the same tower on the other side of the scope: with two terminals
+     * open at phone-320 the full route's identity row printed "thread" /
+     * "fed853f…" / "fc8e1" over three lines beside a one-line state group, and
+     * the bar measured 151px against the 122px it needs. The two surfaces
+     * reach this row through the same markup and had reached the same
+     * conclusion; they are one decision now, and the rule is unscoped.
      */
-    expect(routePhone).not.toMatch(/^\s*\.terminal-panel__thread\{/mu);
+    expect(routePhone).toContain(".terminal-panel__thread{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}");
   });
 });
 
