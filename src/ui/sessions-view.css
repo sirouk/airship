@@ -149,6 +149,36 @@
 }
 
 /*
+ * 42 is two pixels under, and two pixels is the whole rule.
+ *
+ * Everything the library asks a finger to do is on this list — Rename, Proof,
+ * Fork, "Active conversation", Delete, Refresh, the search field — and every
+ * one of them measured 42px tall at 768×1024 and at 932×430 with
+ * `(pointer: coarse)` true. The 46px that makes them correct lives behind
+ * `@media (max-width: 560px)`, so it reaches phones and nothing else, and a
+ * row that is 95% of the floor is the hardest kind of miss to see in a
+ * screenshot: it looks right, it measures wrong, and Delete is on it.
+ *
+ * Floored to `--touch-target` rather than to the phone rule's 46px. 46 is that
+ * breakpoint's row rhythm; 44 is the product's floor, and this rule exists to
+ * meet the floor without also importing a phone's spacing onto a tablet.
+ *
+ * Same list, same order, so the two rules stay legible as one decision — and
+ * so the next control added to the group above is floored by having been added
+ * there, rather than by someone remembering this block exists.
+ */
+@media (pointer: coarse) {
+  .session-library-toolbar input,
+  .session-library-toolbar select,
+  .session-library-toolbar button,
+  .session-library-fork input,
+  .session-library-actions button,
+  .session-library-fork-actions button {
+    min-height: var(--touch-target);
+  }
+}
+
+/*
  * The four filters are a group in the DOM and grid items in the layout, so a
  * phone can collapse them as one unit without the wide layout gaining a box.
  */

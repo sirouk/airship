@@ -772,6 +772,35 @@
 
 .workbench-empty__actions button { min-height: 40px; padding: 0 var(--sp-3); }
 
+/*
+ * The empty workbench is the whole route until a file is open, and every
+ * control on it was 40px on a touch tablet.
+ *
+ * Measured on the built tree with `(pointer: coarse)` true: the three
+ * suggested-file rows 381×40 at 768×1024 and 442×40 at 932×430, and beneath
+ * them "New file" 90×40, "New folder" 108.7×40 and "Import a repository
+ * snapshot" 245.3×40. Four pixels under, on the only controls the route offers
+ * before there is anything to edit — this is the state a person arrives in, so
+ * it is the state the floor matters most in.
+ *
+ * `button.primary` ("New file") is floored product-wide by `tokens.css` under
+ * this same query and still rendered 40px, because `.workbench-empty__actions
+ * button` is (0,1,1) against that rule's (0,1,0) and wins on specificity
+ * regardless of which query either sits in. Restating the route's own selectors
+ * here is what makes the floor reach them; a coarse-pointer rule at lower
+ * specificity would have looked correct and changed nothing.
+ *
+ * Both groups wrap (`flex-wrap: wrap`, and the file list is a column), so the
+ * four extra pixels are absorbed by the block growing downward inside a centred
+ * empty state — no neighbour moves sideways and nothing reflows.
+ */
+@media (pointer: coarse) {
+  .workbench-empty__files button,
+  .workbench-empty__actions button {
+    min-height: var(--touch-target);
+  }
+}
+
 .workbench-empty__note {
   max-width: 52ch;
   margin: var(--sp-4) 0 0;

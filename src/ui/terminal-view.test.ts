@@ -722,16 +722,47 @@ describe("the terminal's one Git command surface", () => {
 describe("the tab rename affordance on touch surfaces", () => {
   /*
    * 34px wide, no height, and invisible until hover: the rename control had
-   * no reachable path on a device that cannot hover. The phone block lifts it
-   * to the same 44px square as its neighbours, and a coarse pointer anywhere
-   * keeps it painted — an affordance that only exists under hover is an
-   * affordance a touchscreen never sees.
+   * no reachable path on a device that cannot hover.
+   *
+   * This used to assert a split — the phone block lifts it to 44px, the coarse
+   * block keeps it painted — and the split was the defect. Paint and size are
+   * one question ("is a finger doing the pointing"), and answering them on two
+   * different queries meant every coarse pointer outside the phone width got
+   * one answer and not the other: measured on the built tree, a tablet at
+   * 768x1024 and a landscape phone at 932x430 both rendered this control
+   * *visible* and 34x44 — floored on the axis it never needed, 10px under on
+   * the axis it did, and the previous version of this test read that as a pass
+   * because both strings it looked for were present.
+   *
+   * So the width floor now lives on the pointer query beside the paint, and
+   * this asserts that rather than the split. The phone block keeps its own
+   * copy: a narrow *desktop* window is a fine pointer, so `pointer: coarse` is
+   * false there and the width rule still has work to do.
    */
-  it("grows to the 44px phone floor and shows itself without a hover", () => {
+  it("floors and paints the rename control on the same coarse-pointer query", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const phone = css.slice(css.indexOf("@media(max-width:760px)"));
     expect(phone).toContain(".terminal-tab .terminal-tab__rename{min-width:var(--touch-target);min-height:var(--touch-target);opacity:1}");
-    expect(css).toContain("@media(pointer:coarse){.terminal-tab .terminal-tab__rename{opacity:1}}");
+    // Width and paint together — the floor may not be left behind on a width.
+    expect(css).toContain("@media(pointer:coarse){.terminal-tab .terminal-tab__rename{min-width:var(--touch-target);opacity:1}}");
+    // The height floor reaches it from `.terminal-route button`, so a coarse
+    // pointer has both axes; asserted here so removing that rule fails loudly.
+    expect(css).toMatch(/^\.terminal-route button\{[^}]*min-height:var\(--touch-target\)/mu);
+  });
+
+  /*
+   * The panel bar's process controls, on the same argument. `New here`,
+   * `Restart`, `Close` and the `running`-only `Interrupt` measured 36px tall at
+   * both coarse viewports above, because their 44px lived in the phone block
+   * only. The floor moves to the pointer; the label-shedding in the phone block
+   * deliberately does not, since dropping these buttons to bare glyphs is a
+   * 320px space decision and not a touch decision.
+   */
+  it("floors the panel bar's process controls on the pointer, without shedding their labels", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    expect(css).toContain("@media(pointer:coarse){.terminal-panel__bar button{min-height:var(--touch-target)}}");
+    const coarse = css.slice(css.indexOf("@media(pointer:coarse){.terminal-panel__bar"));
+    expect(coarse.slice(0, 200)).not.toContain("span:not([aria-hidden");
   });
 });
 

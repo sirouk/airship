@@ -87,8 +87,18 @@
 .terminal-tab:hover .terminal-tab__rename,.terminal-tab__rename:focus-visible{opacity:1}
 /* There is no hover on a touch screen: a control that only reveals itself on
    hover is a control a coarse pointer can never find, so opacity stays 1 and
-   the affordance is visible before the first tap rather than after it. */
-@media(pointer:coarse){.terminal-tab .terminal-tab__rename{opacity:1}}
+   the affordance is visible before the first tap rather than after it.
+
+   The size belongs on the same query as the paint, and did not have it. This
+   rule made the rename glyph *visible* on every coarse pointer while the 44px
+   that makes it *hittable* stayed behind `@media (max-width:760px)` below — so
+   a tablet at 768x1024 and a landscape phone at 932x430 both rendered a
+   measured 34x44 button: floored on the axis it never needed and 10px under on
+   the axis it did. Two rules describing one control, keyed on two different
+   questions, is how that gap opened; keying both on the pointer is what closes
+   it. `min-width` is already this control's declared width floor, so raising
+   the number replaces nothing the min-content floor was carrying. */
+@media(pointer:coarse){.terminal-tab .terminal-tab__rename{min-width:var(--touch-target);opacity:1}}
 .terminal-tab__name-input{width:9rem;min-height:var(--touch-target);padding:5px 8px;border:0;outline:0;background:var(--surface-raised);color:var(--ink);font:inherit}
 .terminal-tab__name-input:focus{box-shadow:inset 0 0 0 1px var(--accent)}
 
@@ -174,6 +184,22 @@
 .terminal-panel__bar .seal[data-state=failed]{color:var(--v-failed)}
 .terminal-panel__bar .seal[data-state=attention]{color:var(--v-caution)}
 .terminal-panel__bar button{min-height:36px;padding:4px 9px;background:#1c2224;border-color:#3b4448;font-size:var(--fs-micro)}
+/* Every process control on the route, floored on the pointer.
+   Measured with `(pointer:coarse)` true: "New here" 91x36 at 768x1024 and
+   96.2x36 at 932x430, Restart 80.8/83.9, Close 65.5/68.5, and Interrupt — which
+   only exists while a shell is `running`, and which
+   `touch-target-floor.spec.ts` enters that state specifically to measure — on
+   the same recipe. These are the controls that kill and restart a live process;
+   36px is 8 under the floor and the mis-tap lands on the neighbour.
+   The 44px was already written for this exact selector, inside the
+   `@media (max-width:760px)` block below — a query no tablet and no landscape
+   phone reaches. Only the floor is lifted
+   out to the pointer axis: the block below also drops the buttons' text to bare
+   glyphs, which is a 320px space decision (triage D1) and must not follow the
+   finger onto a 768px screen where the words fit. Height only, for the same
+   reason — the labels stay, so min-content already holds the width, and a
+   `min-width` here would replace it. */
+@media(pointer:coarse){.terminal-panel__bar button{min-height:var(--touch-target)}}
 .terminal-panel__starting{padding:0 5px;color:#9ba6aa;white-space:nowrap}
 .terminal-emulator{min-width:0;min-height:9rem;padding:10px;overflow:hidden}
 .terminal-emulator .xterm{height:100%}

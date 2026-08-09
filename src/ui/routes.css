@@ -5198,6 +5198,55 @@
   .profile-boundary-grid .menu-select-trigger {
     min-height: var(--touch-target);
   }
+
+  /*
+   * Four route controls that the block above could not reach, because the
+   * selector — not the query — was what they were losing to.
+   *
+   * Each one already has a correct 44px rule; every one of those rules is
+   * keyed on a viewport width. `.proof-surface-tabs button` is floored inside
+   * the `max-width: 760px` query, and the other three inside the compact-shell
+   * pair. (Both at-rules are named without their at-sign on purpose.
+   * `token-vocabulary.test.ts` reads this block back with a regex whose body
+   * character class excludes the at-sign, so writing one inside this block
+   * does not merely empty the capture and drop the strip-height claim — that
+   * pattern is a lazy alternation of a negated class with a newline, applied
+   * to a 5,000-line sheet, and it backtracks catastrophically the moment it
+   * cannot match, so the suite hangs rather than fails. Measured: a single
+   * at-sign in this comment took `vitest run src/ui/` from a minute to never
+   * finishing, with no failure printed to say why.)
+   * A tablet at 768x1024 and a landscape phone at 932x430 are coarse and
+   * wider than all of them, so on the built tree with `(pointer: coarse)` true
+   * they measured: the proof route's tab strip 167.2x36 and 198.1x36 at 768
+   * (174.8/207.5 at 932); "Save new revision" 116.7x40 and "Switch to this
+   * profile" 190x40; "Remove profile" 361.5x40 — the one irreversible action
+   * on Profiles; "New conversation with this set" 186.9x38 and "New skill"
+   * 220x38.
+   *
+   * Written out at the same specificity as the design height each overrides,
+   * rather than folded into the shorter selectors above, because that is the
+   * whole reason the existing floors miss. `tokens.css` floors `.small-button`
+   * product-wide at (0,1,0) under this exact query and three of these are
+   * `.small-button`s that still rendered 38 and 40, since `.skills-toolbar
+   * .small-button` and `.profile-archive-zone .danger` are (0,2,0) and outrank
+   * it wherever it is written. `.proof-surface-tabs button` is (0,1,1) and
+   * outranks the `.tabs__tab-button` floor listed above for the same reason.
+   * A floor that has to win on source order alone is a floor that stops
+   * winning the next time a route adds a class — these win on specificity, and
+   * on being last.
+   *
+   * The corresponding note is the one `.profile-archive-zone .danger` already
+   * carries inside the compact-shell block: "the floor is a token, and the
+   * fine-pointer height is not". That was right, and it was written into a
+   * width query.
+   */
+  .proof-surface-tabs button,
+  .profile-actions .small-button,
+  .profile-actions .primary-link,
+  .profile-archive-zone .danger,
+  .skills-toolbar .small-button {
+    min-height: var(--touch-target);
+  }
 }
 
 .tabs__tab[data-active="true"] .tabs__tab-button {
