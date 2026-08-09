@@ -167,19 +167,59 @@ export function RouteHeader({
         {carriesDescription ? null : (
           <p class="route-header__eyebrow eyebrow" id={`route-${routeId}-eyebrow`}>{eyebrow}</p>
         )}
-        <h1 class={titleVisible ? "route-title" : "sr-only"} id={headingId}>{title}</h1>
-        {aboutRendered ? (
-          <Popover
-            class="route-header__about"
-            triggerClass="route-header__about-trigger"
-            label={routeAboutLabel({ title, eyebrow, carriesDescription, carriesNotes })}
-            heading={eyebrow}
-            trigger={<span aria-hidden="true">ⓘ</span>}
-          >
-            {carriesDescription ? <p class="route-header__about-description">{description}</p> : null}
-            {notes}
-          </Popover>
-        ) : null}
+        {/*
+          * The title and its own disclosure are one line, not two items that
+          * happen to be adjacent.
+          *
+          * They were siblings of the status and action clusters in the bar's
+          * flex wrap, and a flex line breaks on the items' base sizes before it
+          * shrinks any of them — so at phone-320 the 260px heading and the 46px
+          * ⓘ could not share a 294px row and the ⓘ wrapped. What it wrapped to
+          * was a line of its own holding a single 24px glyph: SO058 measured it
+          * on `#sessions` at [13,138], 46x46, with about 40px of dead vertical
+          * space around it, between the heading above and the durability chip
+          * below, saying nothing about what it opens.
+          *
+          * Grouping them makes the pair one flex item, so the row break happens
+          * around the pair and the shrink happens inside it — the heading's own
+          * ellipsis contract, which `.route-title` has carried unused at this
+          * width, absorbs the difference and the ⓘ stays on the heading's line.
+          * `flex: 0 1 auto` and never `1`: growing would fill the row and make
+          * `margin-left: auto` on the status cluster a no-op, which is what
+          * docks a route's chips to the right edge at every width above a
+          * phone.
+          */}
+        <div class="route-header__title-line">
+          <h1 class={titleVisible ? "route-title" : "sr-only"} id={headingId}>{title}</h1>
+          {aboutRendered ? (
+            <Popover
+              class="route-header__about"
+              triggerClass="route-header__about-trigger"
+              label={routeAboutLabel({ title, eyebrow, carriesDescription, carriesNotes })}
+              heading={eyebrow}
+              trigger={<>
+                <span aria-hidden="true">ⓘ</span>
+                {/*
+                  * The word the glyph does not say, revealed at phone widths
+                  * only — see `.route-header__about-word`. A 24px ⓘ alone is a
+                  * generic mark; beside a route name it is at least positioned,
+                  * and at the width where it had become an orphaned line of its
+                  * own it now names itself.
+                  *
+                  * `aria-hidden` because the button already carries a full
+                  * `aria-label` — `routeAboutLabel` above — which supersedes its
+                  * contents for assistive technology entirely. Marking it is
+                  * how the two stay one announcement rather than becoming a
+                  * label and a stray word that disagree at one breakpoint.
+                  */}
+                <span class="route-header__about-word" aria-hidden="true">About</span>
+              </>}
+            >
+              {carriesDescription ? <p class="route-header__about-description">{description}</p> : null}
+              {notes}
+            </Popover>
+          ) : null}
+        </div>
         {status ? <div class="route-header__status">{status}</div> : null}
         {actions ? <div class="route-header__actions">{actions}</div> : null}
       </div>

@@ -402,6 +402,60 @@ export function Popover({
       } else {
         setSide("below");
         setRoom(null);
+        /*
+         * A sheet takes the keyboard with it, because a sheet takes the screen.
+         *
+         * Every other rule in this file assumed the reader's focus would find
+         * its own way inside. It does not: measured on the shipped build at
+         * phone-320, landscape-932, tablet-768 and desktop-1440, pressing the
+         * route header's ⓘ left `document.activeElement` on the TRIGGER at all
+         * four — `activeInsidePanel: false` — while a 112–163px sheet and its
+         * scrim were drawn over the route. So the focused control was the one
+         * underneath the dim, the focus ring was painted behind the scrim, and
+         * a screen reader's next utterance was the trigger it had just left
+         * rather than the panel that had just covered everything.
+         *
+         * The trap is not what was missing. `trapFocus` re-enters from outside
+         * the panel already (`focusTrapTarget` returns "first" when
+         * `insideContainer` is false), so Tab did land on Done — the audit's
+         * second claim, that six Tabs walked out to `Discover models with key`,
+         * no longer reproduces on this build. What was missing is that the
+         * reader should not have to spend a Tab to be where the product has
+         * just put the whole screen.
+         *
+         * SHEETS ONLY, and the reason is a defect this file already paid for
+         * once. An anchored panel opens on a 150ms fine-pointer hover — see
+         * `POPOVER_HOVER_INTENT_MS` — so a pointer merely crossing a chip while
+         * someone types elsewhere would have its focus yanked into a panel it
+         * never asked for. That is the exact harm the containment gate in
+         * `onKeyDown` was written against, and it is why this lives in the
+         * `sheet` branch of the measurement rather than beside it.
+         *
+         * Guarded twice more inside that branch. `openIntent` must be a
+         * commitment: the sheet breakpoints are reachable with a mouse (a 932×430
+         * window on a desktop is a sheet), so a hover-opened sheet is possible
+         * and must behave like the anchored panel it is standing in for. It is
+         * read from the render in which `open` became true — the click handler
+         * and the intent timer each set both pieces of state in one batch — so
+         * the closure is the gesture, not a later one. And focus that is
+         * already inside the PANEL is left exactly where it is, so a
+         * re-measurement — this effect also runs when `width` changes — cannot
+         * pull a reader off the Done button they had tabbed to. The host is the
+         * wrong box to ask about here: the trigger lives in it, and the trigger
+         * is precisely where focus is stranded.
+         *
+         * The panel and not its Done button: `tabIndex={-1}` makes the panel a
+         * landing site rather than a stop, so the reader arrives on the group
+         * whose `aria-label` is the panel's own heading, and the first Tab from
+         * there is Done. Landing on Done would announce the exit before the
+         * content. `preventScroll` because the sheet is pinned by its own
+         * insets and has nothing to be scrolled into view of; the same call
+         * `trapFocus` makes, for the same reason.
+         */
+        const panel = panelRef.current;
+        if (openIntent === "commit" && panel && !panel.contains(document.activeElement)) {
+          panel.focus({ preventScroll: true });
+        }
       }
     }
 

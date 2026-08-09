@@ -52,12 +52,16 @@ describe("the panel cannot report a save it did not make", () => {
     // `setStatus` in the catch below is the panel doing its job.
     const settled = save.slice(save.indexOf("await onSave("), save.indexOf("} catch ("));
     expect(settled).toContain("onClose();");
-    expect(settled).not.toContain("setStatus(");
+    expect(settled).not.toContain("setRefusal(");
   });
 
   it("shows the refusal a rejected save carries, verbatim", () => {
     const source = editorSource();
-    expect(source).toContain("setStatus(error instanceof Error ? error.message : String(error));");
+    // Verbatim survives the refusal becoming a record: the message is still the
+    // rejection's own words and still the only thing rendered. What the record
+    // added beside it is which field the panel itself refused, never a reword.
+    expect(source).toContain("message: error instanceof Error ? error.message : String(error)");
+    expect(source).not.toMatch(/message:\s*"[^"]/u);
   });
 });
 
@@ -280,11 +284,53 @@ describe("a save that was refused says so where the person is looking", () => {
   it("brings the refusal into the frame with the least scroll that does it", () => {
     const source = editorSource();
     expect(source).toContain('statusRef.current?.scrollIntoView({ block: "nearest" });');
-    expect(source).toContain("}, [status]);");
-    // `nearest`, so a refusal already in frame moves nothing and the field the
-    // person has to go back and fix stays where they left it.
-    expect(source).not.toContain('scrollIntoView({ block: "center" })');
+    // `nearest`, so a refusal that names no field moves nothing it does not
+    // have to and the person keeps the frame they pressed the button in.
     expect(source).not.toContain('scrollIntoView({ block: "start" })');
+  });
+
+  /*
+   * SO074, which is the half the sentence above cannot reach. Measured on the
+   * shipped build at phone-320 with Prompt order set to `not-a-number` and
+   * Create skill pressed: `main.route-layout` spans y 82..512, the refusal
+   * renders at y=331 — in frame, doing exactly what the rule above intends —
+   * and the input holding the rejected value sits at y=34, above the top edge
+   * of the scroller and invisible, with `document.activeElement` still the
+   * submit button. The sentence was on screen and the thing it was about was
+   * not, and nothing moved.
+   */
+  it("moves the keyboard to the field a refusal names, and centres it", () => {
+    const source = editorSource();
+    const effect = source.slice(source.indexOf("useEffect(() => {"), source.indexOf("// Proposed, never silently"));
+    // `center` for the field and not `nearest`: `nearest` from below parks the
+    // input flush against the scrollport's top edge, one pixel inside the
+    // frame, which is not a place to be asked to type.
+    expect(effect).toContain('field.scrollIntoView({ block: "center" });');
+    expect(effect).toContain("field.focus();");
+    // The field branch returns, so the two alignments can never both run and
+    // fight each other over the same scroller.
+    expect(effect.indexOf("field.focus();")).toBeLessThan(effect.indexOf("statusRef.current?.scrollIntoView"));
+    expect(effect).toContain("return;");
+    // Keyed on the refusal record, not on its message. Two presses of a button
+    // that refuses the same way twice produce the same STRING, so a
+    // message-keyed effect ran once and left the second press looking exactly
+    // like the defect above.
+    expect(source).toContain("}, [refusal]);");
+    expect(source).toContain("setRefusal(undefined);");
+  });
+
+  it("lets the named field say so on itself, and stop saying it once corrected", () => {
+    const source = editorSource();
+    expect(source).toContain('aria-invalid={refusal?.field === "promptOrder" ? "true" : undefined}');
+    // The refusal names its input and the input names the refusal, so arriving
+    // here by focus is intelligible from either end.
+    expect(source).toContain('aria-describedby={refusal?.field === "promptOrder" ? SAVE_STATUS_ID : undefined}');
+    expect(source).toContain('setRefusal((current) => current?.field === "promptOrder" ? undefined : current);');
+    // The mark is painted from the same attribute assistive technology reads,
+    // so the two cannot drift.
+    const sheet = readFileSync(new URL("./skill-editor.css", import.meta.url), "utf8");
+    expect(sheet).toContain('.skill-editor-fields input[aria-invalid="true"]');
+    expect(/input\[aria-invalid="true"\] \{([\s\S]*?)\n\}/u.exec(sheet)?.[1] ?? "").toContain("var(--v-failed)");
   });
 
   it("announces it and hangs it off the button that produced it", () => {
