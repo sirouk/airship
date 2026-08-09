@@ -246,6 +246,101 @@ describe("the terminal panel's process controls", () => {
   });
 });
 
+describe("the two rows this route's grid could crush without saying so", () => {
+  const baseBlock = (): string => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    return css.slice(0, css.indexOf("@media(max-width:760px)"));
+  };
+
+  /*
+   * The short-viewport block at the foot of the sheet names this mechanism for
+   * 932×430. It is not a short-viewport mechanism.
+   *
+   * `.terminal-route__setup` and `.terminal-panel` both carried
+   * `overflow:hidden` — and a grid item whose overflow is not `visible` has an
+   * automatic minimum size of zero. So the route's own `min-height:min-content`
+   * was computing a min-content that ignored 300px of its two largest rows: the
+   * route never grew, and the shortfall was paid by shrinking those rows under
+   * their content and painting the remainder nowhere. The panel needs its clip
+   * — the rounded card, the popover anchored inside it — and its half of the
+   * repair is arithmetic. The disclosure never needed one: nothing inside it
+   * paints to its edge, so `hidden` was doing exactly one job there.
+   *
+   * Measured on the shipped build with the runtime disclosure open — a stored
+   * preference, so it is the state a reader who opened it once gets on every
+   * visit. At 1024×768 the setup showed 244px of 314 and the panel 236px of
+   * 315, with the meta row's own box 77px BELOW the panel's bottom edge; at
+   * 1440×900 the panel showed 290px of 315 and the meta row hung 23px past the
+   * card. `overflow-y` computed `hidden` on both, so there was no scrollbar and
+   * no fade — the row where the session reports what it is connected to was
+   * neither visible nor reachable.
+   */
+  it("lets the disclosure's own row size to the disclosure", () => {
+    const base = baseBlock();
+    expect(base).toMatch(/\.terminal-route__setup\{overflow:visible/u);
+    // The route grows to its rows and `main` carries the excess, the way it
+    // carries every other long route in the app — but only once this row's
+    // minimum is real, because `min-height:min-content` on the item is not
+    // enough on its own: measured with `overflow:hidden` kept and that minimum
+    // added, the item became 316px inside a 246px track and painted 59px of
+    // itself over the tab strip. The clip has to stop being a clip.
+    expect(base).toMatch(/\.terminal-route\{[^}]*min-height:min-content/u);
+    expect(base).not.toMatch(/\.terminal-route__setup\{[^}]*overflow:hidden/u);
+  });
+
+  /*
+   * And the row that has no such option. `overflow-x:auto` zeroes this item's
+   * automatic minimum size on both axes — non-visible on either is enough — and
+   * there is no version of a tab strip that scrolls horizontally without it. So
+   * the minimum is written. With the disclosure's row restored and nothing
+   * written here, the strip took the whole remaining shortfall at 1024×768 and
+   * measured 2px: the same defect, one row lower.
+   */
+  it("writes the tab strip's minimum, because that row cannot infer one", () => {
+    const base = baseBlock();
+    expect(base).toContain(".terminal-tabs{display:flex;gap:5px;min-height:calc(var(--touch-target) + 2px);overflow-x:auto");
+    // The floor is the touch decision the tab buttons already make plus the
+    // strip's own 2px of padding, not a second opinion in literal pixels.
+    expect(base).not.toMatch(/\.terminal-tabs\{[^}]*min-height:\d/u);
+  });
+
+  /*
+   * The arithmetic underneath, and why the panel could not fit even when the
+   * route handed it the whole floor it asked for. The route reserves
+   * `minmax(14rem,1fr)` for the panel; the panel reserved `minmax(14rem,1fr)`
+   * again for its emulator alone, and 224px of emulator plus a 44px bar, a 32px
+   * meta row and 2px of borders is 302px inside a 224px reservation. One floor
+   * for the terminal, written once: the emulator's own `min-height`. The panel
+   * is then 44+144+32+2 = 222px at its smallest, inside the 224px the route was
+   * already reserving.
+   */
+  it("counts the terminal's floor once, on the emulator, not twice", () => {
+    const base = baseBlock();
+    expect(base).toMatch(/\.terminal-panel\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/u);
+    expect(base).not.toMatch(/\.terminal-panel\{[^}]*minmax\(14rem/u);
+    expect(base).toContain(".terminal-emulator{min-width:0;min-height:9rem;padding:10px;overflow:hidden}");
+    // The route's own reservation for the whole card stays where it was: this
+    // repair removes a double count, it does not buy the terminal less room.
+    expect(base).toContain("grid-template-rows:auto auto auto minmax(14rem,1fr) auto");
+  });
+
+  /*
+   * The dock shares all three of these rules and must not be harmed by them. It
+   * is height-clamped in JavaScript against a measured parent, so the one thing
+   * it cannot afford is a child that refuses to shrink: a `min-height:min-content`
+   * on the panel would be exactly that. The three declarations this repair
+   * makes are all safe for it — a row that sizes to its content, a 46px strip it
+   * already renders, and a middle track floor that goes DOWN — and the dock's
+   * own two-class rules outrank the unscoped ones where it disagrees.
+   */
+  it("leaves the workspace dock a panel that can still be told its size", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    expect(css).not.toMatch(/\.terminal-panel\{[^}]*min-height:min-content/u);
+    expect(css).toContain(".terminal-route--dock .terminal-panel{grid-template-rows:auto minmax(5rem,1fr) auto");
+    expect(css).toContain(".terminal-route--dock .terminal-emulator{min-height:5rem");
+  });
+});
+
 describe("the terminal panel's directory chip on a tablet row", () => {
   /*
    * The cost side of the rule above. Landing the whole shrink on the state
@@ -374,12 +469,17 @@ describe("the terminal route on a short viewport", () => {
    * that makes the scroll worth taking rather than merely honest.
    */
   it("gives the emulator a terminal's worth of rows at the one viewport that had none", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const short = shortBlock();
     expect(short).toContain(".terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto");
-    // The panel's own 14rem floor wants 307px inside that 256px box and
-    // `overflow:hidden` would answer by swallowing the meta row, so the middle
-    // track yields and the bar and meta row take what they need first.
-    expect(short).toContain(".terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}");
+    // The panel's own 14rem floor wanted 307px inside that 256px box and
+    // `overflow:hidden` answered by swallowing the meta row, so the middle track
+    // yields and the bar and meta row take what they need first. That reading
+    // was right and it was never local: the same double-counted 14rem swallowed
+    // the meta row at 1024×768 and 1440×900. The base rule states it once now,
+    // and restating it here would be a second opinion about the same number.
+    expect(short).not.toMatch(/\.terminal-panel\{grid-template-rows/u);
+    expect(css).toMatch(/\.terminal-panel\{[^}]*grid-template-rows:auto minmax\(0,1fr\) auto/u);
     // The gutter is the phone's 6px, and it is now the only thing the emulator
     // rule says: at a 22px cell the 8px saved against the base 10px is most of
     // a row, so it is spent on output. The 2.5rem squeeze that used to stand
@@ -389,20 +489,28 @@ describe("the terminal route on a short viewport", () => {
   });
 
   /*
-   * `.terminal-route__setup` and `.terminal-tabs` are the only two rows in this
-   * grid whose automatic minimum size is zero — both carry non-visible overflow
-   * — so they are the rows that absorb a shortfall in silence rather than
-   * overflowing where a reader can see it, which is how they became a 2px
-   * stripe. They are no longer squeezed; these floors are what keeps that true
-   * if the route is ever height-clamped again.
+   * `.terminal-route__setup` and `.terminal-tabs` were the only two rows in this
+   * grid whose automatic minimum size was zero — both carried non-visible
+   * overflow — so they were the rows that absorb a shortfall in silence rather
+   * than overflowing where a reader can see it, which is how they became a 2px
+   * stripe. They are no longer squeezed, and what keeps that true if the route
+   * is ever height-clamped again is now written at the base: the strip's floor
+   * unqualified by viewport height, and the disclosure's `overflow:visible`.
    */
-  it("keeps the floors under the two rows whose overflow zeroes their minimum", () => {
+  it("leaves the two rows floored by the base rather than by this block", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const short = shortBlock();
-    expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__setup,");
-    expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}");
-    // The floor is the touch decision the summary and tab buttons already make,
-    // not a second opinion about it in literal pixels.
-    expect(short).not.toMatch(/\.terminal-tabs\{min-height:\d/u);
+    // The floors moved one width up rather than away. Neither was ever a
+    // short-viewport property, and `calc(var(--touch-target) + 2px)` was the
+    // right floor for a CLOSED summary and the wrong one for an open
+    // disclosure — whose open state is a stored preference. Measured here at
+    // 932×430 with the runtime band open, the setup held 333px of content in
+    // the 44px its floor bought it: the block written to end a 2px stripe left
+    // a 44px one. The base rules answer both, the tab strip with the same
+    // number and the disclosure by no longer clipping at all.
+    expect(short).not.toMatch(/min-height:calc/u);
+    expect(css.slice(0, css.indexOf("@media(max-width:760px)")))
+      .toContain(".terminal-tabs{display:flex;gap:5px;min-height:calc(var(--touch-target) + 2px);overflow-x:auto");
     expect(short).toContain(".terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}");
   });
 

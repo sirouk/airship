@@ -14,7 +14,27 @@
 
 /* One 44px runtime row. Every fact the 183px band carried on its face stays on
    the face; the boundary paragraph is what the summary opens. */
-.terminal-route__setup{overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-control);background:color-mix(in srgb,var(--surface) 84%,transparent)}
+/* `overflow:visible`, and it is the whole repair for this row.
+ *
+ * A grid item whose overflow is not `visible` has an automatic minimum size of
+ * zero. `overflow:hidden` here therefore told this route's grid that the
+ * disclosure contained nothing, so the route's own `min-height:min-content`
+ * computed a min-content that ignored the band entirely, the route never grew,
+ * and the whole shortfall was charged to this row and then painted nowhere.
+ * Measured on the shipped build at 1024x768 with the band open — which is a
+ * stored preference, so it is the state a reader who opened it once gets on
+ * every visit — the row showed clientHeight 244 against scrollHeight 314, with
+ * `overflow-y` computing `hidden`: 70px of the boundary paragraph, the one
+ * place this route says it is not a host shell, with no scrollbar and no fade
+ * to say so. At 932x430 the same mechanism showed 44px of 333.
+ *
+ * The clip was never bought with anything. Nothing inside this box paints to
+ * its edge — the summary and the body both sit inside padding — so the rounded
+ * corners have nothing to clip, and `hidden` was doing one job here: zeroing
+ * the row's minimum. With it gone the `auto` track sizes to the band, the
+ * route's min-content becomes the truth, the route grows to its rows, and
+ * `main` carries the excess the way it carries every other long route. */
+.terminal-route__setup{overflow:visible;border:1px solid var(--line);border-radius:var(--radius-control);background:color-mix(in srgb,var(--surface) 84%,transparent)}
 .terminal-route__setup>summary{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-height:var(--touch-target);padding:5px 11px;color:var(--ink-muted);font-size:var(--fs-caption);cursor:pointer;list-style:none}
 .terminal-route__setup>summary::-webkit-details-marker{display:none}
 .terminal-route__setup>summary::after{margin-left:auto;color:var(--ink-faint);content:"⌄"}
@@ -33,7 +53,17 @@
    it is one number beside its own verb, and it inherits the button's ink. */
 .terminal-route__drift{min-width:18px;padding:0 5px;border-radius:var(--radius-chip);background:color-mix(in srgb,var(--v-caution) 26%,transparent);color:var(--ink);font-size:var(--fs-micro);font-weight:var(--fw-strong)}
 
-.terminal-tabs{display:flex;gap:5px;overflow-x:auto;padding:0 2px 2px}
+/* The floor the row above no longer needs, because this one cannot have it.
+   `overflow-x:auto` zeroes this item's automatic minimum size on BOTH axes —
+   a non-visible overflow on either axis is enough — and unlike the disclosure
+   there is no version of this strip that scrolls horizontally without it. So
+   the minimum is written rather than inferred. It is not theoretical: with the
+   disclosure's row restored and no floor here, the tab strip took the whole
+   remaining shortfall at 1024x768 and measured 2px, which is the same defect
+   one row lower. 44px is the touch decision the tab buttons already make, plus
+   the strip's own 2px of padding. The short-viewport block used to state this
+   floor for itself; it belongs at every width, so it is stated once. */
+.terminal-tabs{display:flex;gap:5px;min-height:calc(var(--touch-target) + 2px);overflow-x:auto;padding:0 2px 2px}
 .terminal-tab{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;flex:0 0 auto;min-width:9rem;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);overflow:hidden}
 .terminal-tab[data-active=true]{border-color:var(--accent);background:var(--surface-raised)}
 .terminal-tab>button{min-width:0;border:0;border-radius:0;background:transparent}
@@ -55,7 +85,38 @@
    own rows were 693px: the status bar's directory ran off the edge, and
    Interrupt/New here/Restart/Close ran off with it, inside `overflow:hidden`
    where nothing could scroll them back. Measured at 390x844. */
-.terminal-panel{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(14rem,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
+.terminal-panel{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
+/* And the 14rem the panel counted a second time.
+ *
+ * The route reserves `minmax(14rem,1fr)` for the panel; the panel then reserved
+ * `minmax(14rem,1fr)` again for its emulator alone, and 224px of emulator plus a
+ * 44px bar, a 32px meta row and 2px of borders is 302px inside a 224px
+ * reservation. `overflow:hidden` — which the panel genuinely needs, for the
+ * rounded card and for the popover that anchors inside it — then answered the
+ * shortfall the only way it can: by not drawing the last row.
+ *
+ * Measured on the shipped build with the runtime disclosure open. At 1024x768
+ * the panel showed clientHeight 236 against scrollHeight 315, with the meta
+ * row's own box 77px BELOW the panel's bottom edge; at 1440x900 it showed 290 of
+ * 315, rect 1156x292 at y=525, and the meta row hung 23px past the card. The
+ * meta row is where the session reports what it is — its `role="status"` line,
+ * the lineage disclosure and the history control — so what was clipped was not
+ * slack, it was the row that answers "what am I connected to", and there was no
+ * scrollbar and no fade anywhere to say a row existed past the edge.
+ *
+ * The short-viewport block below reached this conclusion first and restated the
+ * middle track at `2.5rem` locally, for exactly this reason. It was never a
+ * short-viewport fact, so the track is `minmax(0,1fr)` here and the emulator's
+ * own `min-height:9rem` is left as the single place the terminal's floor is
+ * written. The panel is then 44+144+32+2 = 222px at its smallest, inside the
+ * 224px the route was already reserving for it, and the emulator — the one row
+ * in this card that scrolls its own content, behind `.xterm-viewport`'s
+ * permanent `overflow-y:scroll` — is the row that absorbs the slack.
+ *
+ * Re-measured at all eight device classes with the disclosure open: the panel's
+ * clientHeight equals its scrollHeight and the meta row is inside the card at
+ * every one, with no row overlapping the row below it and no new page scroll
+ * except the 67px at 1024x768 that 719px of rows in a 710px pane must cost. */
 .terminal-panel__bar{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:var(--touch-target);padding:4px 10px;border-bottom:1px solid #32383b;background:#15191b;color:#d9d3c7;font-size:var(--fs-caption)}
 /* The process controls are never the half that shrinks. As `flex:0 1 auto`
    over an `overflow-x:auto` viewport this group was a strip that clipped in
@@ -397,25 +458,36 @@
 
    The rest of this block is what lands those 256px where they are worth most:
 
-   - The panel restates its middle track at `2.5rem`, because its own 14rem
-     floor wants 44+224+37+2 = 307px inside a 256px box and `overflow:hidden`
-     would answer that by swallowing the meta row. The track's `1fr` then hands
-     the emulator whatever the bar and the meta row do not use, which is the
-     only distribution here that cannot clip a fact.
+   - The panel used to restate its middle track at `2.5rem` here, because its
+     own 14rem floor wanted 44+224+37+2 = 307px inside a 256px box and
+     `overflow:hidden` would have answered that by swallowing the meta row. That
+     reading was right and it was not local: the same double-counted 14rem
+     swallowed the meta row at 1024x768 and 1440x900 with the runtime disclosure
+     open. The base rule now carries the decision — `minmax(0,1fr)`, with the
+     emulator's own `min-height` as the single floor — so the restatement is
+     gone from this block rather than repeated in it. The track's `1fr` still
+     hands the emulator whatever the bar and the meta row do not use, which is
+     the only distribution here that cannot clip a fact.
    - The emulator keeps the 6px gutter the phone block already spends. Against
      the base 10px it saves 8px, and inside a 173px box that is exactly what
      separates six rows from seven — the same 8px that bought nothing at the old
      size, spent where the floor function can act on it. It travels the same 8px
      the other way on the inline axis.
-   - The two floored rows stay. Both carry non-visible overflow, which zeroes a
-     grid item's automatic minimum size, so they are the rows that silently
-     absorb any shortfall rather than overflowing where a reader can see it —
-     which is how a 2px stripe happened in the first place. They are no longer
-     being squeezed, and the floors are what keeps that true if this route is
-     ever height-clamped again. The floors are written against `--touch-target`
-     rather than a literal because they are the same 44px decision the summary
-     and the tab buttons already make, plus the 1px borders and the strip's 2px
-     padding that sit outside it.
+   - The two floored rows stay floored, one width up. Both used to carry
+     non-visible overflow, which zeroes a grid item's automatic minimum size, so
+     they were the rows that silently absorbed any shortfall rather than
+     overflowing where a reader can see it — which is how a 2px stripe happened
+     in the first place. That was never a short-viewport property, and the floors
+     have moved to the base rules where the reasoning is written out: the tab
+     strip keeps `calc(var(--touch-target) + 2px)`, unchanged and now unqualified
+     by height, and the disclosure does not need a number at all because its
+     `overflow` is `visible` and its `auto` row therefore sizes to the band.
+     Which matters here, not only at a desk: `calc(var(--touch-target) + 2px)`
+     was the right floor for a CLOSED summary and the wrong one for an open
+     disclosure, and measured at 932x430 with the runtime band open this block
+     held 333px of content in the 44px that floor bought it — the block written
+     to end a 2px stripe left a 44px one. This route is already its own scroller
+     here, so the open band is now 289px of scroll rather than 289px of nothing.
    - `gap:4px` and the zeroed header margin stay. They no longer pay for
      anything the layout depends on, but they are air between bordered surfaces
      at the one viewport height where height is the scarce axis, and giving them
@@ -454,8 +526,5 @@
 @media(max-height:500px){
   .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:100%;min-height:0;overflow:auto}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}
-  .terminal-route:not(.terminal-route--dock)>.terminal-route__setup,
-  .terminal-route:not(.terminal-route--dock)>.terminal-tabs{min-height:calc(var(--touch-target) + 2px)}
-  .terminal-panel{grid-template-rows:auto minmax(2.5rem,1fr) auto}
   .terminal-emulator{padding:6px}
 }

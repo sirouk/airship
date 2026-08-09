@@ -208,3 +208,82 @@ describe("the editor's own labels", () => {
     expect(app).not.toContain("Minimum posture");
   });
 });
+
+/**
+ * The theme card's captions, un-clamped.
+ *
+ * The rules are asserted against `routes.css` rather than this module's own
+ * sheet, and that is a finding rather than a convenience: `profiles-governance.
+ * css` is imported only by `profiles-governance.tsx`, whose `ProfileGovernance
+ * Strip` has no caller — `app.tsx` imports the label module beside it and
+ * renders the strip inline. Nothing in that sheet reaches the bundle; `grep
+ * profile-governs dist/assets/*.css` finds one selector, and it is routes.css's.
+ * A fix written there would have passed every test and shipped nothing.
+ *
+ * A theme card carries a swatch and two `<small>`s: `theme.description`, which
+ * is the only place the card says what the theme IS, and the presentation
+ * summary, which names the typography and layout that activation will change
+ * and that a 32×43 swatch cannot show. Both were held to `-webkit-line-clamp:2`
+ * in `routes.css` and to `1` below 861px — a count of lines standing in for a
+ * height budget this surface does not have.
+ *
+ * Measured on the shipped build. At laptop-1024 the library is three columns of
+ * 123px and a caption at that width is three lines: 26 of the 27 captions on
+ * the route read clientHeight 32 against scrollHeight 47, one 32 against 63,
+ * every one cut at the end of line two. At tablet-768 the library is a single
+ * column and the clamp drops to one line, so a full-width 307px card showed
+ * 16px of 32 — "Curated · warm cocoa surfaces with a", and the rest of the
+ * sentence was nowhere. The three phone widths showed the same single line, 17
+ * of 34, across 26 captions. desktop-1440 still cut two.
+ *
+ * The clamp is arbitrary in both directions and provably so: it clips hardest
+ * at 768, where the card is at its WIDEST and there is the most room to print
+ * the sentence. Re-measured after: no caption on the route is short of its own
+ * content at any of the eight device classes.
+ */
+describe("the theme card's captions", () => {
+  const routes = readFileSync(new URL("./routes.css", import.meta.url), "utf8");
+
+  it("lets the card be the size of the sentence that tells them apart", () => {
+    const bodies = [...routes.matchAll(/\.theme-option small \{([^}]*)\}/gu)].map(([, body]) => body);
+    // The caption's own rule is the one that lays it out as a `-webkit-box`;
+    // the other spellings of this selector set `display:block` and the clamp.
+    const caption = bodies.find((body) => body.includes("-webkit-box-orient")) ?? "";
+    expect(caption).toContain("-webkit-line-clamp: none");
+    expect(caption).toContain("overflow: visible");
+    // And no breakpoint may re-impose one. The 861px block clamped to a single
+    // line at exactly the width where the library becomes one column, so the
+    // caption was cut hardest on the widest card the route ever draws.
+    for (const body of bodies) {
+      expect(body).not.toMatch(/-webkit-line-clamp:\s*\d/u);
+      expect(body).not.toMatch(/overflow:\s*hidden/u);
+      expect(body).not.toMatch(/max-height/u);
+    }
+  });
+
+  /*
+   * And the cap this deliberately does NOT remove. `.profile-prompt-preview`
+   * clamps the profile's system prompt to two lines and measured 35px of 123 at
+   * tablet-768 — a bounded box that earns its bound. It is the summary OF a
+   * disclosure: `.profile-editor-disclosure[open]` hides it and the full prompt
+   * appears in the textarea underneath, the clamp paints a real ellipsis rather
+   * than ending mid-word, and the summary carries a `›` marker that says where
+   * the rest is. A preview grown to 230px of prompt would stop being a preview.
+   *
+   * The distinction is the one this cluster turns on: a cap that hides content
+   * with no way to reach it is a defect; a cap that summarises content with the
+   * way to the rest attached is a summary. So the preview must keep both halves
+   * of what makes it the second thing.
+   */
+  it("keeps the prompt preview a summary, with the way to the rest attached", () => {
+    const routes = readFileSync(new URL("./routes.css", import.meta.url), "utf8");
+    const previewStart = routes.indexOf(".profile-prompt-preview {");
+    expect(previewStart).toBeGreaterThan(-1);
+    expect(routes.slice(previewStart, routes.indexOf("}", previewStart))).toContain("-webkit-line-clamp: 2");
+    // The withdrawal is what turns the clamp into a summary rather than a cut.
+    expect(routes).toContain(".profile-editor-disclosure[open] .profile-prompt-preview { display: none; }");
+    const editor = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(editor).toContain('<span class="profile-prompt-preview" aria-hidden="true">{draft.systemPrompt.trim() || "No instructions set"}</span>');
+    expect(editor).toContain("<textarea rows={7} value={draft.systemPrompt}");
+  });
+});
