@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RAIL_RECENT_LIMIT, railCurrentHint, railRowFor, railStandInFor, rovingKey } from "./rail";
 import { CANONICAL_DESTINATIONS, destinationLabel, railTraversal, type NavigationView } from "./navigation-model";
+import { defaultRailState } from "./rail-state";
 
 /*
  * The returning person's most important object may not need a click to exist.
@@ -336,13 +337,21 @@ describe("the rail's collapse control", () => {
    * audits as the grip sitting flush against, colliding with, or re-overlapping
    * that label. The original defect, at 1px instead of 22px.
    *
-   * So the paint is no longer widened for a finger at all — it is the 13px the
-   * base rule draws at every pointer type — and the floor is met entirely by a
-   * transparent extension. These tests pin that: that the coarse block never
-   * takes the paint back, that the extension's four terms still sum to
-   * `--touch-target` once `border-box` sizing is paid for, that the box clears
-   * the label inward and the routes' controls outward, and that no rail width
-   * anywhere adds anything for the seam.
+   * So the floor is met entirely by a transparent extension, and the paint is
+   * never widened *inward* again. It is widened outward, once: at 13×46 and
+   * `opacity: .5` the grip was reported invisible by eight route audits, and on
+   * a coarse pointer there is no hover to lift the fade, so that rest state is
+   * the only one a finger ever sees. The coarse block therefore takes the body
+   * to 24px and the opacity to 1 while pulling the box out of the rail by half
+   * the growth, so the painted left edge stays at seam − 6.5px — the reach the
+   * 13px body has always had — and the extra 11px land in the overhang the
+   * extension already owns.
+   *
+   * These tests pin that: that the growth is spent outward and only outward,
+   * that the extension's four terms still sum to `--touch-target` once
+   * `border-box` sizing is paid for and land on the identical box at either
+   * body width, that the paint clears the label inward and the routes' controls
+   * outward, and that no rail width anywhere adds anything for the seam.
    */
   const coarseGripBlock = css.slice(css.lastIndexOf("@media (pointer: coarse)", css.indexOf(".rail-collapse::after")));
   const tokens = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
@@ -353,16 +362,40 @@ describe("the rail's collapse control", () => {
     return Number(hit![1]);
   };
 
-  it("paints the grip at one width for every pointer type", () => {
-    // One paint, named once in the base rule and read by the extension below.
-    const [paint] = rulesDeclaring("--grip-body: 13px", "width: var(--grip-body)");
+  it("paints the grip from one design body, and spends any growth outward", () => {
+    // One design number, named once in the base rule and read by everything
+    // that grows from it.
+    const [paint] = rulesDeclaring("--grip-design-body: 13px", "width: var(--grip-body)");
     expect(paint).toEqual([".rail-collapse"]);
-    // The coarse block must carry the extension and nothing else. A
-    // `.rail-collapse` rule reappearing here is precisely how 24px outlived the
-    // law it was copied from and put the handle back on top of `Connection`.
-    expect(coarseGripBlock).not.toMatch(/\.rail-collapse \{/u);
-    // The seam is still the position; nothing about the finger moves the grip.
+
+    // The coarse block may take the paint — the finger has no hover to lift the
+    // fade with, so the sliver at 0.5 was the only grip it ever got — but the
+    // shape it takes is not free. This `right` is the whole safety: it is
+    // negative by exactly half the growth, so the box slides *out* of the rail
+    // as it widens and the inward edge never moves. Centring 24px on the seam
+    // instead is how the handle came to be drawn over `Connection`'s last
+    // letter, twice.
+    const coarsePaint = coarseGripBlock.match(/\.rail-collapse \{([^}]+)\}/u)?.[1] ?? "";
+    expect(coarsePaint).toContain("--grip-body: 24px");
+    expect(coarsePaint).toContain("right: calc((var(--grip-design-body) - var(--grip-body)) / 2)");
+    expect(coarsePaint).toContain("opacity: 1");
+    // The seam is still the position; nothing about the finger re-anchors it.
     expect(coarseGripBlock).not.toContain("translate:");
+    expect(coarsePaint).not.toContain("width:");
+
+    // The arithmetic that `right` encodes, done in numbers: with `translate:
+    // 50%` the box spans [seam − right − body/2, seam − right + body/2], so a
+    // right of (design − body)/2 pins the inward edge at seam − design/2 for
+    // any body at all. Measured at tablet-768, seam x=83: the paint starts at
+    // x=76.5 whether it is 13px or 24px wide, and `Connection`'s ink ends at
+    // x=73.1.
+    const design = tokenPx(css, "--grip-design-body");
+    const body = tokenPx(css, "--grip-body");
+    expect(body).toBeGreaterThanOrEqual(24);
+    const seam = 83;
+    const right = (design - body) / 2;
+    expect(seam - right - body / 2).toBe(seam - design / 2);
+    expect(seam - right - body / 2).toBeGreaterThan(73.1);
   });
 
   it("meets the touch floor in overhang, and pays for its own borders", () => {
@@ -381,25 +414,47 @@ describe("the rail's collapse control", () => {
 
     // The law those terms encode: beyond the paint the box reaches one `--sp-1`
     // inward — the gutter the collapsed rail insets `.primary-nav` by — and the
-    // whole remainder outward, and the three add up to the floor.
+    // whole remainder outward, and the whole box is `--touch-target` wide once
+    // the two borders `width` swallowed are handed back.
+    const design = tokenPx(css, "--grip-design-body");
     const body = tokenPx(css, "--grip-body");
     const target = tokenPx(tokens, "--touch-target");
+    const edge = tokenPx(css, "--grip-edge");
     const inward = tokenPx(tokens, "--sp-1");
-    const outward = target - body - inward;
-    expect(inward + body + outward).toBe(target);
 
-    // Measured at tablet-768, the only viewport with both a rail and a coarse
-    // pointer: the seam is x=83, `Connection`'s ink ends at x=72, and the
-    // nearest control in any of the fourteen route captures is the `profiles`
-    // avatar whose left edge is x=121. Both edges are pinned because this
-    // control has been over one of them or the other in three of its four
-    // lives, and there is no viewport where it can have room from both.
+    /* The extension's two page-space edges, for a body of any width. Measured
+       at tablet-768, the only viewport with both a rail and a coarse pointer,
+       the seam is x=83. The paint hangs at `right: (design − body) / 2` with
+       `translate: 50%`, so its border box is [seam − design/2, seam − design/2
+       + body]; the insets above resolve against the padding box one
+       `--grip-edge` inside that. Both expressions cancel `body` entirely, which
+       is the property being asserted: widening the paint outward cannot move
+       the room a finger is given. */
     const seam = 83;
-    expect(seam - body / 2 - inward).toBeGreaterThan(72);
-    expect(seam + body / 2 + outward).toBeLessThan(121);
-    // And the paint — which is what the audits actually saw — clears that same
-    // ink by 4.5px, where at 24px it overlapped it.
-    expect(seam - body / 2).toBeGreaterThan(76);
+    const room = (paint: number) => [
+      seam - design / 2 + edge - (inward + edge),
+      seam - design / 2 + paint - edge - (inward + paint - target - edge),
+    ] as const;
+    const [roomLeft, roomRight] = room(body);
+
+    expect(roomRight - roomLeft).toBe(target);
+    expect(room(body)).toEqual(room(design));
+
+    // `Connection`'s ink ends at x=73.1 — the room stops inside that row's own
+    // padding and never under a glyph a tap could be aimed at — and the nearest
+    // control in any of the fourteen route captures is the `profiles` avatar
+    // whose left edge is x=121. Both edges are pinned because this control has
+    // been over one of them or the other in three of its four lives, and there
+    // is no viewport where it can have room from both.
+    expect(roomLeft).toBe(72.5);
+    expect(roomRight).toBe(116.5);
+    expect(roomLeft).toBeGreaterThan(72);
+    expect(roomRight).toBeLessThan(121);
+    // And the paint — which is what the audits actually saw — clears that ink
+    // at either body width, because only its outer edge ever grew, and it never
+    // reaches past the room it is drawn inside.
+    expect(seam - design / 2).toBeGreaterThan(73.1);
+    expect(seam - design / 2 + body).toBeLessThan(roomRight);
   });
 
   it("charges no rail width, in any state, for the grip on its seam", () => {
@@ -415,6 +470,43 @@ describe("the rail's collapse control", () => {
     // `.rail`'s own box is the seam. Padding here is the same 22px charged one
     // level down, and it would move the icons off the mark drawn above them.
     for (const selectors of rulesDeclaring("padding-right")) expect(selectors).not.toContain(".rail");
+  });
+
+  it("never shows a finger less rail than it shows a mouse", () => {
+    /*
+     * The sweep filed those two numbers as an inversion — "1024 shows less rail
+     * than 768 does" — because 84px is declared for a narrower viewport than
+     * the one that reads 60px. They are not two widths, they are two
+     * renderings: at 60px the labels are clipped and answered by `title`, a
+     * hover affordance, and the block above un-clips them and pays the 24px
+     * they need for the pointer that has no hover to ask with.
+     *
+     * What a person can actually cross is the width band, and along that axis
+     * neither sequence ever narrows: coarse reads 84 → 84 → 232 → 232 at 768,
+     * 860, 1024 and 1180, because `defaultRailState` hands a touch tablet the
+     * standard rail from `RAIL_TOUCH_STANDARD_MIN_WIDTH` up; fine reads
+     * 60 → 60 → 60 → 232 → 232 at 1024, 1280, 1361, 1440 and 1920. All five
+     * widths measured on the built app. The invariant worth pinning is the
+     * comparison at equal width, which is the one that would actually be a
+     * defect if it inverted.
+     */
+    const standard = tokenPx(tokens, "--density-sidebar");
+    /** The width `.rail` paints at, for a pointer that has a hover or has not. */
+    const railAt = (width: number, hoverCapable: boolean) =>
+      defaultRailState({ width, hoverCapable }) === "standard" ? standard
+        : hoverCapable ? tokenPx(tokens, "--rail-width") : tokenPx(css, "--rail-width");
+    for (const width of [640, 768, 860, 861, 1024, 1280, 1361, 1440, 1920]) {
+      expect(railAt(width, false), `coarse rail at ${width}`).toBeGreaterThanOrEqual(railAt(width, true));
+    }
+    // Neither sequence narrows as the device gets wider, either.
+    for (const hoverCapable of [true, false]) {
+      const widths = [640, 768, 860, 861, 1024, 1280, 1361, 1440, 1920].map((width) => railAt(width, hoverCapable));
+      expect(widths, `${hoverCapable ? "fine" : "coarse"} widths`).toEqual([...widths].sort((a, b) => a - b));
+    }
+    // And the two literals those readings come from, so a change to either has
+    // to come back through this test.
+    expect(tokenPx(css, "--rail-width")).toBe(84);
+    expect(tokenPx(tokens, "--rail-width")).toBe(60);
   });
 
   it("keeps the topbar's mark over the rail's contents and not over its track", () => {

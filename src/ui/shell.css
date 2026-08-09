@@ -1373,7 +1373,26 @@
      84px is what the labels need, and it is all the track is asked for: the
      collapse grip on the seam is paid for out of its own overhang, not out of
      this number, so the column is the same 84px whether or not a finger is
-     what is driving and the route beside it starts at the same x either way. */
+     what is driving and the route beside it starts at the same x either way.
+
+     Read against `tokens.css`'s 60px this looks inverted — the sweep filed it
+     that way, as "1024 shows less rail than 768 does" — and it is worth saying
+     in the sheet why it is not, so the next reader does not straighten it.
+     These two numbers are not two viewport widths; they are two *renderings*.
+     At 60px the labels are clipped and live in `title`, which is a hover
+     affordance; at 84px they are painted under the glyph, because the rule
+     below un-clips them for a pointer that has no hover to ask with. 84px is
+     the width that rendering needs and 60px is the width the other one needs.
+
+     What a person can actually cross is the width band, and measured on this
+     build `.rail` never narrows as a device gets wider. Coarse pointer:
+     84px at 768 and 860, then 232px from 861 up — `defaultRailState` hands a
+     touch tablet the standard rail at `RAIL_TOUCH_STANDARD_MIN_WIDTH`, so an
+     iPad at 1024 reads 232px, not 60px. Fine pointer: 60px to 1361, then 232px
+     from 1362. Both sequences are monotonic, and at every width the coarse
+     pointer's rail is the wider of the two — 84 against 60 below 861, 232
+     against 60 from 1024 to 1361, and 232 against 232 above it. The finger is
+     never shown less than the mouse. `rail.test.ts` pins that ordering. */
   :root[data-rail="rail"] { --rail-width: 84px; }
 
   .sidebar[data-rail-state="rail"] .nav-item {
@@ -1529,7 +1548,8 @@
      is the *outer* box and the extension's offsets resolve against the padding
      box two `--grip-edge`s inside it. Leaving that pair of pixels out is how
      the extension used to sum to 42px while every comment about it said 44. */
-  --grip-body: 13px;
+  --grip-design-body: 13px;
+  --grip-body: var(--grip-design-body);
   --grip-edge: 1px;
   width: var(--grip-body);
   height: 46px;
@@ -1665,6 +1685,54 @@
     right: calc(var(--sp-1) + var(--grip-body) - var(--touch-target) - var(--grip-edge));
   }
 
+  /* And the paint, for the one pointer that never gets to approach.
+   *
+   * "Ever so subtle" is a rest state, and on a mouse it is only ever half the
+   * sentence: the base rule fades this control to `opacity: .5` because hover
+   * and focus bring it back to 1, so what a person actually reaches for is the
+   * bright grip. A finger has no hover. On a coarse pointer the faded rest
+   * state is the *only* state that exists, and the sweep measured what that
+   * ships as at tablet-768 — the sole viewport with both a rail and a coarse
+   * pointer: a 13×46 sliver at 0.5, painted in `--surface-soft` on a rail that
+   * is `--surface-soft`, with a `--line` border at half strength to separate
+   * them. The sweep raised this cluster from eight route audits, which read the
+   * control as invisible or as an unexplained sliver on the seam. The room was
+   * never the problem — the extension above
+   * has measured 44×46 at that viewport, over the floor on both axes, since it
+   * was derived. The paint was.
+   *
+   * So on a coarse pointer the grip states itself: full opacity, and a body
+   * wide enough to read as a handle rather than as a seam artefact.
+   *
+   * Where those extra 11px come from is the whole care of this rule, because
+   * widening this control has broken something every previous time it was
+   * tried. Every added pixel is spent *outward*. `right` pulls the box back out
+   * of the rail by exactly half the growth, so the painted left edge stays
+   * where a 13px body centred on the seam always put it — 6.5px inside it,
+   * x=76.5 at tablet-768, clearing the ink of `Connection` (which ends at
+   * x=73.1) by 3.4px, the same clearance the sliver had. Not one pixel of new
+   * paint lands on a destination label.
+   *
+   * Outward it reaches x=100.5, and it does not claim a single pixel that was
+   * not already this control's: the transparent extension above is pressable
+   * from x=72.5 to x=116.5, so the wider body is painted *inside the room it
+   * already owns*. The pressable box does not change, `--rail-width` does not
+   * change — the grip still hangs off the seam and charges no track, which is
+   * the law the 22px seam reserve broke with 34 regressions — and no route's
+   * content column moves at any width. The extension's own arithmetic reads
+   * `--grip-body`, so it re-derives against 24px and lands on the identical
+   * box: left inset −5px and right inset −17px, still summing to
+   * `--touch-target` once `border-box` sizing is paid for.
+   *
+   * Nothing here reaches a fine pointer. Every laptop, desktop and wide capture
+   * is byte-identical, and the fade the design asked for is untouched wherever
+   * there is a hover to lift it. */
+  .rail-collapse {
+    --grip-body: 24px;
+    right: calc((var(--grip-design-body) - var(--grip-body)) / 2);
+    opacity: 1;
+  }
+
   .chat-nav-disclosure,
   .rail-expander,
   .chat-nav-new { min-height: 44px; min-width: 44px; }
@@ -1771,7 +1839,54 @@
   font-size: var(--fs-micro);
 }
 
+/*
+ * The pane is the containing block for what it contains. One declaration, and
+ * it is the largest measured repair in this sheet.
+ *
+ * `.main` was `position: static`, so every absolutely-positioned box inside a
+ * route resolved against the *initial* containing block rather than against
+ * this pane — and a box positioned against the ICB is a box this pane's own
+ * `overflow: auto` has no standing to clip. The routes are full of them: the
+ * screen-reader spans (`.sr-only`, `.seal__label`, `.session-library-visually-
+ * hidden`) are `position: absolute` with no offsets, so each one landed at its
+ * static position *in the document*, hundreds of pixels below a viewport it was
+ * never measured against, and `documentElement.scrollHeight` grew to hold it.
+ *
+ * Measured before, at phone-320: `#proof` reported scrollHeight 1141 against
+ * clientHeight 568, the deepest leak being a 1px-tall `span.seal__label`
+ * reading "Journal structure passed" whose bottom sat at y=1140.6. `#memory`
+ * and `#context` reported 1061. The cost is not the scrollbar. `.app-shell` is
+ * a fixed-height grid whose last row is the mobile navigation, so the document
+ * scrolling means the *whole shell* scrolls: at maximum scroll on `#proof` the
+ * nav's rect read y=-61..-5 — the primary navigation above the top of the
+ * screen, with 573px of empty ground below it. `#context` arrived already
+ * scrolled by 82px, so the void was visible without touching anything.
+ * Nine route/viewport pairs measured it, from 32px on `#proof` at phone-430 to
+ * 573px at phone-320, and it reached fine-pointer widths too: `#proof` at
+ * laptop-1024 read 816 against 768.
+ *
+ * `position: relative` and not `contain`, `transform` or `filter`, all of which
+ * would also have made this a containing block. Those three capture
+ * `position: fixed` descendants as well, and the four overlay surfaces —
+ * command palette, preferences dialog, trust sheet, approval dock — are
+ * `position: fixed` in sheet mode precisely so they can rise from the edge of
+ * the *viewport*; a sheet re-anchored to this pane would open inside the
+ * scroller it is meant to cover. `position: relative` moves only the absolute
+ * ones, which is exactly the leak. No `z-index` with it, so no stacking context
+ * is created and nothing that paints over this pane changes order.
+ *
+ * `.app-shell { overflow: clip }` was measured first and changes nothing: the
+ * escaping boxes are not this pane's overflow, they are the document's layout.
+ *
+ * After, on all 14 routes × 8 viewports: `documentElement.scrollHeight ===
+ * clientHeight` everywhere, and the mobile nav's bottom sits on the viewport's
+ * bottom edge on every phone width. Nothing visible moves — the census that
+ * flipped this at runtime and compared every box in `main` against the shell's
+ * own origin found the only boxes to change place were the clipped 1px spans
+ * that were never on screen.
+ */
 .main {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;
