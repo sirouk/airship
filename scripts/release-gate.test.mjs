@@ -290,10 +290,14 @@ describe("release gate", () => {
     // AMENDED again for the same reason: the editor-theme pass recorded a
     // third, larger pair in this block, and a claim that blanks two of three
     // readings proves nothing while the operative one survives.
-    // The current editor-workbench block has three operative readings. Blank
-    // all three; leaving any one of them would let the largest pair keep
+    // AMENDED once more: the surface sweep's dock repairs recorded a fourth,
+    // larger pair, and the same reasoning applies — the guard reads the largest
+    // pair stated, so the newest reading is now the operative one.
+    // The current editor-workbench block has four operative readings. Blank
+    // all four; leaving any one of them would let the largest pair keep
     // justifying the ceiling.
     expect(() => assertDocumentedBudgetMeasurements(source
+      .replace("Re-measured at 88,281 B raw / 28,172 B gzip", "Re-weighed at 88,281 B and 28,172 B")
       .replace("Re-measured on this build: 87,281 B raw / 27,902 B gzip", "Re-weighed at 87,281 B and 27,902 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
@@ -320,7 +324,11 @@ describe("release gate", () => {
       // and its comment now pays for the second step in as many words — "27 KiB
       // gzip would have left 62 bytes". So the ceiling is 28 KiB and the step
       // granted without a sentence behind it is 29.
-      ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
+      // AMENDED again: the surface sweep re-measured the pack at 28,172 B gzip
+      // and its comment pays for the second step in as many words — "28 KiB
+      // gzip would have left 500 B". So the ceiling is 29 KiB and the step
+      // granted without a sentence behind it is 30.
+      ["optionalWorkspaceWorkbench", "gzip: 29 * 1024", "gzip: 30 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 128 KiB after the conversation-proof cleanup operation, and the
       // step this row grants without paying for it is now the one past it.

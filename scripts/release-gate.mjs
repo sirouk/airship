@@ -192,7 +192,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // in. 186 KiB gzip would have left a negative margin against this reading,
   // so gzip takes one whole-KiB step to 187, leaving 946 bytes — above the
   // 768-byte tripwire. Raw is unchanged and keeps 215 KiB of its clearance.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 187 * 1024 }),
+  //
+  // The surface sweep's last two waves — the popover header's air moved inside
+  // the 44px floor it had been added on top of, the dismissal control that
+  // stops being shrunk below its own label, the landscape panel that spends its
+  // abundant axis, and the rail grip that keeps both its target and its
+  // clearance — re-measure it at 572,461 B raw / 191,573 B gzip, and gzip takes
+  // one further whole-KiB step to 188 (963 B). Raw is unchanged and keeps
+  // 213 KiB of its clearance.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 188 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -781,13 +789,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The closing wave — the Tabs overflow latch fixed at the primitive, the
   // conversation list that stopped being 330px at every width, the composer
   // that stopped discarding what was typed before its conversation existed, and
-  // the last of the per-route leftovers — re-measures it at 2,363,536 B raw /
-  // 750,459 B gzip — the Docker readings, a little under this host
-  // artifact, because the claim has to state the floor across build modes or
-  // whichever comes in lightest fails the gate on the other's justification.
-  // Raw takes one whole step to 2,308 (939 B); gzip does not move and keeps
-  // 605 B inside the 733 it already had.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2310 * 1024, gzip: 734 * 1024 }),
+  // the last of the per-route leftovers — re-measures it at 2,365,775 B raw /
+  // 751,226 B gzip, the floor across both build modes: the container build
+  // comes in 26 raw bytes under this host artifact and no lighter on gzip, and
+  // the claim has to state whichever mode ships least or the other fails the
+  // gate on a justification it does not meet. 2,311 KiB raw would have left
+  // 689 B and 734 KiB gzip would have left 390 B, both under the aggregate's
+  // 768-byte minifier-rename floor, so each takes one further whole step — raw
+  // to 2,312 (1,713 B) and gzip to 735 (1,414 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2312 * 1024, gzip: 735 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1053,8 +1063,8 @@ export const RELEASE_BUDGETS = Object.freeze({
   // floor, so each takes one further whole step — raw to 2,986 (1,774 B) and
   // gzip to 921 (1,414 B).
   //
-  // Re-measured at 3,060,521 B raw / 944,084 B gzip after the closing surface
-  // wave, again the Docker floor. This backstop tracks the first-party reading
+  // Re-measured at 3,061,389 B raw / 944,311 B gzip after the closing surface
+  // wave, again the floor across both modes. This backstop tracks the first-party reading
   // above and moves for the same reason. 2,987 KiB raw would have left 764 B
   // and 921 KiB gzip would have left 75 B, both inside the aggregate's
   // 768-byte floor, so each takes one further whole step — raw to 2,988
@@ -1064,8 +1074,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // was being added on top of, the landscape panel that spends its abundant
   // axis to save its scarce one, the terminal route that scrolls rather than
   // slicing itself at 430px, and the readable save refusal in the skill editor
-  // — takes raw one further whole step to 2,990.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2990 * 1024, gzip: 923 * 1024 }),
+  // — moves it again. 2,990 KiB raw would have left 371 B, under the
+  // aggregate's 768-byte floor, so raw takes one further whole step to 2,991
+  // (1,395 B); gzip takes its smallest clearing step to 923, which leaves
+  // 841 B and is already above the floor.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2991 * 1024, gzip: 923 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1303,7 +1316,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // neither is reachable until Workspace opens, so first paint is untouched
   // and the entry chunk does not move. Raw takes the tightest whole step above
   // the reading, 86 KiB, leaving 783 B; gzip stays at 28 KiB with 767 B left.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 86 * 1024, gzip: 28 * 1024 }),
+  //
+  // Re-measured at 88,281 B raw / 28,172 B gzip after the surface sweep — the
+  // floor across both modes, gzip taken from the container build, which
+  // compresses two bytes tighter than this host artifact. The named cause is
+  // the dock learning to close honestly at the two viewports it could not fit:
+  // a landscape phone was slicing the transcript through its x-height against
+  // the tab bar and a 320px phone was drawing a card with no bottom edge and
+  // half a line inside it. Raw takes one whole-KiB step to 87, which leaves
+  // 807 B and clears the 768-byte floor on its own; 28 KiB gzip would have
+  // left 500 B, under that floor, so gzip takes one further step to 29
+  // (1,524 B) — its first move since the soft-wrap path landed.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 87 * 1024, gzip: 29 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather
