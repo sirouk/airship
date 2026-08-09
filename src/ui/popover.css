@@ -429,6 +429,47 @@
     border-radius: var(--radius-panel) var(--radius-panel) 0 0;
   }
 
+  /*
+   * The sheet says what it is doing to the page underneath it.
+   *
+   * Measured on the shipped build at every compact width: the panel is pinned
+   * to the viewport's bottom edge and so lands on the navigation band in all
+   * 57 of the sheet's open states — chat's SESSION STATE runs y=204→568 on a
+   * 568px screen, connection's info sheet y=315→568, account's y=414→568 over
+   * the `Connect Chutes` call to action. The route behind it was left at full
+   * contrast with nothing between, which is why every judge that read these
+   * captures described the same thing in the same word: the content is
+   * *guillotined*. A control cut in half at full strength does not read as a
+   * control behind a panel, it reads as a control that has been broken.
+   *
+   * A scrim is the whole difference, and it is the one the product already
+   * owns: `--scrim` is `.mobile-sheet-scrim`'s dim in `routes.css:3197`, the
+   * phone-only spelling that stays correct in Paper mode. Sharing the token
+   * means both overlays dim by the same amount, which is what makes them read
+   * as the same kind of object.
+   *
+   * A pseudo-element rather than a node, so no route re-renders and no markup
+   * moves; it costs one rule and nothing in JavaScript. `position: fixed`
+   * takes it out of `.popover`'s inline flex flow, so the trigger's own box is
+   * untouched — and `.popover` sets no `z-index`, so both this at 119 and the
+   * panel at 120 resolve against the root and the panel is always on top.
+   *
+   * It takes pointer events on purpose. Dismissal already worked by tapping
+   * away, and a transparent scrim would have kept that while also letting the
+   * tap through to whatever it hit — dismissing the disclosure and pressing a
+   * control the reader could only half see. Hit-testing a pseudo reports the
+   * originating element, so `popover.tsx` asks whether the press landed in the
+   * trigger or in the panel rather than anywhere in the host; a press on this
+   * is neither, and closes the sheet without reaching the route.
+   */
+  .popover[data-mode="sheet"][data-open="true"]::before {
+    content: "";
+    position: fixed;
+    z-index: 119;
+    inset: 0;
+    background: var(--scrim);
+  }
+
   .popover[data-mode="sheet"] .popover__header {
     position: sticky;
     top: 0;
@@ -556,6 +597,21 @@
     /* The travel has to clear the band as well as the panel, or the sheet
        begins its entrance already sitting on top of the navigation. */
     --popover-lift: translateY(calc(100% + 64px + env(safe-area-inset-bottom)));
+  }
+
+  /*
+   * The scrim stops where the panel stops.
+   *
+   * The whole point of the block above is that this shape keeps its navigation
+   * band: a sheet that clears the band and a scrim that covers it would take
+   * back the reachability the panel just gave up height to preserve. Reserving
+   * the same `64px + env(safe-area-inset-bottom)` leaves the band at full
+   * contrast and fully pressable, which is the state the landscape captures
+   * verified — and it is the same inset `.mobile-sheet-scrim` reserves in
+   * `routes.css:3192`, for the same reason.
+   */
+  .popover[data-mode="sheet"][data-open="true"]::before {
+    bottom: calc(64px + env(safe-area-inset-bottom));
   }
 
   .popover[data-mode="sheet"] .popover__body {

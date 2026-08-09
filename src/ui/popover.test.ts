@@ -618,7 +618,65 @@ describe("the panel is the width of the box it is pinned to", () => {
     // And the flush sheet above it still owns every one of the others.
     expect(block(sheet, ".popover__body")).toContain("max-height: min(420px, 60vh)");
   });
+
+  it("dims the route the sheet covers, and only as far as the sheet covers it", () => {
+    /*
+     * The flush tier lands on the navigation band at every compact width — 57
+     * open sheets in the geometry probe, all of them — so the page underneath
+     * has to be dimmed or a half-covered control reads as a broken one. The
+     * short tier gives up height precisely so the band survives, so the scrim
+     * has to stop where the panel stops or it takes that back.
+     */
+    const scrim = nestedBlock(sheet, '.popover[data-mode="sheet"][data-open="true"]::before');
+    expect(scrim).toContain("position: fixed");
+    expect(scrim).toContain("inset: 0");
+    // The dim `.mobile-sheet-scrim` already uses, so both overlays read as the
+    // same object and both stay correct in Paper mode.
+    expect(scrim).toContain("background: var(--scrim)");
+    // Under the panel, over everything else. `.popover` sets no `z-index` and
+    // no `transform`, so neither box gets a stacking context of its own and
+    // 119 against the panel's 120 is the order that actually paints.
+    expect(scrim).toContain("z-index: 119");
+    expect(block(sheet, ".popover")).not.toContain("z-index");
+    expect(block(sheet, ".popover")).not.toContain("transform");
+    const short = sheet.slice(sheet.indexOf("@media (max-width: 950px) and (max-height: 500px) {"));
+    // The panel's own reservation, restated on the scrim rather than assumed.
+    expect(short).toContain("bottom: calc(64px + env(safe-area-inset-bottom));");
+    expect(short.split("bottom: calc(64px + env(safe-area-inset-bottom));").length - 1).toBe(2);
+  });
+
+  it("asks about the trigger and the panel, because the scrim reports the host", () => {
+    /*
+     * Hit-testing a pseudo-element reports its originating element, so the
+     * scrim comes back as the host. `host.contains(target)` would therefore
+     * read a press on the dim as a press inside the disclosure and leave the
+     * sheet open with no exit but the control it is covering.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const dismiss = source.slice(source.indexOf("function onPointerDown"));
+    expect(dismiss.slice(0, dismiss.indexOf("}\n"))).not.toContain("hostRef.current?.contains");
+    expect(dismiss).toContain("triggerRef.current?.contains(target)");
+    expect(dismiss).toContain("panelRef.current?.contains(target)");
+    // And the panel keeps its reason for not claiming the page is inert: the
+    // short tier really does leave the navigation band reachable, so the
+    // attribute that would say otherwise is still not on the node.
+    expect(source).not.toContain("aria-modal=");
+  });
 });
+
+/**
+ * The declarations of the first rule with this selector at any indentation.
+ *
+ * `block` below anchors on a newline, which is the right strictness for a
+ * top-level rule and finds nothing at all inside a media query. The sheet's
+ * tiers live in two of those, so the rules that matter most here are indented.
+ */
+function nestedBlock(source: string, selector: string): string {
+  const start = source.search(new RegExp(`^\\s*${selector.replace(/[.[\]()*+?^$|\\]/gu, "\\$&")} \\{`, "mu"));
+  expect(start, `missing ${selector}`).toBeGreaterThanOrEqual(0);
+  const bodyStart = source.indexOf("{", start) + 1;
+  return source.slice(bodyStart, source.indexOf("}", bodyStart));
+}
 
 /** The declarations of the first rule with exactly this selector. */
 function block(source: string, selector: string): string {

@@ -296,8 +296,27 @@ export function Popover({
         : null);
     }
 
+    /**
+     * Dismissal asks about the two boxes a reader can actually press, rather
+     * than about the host.
+     *
+     * `host.contains(target)` was the same question for as long as the host
+     * held nothing but the trigger and the panel. The sheet's scrim is a
+     * `::before` on that host, and hit-testing a pseudo-element reports its
+     * originating element — so a press on the dim would have come back as
+     * "inside the host" and left the sheet open with no way out but the one
+     * control the dim is covering.
+     *
+     * Naming the trigger and the panel is also the stricter test of the two:
+     * anything else the host ever grows is outside the disclosure until it
+     * says otherwise, which is the safer default for a control whose whole job
+     * is knowing when the reader has left.
+     */
     function onPointerDown(event: PointerEvent) {
-      if (!hostRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      const insideTrigger = triggerRef.current?.contains(target) ?? false;
+      const insidePanel = panelRef.current?.contains(target) ?? false;
+      if (!insideTrigger && !insidePanel) setOpen(false);
     }
     /**
      * A sheet may not outlive the focus that was inside it.
@@ -425,9 +444,13 @@ export function Popover({
          * no tab stop: `FOCUSABLE_SELECTOR` excludes `tabindex="-1"`, so the
          * trap does not treat the container as a stop inside itself.
          *
-         * Deliberately not `role="dialog"` with `aria-modal`. The sheet leaves
-         * the navigation band uncovered on purpose, and claiming the rest of
-         * the page is inert would be a promise this disclosure does not keep.
+         * Deliberately not `role="dialog"` with `aria-modal`, and the reason
+         * survived the scrim rather than being removed by it. `aria-modal`
+         * tells assistive technology that everything outside this node is
+         * unreachable, and on the short shape that is false by design: the
+         * panel and its scrim both stop above the navigation band, which stays
+         * readable and pressable while the disclosure is open. A promise that
+         * holds at one of two sheet tiers is not a promise.
          */
         tabIndex={-1}
         /*

@@ -369,14 +369,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
   //
-  // Re-measured at 455,857 B raw / 134,237 B gzip after the surface sweep's
+  // Re-measured at 455,857 B raw / 134,233 B gzip after the surface sweep's
   // closing waves. The named cause is the deferred routes finally being audited
   // at eight device classes: Preferences keeping its header from slicing the
   // row beneath it, the conversation library seating its own rows at 320, the
   // Proof switcher seating both tab names, the skill editor opening into view,
   // and the graph declining to draw a label it cannot draw legibly. All of it
   // is deferred and none of it is eager. Raw takes one whole-KiB step to 446
-  // (843 B) and gzip one to 132 (924 B).
+  // (847 B) and gzip one to 132 (935 B).
   deferredCapabilities: Object.freeze({ raw: 446 * 1024, gzip: 132 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
@@ -4069,7 +4069,7 @@ function printResult(result) {
   console.log(
     `Baseline JS/workers ${formatBytes(measurements.baselineJavaScriptAndWorkers.raw)} raw / ${formatBytes(measurements.baselineJavaScriptAndWorkers.gzip)} gzip`,
   );
-  console.log(
+    console.log(
     `Deferred capability pack ${formatBytes(measurements.deferredCapabilities.raw)} raw / ${formatBytes(measurements.deferredCapabilities.gzip)} gzip`,
   );
   console.log(

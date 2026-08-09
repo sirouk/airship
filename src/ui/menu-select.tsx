@@ -2,6 +2,45 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { MOBILE_SHELL_MEDIA_QUERY } from "./chat/composer-focus";
 
+/** Minimum distance an anchored listbox keeps from the viewport edge. */
+export const MENU_SELECT_EDGE_GUTTER = 8;
+
+/**
+ * How far an anchored listbox has to move to be on the screen at all.
+ *
+ * The edge flip below picks the better side of the anchor; this is what
+ * happens when neither side is wide enough. Both are needed, and the gap
+ * between them is where the highest-severity finding of the surface sweep
+ * lived: the composer's approval-policy chooser opens *upward*, the flip is
+ * written for the `down` placement only, and the panel is pinned by `right: 0`
+ * to a trigger far narrower than itself. Measured on the shipped build at
+ * 768x1024, the 400px panel rendered at x=-36.9 — so all three option labels
+ * started off the left edge of the screen and the control that decides whether
+ * the agent asks before taking effectful actions read as three unlabelled
+ * rows: `…before effectual actions.`, `…k the active model to review each
+ * effect`, `…every effect without prompting`. Ask First and Full Access were
+ * indistinguishable.
+ *
+ * The left edge is repaid first, and that ordering is the whole content of
+ * this function. A listbox wider than the screen can only show one of its
+ * edges, and its labels are left-aligned: showing the right edge of an option
+ * list is showing the part with no words in it.
+ *
+ * Kept free of the DOM, like `popoverPlacement` next door, because "can the
+ * reader see what they are choosing between" is a correctness question and has
+ * to be assertable without a browser.
+ */
+export function menuSelectShift(input: Readonly<{
+  panelLeft: number;
+  panelRight: number;
+  viewportWidth: number;
+}>): number {
+  const overLeft = MENU_SELECT_EDGE_GUTTER - input.panelLeft;
+  if (overLeft > 0) return Math.round(overLeft);
+  const overRight = input.panelRight - (input.viewportWidth - MENU_SELECT_EDGE_GUTTER);
+  return overRight > 0 ? -Math.round(overRight) : 0;
+}
+
 export type MenuSelectOption = Readonly<{
   value: string;
   label: string;
@@ -82,17 +121,47 @@ export function MenuSelect({
   }, [open]);
 
   useLayoutEffect(() => {
-    if (!open || placement !== "down" || !popover.current || !trigger.current) return;
+    if (!open || !popover.current || !trigger.current) return;
     const listbox = popover.current;
     const control = trigger.current;
     const narrowViewport = window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches;
+    /*
+     * The horizontal pass now runs for both placements, and it cleans up after
+     * itself before it measures.
+     *
+     * This whole block used to sit behind `placement !== "down"`, so the panel
+     * that opens upward — the composer's approval-policy chooser, the one
+     * control on the route that decides what the agent may do without asking —
+     * was never checked against the viewport at all. Nothing about staying on
+     * the screen depends on which way a panel opens.
+     *
+     * Clearing the inline styles first is the other half. The flip writes
+     * `left`/`right` onto the node and a shift writes `transform`, and both
+     * used to survive the close: a listbox flipped once at 768px stayed
+     * flipped when the same tree was later read at 1440px, because the
+     * measurement that would have undone it was taken through the override.
+     * Resetting makes each open measure the panel where the stylesheet puts
+     * it, which is the only reading that means anything.
+     */
     if (!narrowViewport) {
-      const bounds = listbox.getBoundingClientRect();
-      if (bounds.right > window.innerWidth - 8) {
+      listbox.style.left = "";
+      listbox.style.right = "";
+      listbox.style.transform = "";
+      if (placement === "down" && listbox.getBoundingClientRect().right > window.innerWidth - MENU_SELECT_EDGE_GUTTER) {
         listbox.style.left = "auto";
         listbox.style.right = "0";
       }
+      // The flip picks the better side of the anchor; this is what is left when
+      // neither side is wide enough for the panel.
+      const flipped = listbox.getBoundingClientRect();
+      const shift = menuSelectShift({
+        panelLeft: flipped.left,
+        panelRight: flipped.right,
+        viewportWidth: window.innerWidth,
+      });
+      if (shift !== 0) listbox.style.transform = `translateX(${shift}px)`;
     }
+    if (placement !== "down") return;
     const fitBelow = () => {
       const viewport = window.visualViewport;
       const viewportBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
