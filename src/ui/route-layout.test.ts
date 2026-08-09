@@ -12,6 +12,7 @@ const [app, styles, sessions, proofSource, proofStyles, terminalSource, featureS
   Promise.all([
     ["access-connection-view", "./access-view.css"],
     ["attestations-view", "./attestations-view.css"],
+    ["capabilities-view", "./capabilities-view.css"],
     ["client-context-view", "./context-view.css"],
     ["git-sources", "./sources-view.css"],
     ["vault-view", "./vault-view.css"],
@@ -87,16 +88,113 @@ describe("route layout contract", () => {
     // The attestation ledger is the grid that wanted the width; the receipt
     // panel is prose and re-enters the same measure one level down.
     expect(cssRule(proofStyles, ".proof-surface-panel--prose")).toContain("width: min(1160px, 100%)");
+    /*
+     * …and re-entering it means re-centring it. Measured at wide-1920 before
+     * this line existed: the route ran x=258..1894 (the 1636px it opted into)
+     * and this panel ran x=258..1418 — the cap held and the panel sat hard
+     * against the route's left edge with 476px of empty ground beside it. A cap
+     * without an alignment is left-aligning with extra steps.
+     */
+    expect(cssRule(proofStyles, ".proof-surface-panel--prose"), "a re-entered measure is centred, not parked at the route's start edge")
+      .toContain("margin-inline: auto");
     expect(proofSource).toContain('class="proof-surface-panel proof-surface-panel--prose"');
     expect(proofSource, "the evidence ledger keeps the width the route opted into")
       .toContain('id="proof-panel-attestations" class="proof-surface-panel"');
   });
 
   it("keeps profile navigation inside the route-owned gutter without nesting another inset", () => {
-    expect(cssRule(styles, ".profile-hub-tabs")).toContain("width: min(1320px, 100%)");
+    expect(cssRule(styles, ".profile-hub-tabs")).toContain("width: min(1160px, 100%)");
     expect(cssRule(styles, ".profile-hub-tabs")).toContain("margin: 0 auto");
-    expect(cssRule(styles, ".profile-scope-contract")).toContain("width: min(1320px, 100%)");
+    expect(cssRule(styles, ".profile-scope-contract")).toContain("width: min(1160px, 100%)");
     expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
+  });
+
+  /*
+   * One measure, written once, spelled the same everywhere it is re-entered.
+   *
+   * The wide-viewport judgements arrived as six separate route complaints —
+   * "wastes the width it asked for" (Account), "the tab strip does not share
+   * the route's measure" (Profiles), "a quarter of the screen empty" (Proof) —
+   * and they were one fact: the product held three measures at once. Measured
+   * at wide-1920 before this test existed, in the same frame class and behind
+   * the same 232px rail: Account ran x=446..1706 (1260px), the Profiles tab
+   * strip ran x=416..1736 (1320px), and Vault and Sessions ran x=496..1656
+   * (1160px). At desktop-1440 every one of them collapsed onto 1156px, which is
+   * why four waves of screenshots at ≤1440 showed nothing wrong.
+   *
+   * So the literal is pinned, not the intent. `min(1160px, 100%)` is the whole
+   * convention: it is what `.route-layout > *` writes, what `.vault-route`
+   * repeats for the one route that needs its own root, and what
+   * `.proof-surface-panel--prose` re-enters one level down inside a route that
+   * opted out. A second number appearing anywhere in this family is the defect,
+   * and `min(…, 100%)` hides it from every viewport under about 1400px.
+   */
+  it("writes exactly one prose measure across the route family", () => {
+    const measures = new Set<string>();
+    for (const selector of [".route-layout > *", ".route-layout > .vault-route", ".profile-hub-tabs", ".profile-scope-contract", ".billing-view"]) {
+      const rule = cssRule(styles, selector);
+      const width = /width:\s*min\((\d+)px,\s*100%\)/u.exec(rule);
+      expect(width, `${selector} states the shared measure`).not.toBeNull();
+      measures.add(width![1]);
+    }
+    measures.add(/width:\s*min\((\d+)px,\s*100%\)/u.exec(cssRule(proofStyles, ".proof-surface-panel--prose"))![1]);
+    expect([...measures], "one measure, not three").toEqual(["1160"]);
+  });
+
+  /*
+   * A label and the state it names are a pair, not a pair of edges.
+   *
+   * Vault's attached-prerequisites list is `justify-content: space-between`,
+   * which is right on a phone row and an index without leaders on a desktop
+   * one. Measured at desktop-1440: each `li` was 1084px and the gap between
+   * label and value was 981.9px (`Endpoint` → `None`), 912.5px
+   * (`Credential authority` → `None`) and 941.9px (`Workspace key` → `None`);
+   * at wide-1920, 1088px rows with 985.9 / 916.5 / 945.9px of gap. The fix is
+   * a fixed value column above 1100px, and it must stay a fixed *font-relative*
+   * column — a px track cannot follow the type scale, and the longest label in
+   * `attachedRows` is `Encrypted object store`.
+   */
+  it("binds Vault's attached facts to their labels instead of to the row's far edge", () => {
+    const vault = featureStyles.find(({ selector }) => selector === "vault-view")!.source;
+    expect(cssRule(vault, ".vault-view__attached li"), "the narrow tier keeps space-between")
+      .toContain("justify-content: space-between");
+    const wide = vault.slice(vault.indexOf("@media (min-width: 1101px)"));
+    expect(wide).toContain(".vault-view__attached li { justify-content: flex-start; }");
+    expect(wide).toMatch(/\.vault-view__attached li > span \{ flex: 0 0 \d+rem; \}/u);
+    expect(wide, "the value reads from the start of its own column").toContain("text-align: start");
+  });
+
+  /*
+   * The advanced source-controls panel may not cap its own primary action.
+   *
+   * `.git-rails` carried `max-height: 200px; overflow-y: auto` above 1100px,
+   * and it is the grid row that holds `.git-commit-box`. Measured at
+   * desktop-1440 with one path genuinely staged: the rails scroller was 199px
+   * of client box over 495px of content and `Commit locally` ran
+   * y=846.1..890.1 against a bottom edge at y=858 — 11.9px of a 44px button,
+   * with overlay scrollbars painting no affordance over the missing 32px. The
+   * cap moves onto the two `<details>`, which are the columns that are actually
+   * tall and which a reader can close; the commit box takes its natural height.
+   */
+  it("caps the source-controls disclosures rather than the row holding Commit", () => {
+    const sources = featureStyles.find(({ selector }) => selector === "git-sources")!.source;
+    const desktop = sources.slice(sources.indexOf("@media (min-width: 1101px)"), sources.indexOf("@media (max-width: 1100px)"));
+    expect(desktop, "the row no longer clips its own primary action").not.toMatch(/\.git-rails\s*\{[^}]*max-height/su);
+    expect(desktop).toContain(".git-repository-controls,\n  .git-remote-boundary { max-height: 200px; overflow-y: auto; }");
+    expect(sources, "the commit box is not a disclosure and takes the height it needs")
+      .not.toMatch(/\.git-commit-box\s*\{[^}]*max-height/su);
+  });
+
+  /*
+   * A shut drawer draws as a shut drawer. `.capability-policy-row` is a grid,
+   * and grid items stretch: the collapsed `Browser primitives` disclosure was
+   * sized by the policy stack beside it and measured 345.9 x 129.5px at
+   * wide-1920 (344.7 x 129.5 at desktop-1440) around a 15px summary — 114.5px
+   * of bordered nothing that reads as a panel that failed to load.
+   */
+  it("lets a closed capabilities disclosure keep its own height", () => {
+    const capabilities = featureStyles.find(({ selector }) => selector === "capabilities-view")!.source;
+    expect(cssRule(capabilities, ".capability-policy-row > details:not([open])")).toContain("align-self: start");
   });
 
   it("wraps the Attestations actions to their own line instead of crushing the lede beside them", () => {

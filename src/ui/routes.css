@@ -1330,7 +1330,22 @@
   overflow-wrap: anywhere;
 }
 
-.profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1320px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
+/*
+ * The strip shares the measure of the route it heads — 1160px, the same literal
+ * `.route-layout > *` above writes and the same one `.proof-surface-panel--prose`
+ * re-enters one level down. This is not a new number; it is the repo's only
+ * measure, applied to a control that had quietly kept a second one.
+ *
+ * Measured at wide-1920 before the change: the segmented `Profiles / Skills /
+ * Capabilities` strip ran x=416..1736 (1320px) while the cards it heads ran
+ * x=496..1656 (1160px). Both were centred on x=1076, so the strip overhung the
+ * column it names by exactly 80px on each side and every eyebrow, H1 and card
+ * beneath it started 80px inside the control above it. At desktop-1440 the two
+ * already agreed (258..1414 for both) because `min(…, 100%)` bottomed out on
+ * the gutter box — which is why this only ever broke at 1920, and why the
+ * screenshot diff for the whole sweep showed nothing here at any other width.
+ */
+.profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1160px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
 /* One persistent tab geometry. The scope control used to take the flexible
    `1fr` track and demote the three tabs to `auto`, so activating Skills — the
    route the filter belongs to — physically collapsed the strip to text width
@@ -1350,7 +1365,9 @@
 .profile-hub-scope { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; min-width: 0; margin: var(--sp-3) 0 var(--sp-2); }
 .profile-hub-scope .menu-select { min-width: 0; max-width: min(280px, 100%); }
 .profile-hub-scope > span { color: var(--ink-faint); font: var(--fs-micro)/1 var(--font-mono); text-transform: uppercase; }
-.profile-scope-contract { display: flex; gap: 10px; width: min(1320px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
+/* The contract line sits directly under the strip and must not out-run it:
+   same measure, same reason as `.profile-hub-tabs` above. */
+.profile-scope-contract { display: flex; gap: 10px; width: min(1160px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
 .profile-scope-contract strong { flex: 0 0 auto; color: var(--ink); }
 
 .profile-archive-zone {
@@ -1885,8 +1902,21 @@
   white-space: nowrap;
 }
 
+/*
+ * Account is a reading surface, so it takes the reading measure — the same
+ * 1160px every other prose route takes, not a third opinion about it.
+ *
+ * Measured at wide-1920 before the change: `.billing-view` ran x=446..1706
+ * (1260px) while Vault ran 496..1656 and Sessions ran 496..1656 (1160px each),
+ * from the same shell, in the same frame class. Three sibling routes on three
+ * measures — 1160, 1260 and the tab strip's 1320 — is what the judges kept
+ * describing one route at a time as "wastes the width it asked for": a reader
+ * moving Account → Vault watched the column jump 50px on each side for no
+ * reason either page could state. At desktop-1440 all three already collapsed
+ * onto 1156 (the gutter box), so this too was only ever visible past 1400.
+ */
 .billing-view {
-  width: min(1260px, 100%);
+  width: min(1160px, 100%);
 }
 
 .billing-toolbar {

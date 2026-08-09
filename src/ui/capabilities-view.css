@@ -76,6 +76,20 @@
 .capability-tags span { max-width: 100%; overflow: hidden; padding: .16rem .35rem; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-muted); background: var(--surface-soft); font: var(--fs-micro)/1.2 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .capability-policy-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, .45fr); gap: .55rem; }
 .capability-policy-row > div, .capability-policy-row > details { padding: .65rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
+/*
+ * A closed disclosure is a one-line control, and it draws as one.
+ *
+ * Grid items stretch by default, so the collapsed `Browser primitives`
+ * disclosure was sized by the ADAPTIVE POLICY stack beside it: measured
+ * 345.9 x 129.5px at wide-1920 and 344.7 x 129.5px at desktop-1440, holding a
+ * 15px summary and 114.5px of bordered nothing underneath it at both widths.
+ * The border is what made it read as a broken card rather than as a shut
+ * drawer — a reader cannot tell an empty panel from a panel that failed to
+ * load. `align-self: start` is scoped to the closed state on purpose: opened,
+ * the disclosure has content to fill the row with and stretching it back to
+ * its neighbour's height is the right answer again.
+ */
+.capability-policy-row > details:not([open]) { align-self: start; }
 .capability-policy-row strong, .capability-policy-row small { display: block; }
 .capability-policy-row strong { margin-top: .2rem; font-size: var(--fs-caption); }
 .capability-policy-row small { margin-top: .18rem; color: var(--ink-faint); font-size: var(--fs-micro); }
