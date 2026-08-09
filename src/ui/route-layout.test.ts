@@ -92,6 +92,48 @@ describe("route layout contract", () => {
       .toContain('id="proof-panel-attestations" class="proof-surface-panel"');
   });
 
+  it("holds the hub's own tab strip against the scroll that used to take it away", () => {
+    /*
+     * NR027. Profiles, Skills and Capabilities are one hub reachable only
+     * through this strip, and it is the first child of `main.route-layout` —
+     * the pane that scrolls — so it was the first thing off the top of any
+     * scroll. Measured on the shipped build on `#skills` with the new-skill
+     * editor open, which scrolls the pane by itself: the strip sat at y=-466 at
+     * phone-320, -459 at landscape-932, y=6..58 against a pane starting at 58
+     * at tablet-768, and bottom=-3 at desktop-1440. Four viewports out of four,
+     * with nothing on screen saying which of the three pages was open.
+     */
+    // The strip is written as several rules across this sheet and its media
+    // queries, so the block is found by what it declares rather than by its
+    // position among them.
+    const sticky = [...styles.matchAll(/\.profile-hub-tabs \{([^}]*)\}/gu)]
+      .map((match) => match[1])
+      .find((body) => body.includes("position: sticky")) ?? "";
+    expect(sticky, "the strip declares itself sticky").not.toBe("");
+    expect(sticky).toContain("top: 0");
+    // Against the route's own content only. `.menu-select-popover` is z-index
+    // 320 and the Skills scope dropdown sits directly beneath this strip, so an
+    // upward-opening menu still paints over it rather than under it.
+    expect(sticky).toContain("z-index: 2");
+    /*
+     * The band, and why it is not optional. A sticky box is held at the
+     * scrollport's PADDING edge, and `.route-layout` carries
+     * `--route-gutter-block` of top padding — so content scrolling up through
+     * that gutter passes over the clear above the held strip. The two inline
+     * gutter variables are cancelled so the band reaches the pane's own edges
+     * at every width rather than only as far as the centred strip does.
+     */
+    const band = cssRule(styles, ".profile-hub-tabs::before");
+    expect(band).toContain("var(--route-gutter-inline-start)");
+    expect(band).toContain("var(--route-gutter-inline-end)");
+    expect(band).toContain("var(--route-gutter-block)");
+    expect(band).toContain("background: var(--ground)");
+    // Strictly above the strip: a pseudo-element paints after its own parent's
+    // background, so an overlapping band would be page ground drawn across the
+    // top of the pill rather than hidden behind it.
+    expect(band).toContain("bottom: 100%");
+  });
+
   it("keeps profile navigation inside the route-owned gutter without nesting another inset", () => {
     expect(cssRule(styles, ".profile-hub-tabs")).toContain("width: min(1320px, 100%)");
     expect(cssRule(styles, ".profile-hub-tabs")).toContain("margin: 0 auto");

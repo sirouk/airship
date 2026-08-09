@@ -400,6 +400,46 @@ describe("the one anchored disclosure", () => {
     expect(panel).toContain('role="group"');
   });
 
+  it("takes the keyboard with it when it takes the screen, and only then", () => {
+    /*
+     * NR001's surviving half. The audit's first claim — that Tab walked out of
+     * an open sheet into `Discover models with key` — does not reproduce on
+     * this build: `focusTrapTarget` returns "first" when `insideContainer` is
+     * false, so the trap already re-enters from the trigger. The second claim
+     * does, at every viewport. Measured on `#sessions` with the route header's
+     * ⓘ pressed: `activeInsidePanel: false` at phone-320, landscape-932,
+     * tablet-768 and desktop-1440, with the active element still the trigger
+     * BUTTON while a 112–163px sheet and its scrim covered the route. The
+     * focused control was the one under the dim, its focus ring was painted
+     * behind the scrim, and a screen reader's next utterance was the trigger
+     * rather than the panel that had just taken the screen.
+     *
+     * Sheets only, and that is the load-bearing half of this test. An anchored
+     * panel opens on a 150ms fine-pointer hover, so the same line placed one
+     * scope out would yank a typist's focus into a panel a passing cursor
+     * opened — the exact defect the containment gate above exists against, and
+     * one this file has already paid for once.
+     */
+    const source = readFileSync(new URL("./popover.tsx", import.meta.url), "utf8");
+    const effect = source.slice(source.indexOf("const next = popoverPlacement({"), source.indexOf("function onPointerDown"));
+    const anchored = effect.slice(effect.indexOf('if (next.mode === "anchored") {'), effect.indexOf("} else {"));
+    const sheet = effect.slice(effect.indexOf("} else {"));
+    expect(anchored, "the anchored branch never touches focus").not.toContain(".focus(");
+    expect(sheet).toContain('panel.focus({ preventScroll: true });');
+    // A glance is not a commitment, and a re-measurement is not an open.
+    expect(sheet).toContain('openIntent === "commit"');
+    expect(sheet).toContain("!panel.contains(document.activeElement)");
+    // The PANEL, not the host: the trigger lives in the host and the trigger is
+    // exactly where focus was stranded, so asking the host would answer "yes,
+    // already inside" and do nothing at all.
+    expect(sheet).not.toContain("host.contains(document.activeElement)");
+    // The landing site, not the exit. `tabIndex={-1}` puts the reader on the
+    // group whose accessible name is the panel's heading; Done is the first Tab
+    // from there, and announcing the way out before the content is backwards.
+    expect(sheet).not.toContain("popover__done");
+    expect(source).toContain("tabIndex={-1}");
+  });
+
   it("reads the mode from a ref, so the first open of a sheet is not judged as an anchor", () => {
     /*
      * The staleness this avoids is not cosmetic. `placement` starts life as

@@ -10,6 +10,18 @@ const headerSource = await readFile(new URL("./route-header.tsx", import.meta.ur
 const TERMINAL_EYEBROW = "Workspace · browser process room";
 const PROOF_EYEBROW = "Inspectable, portable evidence";
 
+/**
+ * The declarations of the first rule with this exact selector. The existing
+ * assertions in this file each inline the same regex; it is written once here
+ * for the rules added since, and deliberately reads the FIRST match — a rule
+ * repeated inside a media query is an override and is asserted against the
+ * query it lives in, not through this.
+ */
+function cssRule(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`${escaped} \\{([^}]+)\\}`, "u").exec(routeStyles)?.[1] ?? "";
+}
+
 describe("the route ⓘ says what it contains", () => {
   it("quotes the eyebrow and names the sentence it is standing in front of", () => {
     expect(routeAboutLabel({
@@ -124,6 +136,56 @@ describe("route header geometry", () => {
     expect(title).toContain("min-width: 0");
     expect(title).toContain("text-overflow: ellipsis");
     expect(title).toContain("white-space: nowrap");
+  });
+
+  /*
+   * SO058. On `#sessions` at phone-320 the ⓘ was a 46x46 button at [13,138]
+   * whose entire visible content was a 23x24 'ⓘ' ring, alone on a line between
+   * the heading (96..130) and the durability chip (192..236) — about 40px of
+   * dead vertical space around a generic glyph that said nothing about what it
+   * opened. It had a full `aria-label` the whole time, so this was visual
+   * discoverability only and the repair is a visible word, not a new promise.
+   *
+   * The mechanism was the flex wrap: a line breaks on its items' base sizes
+   * before it shrinks any of them, so a 260px heading and a 46px ⓘ could not
+   * share a 294px row and the ⓘ wrapped alone. Grouped, the pair is one item —
+   * the break happens around it and the shrink happens inside it, against the
+   * heading's own ellipsis.
+   */
+  it("keeps the ⓘ on the heading's line rather than letting it wrap to one of its own", () => {
+    expect(headerSource).toContain('<div class="route-header__title-line">');
+    const line = cssRule(".route-header__title-line");
+    // Shrink, never grow: growing would fill the row and make `margin-left:
+    // auto` on the status cluster a no-op, which is what docks a route's chips
+    // to the right edge at every width above a phone.
+    expect(line).toContain("flex: 0 1 auto");
+    expect(line).toContain("min-width: 0");
+    // Inside the pair only the heading yields; shrink is proportional to base
+    // size, so a shrinking ⓘ would give up target width and clip its own word.
+    expect(cssRule(".route-header__title-line > .route-header__about")).toContain("flex: none");
+    /*
+     * And the bar has to be allowed to be narrower than what it holds. It is a
+     * grid item of `.route-header`, whose default `min-width: auto` is its
+     * min-content width — which for a wrapping flex row used to be its widest
+     * single child and is now the heading and the ⓘ together. Measured at
+     * phone-320 without this: a 294px header holding a 360px bar, with the ⓘ
+     * ending 53px past the right edge of the screen.
+     */
+    expect(cssRule(".route-header__bar")).toContain("min-width: 0");
+  });
+
+  it("gives the ⓘ a word at the width where it had become an orphan, and only there", () => {
+    // Hidden by default: above a phone the glyph sits immediately after a route
+    // name it plainly belongs to, and a second word there is a label on a label.
+    expect(cssRule(".route-header__about-word")).toContain("display: none");
+    const phone = routeStyles.slice(routeStyles.indexOf("@media (max-width: 640px) {", routeStyles.indexOf(".route-header__about-word")));
+    expect(phone).toContain(".route-header__about-word {");
+    // The eyebrow's own recipe — the product's existing treatment for a small
+    // word attached to a larger one.
+    expect(phone.slice(phone.indexOf(".route-header__about-word {"))).toContain("var(--font-mono)");
+    // Superseded by the button's `aria-label`, so the word is a mark for eyes
+    // only and cannot become a second, divergent announcement.
+    expect(headerSource).toContain('<span class="route-header__about-word" aria-hidden="true">About</span>');
   });
 
   it("keeps the eyebrow off brass, which encodes location and action only", () => {

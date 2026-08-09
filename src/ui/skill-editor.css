@@ -98,6 +98,23 @@
   cursor: not-allowed;
 }
 
+/*
+ * The refused field says so on itself, in the colour its own refusal is set in.
+ *
+ * A save that scrolls a field into the middle of the frame and puts the
+ * keyboard in it has moved the person somewhere without saying why they are
+ * there. `--v-failed` is what `.skill-editor-status` below uses for the
+ * sentence, so the border and the sentence are one claim rather than two.
+ *
+ * Keyed on `aria-invalid` and not on a `data-` twin of it: the attribute that
+ * tells assistive technology and the attribute that paints must be the same
+ * one, or one of them can go stale without the other noticing. Same recipe as
+ * `.connect-paste__field input[aria-invalid="true"]`.
+ */
+.skill-editor-fields input[aria-invalid="true"] {
+  border-color: var(--v-failed);
+}
+
 .skill-editor-wide {
   grid-column: 1 / -1;
 }

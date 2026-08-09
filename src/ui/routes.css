@@ -1331,6 +1331,73 @@
 }
 
 .profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1320px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
+/*
+ * The one indicator of which of the three hub pages you are on, held against
+ * the scroll that hides it.
+ *
+ * Profiles, Skills and Capabilities are one hub reached only through this
+ * strip, and it is the first child of `main.route-layout` — the pane that
+ * scrolls — so it was the first thing off the top of every scroll. Measured on
+ * the shipped build on `#skills` with the new-skill editor open, which is the
+ * gesture that scrolls the pane on its own: the strip sat at y=-466 at
+ * phone-320, -459 at landscape-932, y=6..58 against a pane starting at y=58 at
+ * tablet-768 (out of frame by two pixels), and bottom=-3 at desktop-1440.
+ * Four for four, and scrolling to the pane's foot puts it a further thousand
+ * pixels away. A person editing a skill had nothing on screen saying which of
+ * the three pages they were on or how to leave for the other two.
+ *
+ * Sticky and not fixed, for the same reason `platform-shell.css` sticks the
+ * preferences dialog's header rather than docking it: the strip is a child of
+ * the scroller, there is no separate middle that could scroll on its own, and
+ * a fixed box would have to re-derive the pane's inline geometry from nothing.
+ * The cost is the strip's own height, held back from the rows while scrolled,
+ * which is the trade that sheet already makes.
+ *
+ * `top: 0` is the scrollport's PADDING edge, not its border edge — which is
+ * why the band above needs painting. `.route-layout` carries a
+ * `--route-gutter-block` of top padding (14px at phone widths, up to ~25px at
+ * desktop-1440), and content scrolling up through that band would pass over
+ * the clear above the held strip. `platform-shell.css` answers this by moving
+ * the container's top padding onto the sticky header itself; that is not
+ * available here, because the padding belongs to `.route-layout`, which every
+ * route shares and only these three have a strip in. So the strip paints the
+ * band instead: a pseudo-element in the page's own `--ground`, spanning the
+ * full width of the pane by cancelling the same two gutter variables the
+ * padding is written from, so it reaches the pane's edges at every width
+ * rather than only where the strip does.
+ *
+ * `z-index: 2` is against the route's own content only. `.menu-select-popover`
+ * is z-index 320 and the Skills scope dropdown sits directly beneath this
+ * strip, so an upward-opening menu still paints over it rather than under it.
+ */
+.profile-hub-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.profile-hub-tabs::before {
+  content: "";
+  position: absolute;
+  inset-inline: calc(-1 * var(--route-gutter-inline-start)) calc(-1 * var(--route-gutter-inline-end));
+  /*
+   * Strictly above the strip and never over it. Overlapping would put the
+   * page's ground across the top of the pill: a pseudo-element of a
+   * stacking-context parent paints after that parent's own background, so
+   * there is no depth here at which a band could hide behind the strip.
+   */
+  bottom: 100%;
+  /*
+   * Deliberately taller than the gutter it is covering. A sticky box is held by
+   * its MARGIN edge, and the phone query below gives this strip a `var(--sp-2)`
+   * top margin — so the clear above the stuck strip is the pane's padding plus
+   * that margin, not the padding alone. Overshooting costs nothing: the extra
+   * runs off the top of the scrollport and is clipped, and at rest the whole
+   * band is over the pane's own ground and paints ground onto ground.
+   */
+  height: calc(var(--route-gutter-block) + var(--sp-3));
+  background: var(--ground);
+}
 /* One persistent tab geometry. The scope control used to take the flexible
    `1fr` track and demote the three tabs to `auto`, so activating Skills — the
    route the filter belongs to — physically collapsed the strip to text width
@@ -4615,6 +4682,18 @@
   flex-wrap: wrap;
   gap: var(--sp-2) var(--sp-3);
   align-items: center;
+  /*
+   * The bar is a grid item of `.route-header`, and a grid item's default
+   * `min-width: auto` is its min-content width — which for a wrapping flex row
+   * used to be its widest single child and is now the width of the title and
+   * its ⓘ together, because those two are one item (`.route-header__title-line`
+   * below). Measured at phone-320 on `#sessions` without this line: a 294px
+   * header holding a 360px bar, the ⓘ ending 53px past the right edge of the
+   * screen. The declaration says the bar may be narrower than the sum it
+   * contains; every box inside it that must then give way already carries its
+   * own `min-width: 0` and its own truncation rule.
+   */
+  min-width: 0;
   min-height: var(--density-control);
 }
 
@@ -4649,6 +4728,47 @@
   color: var(--ink);
   font-size: var(--fs-caption);
   line-height: 1.5;
+}
+
+/*
+ * The heading and its ⓘ, as one flex item of the bar. See the comment beside
+ * the element in `route-header.tsx` for what this repairs.
+ *
+ * The column gap is the bar's own `var(--sp-3)`, so nothing moves at any width
+ * where the pair already fitted: measured at desktop-1440 on `#sessions` the
+ * heading ends at x=518 and the ⓘ opens at x=530 both before and after.
+ * `min-width: 0` is the same declaration `.route-title` carries and for the
+ * same reason — a flex item's default `min-width: auto` is its content, and a
+ * nowrap heading's content is the whole string, so without it this box would
+ * refuse to shrink and the ellipsis inside it could never fire.
+ */
+.route-header__title-line {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+}
+
+/*
+ * Inside that pair, the heading is the only box that yields. Shrink is
+ * distributed in proportion to the items' base sizes, so a shrinking pair would
+ * take about a fifth of its deficit out of the ⓘ — narrowing a 44px-floor touch
+ * target and clipping the word beside it — to save the heading a quarter of one
+ * character. The heading has an ellipsis for exactly this; the trigger has
+ * nowhere to put the loss.
+ */
+.route-header__title-line > .route-header__about {
+  flex: none;
+}
+
+/*
+ * Hidden by default and revealed only where the ⓘ had become an orphan. At
+ * every width above a phone the glyph sits immediately after a route name it
+ * plainly belongs to, and a second word there would be a label on a label.
+ */
+.route-header__about-word {
+  display: none;
 }
 
 /*
@@ -4711,10 +4831,65 @@
    * The status cluster wraps to its own line rather than compressing the
    * title into an ellipsis. A route name is not a fact worth truncating to
    * keep a chip on the same row.
+   *
+   * That still holds, and the ⓘ is not one of these. A chip is a fact the
+   * header is reporting; the ⓘ is the heading's own disclosure — its accessible
+   * name is literally "About <title>" — so it belongs to the title's line in a
+   * way a durability seal does not. It is grouped with the heading in
+   * `.route-header__title-line` above, which is why it no longer competes for
+   * this row and no longer wraps to a line of its own.
    */
   .route-header__status,
   .route-header__actions {
     margin-left: 0;
+  }
+
+  /*
+   * The tap target names itself at the one width where it had nothing else to
+   * go on. SO058, on `#sessions` at phone-320: a 46x46 button whose entire
+   * visible content was a 23x24 'ⓘ' ring, alone on a line between the heading
+   * and the durability chip, with no state colour and no word. The full
+   * `aria-label` was already there — this was visual discoverability only, so
+   * the repair is a visible word rather than a new promise.
+   *
+   * The eyebrow's own recipe, because that is what this product already uses
+   * for a small word attached to a larger one, and because a second type
+   * treatment for four characters is how a header stops looking like one thing.
+   * `--fs-micro` keeps the pair narrow: the heading beside it gives up about
+   * 46px of measure, which its own ellipsis absorbs, and the header gives back
+   * the whole 46px row plus its gap that the orphaned glyph was costing — a
+   * profitable trade on a 568px-tall screen.
+   */
+  .route-header__about-word {
+    display: inline;
+    color: currentcolor;
+    font: var(--fs-micro)/1 var(--font-mono);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  /*
+   * With a word inside it the trigger is content-sized, and the square floor
+   * would only pad it wider. The touch promise is unchanged: `min-height`
+   * stays, and the pair measures ~64px across — comfortably past the 44px floor
+   * `pointer: coarse` asks for — because the word alone is broader than the
+   * glyph it stands beside.
+   *
+   * Every pixel here is taken from the heading beside it, which is the reason
+   * the gap is 4px and there is no inline padding at all. Measured at
+   * phone-320 on `#sessions`, where "All conversations" wants 260px of a 294px
+   * row: at the trigger's default air the heading was left 194px and set as
+   * "All conver…"; at this one the trigger is 68px and the heading keeps 214px
+   * and sets as "All conversa…". The heading is still truncated —
+   * no trailing affordance of any width fits beside 260px of ink here, which is
+   * exactly what `.route-title`'s ellipsis contract exists for — but the
+   * truncation is the smallest one that buys back the whole 46px row plus its
+   * gap that the orphaned glyph was spending.
+   */
+  .route-header__about .route-header__about-trigger {
+    gap: var(--sp-1);
+    min-width: 0;
+    padding-inline: 0;
   }
 }
 
