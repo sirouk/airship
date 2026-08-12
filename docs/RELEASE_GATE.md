@@ -42,28 +42,28 @@ ceilings are both blocking.
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 384 KiB | 118 KiB |
-| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 186 KiB |
-| Deferred advanced capability bundle | 444 KiB | 131 KiB |
-| First-party and other non-vendor JS/workers | 2,302 KiB | 731 KiB |
+| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 189 KiB |
+| Deferred advanced capability bundle | 447 KiB | 133 KiB |
+| First-party and other non-vendor JS/workers | 2,315 KiB | 736 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 2,981 KiB | 919 KiB |
+| Absolute installed JavaScript/worker backstop | 2,994 KiB | 924 KiB |
 | Service worker | 12 KiB | 4 KiB |
-| Optional execution broker / engine / support / tools | 32 / 56 / 10 / 60 KiB | 10 / 14 / 4 / 18 KiB |
+| Optional execution broker / engine / support / tools | 32 / 56 / 10 / 58 KiB | 10 / 14 / 4 / 17 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
 | Optional Node/WebContainer pack | 32 KiB | 11 KiB |
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
-| Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
-| Optional Workspace / Source Control / browser Git | 86 / 48 / 276 KiB | 28 / 14 / 83 KiB |
+| Optional agent runtime / tool bundle | 54 / 128 KiB | 16 / 39 KiB |
+| Optional Workspace / Source Control / browser Git | 87 / 48 / 276 KiB | 29 / 14 / 83 KiB |
 | Optional Sessions / Memory / Memory support / Proof | 65 / 64 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
-| Optional Skills route / skill editor | 7 / 4 KiB | 3 / 2 KiB |
+| Optional Skills route / skill editor | 8 / 4 KiB | 3 / 2 KiB |
 | Optional Terminal | 423 KiB | 112 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
 | Optional inference/provider + Companion protocol packs | 165 KiB | 53 KiB |
-| Optional prime runtime pack | 98 KiB | 30 KiB |
+| Optional prime runtime pack | 101 KiB | 31 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
-| HTML-referenced entry CSS | 175 KiB | 32 KiB |
+| HTML-referenced entry CSS | 184 KiB | 32 KiB |
 | General WASM excluding separately capped DCAP | 1,024 KiB each and aggregate | 350 KiB each and aggregate |
 
 These values mirror the executable ceilings exported by

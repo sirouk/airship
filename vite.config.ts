@@ -23,13 +23,19 @@ export function resolveAirshipModulePreloadDependencies(
     : dependencies;
 }
 
+/**
+ * This also carried a `style-src 'self';` → `'unsafe-inline'` rewrite for
+ * Vite's CSS HMR client. The shipped policy in `index.html` has not had that
+ * shape for some time — it already grants `'unsafe-inline'` to `style-src` for
+ * the runtime theme tokens — so the literal never occurred and the replacement
+ * never fired, while its comment promised a development compensation that
+ * anyone tightening the shipped directive would have relied on.
+ */
 export function applyLocalDevelopmentPolicy(html: string): string {
-  return html
-    .replace("style-src 'self';", "style-src 'self' 'unsafe-inline';")
-    .replace(
-      "connect-src 'self' ",
-      "connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 ",
-    );
+  return html.replace(
+    "connect-src 'self' ",
+    "connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 ",
+  );
 }
 
 export function resolvePublicBasePath(value: string | undefined): string {
@@ -106,7 +112,6 @@ export default defineConfig({
       name: "airship-local-development-csp",
       apply: "serve",
       transformIndexHtml(html) {
-        // Vite's development-only CSS HMR client injects <style> elements.
         // The loopback origins are the disposable MinIO lab only. The source
         // and production response remain on the reviewed strict policy.
         return applyLocalDevelopmentPolicy(html);

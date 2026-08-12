@@ -55,11 +55,13 @@ server framework.
 
 ## Narrow-waist contracts
 
-The runtime depends only on these ports:
+The runtime depends only on these ports; entries marked (target) are contract
+names, not symbols in this tree:
 
 - `InferenceTransport`: streams typed text, tool-call, usage, completion, and
   failure events and reports its verified security posture.
-- `SessionStore`: atomically appends immutable events and reads checkpoints.
+- `JournalBackend` (src/core/journal.ts): atomically appends immutable events
+  and reads checkpoints.
 - `WorkspacePort`: normalized path-based file operations with optimistic
   revisions; implementations declare limits and durability.
 - `Tool`: JSON Schema declaration plus cancellable execution and an effect
@@ -70,25 +72,27 @@ The runtime depends only on these ports:
 - `WalrusBlobTransport`: immutable encrypted blob/Quilt data plane; it remains
   separate because Walrus blob IDs do not provide S3 keys, listing, or
   compare-and-swap.
-- `Keyring`: derives purpose-separated workspace keys and wraps them for
-  enrolled devices.
-- `AttestationVerifier`: verifies fresh evidence and emits granular claims;
-  provider assertions alone cannot set a verified claim.
-- `ReceiptStore`: stores/exports content-addressed evidence without changing
-  the canonical conversation.
-- `AuthPort` and `PaymentPort`: direct browser integrations returning scoped
-  capabilities and portable receipts; the agent never handles raw payment
+- `Keyring` (target): derives purpose-separated workspace keys and wraps them
+  for enrolled devices.
+- `AttestationVerifier` (target): verifies fresh evidence and emits granular
+  claims; provider assertions alone cannot set a verified claim.
+- `ReceiptStore` (target): stores/exports content-addressed evidence without
+  changing the canonical conversation.
+- `AuthPort` and `PaymentPort` (target): direct browser integrations returning
+  scoped capabilities and portable receipts; the agent never handles raw
+  payment authority.
+- `AccountTelemetryPort` (target): cancellable, cache-bypassing, partial-result
+  reads of provider balance, quota, subscription windows, usage, and live
+  invocation headers. Provider telemetry never upgrades a cryptographic proof claim.
+- `ContinuumPlanner` and `RemoteExecutorPort` (target): resolve an immutable
+  approved job to a browser runtime or an independently verified paired
+  executor, then expose bounded process frames without transferring browser
   authority.
-- `AccountTelemetryPort`: cancellable, cache-bypassing, partial-result reads of
-  provider balance, quota, subscription windows, usage, and live invocation
-  headers. Provider telemetry never upgrades a cryptographic proof claim.
-- `ContinuumPlanner` and `RemoteExecutorPort`: resolve an immutable approved job
-  to a browser runtime or an independently verified paired executor, then
-  expose bounded process frames without transferring browser authority.
 - `WorkspaceSnapshotPort` (target): captures a coherent read-only base and
   conditionally adopts a verified copy-on-write delta; it is separate from the
   current per-file `WorkspacePort`.
-- `Clock`, `IdSource`, and `Logger`: injected so recovery behavior is testable.
+- `Clock`, `IdSource`, and `Logger` (target): injected so recovery behavior is
+  testable.
 
 No provider SDK, UI framework, database, or chain type appears in canonical
 events.

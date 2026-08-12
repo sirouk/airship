@@ -137,11 +137,24 @@ async function __runJob(job) {
   let outcome = "completed";
   const startedAt = Date.now();
   try {
-    const keys = Object.keys(ns).sort();
+    // The toolkit parameter carries the name the model was given, not an
+    // implementation name: the system prompt, the execute_code description and
+    // the pyodide engine all say pat.call, so binding it to anything else makes
+    // the kernel's only sanctioned egress a ReferenceError for every model that
+    // believes its own prompt. Namespace keys are filtered against both
+    // injected names because a duplicate parameter in a strict-mode
+    // AsyncFunction is a SyntaxError, not a shadowing.
+    const keys = Object.keys(ns).filter((k) => k !== "pat" && k !== "__job").sort();
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const argNames = keys.concat(["__job", "__pat"]);
+    const argNames = keys.concat(["__job", "pat"]);
     const argValues = keys.map((k) => ns[k]).concat([{ jobId: job.jobId, label: job.label }, toolkit]);
-    const fn = AsyncFunction.apply(null, argNames.concat(["\"use strict\";\n" + job.code + "\n"]));
+    // Single quotes on purpose: this line is generated source, so a
+    // double-quoted literal here needs an escape that the template renders
+    // away, and the emitted worker read an empty string followed by a bare
+    // identifier (use), which made the whole worker script a
+    // SyntaxError that no unit test could see because none of them ran the
+    // generated text.
+    const fn = AsyncFunction.apply(null, argNames.concat(['"use strict";\\n' + job.code + '\\n']));
     const value = await fn.apply(undefined, argValues);
     valueJson = __serializeValueBounded(value);
   } catch (caught) {
@@ -169,8 +182,8 @@ async function __runJob(job) {
       outcome,
       valueJson,
       error,
-      stdout: stdout.join("\n"),
-      stderr: stderr.join("\n"),
+      stdout: stdout.join('\\n'),
+      stderr: stderr.join('\\n'),
       bridgeCalls: seqCounter.next,
       wallMs
     }

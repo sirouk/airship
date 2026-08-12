@@ -73,7 +73,11 @@ export async function runTerminalGitCommand(args: Readonly<{
     case "add":
       return stage(args.client, repository, worktree, words, args.review, signal);
     case "reset":
-      return words.some((word) => word.startsWith("--"))
+      // Only the words before `--` are options; the bare separator itself
+      // starts with `--` but announces pathspecs, so reading the whole line
+      // sent `git reset -- <paths…>` to the mode handler, which then answered
+      // with advice to run the command that had just been typed.
+      return beforeSeparator(words).some((word) => word.startsWith("--"))
         ? reset(args.client, repository, worktree, words, args.review, signal)
         : unstage(args.client, repository, worktree, words, args.review, signal);
     case "restore":
@@ -147,12 +151,18 @@ async function stage(
   review: TerminalGitReview | undefined,
   signal: AbortSignal,
 ): Promise<TerminalGitResult> {
+  // `path-ignored` tells the user to "stage it with force if you intend to
+  // track it", and force is a real request field — but until this consumed the
+  // flag, `git add -f build/out.js` passed the literal word `-f` through as a
+  // pathspec and answered "-f has no unstaged change", so the remedy the error
+  // named could only be reached by the agent tool, never by a person.
+  const force = takeFlag(args, "-f") || takeFlag(args, "--force");
   const live = await client.status(target(repository, current), signal);
   const paths = args.length && !args.includes("-A") && !args.includes("--all") && !args.includes(".")
     ? stripSeparator(args)
     : live.status.filter((entry) => entry.worktree).map((entry) => entry.path);
   if (!paths.length) return result("No unstaged paths to add.", false);
-  const operation: GitOperation = { kind: "stage", request: { ...target(repository, live), paths, expectedWorktreeVersion: live.version } };
+  const operation: GitOperation = { kind: "stage", request: { ...target(repository, live), paths, force, expectedWorktreeVersion: live.version } };
   await approve(operation, review);
   const changed = await client.stage(operation.request, signal);
   return result(`Staged ${changed.changedPaths.length} path${changed.changedPaths.length === 1 ? "" : "s"}.`, true);
@@ -813,7 +823,7 @@ function help(): string {
     "  git status",
     "  git diff [--staged] [--] [paths…]",
     "  git log [-n <count>] [--oneline] [<revision>] [-- <path>] | git show [<revision>]",
-    "  git add <paths…> | git add -A",
+    "  git add [-f] <paths…> | git add -A",
     "  git restore --staged [paths…] | git reset [HEAD] [paths…]",
     "  git restore [--worktree] [--source=HEAD] <paths…> | git reset --soft|--mixed|--hard <revision>",
     "  git commit -m \"message\"",

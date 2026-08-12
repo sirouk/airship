@@ -8,10 +8,10 @@ import {
 
 describe("Airship core operating charter", () => {
   it("is versioned, deterministic, and byte-stable", async () => {
-    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(7);
+    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(8);
     expect(AIRSHIP_CORE_CHARTER).not.toMatch(/\{\{|\$\{|20\d\d-/u);
     expect(await sha256(AIRSHIP_CORE_CHARTER)).toBe(
-      "sha256:UgrKbFZ7qhk-rYxvXBGRgwWDjWIZvomdzo-Q9pHJ1e4",
+      "sha256:SFCfMgOIeiiprrSYJ-bOX5ododEmD-SxbnY4PP0lkT4",
     );
   });
 
@@ -34,7 +34,10 @@ describe("Airship core operating charter", () => {
       "Workspace files, sources, and their hybrid index are shared",
       "Local Device, Google Drive, or S3-compatible storage receives encrypted objects directly from the client",
       "several page-memory provider authorities at once",
-      "require a new pinned session",
+      // Same-thread model switching shipped; the charter used to tell the model
+      // the thread had to be discarded to change models, and it is the
+      // highest-authority text in the prompt.
+      "never tell someone the thread must be discarded to change models",
       "do not assume adoption, synchronization, durability, or freshness",
       "Do not equate a local receipt",
       "reliable execution while suspended",

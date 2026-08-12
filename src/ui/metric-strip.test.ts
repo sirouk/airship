@@ -72,4 +72,32 @@ describe("the metric grammar", () => {
     // every provenance sentence readable, and the rule moves with them.
     expect(routeStyles).toMatch(/\.metric-strip__cell:nth-child\(n \+ 3\) \{\n\s*border-top: 1px solid var\(--line\)/u);
   });
+
+  /*
+   * A rule that stops halfway is a rule the reader cannot interpret.
+   *
+   * Two columns and an odd number of cells leaves the last row half empty, and
+   * because the hairlines above are drawn per cell they stopped where the cells
+   * stopped. Account renders five: measured at phone-430, "Live headroom" sat
+   * alone in row 3, so the rule closing the CHARGED/TOKENS row was painted only
+   * under column 1 (x 39..215 of a 39..391 strip), TOKENS got no bottom edge,
+   * and the divider carried down by cells 2 and 4 ended in mid-air at y=619.
+   * There is no way to read that as a merged cell rather than as a table that
+   * stopped being drawn — and an unfinished rule under a spend figure invites
+   * the question of whether the figure is unfinished too.
+   *
+   * Asserted as `last-child:nth-child(odd)` and not as `nth-child(5)`, because
+   * the count belongs to the caller: Billing's four cells must stay untouched,
+   * and three, five or seven must all close without this sheet being told how
+   * many arrived. Naming the count here would be the same defect one layer up.
+   */
+  it("spans an odd tail cell across the row so no hairline is left half-drawn", () => {
+    expect(routeStyles).toMatch(/\.metric-strip__cell:last-child:nth-child\(odd\) \{\n\s*grid-column: 1 \/ -1;/u);
+    expect(routeStyles).not.toMatch(/\.metric-strip__cell:nth-child\(5\)/u);
+
+    // The spanning cell must not also take a left rule: `nth-child(2n)` cannot
+    // match an odd child, which is what keeps these two rules from colliding.
+    const leftRule = /\.metric-strip__cell:nth-child\((\d*n[^)]*)\) \{\n\s*border-left/u.exec(routeStyles)?.[1];
+    expect(leftRule).toBe("2n");
+  });
 });

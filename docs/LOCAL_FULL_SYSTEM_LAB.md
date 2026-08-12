@@ -9,11 +9,13 @@ billing, OAuth, or payment responses. Connect a real memory-only `cak_` or
 
 ## Start
 
-Requirements: Node.js 22.13+, Rust, `uv`, Docker with Compose, and the repository
-dependencies installed.
+Requirements: Node.js 22.13+, Rust, `uv`, Docker with Compose, the repository
+dependencies installed, and — for the final Chutes-API step of the full gate
+only — a `chutes-api` checkout in the parent directory. That step runs outside
+this repository; every other step is reproducible from this repository alone.
 
 ```sh
-cd ~/chutes-jumpmaster/airship
+cd /path/to/airship
 npm install
 npm run lab:start
 npm run lab:status
@@ -73,8 +75,8 @@ selection auto-configures, probes, and adopts the baked loopback lab; wait for
 **Encrypted state synced** before testing reload durability. The harness never
 selects or adopts MinIO for an ordinary Google Drive browser session. If the
 automatic handoff fails, `npm run lab:status` prints the exact diagnostic fields
-for **Configure vault** and the manual live probe. Preferences → Durability can
-switch to fully Ephemeral page memory and back; the transition migrates the
+for **Configure connection** and the manual live probe. Preferences → Durability
+can switch to fully Ephemeral page memory and back; the transition migrates the
 workspace, journal, browser-Git registry, and conventional `.git` state before replacing the active runtime. A
 ready probe proves the tested storage primitives. It does not, by itself,
 certify multi-device convergence or make MinIO a production tenant service.
@@ -90,10 +92,11 @@ remain loopback-only and disposable.
    and `/write notes/lab.md` followed by content.
 2. Use Workspace Explorer to expand folders, open multiple editable tabs,
    save with revision fencing, move files by drag/drop or the mobile action
-   sheet, then open **Workspace → Editor → Sources** for full diffs,
-   branches, and source-control management. Import a public GitHub snapshot; the
-   same snapshot must appear in both Editor views and remain after reload in
-   Vault mode.
+   sheet, then open **Workspace → Editor → Source Control** for full diffs,
+   and **Advanced source controls** inside it for branches, worktrees, and
+   remote operations. Import a public GitHub snapshot; the same snapshot must
+   appear in both **Explorer** and **Source Control** and remain after reload
+   in Vault mode.
 3. Switch profiles and themes, change global/per-profile Skills, and inspect
    the Memory relationship graph.
 4. Inspect Sessions, fork a session, run Proof audit, and review the local
@@ -105,7 +108,7 @@ remain loopback-only and disposable.
    to the Vault. Node projects may explicitly activate `node-webcontainer` and
    use `execute_node_project`; provider delivery may fail or exceed the bounded
    30-second boot, in which case Airship must remain non-ready.
-6. Optionally use **Continue to Chutes** through the configured local OAuth
+6. Optionally use **Sign in to Chutes** through the configured local OAuth
    bridge, or connect a real Chutes `cpk_`; select a model, invoke a turn, and
    open the exact receipt under **Proof → Endpoint evidence**. Missing deployed
    CORS/verifiers must remain visibly partial or unavailable; the lab never
@@ -127,7 +130,12 @@ This runs, in order:
   approved encrypted context generation, retrieves its selected expert over an
   exact HTTP `Range`, injects it into inference, and verifies the encrypted
   journal; and
-- Chutes API evidence-scope, OAuth/IDP, and ingress-CORS regression tests.
+- Chutes API evidence-scope, OAuth/IDP, and ingress-CORS regression tests,
+  which `uv run pytest` executes inside a sibling `../chutes-api` checkout
+  (`scripts/local-lab.mjs`). Without that checkout the first four phases pass
+  over several minutes and the fifth dies spawning `uv` in a directory that
+  does not exist, which reads as a broken `uv` install rather than a missing
+  prerequisite.
 
 The Node conformance runner reports browser CORS separately. The bucket itself
 is configured for the browser origin, but production provider CORS/IAM and real

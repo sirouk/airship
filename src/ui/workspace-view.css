@@ -94,11 +94,46 @@
   padding: var(--sp-1);
 }
 
+/*
+ * The pair fills the rail, and the label that needs the width gets it.
+ *
+ * Two rules were tried here and each bought one half of the problem. `flex:
+ * 1 1 0` splits the rail into halves neither label asked for: measured at 1024,
+ * both cells are 119px, "Explorer" uses 81px of its 93px content box and leaves
+ * the other 12 unspent, and "Source Control 0" — which wants 139px — is cut to
+ * "Sourc… 0" in the cell beside it. Capping each cell at `max-width:
+ * max-content` rescued that label and spent the rail to do it: with both cells
+ * frozen at their own content the pair stopped 73px short of a 1920 desktop's
+ * 352px rail and read as two buttons parked at one end of an empty strip.
+ *
+ * `flex: 1 1 auto` is the answer that owes neither. The cell starts at the
+ * width its own label asks for — so nothing is cut while the rail can hold
+ * both — and the surplus above that is shared, so the pair still reaches the
+ * far edge. The two cells end up different widths because the two labels are
+ * different lengths; what makes them read as one switch is that they are the
+ * same height, hairline-separated, and carry one 2px `--accent` under whichever
+ * is current — not that they are halves.
+ */
 .tabs.workbench-mode-tabs .tabs__tab {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
+}
+
+/*
+ * Explorer is this strip's first cell and its short one, and it does not yield.
+ *
+ * Shrink is otherwise weighted by content width, so a rail too narrow for both
+ * would take characters off "Explorer" as well — and there is nothing in it to
+ * spend: its 100px is the whole word plus its glyph, its padding and its border.
+ * Charging the entire deficit to "Source Control" is what keeps the trade the
+ * block below describes, where the count survives and the label is what gives
+ * way. It cannot overflow the strip instead of shrinking: `.workbench-shell`
+ * clamps the rail at `15rem` (:22), which is 240px against Explorer's 100.
+ */
+.tabs.workbench-mode-tabs .tabs__tab:first-child {
+  flex-shrink: 0;
 }
 
 /*
@@ -110,8 +145,9 @@
  * behind a `⌄ 1` chevron hides the change count that is the whole reason this
  * strip steps down a type rung. `min-width: 0` is what lets a flex item shrink
  * below its content at all; the count is pinned beside it so the label is what
- * gives way. Measured on an iPad's 240px rail: "Source Contr… 3" rather than a
- * tab the reader has to open a menu to find.
+ * gives way. What a narrow rail costs is characters off a destination that is
+ * still named, still glyphed and still counted — not a tab the reader has to
+ * open a menu to find.
  */
 .tabs.workbench-mode-tabs .tabs__tab,
 .tabs.workbench-mode-tabs .tabs__tab-button {
@@ -134,14 +170,35 @@
  * disappears into the overflow menu on every tablet. A legible 15px label that
  * keeps the count visible beats a 17px one that hides it.
  *
- * The padding, though, is the product's own `--sp-3`: the step down to `--sp-1`
- * was never argued for and it is what made two controls read as prose. At the
- * 26% default rail the pair measures 289px of a 314px strip; below that the
- * strip's measured overflow menu takes over, which is the machinery it was
- * built for.
+ * The padding is the gutter the cut label can be paid out of, and `--sp-2` is
+ * the most of it that can be spent. Measured: laptop-1024 and tablet-768 hand
+ * this strip the same 255px rail, which leaves the two cells 236px after the
+ * strip's own inset and the gap between them. At `--sp-3` "Explorer" asked 108
+ * and "Source Control 0" asked 165, so 37px were missing and the block above
+ * charges every one of them to the label — which left the label 70px, reading
+ * "Source …", a destination named by the one word in it that does not say which
+ * destination it is. `--sp-2` returns 16 of those 37: 8 that Explorer no longer
+ * spends on its own gutter, which costs it nothing because its cell is its
+ * content and its word was never the thing being cut, and 8 the Source cell no
+ * longer spends on its own. The label gets 88px and reads "Source Con…".
+ *
+ * Nothing outside the strip pays for that. The rail is not touched, and where
+ * there is surplus the cells still `flex: 1 1 auto` to the far edge, so the
+ * desktop pair is what it was with 4px more air around each label. `--sp-1` is
+ * still not the answer — 4px is what made two bordered controls read as prose —
+ * and 8px is the gutter `.tabs__overflow-trigger` already uses inside this same
+ * primitive. The last 21px have no honest source here: only `.workbench-shell`'s
+ * `clamp(15rem, 26%, 22rem)` (:22) could pay them, and it would pay them out of
+ * the code column at exactly the widths where that column is what the clamp
+ * exists to protect. The label is still cut at tablet and laptop; it is cut
+ * three characters further in.
+ *
+ * This once said the strip's measured overflow menu takes over below that; it
+ * does not and must not — that menu is what the `min-width: 0` above exists to
+ * keep away from a two-way switch.
  */
 .tabs.workbench-mode-tabs .tabs__tab-button {
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-2);
   font-size: var(--fs-body);
 }
 
@@ -379,8 +436,24 @@
  * theme — is unchanged. The editor theme reaches nothing outside this frame:
  * it is the sheet on the desk, not a second answer to the colour-mode
  * preference the whole instrument obeys.
+ *
+ * `overflow: hidden` is what makes the frame lose height rather than paint
+ * outside it. `flex: 1 1 auto; min-height: 0` already gives the column's slack
+ * to the code and the floor to the strip beneath it, but with the terminal
+ * dock open on a 932×430 landscape phone the column has almost nothing for
+ * both: the frame duly shrank to nothing and then went on painting three
+ * wrapped lines straight through the Modified verdict, the file path, the
+ * revision and the Wrap/Save controls, with both layers illegible where they
+ * crossed. A pane with no room left is honest; a pane that overruns its own
+ * chrome is a lie about which one you are reading.
+ *
+ * How much room is left is no longer this rule's problem to survive. The
+ * column had 107px for 150px of chrome because the dock's 220px opening height
+ * outranked the room above it; `TERMINAL_DOCK_EDITOR_FLOOR` now keeps the tab
+ * strip and the file strip whole at that viewport and the frame is what goes
+ * to zero, which is what this rule was always for.
  */
-.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--code-ground, transparent); }
+.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; background: var(--code-ground, transparent); }
 /* The gutter must share the textarea's exact metrics or the numbers drift out
    of register as the file scrolls. Keep the font/line-height/padding paired. */
 .code-gutter { position: relative; box-sizing: border-box; flex: 0 0 auto; width: calc(4ch + 1.35rem); margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: color-mix(in srgb, var(--code-ink, var(--ink-faint)) 62%, transparent); background: color-mix(in srgb, var(--code-ground, var(--surface-soft)) 92%, var(--ink)); font: var(--fs-caption)/1.72 var(--font-mono); text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
@@ -450,8 +523,21 @@
  * file state twice. Nothing here is ever `display: none`: the revision hash and
  * the byte size that the old `.editor-toolbar small` rule deleted below 760px
  * wrap onto a second line instead of disappearing.
+ *
+ * It also has to outrank the sheet it describes. `.code-editor` and the layer
+ * painted behind it are positioned at `z-index: 1` and `0`, and an unpositioned
+ * strip paints below both of them — background included — so any code pixel
+ * that reaches this band lands on top of the chrome rather than behind it.
+ * Measured at 320x568: the wrapped continuation of line 1 painted in code ink
+ * at y=337–341, across the "Saved" chip and the file path, with neither the
+ * glyphs nor the strip legible and no scroll position that clears them.
+ * `position: relative` puts the strip in the same layer the code is in and
+ * `z-index: 2` puts it above, which is the rule the terminal dock beneath it
+ * already states for itself at `z-index: 20`.
  */
 .editor-strip {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
@@ -686,6 +772,35 @@
 
 .workbench-empty__actions button { min-height: 40px; padding: 0 var(--sp-3); }
 
+/*
+ * The empty workbench is the whole route until a file is open, and every
+ * control on it was 40px on a touch tablet.
+ *
+ * Measured on the built tree with `(pointer: coarse)` true: the three
+ * suggested-file rows 381×40 at 768×1024 and 442×40 at 932×430, and beneath
+ * them "New file" 90×40, "New folder" 108.7×40 and "Import a repository
+ * snapshot" 245.3×40. Four pixels under, on the only controls the route offers
+ * before there is anything to edit — this is the state a person arrives in, so
+ * it is the state the floor matters most in.
+ *
+ * `button.primary` ("New file") is floored product-wide by `tokens.css` under
+ * this same query and still rendered 40px, because `.workbench-empty__actions
+ * button` is (0,1,1) against that rule's (0,1,0) and wins on specificity
+ * regardless of which query either sits in. Restating the route's own selectors
+ * here is what makes the floor reach them; a coarse-pointer rule at lower
+ * specificity would have looked correct and changed nothing.
+ *
+ * Both groups wrap (`flex-wrap: wrap`, and the file list is a column), so the
+ * four extra pixels are absorbed by the block growing downward inside a centred
+ * empty state — no neighbour moves sideways and nothing reflows.
+ */
+@media (pointer: coarse) {
+  .workbench-empty__files button,
+  .workbench-empty__actions button {
+    min-height: var(--touch-target);
+  }
+}
+
 .workbench-empty__note {
   max-width: 52ch;
   margin: var(--sp-4) 0 0;
@@ -898,7 +1013,22 @@
    instead of at the row's end. */
 .scm-history-row > button > span { display: grid; flex: 1 1 auto; min-width: 0; gap: 2px; }
 .scm-history-row > button strong { overflow: hidden; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
-.scm-history-row > button small { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
+.scm-history-row > button small { display: flex; gap: var(--sp-1); align-items: baseline; min-width: 0; color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
+/*
+ * The meta line's deficit is charged to the revision, never to the date.
+ *
+ * Measured at tablet-768, where the rail hands this row about 178px and the
+ * pair asks for ~183: the line was one text node with no ellipsis on it, so the
+ * span's `overflow: hidden` cut it mid-glyph and the date rendered "2026-08-0"
+ * with its last digit sliced in half, directly under the `↱`. A truncated hash
+ * is still a hash — it is already an abbreviation of one, and the full value is
+ * in the accessible name of the button next to it — while a date missing a
+ * digit is a different date. `min-width: 0` is what lets the flex item shrink
+ * below its own unbroken word at all; the ellipsis it then shows is inherited
+ * from `.scm-row > button span` above.
+ */
+.scm-history-row__oid { min-width: 0; }
+.scm-history-row__sep, .scm-history-row__date { flex: 0 0 auto; }
 .scm-commit { display: grid; gap: .4rem; margin-top: .5rem; }
 .scm-commit textarea { min-height: 64px; resize: vertical; }
 /* The one full-word button the rail still needs, and it was drawing at 24px —
@@ -945,6 +1075,70 @@
    * Control merge into the pane switch with the change count intact.
    */
   .tabs.workbench-mobile-switch { display: flex; flex: 0 0 auto; padding-inline: var(--sp-2); }
+  /*
+   * The switch contains itself. It never sends a third of itself behind a `⌄`.
+   *
+   * `Tabs` grows an overflow control the moment a tab measures outside the
+   * strip's view, and on this row that measurement latches: the control it
+   * grows takes ~38px of the very row it was measuring, so every re-measure
+   * after the first sees a strip narrower than the one that fitted and the
+   * state can never unwind. At 390px — where the three labels want 347px of a
+   * 374px row — 27px of slack was all that stood between the two stable
+   * readings, and once the strip tipped it stayed tipped: "Explorer" cut to
+   * "lorer" by the viewport edge with the strip scrolled, "Source Control"
+   * stripped of its change count, and a `⌄ 1` chevron holding a third of the
+   * only navigation a phone has into this route.
+   *
+   * Letting the cells shrink removes the latch rather than widening the gap it
+   * waits in. `min-width: 0` is what allows a flex item to go below its own
+   * nowrap label at all; with it the row can always be made to fit, so no tab
+   * is ever out of view, so the chevron has nothing to report and the strip has
+   * nothing to scroll — and a label that runs out of room ellipsises inside its
+   * own cell instead of being cut by the edge of the screen. While the three
+   * labels fit, which they do at 390 and above, none of this fires and the row
+   * is exactly what it was.
+   */
+  .tabs.workbench-mobile-switch .tabs__tab,
+  .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }
+  /*
+   * And the deficit is charged to the one label that can pay it, exactly as the
+   * desktop strip charges it — the rule above removed the latch and left the
+   * bill to be split by flex's default weighting, which is the wrong split.
+   *
+   * Shrink is weighted by content width, so every cell loses characters in
+   * proportion to how many it had. Measured off the phone-320 shots, ink runs on
+   * the strip's own scanline: the three labels want 72px, 51px and 144px (that
+   * last including its count) and the row has about 49px less than that, so the
+   * split took 21px off "Explorer", 16px off "Editor" and 23px off "Source
+   * Control" — and rendered "Expl…", "Ed…", "Source Co…". "Ed…" names nothing,
+   * and it was the *active* tab that was cut to four characters. A switch whose
+   * current destination cannot be read is not a switch.
+   *
+   * "Explorer" and "Editor" are this strip's short words and they have nothing
+   * in them to spend; "Source Control" is the long one and it is still named by
+   * its first word after a cut. So the first two do not yield and the third
+   * absorbs the whole deficit — the same sentence `:first-child` states for the
+   * desktop pair at :135, for the same reason.
+   *
+   * The cost, measured rather than asserted, is a few more characters off the
+   * third label at phone-320 alone: its ~131px of label ink takes the full ~49px
+   * instead of its proportional 23px, while Explorer and Editor render whole.
+   * Re-measured off the shipped strip rather than predicted from the deficit,
+   * because the first draft of this paragraph guessed one character too
+   * generously in both readings: at rest the third cell reads "Source …", and
+   * with a document open — where the Editor cell also carries a count, ~14px
+   * more that the third label pays too — it reads "Sourc…". Both keep the first
+   * word, which is what makes the destination still named, and both keep the
+   * change count beside them, because the rule below pins it. Nothing else on
+   * the route is touched: the strip's own width is unchanged, and 390 and 430
+   * have slack — both render "Source Control" whole — so at every other device
+   * class this rule never fires and the row is byte-identical.
+   */
+  .tabs.workbench-mobile-switch .tabs__tab:not(:last-child) { flex-shrink: 0; }
+  /* The label gives way and the count does not, the same way round as the
+     desktop strip: a switch that drops the number of changes to keep the word
+     "Control" has hidden the reading the reader was steering by. */
+  .tabs.workbench-mobile-switch .tabs__count { flex: 0 0 auto; }
   .tabs.workbench-mode-tabs { display: none; }
   .workbench-shell { display: block; }
   .workbench-activity, .workbench-editor { display: none; min-height: 0; height: 100%; border: 0; }

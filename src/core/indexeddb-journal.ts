@@ -26,7 +26,7 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 function transactionDone(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const done = new Promise<void>((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
     transaction.addEventListener("abort", () => reject(transaction.error ?? new Error("IndexedDB transaction aborted")), {
       once: true,
@@ -35,8 +35,35 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
       once: true,
     });
   });
+  /*
+   * Every deliberate `transaction.abort()` below returns or throws without
+   * touching this promise, and the abort event then fires a task later, on a
+   * promise nobody is holding — so the browser reports an ordinary CAS conflict
+   * or a delete of an absent session as `Uncaught (in promise) AbortError`.
+   * Claiming the rejection here rather than at each call site also covers the
+   * read paths, and costs the commit path nothing: awaiting an already-rejected
+   * promise still throws at the `await done` that cares.
+   */
+  void done.catch(() => undefined);
+  return done;
 }
 
+/**
+ * A plaintext IndexedDB journal. Nothing in the product constructs it.
+ *
+ * The two backends that are wired are `MemoryJournalBackend`, which is what an
+ * unvaulted page runs on, and `EncryptedObjectJournalBackend`, which is the
+ * durable one — sealed segments over an `ObjectStore`, keyed by the workspace
+ * root key. This one writes `DurableEvent` records to the origin's IndexedDB
+ * exactly as they are, so wiring it as the durable backend would put whole
+ * conversations on disk in the clear, which is the property
+ * `docs/FERRARI_AUDIT.md` already names it for.
+ *
+ * It is kept, and kept under test, because whether Airship offers an
+ * unencrypted local journal is a product decision — not a question a reader of
+ * this file should have to rediscover. Until that decision is made, treat an
+ * import of this class as the decision itself.
+ */
 export class IndexedDbJournalBackend implements JournalBackend {
   private databasePromise?: Promise<IDBDatabase>;
 

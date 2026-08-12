@@ -88,6 +88,25 @@ test("openai responses lane: tool call docks for approval before the memory writ
 
   // Proof beyond the happy path: the approved write is a real memory record.
   await page.goto("/#memory");
-  const record = page.getByRole("main").locator("text=Likes mint tea").first();
+  /*
+   * The profile record list is a disclosure, and it starts closed on a phone —
+   * `expanded={!phone}` in memory-view.tsx, so the route opens on a summary and
+   * a count rather than a corpus dump on the screen with the least room. A
+   * closed `<details>` gives its children no box, so the record was in the DOM
+   * and correctly reported hidden, and this assertion could only ever pass on
+   * desktop. That is one tap, not concealment: the proof takes the tap a reader
+   * takes and then asserts the record itself. `memory-dedup` already opens it
+   * this way; the guard makes it a no-op where the section is open already.
+   */
+  const records = page.locator("#memory-records");
+  await records.waitFor();
+  if (!(await records.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await records.locator("summary").click();
+  }
+  // Scoped to the record list rather than the route: this asserts the write
+  // landed in the profile's own corpus, not merely that the words appear
+  // somewhere on #memory — a search echo or a stat line would satisfy the
+  // looser locator.
+  const record = records.locator("text=Likes mint tea").first();
   await expect(record).toBeVisible({ timeout: 15_000 });
 });

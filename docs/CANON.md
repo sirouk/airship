@@ -544,23 +544,34 @@ implementation language.
 
 - `InferenceTransport` streams typed model, tool-call, usage, completion, and
   failure events and reports only its established posture.
-- `SessionStore` appends immutable events and reads bounded materializations.
+- `JournalBackend` (src/core/journal.ts) appends immutable events and reads
+  bounded materializations. `SessionStore` was the planned name and is not a
+  symbol in this tree.
 - `WorkspacePort` provides revision-aware virtual file operations.
 - `ObjectStore` provides the conditional immutable operations needed by
   encrypted manifests and journals.
-- `SourceControlPort` normalizes browser-owned repository and worktree state.
+- `SourceControlPort` (src/sources/contracts.ts) declares the normalization of
+  browser-owned repository and worktree state, but nothing imports it: the
+  operations it names are served today by `BrowserGitClient`. Treat it as a
+  declared contract awaiting a consumer, not as the seam a change must go
+  through.
 - `Tool` declares JSON input, effects, limits, cancellation, and replay safety.
 - `ApprovalPolicy` asks, permits, or denies an operation independently of the
   model's request.
-- `AttestationVerifier` emits granular evidence results without turning
-  assertions into verified claims.
+- `AttestationVerifier` names the contract that emits granular evidence results
+  without turning assertions into verified claims; the bare symbol is planned,
+  and the shipped verification lives behind `AttestationVerifierPorts`
+  (src/attestation/types.ts).
 - the compute-continuum planner keeps browser and remote executors behind one
   prepared job contract while preserving their different authorities and proof;
 - `AuthPort`, `AccountTelemetryPort`, and `PaymentPort` are **planned** contract
   names, not symbols in this tree; identity, account telemetry, and payment are
   currently a single Chutes-specific client rather than adapters. They keep
   identity, provider
-  telemetry, and payment authority outside canonical agent events.
+  telemetry, and payment authority outside canonical agent events. The same is
+  true of `Keyring`, `ReceiptStore`, `ContinuumPlanner`, `RemoteExecutorPort`,
+  `Clock`, `IdSource`, and `Logger` where the port documents name them: they are
+  contract names, and `docs/ARCHITECTURE.md` marks each of them `(target)`.
 - execution and semantic packs advertise availability before use and remain
   optional.
 
@@ -1210,8 +1221,16 @@ The ordinary gate is:
 npm run check
 ```
 
-It covers TypeScript, static security policy, unit tests, production build, and
-the deterministic release gate. The build rejects source maps and
+It covers TypeScript for the app and the extension, static security policy, the
+reference-library and journey-atlas gates, unit tests, the extension and
+production builds, the deterministic release gate, and a bounded
+mobile-Chromium geometry check (`check:browser`). That last stage needs
+Playwright's chromium installed (`npx playwright install chromium`) — it is the
+one stage of the ordinary gate that launches a browser, and leaving it out of
+this enumeration is how a fresh checkout comes to read the gate as browser-free
+and meets Chromium on the eleventh stage. It stays credential-free and
+localhost-only; the long browser matrices remain separate. The build rejects
+source maps and
 credential-shaped payloads, enforces size budgets, checks static-service
 boundaries, and produces an explicitly unsigned SHA-256 artifact inventory.
 Every shipped JavaScript artifact has exactly one functional owner. Runtime,
@@ -1277,8 +1296,12 @@ AIRSHIP_CHUTES_VISION_MODEL='<exact vision-capable model ID>' \
 npm run check:release:live
 ```
 
-Open <http://localhost:4173> after `lab:start`. Local Device is the ordinary
-default when no deployable Google OAuth client is configured; selecting
+Open <http://localhost:4173> after `lab:start`. The lab injects a syntactically
+valid `VITE_GOOGLE_CLIENT_ID` of its own (`scripts/local-lab.mjs`), so a lab
+session starts Drive-defaulted; a build with no deployable client ID fails
+closed to Ephemeral page memory rather than to an encrypted rung the person
+never asked for, and Local Device is the explicit offline selection
+(`resolveDefaultVaultBackend`, src/ui/platform-shell.tsx). Selecting
 **Vault → S3-compatible / MinIO** explicitly enables the baked loopback provider
 and its automatic live probe.
 

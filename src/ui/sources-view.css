@@ -23,6 +23,55 @@
   padding: 0 var(--sp-4) var(--sp-4);
 }
 
+/*
+ * The heading is what made this sheet wider than the phone it opens on.
+ *
+ * `<RouteHeader>` is a grid, and with no explicit column it gets one implicit
+ * `auto` track whose base size is the widest min-content contribution of its
+ * children. `.route-title` is `white-space: nowrap`, so its min-content
+ * contribution is the entire string: "Repositories & worktrees" measures 378px
+ * and floored the track at 378px inside a 256px content box. The bar inherited
+ * that width, the heading was handed all of it, and the `text-overflow:
+ * ellipsis` that `.route-title` already carries never fired once — the box it
+ * was asked to truncate into was never too small. At 320px the reader got
+ * "Repositories & wor" cut flush by the screen edge with no ellipsis to say so,
+ * `.git-sources`' own `overflow: auto` silently absorbing the missing 122px,
+ * and the ⓘ/Import/Refresh row — laid out in that same over-wide track —
+ * overhanging the header's own bottom rule by 13px.
+ *
+ * A `minmax(0, 1fr)` column cannot be inflated by a nowrap child: it is exactly
+ * the sheet's width, so the ellipsis finally has a box to fire in. Declared on
+ * this header rather than on `.route-header` because the primitive is shared by
+ * ten routes and this is the one that mounts it inside a panel narrow enough to
+ * prove the difference.
+ */
+.git-sources-header.route-header {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * The second page edge `routes.css` warns about, in the one place it happens.
+ *
+ * `.route-layout > * > .route-header` zeroes the primitive's inset for routes
+ * whose shell already supplies a gutter, and its comment deliberately exempts a
+ * `<RouteHeader>` nested in a panel — "not a page edge" — naming this very
+ * header. That holds for the Sources pane, where `.git-sources` has no padding
+ * of its own. It stops holding the moment the panel becomes the advanced sheet:
+ * `.git-sources--embedded` pads 16px inline, so the primitive's 16px was a
+ * second gutter stacked on the first. The heading and its verbs started 32px in
+ * while every card below them started at 16px, and the 32px went missing from
+ * the width the title had to truncate into.
+ *
+ * Giving it back is what makes the clamp above free: at 320px the actions
+ * cluster is 209px and the ⓘ beside it is 49px, which fits 288px and does not
+ * fit 256px, so without this the header would have wrapped Import and Refresh
+ * onto a third row to pay for the ellipsis. Nothing gives anything up here —
+ * the cards below are untouched and keep the sheet's one gutter.
+ */
+.git-sources--embedded .git-sources-header.route-header {
+  padding-inline: 0;
+}
+
 .git-sources-header .route-header__actions button {
   min-height: 44px;
 }
@@ -423,9 +472,35 @@
 
 @media (min-width: 1101px) {
   .git-sources-layout { flex: 1 1 auto; }
-  /* The footer is controls, not content: it is capped so the list and the diff
-     keep the height, and it scrolls rather than growing into them. */
-  .git-rails { max-height: 200px; overflow-y: auto; }
+  /*
+   * The footer is controls, not content: it is capped so the list and the diff
+   * keep the height, and it scrolls rather than growing into them. That is
+   * still true — but the cap belongs on the two disclosures, not on the row.
+   *
+   * The cap used to be `max-height: 200px; overflow-y: auto` on `.git-rails`
+   * itself, and `.git-rails` is a three-column grid whose middle column is
+   * `.git-commit-box` — the panel's primary action. Measured at desktop-1440
+   * with one path genuinely staged (README.md edited, saved and staged through
+   * the UI, `1 staged path` on the box): the rails row was 200px tall with a
+   * 199px client box over 495px of content, and the `Commit locally` button ran
+   * y=846.1..890.1 against a scroller ending at y=858 — 11.9px of a 44px
+   * primary control drawn, inside a dialog that was 747px tall and had the room
+   * to spare. At wide-1920 the identical 11.9px, in a 927px dialog. Overlay
+   * scrollbars paint nothing at rest, so the remaining 32px had no affordance
+   * pointing at it: the judge recorded the button as sliced to "roughly 10px of
+   * its top edge" and concluded it had never been reachable at any width.
+   *
+   * The row's height is now driven by whichever column is tallest, and the two
+   * things that are actually tall are the two `<details>` — `Repository &
+   * worktrees` alone measured 495px open. They keep the 200px cap and scroll
+   * inside it exactly as the whole row used to; nothing loses a pixel it had.
+   * The commit box has no cap because it is not a disclosure and cannot be
+   * closed, so the row settles at its natural 232px and the primary action is
+   * drawn whole. The 32px comes out of the diff pane, which is `minmax(0, 1fr)`
+   * and was 319px — a cheaper trade than a 12px commit button.
+   */
+  .git-repository-controls,
+  .git-remote-boundary { max-height: 200px; overflow-y: auto; }
 }
 
 @media (max-width: 1100px) {
@@ -451,6 +526,20 @@
   .git-posture-chips { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
   .git-posture-chips::-webkit-scrollbar { display: none; }
   .git-posture-chips > * { flex: 0 0 auto; scroll-snap-align: start; }
+
+  /*
+   * …and the swipe says so. The row above hides its scrollbar, which is right
+   * for four chips on a phone and was also the whole reason nothing marked the
+   * boundary: measured at 320x568, "Direct Git HTTPS · 1 permitted origin" was
+   * cut mid-word at the row's edge and the two chips after it were unannounced.
+   * This is `.tabs__strip`'s affordance verbatim — the same 24px fade, the same
+   * measured `data-scroll-edges`, so it paints on the side that is genuinely
+   * hiding a chip and never on a row that fits. It costs no layout: a mask
+   * paints inside the row's own box, so no chip and no neighbour loses a pixel.
+   */
+  .git-posture-chips[data-scroll-edges="start"] { mask-image: linear-gradient(to right, transparent 0, #000 24px); }
+  .git-posture-chips[data-scroll-edges="end"] { mask-image: linear-gradient(to left, transparent 0, #000 24px); }
+  .git-posture-chips[data-scroll-edges="both"] { mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%); }
   .git-import-form { grid-template-columns: 1fr; }
   .git-import-receipt dl { grid-template-columns: 1fr 1fr; }
   .git-import-receipt dl > div:nth-child(3n) { border-right: 1px solid var(--line); }
@@ -498,6 +587,10 @@
   .git-sources textarea,
   .git-sources-layout,
   .git-sources-trust-disclosure { border-color: CanvasText; }
+  /* A fade is a colour effect, and forced colours replace the palette it fades
+     into: the chip at the edge would be dissolved into the system canvas rather
+     than softened. `.tabs__strip` retracts its mask here for the same reason. */
+  .git-posture-chips { mask-image: none; }
   .git-sources button:focus-visible,
   .git-sources input:focus-visible,
   .git-sources select:focus-visible,

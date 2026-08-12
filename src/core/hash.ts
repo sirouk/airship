@@ -7,7 +7,18 @@ export function stableStringify(value: JsonValue): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
 
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  /*
+   * Code-unit order, not `localeCompare`. These strings are digest preimages
+   * that cross devices — an evidence checkpoint written on one machine is
+   * recomputed and enforced on the next — and ICU collation is a function of
+   * the host's locale and ICU version, not of the bytes. Under `en` it orders
+   * `a_b` before `a0b`; by code point it is the other way round, so a record
+   * whose keys straddle that pair verified on the device that wrote it and
+   * failed everywhere else. Code-unit order is also what RFC 8785 canonical
+   * JSON specifies, so the preimage is now something another implementation
+   * could reproduce.
+   */
+  const entries = Object.entries(value).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
   return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(",")}}`;
 }
 

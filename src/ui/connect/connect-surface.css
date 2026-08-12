@@ -419,9 +419,23 @@
   color: var(--ink-faint);
   font: var(--fs-micro)/1.2 var(--font-mono);
   text-align: right;
-  /* No ellipsis: these sub-labels are short by construction now, and a clipped
-     "Add the Airship e…" is a status a person cannot read. */
-  overflow-wrap: anywhere;
+  /*
+   * No ellipsis: a clipped "Add the Airship e…" is a status a person cannot
+   * read. But `anywhere` bought that by breaking at any character, including
+   * where a word-boundary break would have fitted, and the sub-labels are not
+   * as short as this rule once assumed: the Chutes lane builds its own strip in
+   * `access-view.tsx` and puts "Unavailable in this build" here, 25 characters
+   * that no entry in `METHOD_SUBLABELS` is measured against. In the ~60px the
+   * `auto 1fr` split leaves beside the label, that rendered as "Unavai/lable in"
+   * at 320px and "Unavailabl/e in this/build" at 390px — a word split down the
+   * middle reads as a rendering fault, not as a status.
+   *
+   * `break-word` keeps the protection and drops the damage: it breaks inside a
+   * word only when that word alone cannot fit the line, so the sub-label still
+   * can never overflow the tab, and every width with room to wrap on the space
+   * now does.
+   */
+  overflow-wrap: break-word;
 }
 
 .connect-method__switch > button[aria-selected="true"] small {
@@ -754,12 +768,170 @@
     justify-content: center;
   }
 
+  /*
+   * The lane header is a button, and it was being centred as one.
+   *
+   * The rule directly above centres the full-width action buttons, which is
+   * right for a button whose whole content is one word. The lane header is a
+   * *row* — an icon, a name, a subtitle, a caret and a state chip — and it
+   * wraps. Centring a wrapping flex container centres each line independently,
+   * so measured at phone-320 the wifi glyph sat at x=150..170 and the caret at
+   * x=156..164, both centred on the card's midline of 160, while the identity
+   * and the seal chip started at x=38 against the card's left edge. Three
+   * items on three axes inside one card, and the caret orphaned between the
+   * subtitle and the chip with nothing to belong to.
+   *
+   * This is the same collision `.connect-method__switch > button` resolves
+   * fourteen rules down, and it is resolved the same way and for the same
+   * reason: the tab restates the edge its contents agree on. `button` is in
+   * the selector to outrank `.connect-surface button` on its own terms rather
+   * than by reaching for a parent class this element does not need.
+   */
+  button.connect-lane__header {
+    justify-content: flex-start;
+  }
+
+  /*
+   * With one axis agreed, the row can be one row. `flex: 1 1 auto` sized the
+   * identity from its own content — 244px of name and subtitle inside a 246px
+   * content box — so it could never share a line with the 20px glyph, and the
+   * glyph and the caret each took a line of their own. A zero basis lets flex
+   * place all three on line 1 and hand the identity everything the other two
+   * did not need (192px at phone-320, against the ~70px the longest name
+   * needs), so the header reads down one left edge with one right-hand
+   * affordance and the seal keeps the separate row it was given above.
+   */
+  .connect-lane__identity {
+    flex: 1 1 0;
+  }
+
+  /* Docked, not floated. The caret is the only thing in this header that
+     speaks for the row rather than about the provider, so it sits at the far
+     edge where a disclosure caret is looked for. */
+  .connect-lane__chevron {
+    margin-inline-start: auto;
+  }
+
   .connect-method__switch {
     max-width: none;
   }
 
+  /*
+   * The sub-label drops below the label when — and only when — it cannot hold
+   * its longest word beside it.
+   *
+   * `auto 1fr` is right where the strip has 420px to divide. At 320px it has
+   * ~130px per tab, and "OAuth" plus the 8px gap claims enough of it that the
+   * status is left roughly 60px — about nine mono characters at `--fs-micro`,
+   * which "Unavailable" alone overruns. `break-word` above stops that from
+   * splitting mid-word wherever the word fits, but at that width no wrap mode
+   * can help a word that does not fit the column at all; the column is the
+   * problem, so the column is what changes.
+   *
+   * This first shipped as an unconditional stack for the whole `<= 640px` band,
+   * and the band is wider than the failure. Measured on the Connect Chutes
+   * sheet: the tab is 174px at 430 and 154px at 390, which leaves the status
+   * ~109px and ~89px beside a ~37px "OAuth" — both above the ~79px that
+   * "Unavailable" needs at the phone ramp's 12px `--fs-micro`. The stack put
+   * the label on a row of its own anyway, and the tab went from 48px to 66px at
+   * 320, 390 and 430 alike; on the 430 sheet that 18px is one more line of the
+   * body copy pushed under the bottom dock. 390 and 430 were paying for 320.
+   *
+   * A width breakpoint cannot say this. The quantity that decides it is the
+   * width of one mono word, and that word is sized by `--fs-micro`, which the
+   * ramp moves at `<= 640px` and `data-density="compact"` moves again, and which
+   * the reader's own Type scale preference multiplies on top (tokens.css:130,
+   * WCAG 1.4.4). Any px threshold measured here would be measured at exactly one
+   * of those settings and would split "Unavailable" down the middle at the rest.
+   *
+   * So the flex line break is asked the question instead. The row wraps, and the
+   * sub-label asks for `12ch` — the longest word in any sub-label is
+   * "Unavailable" at 11 characters, plus one character against sub-pixel
+   * rounding, and `ch` in a monospace face is exactly one character. Flex puts
+   * an item on the current line only if its basis fits the space the label left,
+   * so the sub-label takes the whole row below whenever the word would not have
+   * fitted beside it and shares the row whenever it would. `ch` is resolved in
+   * the `small`'s own font, so the threshold moves with every one of the size
+   * settings above rather than against them.
+   *
+   * Nothing pays for this, at any viewport. Width: the two tabs stay
+   * `minmax(0, 1fr)` in a strip that is already `max-width: none` here, and a
+   * `1fr` track cannot be widened by its content, so no tab and no neighbour
+   * gives up a pixel. Height: this rule is only reachable below 640px, where the
+   * tab is stacked and 66px today — it either stays stacked and stays 66px, or
+   * shares the row and returns to the 48px it was before the stack. No viewport
+   * gets taller.
+   */
   .connect-method__switch > button {
     width: auto;
+    display: flex;
+    flex-wrap: wrap;
+    /* `.connect-surface button` centres its content at this width for the
+       full-width action buttons. On a flex strip tab that would centre the
+       shared row, so the tab restates the edge the label and status agree on. */
+    justify-content: flex-start;
+    align-items: baseline;
+    gap: 2px 8px;
+    /*
+     * Both rows of the control read down one edge.
+     *
+     * The stack was landed without settling what it stacks against. The label is
+     * a `<span>` in a button, so it inherits the UA's `text-align: center`; the
+     * sub-label carries the explicit `left` below, which is what replaced the
+     * `right` the side-by-side row needed. Measured on the Connect Chutes sheet
+     * at 320, 390 and 430: `OAuth` sat centred over an `Unavailable in this
+     * build` flush to the tab's inner edge — two lines of one control on two
+     * different axes, which reads as two controls that have collided rather than
+     * as a label and its status.
+     *
+     * Left is the axis to agree on, not centre: the sub-label is mono and wraps
+     * to two and three lines here, and a centred ragged block under a centred
+     * word has no edge for the eye to return to. This declaration is what makes
+     * the button's own text direction the axis, so the `left` below is a
+     * restatement of the agreed edge rather than the only one declared. It is
+     * also the axis the shared row now reads down, so the two states of this
+     * control differ in where the status sits and not in how it is set.
+     *
+     * It costs nothing. `text-align` moves ink inside boxes that are already
+     * `1fr` in a strip that is already `max-width: none` at this width — no tab,
+     * no neighbour and no row changes width or height.
+     */
+    text-align: left;
+  }
+
+  .connect-method__switch small {
+    /*
+     * `12ch` is the basis the line break is decided on, and `1 1` is what makes
+     * the two states the same declaration: on its own row it grows to the tab's
+     * full width, and beside the label it grows into whatever the label left. It
+     * never shrinks below the basis, because it never has to — flex only reaches
+     * a shrink when a single item overflows the line on its own, and this one
+     * wraps first.
+     */
+    /*
+     * `12ch` was the threshold, and the threshold was measured one width short.
+     *
+     * The reasoning above is right that the quantity deciding this is the width
+     * of one mono word and that no px breakpoint can name it. What it got wrong
+     * is which word has to fit. `12ch` covers "Unavailable" — the longest single
+     * word — but the sub-label is a *sentence*, and a basis that fits beside the
+     * label is a basis flex will place beside the label. Measured at phone-430,
+     * where the tab column is 178px: "OAuth" takes 40px and 12ch still fits in
+     * what is left, so line 1 read "OAuth Unavailable" with "in this build"
+     * hanging indented below it, while the "API key" tab beside it kept its
+     * break. One control, two tiles, two different shapes — at 430 alone; 320
+     * and 390 stacked, and the wide grid uses its own deliberate pattern.
+     *
+     * `100%` stops asking. The sub-label takes its own row at every phone width
+     * because that is what the surrounding comment already says this control
+     * intends, and a rule that is true at one width and false at the next is not
+     * a rule. It costs nothing the stack did not already cost at 320 and 390:
+     * `1 1` still lets the row it lands on be the tab's full width, the tabs are
+     * `minmax(0, 1fr)` in a strip that is already `max-width: none` here, and no
+     * tab, neighbour or row changes width.
+     */
+    flex: 1 1 100%;
+    text-align: left;
   }
 
   /* The promoted fact strip is a convenience, not a home: the identical three

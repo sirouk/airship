@@ -347,8 +347,16 @@ body {
  * 8px gutter around a 44px touch target, which is the smallest column that can
  * still be pressed accurately. `focus` is nothing at all.
  *
+ * These are what the rail's *contents* need, and nothing else is added to
+ * them. The collapse grip that rides the seam was briefly paid for here, by
+ * adding half a touch target to every painted state; that moved the seam 22px
+ * right on a coarse pointer with the icons still centred where they were, and
+ * every route's content column, and the topbar track the posture chip lives
+ * in, moved with it. A grip that hangs off an edge does not get to widen the
+ * column behind it — shell.css's coarse-pointer block pays for it in overhang.
+ *
  * `data-rail` is written by the shell from the remembered preference, so the
- * default below only ever paints during the first frame of a cold load.
+ * `:root` default above only ever paints during the first frame of a cold load.
  */
 :root[data-rail="standard"] { --rail-width: var(--density-sidebar); }
 :root[data-rail="rail"] { --rail-width: 60px; }
@@ -639,4 +647,27 @@ button.primary:disabled {
     min-width: var(--touch-target);
     min-height: var(--touch-target);
   }
+}
+
+/*
+ * The same floor for the rows a density preference sizes, on the pointer axis
+ * rather than the width axis.
+ *
+ * Compact's floor already existed, but only inside the phone query — where
+ * `.sidebar` is `display: none` and there is no rail to floor. A coarse-pointer
+ * tablet is deliberately given the full 232px rail down to 861px
+ * (`rail-state.ts`), so on an iPad at Compact every rail destination rendered a
+ * 36px row while the Expand-recents chevron beside it — floored by
+ * `shell.css`'s own `pointer: coarse` block — rendered 44px. Nothing a finger
+ * has to hit may be smaller than 44px on either axis, and the rail is the
+ * primary navigation.
+ *
+ * Added rather than moved: the width-scoped copy also floors a narrow *desktop*
+ * window, where a resized mouse-driven viewport keeps `(pointer: coarse)` false.
+ * `.nav-item--nested` is untouched — `shell.css` pins it to its own
+ * `--rail-item-height`, and whether the hierarchy signal outranks the floor is
+ * a separate decision.
+ */
+@media (pointer: coarse) {
+  :root[data-density="compact"] { --density-control: var(--touch-target); --density-row: var(--touch-target); }
 }

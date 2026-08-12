@@ -965,7 +965,65 @@ describe("Explorer search: one field, both questions", () => {
     // The scan's own sentence — truncated, unsearched, capReachedIn — reaches
     // the reader in the same line as the file count.
     expect(source).toContain("workspaceSearchSummary(search)");
-    expect(source).toContain('scanning || !search ? "reading contents…"');
+    expect(source).toContain('scanning ? "reading contents…"');
+  });
+
+  it("settles the rail when the scan comes back as a rejection", () => {
+    /*
+     * Shipped: `search` was written only in `.then`, and the rail's whole
+     * settled/scanning decision was `search !== undefined`. So a scan that threw
+     * — an object whose key rotated, a transient IndexedDB failure — left
+     * `scanning` true for as long as the query stayed in the field: the count
+     * line said "reading contents…" and the tree stayed hidden behind
+     * "Searching file contents…" with nothing reading. The error notice at the
+     * bottom of the route was the only sign anything had happened.
+     */
+    const failure = source.match(/\.catch\(\(cause: unknown\) => \{[\s\S]*?\}\)/u)?.[0] ?? "";
+    expect(failure).toContain("setScanFailed(true)");
+    // And the previous query's result goes with it: the count line prints that
+    // result verbatim, so a stale one describes a term the reader has left.
+    expect(failure).toContain("setSearch(undefined)");
+    expect(source).toContain("const scanSettled = Boolean(query) && !searching && (search !== undefined || scanFailed);");
+    // Reset per query, in both places a query begins — the emptied field and
+    // the new term — or one failure would poison every later search.
+    expect([...source.matchAll(/setScanFailed\(false\)/gu)]).toHaveLength(2);
+    // A settled failure has no summary to print, and must not claim to be reading.
+    expect(source).toContain('"file contents could not be read"');
+  });
+});
+
+/*
+ * The rail's verbs and the workbench's transaction are one thing.
+ *
+ * `mutateSource` drops every request while `busy`, without a notice and without
+ * a throw, so a Source Control control that stays pressable through a save or a
+ * forty-file folder rename is a control that lies: it depresses, nothing
+ * stages, and the only feedback on screen is a progress notice about an
+ * unrelated operation. `Save` in the same component has always been gated on
+ * exactly this state.
+ */
+describe("Source Control during a workbench transaction", () => {
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("hands the transaction state to the rail that shares it", () => {
+    const rail = source.match(/<SourceControlRail[\s\S]*?\/>/u)?.[0] ?? "";
+    expect(rail).toContain("busy={busy}");
+    // Forwarded to both lanes, because staging and unstaging are the same
+    // transaction from opposite sides.
+    expect([...source.matchAll(/<ScmGroup[\s\S]*?\/>/gu)].filter((group) => group[0].includes("busy={busy}"))).toHaveLength(2);
+  });
+
+  it("disables every verb that a busy workbench would silently drop", () => {
+    const group = source.slice(source.indexOf("function ScmGroup("));
+    // The per-row stage/unstage toggle, the group's bulk verb, and the row's
+    // discard — the three controls that reach `mutate` from a row.
+    expect(group).toContain('aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} disabled={busy}');
+    expect(group).toContain('class="scm-group__bulk" type="button" aria-label={bulk.label} title={bulk.label} disabled={busy}');
+    expect(group).toContain("disabled={busy || !repository || !worktree || conflicted}");
+    // Commit is the fourth, and the discard confirmation is the one that has
+    // already been armed — it must not commit a decision the workbench drops.
+    expect(source).toContain("disabled={busy || !commitMessage.trim()}");
+    expect(source).toContain("confirmDisabled={busy}");
   });
 });
 
@@ -1121,6 +1179,127 @@ describe("Explorer chrome above the tree", () => {
   });
 });
 
+/*
+ * The file strip is chrome about the sheet, and chrome the sheet can paint
+ * through costs the reader both things at once: the file state is unreadable
+ * and so is the line of the file that covered it.
+ *
+ * Nothing about the failure shows in a diff. The strip has an opaque
+ * background and reads correctly in its own rule; what breaks it is a
+ * paint-order fact held between two rules ninety lines apart, where the
+ * positioned code layers outrank an unpositioned sibling that comes after them
+ * in the document. Seen at 320x568 with the editor pane open: the wrapped
+ * continuation of line 1 of `notes/retrieval.md` painted in code ink at
+ * y=337–341, on the strip's own background, across the "Saved" chip and the
+ * file path, with no scroll position that clears it.
+ */
+describe("the file strip and the sheet it describes", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const rule = (selector: string) => styles.match(new RegExp(`\\n${selector} \\{([^}]+)\\}`, "u"))?.[1] ?? "";
+
+  it("puts the strip in a layer above the code surface it describes", () => {
+    const strip = rule("\\.editor-strip");
+    expect(strip).toContain("position: relative;");
+    expect(strip).toContain("z-index: 2;");
+  });
+
+  it("keeps the code layers the strip has to outrank below it", () => {
+    // The assertion above only means anything while these are the numbers it
+    // beats: the textarea paints at 1, the highlight twin behind it at 0. If a
+    // later change raises either, the strip stops winning and says nothing.
+    expect(rule("\\.code-editor")).toContain("z-index: 1;");
+    expect(styles).toMatch(/:is\(\.code-highlight, \.code-wrap-measure\) \{[^}]*z-index: 0;/u);
+  });
+});
+
+/*
+ * Two labels, one rail, and only one of them can be shortened.
+ *
+ * Both halves of this are regressions someone has already shipped. `flex: 1 1 0`
+ * splits the strip into halves, which spends width on the label that already
+ * fits: measured at 1024, "Explorer" left 12px of its cell unused while "Source
+ * Control 0" was cut to five characters beside it. Capping the cells at
+ * `max-width: max-content` freed that label and froze the pair at its own
+ * content, leaving 73px of dead rail on a 1920 desktop. `flex: 1 1 auto` is the
+ * basis that owes neither — content width first, surplus shared after — so both
+ * numbers below are asserted together and neither can be traded for the other
+ * without this failing.
+ */
+describe("the workbench's two-way activity switch", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("sizes a cell from its own label and shares what the rail has left over", () => {
+    const tab = styles.match(/\n\.tabs\.workbench-mode-tabs \.tabs__tab \{([^}]+)\}/u)?.[1] ?? "";
+    // `auto`, not `0`: a zero basis is the halving, and it is what cut the
+    // label. A grow factor, not none: without it the pair stops at its content.
+    expect(tab).toContain("flex: 1 1 auto;");
+    expect(tab).toContain("min-width: 0;");
+    // The cap this replaces. Reinstating it would re-open the dead-rail half.
+    expect(tab).not.toContain("max-width: max-content;");
+  });
+
+  it("charges a rail too narrow for both entirely to the longer label", () => {
+    // Shrink is weighted by content width, so without this "Explorer" — which
+    // has no characters to spare — loses letters alongside a neighbour that
+    // does. The rule is positional, so it is only true while Explorer is the
+    // strip's first item; that ordering is asserted with it.
+    const first = styles.match(/\n\.tabs\.workbench-mode-tabs \.tabs__tab:first-child \{([^}]+)\}/u)?.[1] ?? "";
+    expect(first).toContain("flex-shrink: 0;");
+    expect(source.indexOf('{ id: "explorer", label: "Explorer", leading:'))
+      .toBeLessThan(source.indexOf('{ id: "source", label: "Source Control", leading:'));
+    // And it can only refuse to shrink because the rail has a floor it clears:
+    // 15rem is 240px against Explorer's measured 108.
+    expect(styles).toContain("clamp(15rem, var(--workbench-rail, 26%), 22rem)");
+  });
+});
+
+/*
+ * The phone's only way between the three panes, and it may not hide one.
+ *
+ * `Tabs` grows a `⌄ n` control the moment a tab measures outside the strip's
+ * view, and on this row that reading latches: the control takes ~38px of the
+ * row it was measuring, so every re-measure after the first sees a narrower
+ * strip than the one that fitted. At 390px the three labels want 347px of a
+ * 374px row — 27px of slack between two stable readings — and once it tipped it
+ * stayed tipped: "Explorer" cut to "lorer" by the viewport edge, "Source
+ * Control" without its count, and a third of the route's navigation behind a
+ * chevron. `min-width: 0` is what makes the losing reading unreachable: cells
+ * that can shrink always fit, and a strip with nothing out of view has nothing
+ * to report.
+ */
+describe("the phone's three-way pane switch", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const phone = styles.slice(styles.indexOf("@media (max-width: 760px) {"));
+
+  it("lets a cell shrink so the strip never has a tab to hide", () => {
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__tab,\n  .tabs.workbench-mobile-switch .tabs__tab-button { min-width: 0; }");
+  });
+
+  it("charges a narrow strip to the one label that survives being cut", () => {
+    /*
+     * The cell that can shrink is not the cell that should. Flex weights shrink
+     * by content width, so at phone-320 the ~49px deficit was split 21/16/23
+     * across three labels wanting 72px, 51px and 144px — rendering "Expl…",
+     * "Ed…" and "Source Co…", with the *active* tab cut to four characters and
+     * its neighbour to two. Freezing the two short words sends the whole
+     * deficit to "Source Control", which is still named by its first word after
+     * a cut and still carries its count; "Ed…" names nothing at all.
+     */
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__tab:not(:last-child) { flex-shrink: 0; }");
+  });
+
+  it("keeps the change count while the label is what gives way", () => {
+    // The count is the reading the switch exists to carry; ellipsising the
+    // label around it is the whole trade.
+    expect(phone).toContain(".tabs.workbench-mobile-switch .tabs__count { flex: 0 0 auto; }");
+    // And the label has somewhere to put the characters it drops — the
+    // primitive's own rule, which this depends on and does not restate.
+    const routes = readFileSync(new URL("./routes.css", import.meta.url), "utf8");
+    expect(routes).toMatch(/\.tabs__label \{[^}]*text-overflow: ellipsis;/u);
+  });
+});
+
 describe("one byte vocabulary", () => {
   it("formats workspace sizes through the shared module, not a local copy", () => {
     const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
@@ -1244,22 +1423,33 @@ describe("Explorer density", () => {
     expect(coarse).toContain("opacity: 1;");
   });
 
-  it("splits the activity row between Explorer and Source Control", () => {
-    // Equal flex tracks make the two destinations easy to scan and the gap
-    // gives them a quiet separation without inventing a second tab grammar.
-    // Every rule the strip's tab button carries, joined: the button is named by
-    // two of them — one for the padding, one for the `min-width: 0` that lets a
-    // 240px rail truncate a label instead of hiding a whole tab.
+  it("gives the whole activity row to Explorer and Source Control", () => {
+    // Two flexible cells and a gap between them: one tab grammar, one rail,
+    // nothing left over. Not equal tracks — the two labels are different
+    // lengths and halving the rail is what cut the longer one; the sizing
+    // itself is argued and asserted in "the workbench's two-way activity
+    // switch" above. Every rule the strip's tab button carries, joined: the
+    // button is named by two of them — one for the padding, one for the
+    // `min-width: 0` that lets a 240px rail truncate a label instead of hiding
+    // a whole tab.
     const button = [...styles.matchAll(/\.tabs\.workbench-mode-tabs \.tabs__tab-button \{([^}]+)\}/gu)]
       .map((match) => match[1] ?? "").join("\n");
-    expect(button).toContain("padding: 0 var(--sp-3);");
+    // `--sp-2`, and it is the label's width rather than a taste in gutters: the
+    // 255px rail this strip gets at laptop-1024 and tablet-768 was 37px short of
+    // what its two cells asked for at `--sp-3`, all 37 are charged to "Source
+    // Control", and stepping the gutter back returns 16 of them — the difference
+    // between a cell reading "Source …" and one reading "Source Con…". `--sp-1`
+    // is the step that made two bordered controls read as prose and is not the
+    // way to find the rest.
+    expect(button).toContain("padding: 0 var(--sp-2);");
+    expect(button).not.toContain("padding: 0 var(--sp-1);");
     // The step down in *size* keeps its documented reason: "Source Control"
     // plus its count has to fit a 15rem rail.
     expect(button).toContain("font-size: var(--fs-body);");
     expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {");
     expect(styles).toContain("gap: var(--sp-2);");
     expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__tab {");
-    expect(styles).toContain("flex: 1 1 0;");
+    expect(styles).toContain("flex: 1 1 auto;");
     expect(source).toContain('{ id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> }');
   });
 
@@ -1274,6 +1464,28 @@ describe("Explorer density", () => {
     expect(new Set(labels).size).toBe(1);
     // And it is the name the tree's own heading and the route already use.
     expect(source).toContain('{mode === "source" ? "Source Control" : "Explorer"}');
+  });
+});
+
+/*
+ * The editor column has to be able to run out of room. With the terminal dock
+ * open on a 932×430 landscape phone it has about 65px for the code frame and
+ * the file strip together; the frame shrinks to nothing, as its flex terms ask,
+ * and then the only question is whether its content stays inside it. It did
+ * not: three wrapped lines painted straight through the Modified verdict, the
+ * path, the revision and the Wrap/Save controls.
+ */
+describe("the editing sheet under a column that has run out of height", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+
+  it("clips the code frame instead of letting it paint over the file strip", () => {
+    const frame = styles.match(/\.code-editor-frame \{([^}]+)\}/u)?.[1] ?? "";
+    expect(frame).toContain("flex: 1 1 auto");
+    expect(frame).toContain("min-height: 0");
+    expect(frame).toContain("overflow: hidden");
+    // The strip is the half that must not shrink; the frame is the half that
+    // must. A strip that could shrink would simply lose the same facts slowly.
+    expect(styles.match(/\.editor-strip \{([^}]+)\}/u)?.[1] ?? "").toContain("flex: 0 0 auto");
   });
 });
 

@@ -205,7 +205,10 @@ describe("PrimeRuntime", () => {
   });
 
   it("gate: evidence classification and fork refusals are fail-closed", async () => {
-    expect(sessionRuntimeKind([])).toBe("airship-core");
+    // The classification is the gate's, so an empty journal is unclaimed land
+    // rather than airship-core; the local copy that said otherwise is what
+    // kept the first-turn seal from ever being written.
+    expect(sessionRuntimeKind([])).toBe("unpinned");
     expect(sessionRuntimeKind([{ type: "turn.requested" }])).toBe("airship-core");
     expect(sessionRuntimeKind([{ type: "prime.kernel.job.started" }])).toBe("prime");
 
@@ -227,10 +230,66 @@ describe("PrimeRuntime", () => {
       workspaceId: "ws-runtime",
       securityPosture: "local",
     });
+    /*
+     * A fresh journal is unpinned, so prime is admitted and the first prime
+     * turn seals it — the durable statement the Proof view reads. The seal is
+     * written before the session runs, so it lands whatever the turn then does
+     * with this deliberately unusable transport.
+     */
     const plain = await fixture.journal.createSession("plain", manifest);
     await expect(
       runPrimeTurn({
         sessionId: plain.id,
+        content: "hi",
+        runtime: "prime",
+        transport,
+        tools: fixture.registry,
+        journal: fixture.journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+    const sealed = await fixture.journal.readEvents(plain.id);
+    expect(sealed.filter((event) => event.type === "prime.session.runtime.seal")).toHaveLength(1);
+
+    // The default path — no explicit `runtime` — takes the same branch, and
+    // the seal is written exactly once per journal.
+    const defaulted = await fixture.journal.createSession("defaulted", manifest);
+    await expect(
+      runPrimeTurn({
+        sessionId: defaulted.id,
+        content: "hi",
+        transport,
+        tools: fixture.registry,
+        journal: fixture.journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      runPrimeTurn({
+        sessionId: defaulted.id,
+        content: "again",
+        transport,
+        tools: fixture.registry,
+        journal: fixture.journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+    const defaultedEvents = await fixture.journal.readEvents(defaulted.id);
+    expect(defaultedEvents.filter((event) => event.type === "prime.session.runtime.seal")).toHaveLength(1);
+
+    // Durable airship turn history is what refuses prime, not the mere
+    // presence of a creation record.
+    const airship = await fixture.journal.createSession("airship", manifest);
+    await fixture.journal.append(airship.id, [
+      { type: "turn.requested", turnId: "t-1", payload: { content: "hi" } },
+      { type: "inference.started", turnId: "t-1", payload: { step: 0 } },
+    ]);
+    await expect(
+      runPrimeTurn({
+        sessionId: airship.id,
         content: "hi",
         runtime: "prime",
         transport,

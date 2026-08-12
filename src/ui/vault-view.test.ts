@@ -280,6 +280,82 @@ describe("provider comparison", () => {
     expect(lab?.note.split(". ")[0]).toBe("On a loopback lab endpoint nothing is cloud-synchronized");
   });
 
+  /*
+   * The sentence that tells you how to read the comparison has to survive the
+   * layout that makes the comparison readable. Under 680px the matrix stops
+   * being a table and becomes one block per provider; `caption` was left out of
+   * that list, so it kept `display: table-caption`, shrink-wrapped to the
+   * collapsed table's intrinsic width, and printed one word per line down a
+   * 90px column at 390 — on the screen where a person chooses who holds their
+   * data, with two thirds of the row beside it empty.
+   */
+  it("lets the caption use the full width the stacked layout gives everything else", () => {
+    const styles = readFileSync(new URL("./vault-view.css", import.meta.url), "utf8");
+    const stacked = styles.slice(styles.indexOf("@media (max-width: 1023px)"));
+    const rule = stacked.slice(0, stacked.indexOf("display: block;"));
+
+    expect(rule).toContain(".vault-provider-compare caption");
+  });
+
+  /*
+   * SO035. The stacked shape above was right and its threshold was wrong: it
+   * stopped at 680px while the five columns stayed starved well past it.
+   * Measured on the shipped build — column width, and the line count of the
+   * longest cell ("A recovery key and an encrypted backup file — the key alone
+   * cannot rebuild an evicted store"):
+   *
+   *   768  → 124.7px/col, 8 lines, row heights 49..129px   ← the filed defect
+   *   900  → 120.3px/col, 8 lines, row heights 49..129px
+   *   1024 → 144.0px/col, 7 lines, row heights 47..113px
+   *   1280 → 194.0px/col, 5 lines, row heights 33..81px
+   *
+   * At 768 one cell inflated its row to 129px against 49px neighbours. 900 was
+   * worse than 768 because the route's own measure narrows the table faster
+   * than the viewport widens it. The line is drawn at 1023 so the whole starved
+   * band stacks; laptop-1024 up keeps its columns, which is a wide-viewport
+   * measure decision rather than this tier's.
+   */
+  it("stacks the comparison across the whole band where a column cannot hold an answer", () => {
+    const styles = readFileSync(new URL("./vault-view.css", import.meta.url), "utf8");
+    expect(styles).toContain("@media (max-width: 1023px)");
+    // The old threshold must not survive alongside the new one, or a reader of
+    // this sheet cannot tell which number the table actually obeys.
+    const stacked = styles.slice(styles.indexOf("@media (max-width: 1023px)"));
+    expect(stacked).toContain(".vault-provider-compare thead { display: none; }");
+    expect(styles.slice(styles.indexOf("@media (max-width: 680px)"), styles.indexOf("@media (max-width: 1023px)")))
+      .not.toContain(".vault-provider-compare thead");
+
+    /*
+     * And the tier is a test of affordability, not a vote against columns.
+     * Stacked all the way down, the six question cards ran 226px each and the
+     * comparison stood 1356px tall on a 1024px-tall tablet. From 641px up a
+     * card seats two provider answers a side at ~300px each and the longest
+     * cell lands in two lines; below 641 — the compact-shell boundary this
+     * stylesheet family already uses — it stays one answer per line, because
+     * 320px cannot afford the pair. Measured after: rows 138..170px at 768.
+     */
+    expect(stacked).toMatch(/@media \(min-width: 641px\) \{[^}]*\.vault-provider-compare tbody tr \{\s*display: grid;\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/u);
+  });
+
+  /*
+   * SO030. The prerequisite list kept a two-column `space-between` row with
+   * `text-align: end` on the value at every width. At phone-320 that left the
+   * value column ~110px, and `Recovery key` — two words — sat opposite `Shown
+   * once when you create the Vault, then never again` broken over five
+   * right-aligned lines with a ragged LEFT edge, on the side the eye returns
+   * to. Measured after at phone-320: label and value both start at x=68, the
+   * value is 222px wide and `text-align` is `start`.
+   */
+  it("stacks each prerequisite over its own answer instead of towering it right-aligned", () => {
+    const styles = readFileSync(new URL("./vault-view.css", import.meta.url), "utf8");
+    const compact = styles.slice(styles.indexOf("@media (max-width: 680px)"), styles.indexOf("@media (max-width: 1023px)"));
+    expect(compact).toMatch(/\.vault-view__attached li \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\);/u);
+    expect(compact).toContain(".vault-view__attached li strong { text-align: start; }");
+    // The wide tiers keep the two-column row: at laptop-1024 the same three
+    // values measure 45px against a 1024px row and read as a settled ledger.
+    expect(styles).toContain(".vault-view__attached li strong { color: var(--v-caution); overflow-wrap: anywhere; text-align: end; }");
+  });
+
   it("states plainly that the ephemeral option keeps nothing", () => {
     const ephemeral = PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
 

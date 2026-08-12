@@ -21,8 +21,13 @@
  * measurement below it paid: desktop deltas of `> 22%`, sessions mid-screen
  * at about 900px, compact density inversion, and the tall-viewport centre of
  * the empty-transcript zero state failed in the same frame. Declaring all
- * four rows treats missing children honestly: nothing rendered at a row is a
- * zero-height auto, never a displaced band.
+ * four rows was necessary and, on its own, not sufficient: the sentence that
+ * used to end this comment — "nothing rendered at a row is a zero-height auto,
+ * never a displaced band" — is not how grid works. Auto-placement is
+ * positional, not by name. A row is only skipped if something is placed past
+ * it, so an absent first child does not leave row 1 empty; it slides every
+ * later child up one, which is the same displacement the extra row was added
+ * to stop. The two tracks that may never move are therefore pinned below.
  */
 .chat-stage {
   display: grid;
@@ -31,6 +36,62 @@
   min-height: 0;
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--ground) 76%, transparent);
+}
+
+/*
+ * The eyebrow is conditional three times over — on `sessionId &&
+ * runtime.current?.journal`, on its lazy chunk (`DeferredAgentRuntimeStatus`
+ * renders nothing until the module lands), and on the journal read inside the
+ * tag. Every first paint therefore begins without it, and unpinned that frame
+ * put the SessionBar in row 1, the transcript in row 2 — an `auto` track sized
+ * to its own content, so not a scroll region at all — and the composer in the
+ * flexible one. `align-content: safe center` on `.transcript.no-turns` then
+ * centred the zero state inside a box the height of the zero state, leaving it
+ * 24px from the top instead of optically centred, and the empty row was the
+ * trailing one nobody could see.
+ *
+ * Pinned, both frames agree: with the eyebrow, rows 1-4 in order; without it,
+ * row 2 is an empty zero-height `auto` and nothing else moves. Same repair
+ * `.main` and `.mobile-nav` carry in routes.css, for the same reason.
+ */
+.chat-stage > .transcript {
+  grid-row: 3;
+}
+
+.chat-stage > .composer-wrap {
+  grid-row: 4;
+}
+
+/*
+ * The engine claim is the session bar's eyebrow, so it starts where the bar's
+ * own title starts — and it is declared in the same breath so it cannot stop.
+ *
+ * `.chat-stage` is a bare grid with no padding of its own: every other child
+ * brings its gutter with it, the bar in this rule and the transcript in its
+ * own. The runtime tag arrived as an `.eyebrow` span with neither, so it
+ * inherited a zero-padding stage and ran the full width of it. Measured at
+ * phone-320, `engine: airship-core (default)` had its E-stem on the viewport
+ * edge at x=0 while the conversation title beneath it sat at 12; at
+ * desktop-1440 it began at x=232, flush on the rail seam, with the title it
+ * belongs to at 256. A band starting outside every neighbour reads as a stripe
+ * of chrome rather than as a fact about the row below it.
+ *
+ * Naming a token here instead would have been a guess dressed as a match: this
+ * gutter is not one value. `routes.css` re-states it twice — 12px in the phone
+ * band and 9px in the ≤500px-tall landscape band, both against a safe-area
+ * floor — because the header's inset is a function of how much width the
+ * device has, not of a constant. A `var(--sp-5)` on the eyebrow was measured
+ * doing exactly the harm it was meant to repair: correct at desktop, 12px
+ * past the title at phone-320, and wide enough there to wrap the tag onto a
+ * second line on the shortest viewport in the product.
+ *
+ * So the two elements share one declaration rather than agreeing by
+ * coincidence, here and at both overrides. Inline only — the row's height is
+ * the eyebrow's own line box, and the stage grid still owns the rhythm.
+ */
+.session-bar,
+.chat-stage > .agent-runtime-status {
+  padding-inline: var(--sp-5);
 }
 
 /*
@@ -47,7 +108,7 @@
   gap: var(--sp-2) var(--sp-4);
   align-items: center;
   min-height: 40px;
-  padding: var(--sp-1) var(--sp-5);
+  padding-block: var(--sp-1);
   border-bottom: 1px solid var(--line);
 }
 
@@ -77,6 +138,33 @@
 }
 
 .session-bar__identity-button:hover .session-bar__title { color: var(--accent-bright); }
+
+/*
+ * The session bar's identity control is the rename gesture on touch, and it
+ * was 32px tall on a tablet.
+ *
+ * The 44px rule for it already existed, under the compact-shell pair
+ * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`. That pair
+ * describes a *layout*, and it was standing in for a pointer: measured on the
+ * built tree at 768×1024 with `(pointer: coarse)` true, this button rendered
+ * 230.8×32. The comment ten lines below says touch renames "by tapping the
+ * title itself" — which is precisely why this cannot be keyed on width. The
+ * pencil button was removed on the strength of this target existing, and on a
+ * tablet it was 12px under the floor, so the route had no rename gesture a
+ * finger was guaranteed to land on at all.
+ *
+ * Height only, deliberately. The width-scoped copy also sets
+ * `min-width: var(--touch-target)`, which it can afford because at 640px the
+ * bar is a single stacked column. Here the button is `width: 100%` inside a
+ * bar that must be allowed to ellipsize, and `min-width` on a flex item
+ * replaces its min-content floor — the defect `touch-target-floor.spec.ts`
+ * opens by describing, a `.popover__trigger` correct in the stylesheet and 9px
+ * wide on the screen. It measures 230.8px wide here; the axis under floor is
+ * the one being floored.
+ */
+@media (pointer: coarse) {
+  .session-bar__identity-button { min-height: var(--touch-target); }
+}
 
 /* `.session-bar__rename-action` used to be declared here and revealed at the
    phone and landscape breakpoints, because "fine pointers already have
@@ -275,6 +363,37 @@
   color: var(--ink-disabled);
   background: var(--surface-disabled);
   cursor: not-allowed;
+}
+
+/*
+ * The three icon-only verbs of this bar, floored on the pointer axis.
+ *
+ * `routes.css` already floors all of them to `--touch-target`, but inside
+ * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)` — and a
+ * portrait tablet matches neither clause. Measured on this build at 768×1024
+ * with a coarse pointer, the journal chip's `⌗` and the `+` rendered ~25px
+ * circles and the conversation switcher a bare 28px glyph, beside the `⌘K`,
+ * gear and shield buttons of the topbar at their full 44 in the same frame.
+ * A control that is a target on a phone and not on an iPad has a floor
+ * written against the wrong axis: what a finger has to find is decided by the
+ * pointer, not by the width.
+ *
+ * Here rather than in `tokens.css` beside the primitive floor, because these
+ * carry their resting `min-height` in the rules directly above at the same
+ * specificity — declared earlier in the barrel, the floor would lose the
+ * cascade to the 26px and 28px it exists to raise and would sit in the sheet
+ * looking correct and doing nothing. This sheet already keeps three such
+ * blocks, each beside the recipe it raises, for the same reason.
+ */
+@media (pointer: coarse) {
+  .journal-chip__branch,
+  .journal-chip__record,
+  .session-bar__new,
+  .session-bar__switch.menu-select.compact .menu-select-trigger {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    justify-content: center;
+  }
 }
 
 /*
@@ -1893,6 +2012,26 @@ button.runtime-posture {
   font-size: var(--fs-micro);
 }
 
+/*
+ * 28px is the *quiet* height, not the touch height.
+ *
+ * The shared `.menu-select-trigger` ships a 40px floor; this rule takes it down
+ * to 28 so the policy control reads as a caption in the composer strip rather
+ * than as a second button beside Send. That trade is right on a mouse and wrong
+ * on a finger, and until now the only thing that undid it was the compact-shell
+ * width pair — so measured at 768×1024 on a coarse pointer this rendered
+ * 132.4×28, 16px under the floor, on the control that decides whether the agent
+ * asks before acting. It is the one control in the composer where a mis-tap
+ * changes what the product is allowed to do without asking.
+ *
+ * The strip it sits in is `align-items: center` in a row that the 44px Send
+ * button below already sets the height of, so restoring the floor moves no
+ * neighbour: measured after, the composer strip is the same height it was.
+ */
+@media (pointer: coarse) {
+  .composer-approval-select .menu-select-trigger { min-height: var(--touch-target); }
+}
+
 /* 700 on an 11px muted label was the loudest thing in the strip while saying
    the least. The escalation dot and the verbatim Title Case word carry the
    state; the weight was carrying nothing. */
@@ -1983,6 +2122,31 @@ button.runtime-posture {
   color: #f5e9e4;
   border-color: rgba(200, 103, 88, 0.45);
   background: var(--signal-red);
+}
+
+/*
+ * "The most-pressed thing in the product" — 32×32 on a touch tablet.
+ *
+ * The rule above says so about the colour and then sizes the box for a mouse.
+ * `routes.css` grows `.icon-button, .send-button` to `--touch-target` inside
+ * the compact-shell width pair, which is why a 390px phone is correct and why
+ * nobody noticed: measured on the built tree at 768×1024 with
+ * `(pointer: coarse)` true, this is 32×32 — 12px under the floor on both axes,
+ * on the composer's primary action, and the smallest control the chat route
+ * asks a finger to find.
+ *
+ * `width`/`height` rather than the `min-*` pair, matching the width-scoped rule
+ * this mirrors: the button is a `display: grid; place-items: center` square
+ * holding one glyph, so the two axes have to grow together or the icon stops
+ * being centred in a square. It grows into the composer's own padding — the
+ * strip is taller than 44px at every viewport that reaches this rule, so the
+ * textarea beside it does not move.
+ */
+@media (pointer: coarse) {
+  .send-button {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
 }
 
 /* Fresh-transcript entry points: give the empty chat stage intent, not void. */

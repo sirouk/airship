@@ -787,7 +787,11 @@ function loadMessageParts() {
  * is waiting on it, and long before anyone goes offline.
  */
 function warmMessageParts(): void {
-  const warm = () => { void loadMessageParts(); };
+  // The rejection is terminated here because nobody is waiting on this fetch:
+  // `loadRetryableChunk` reports a terminal failure by throwing, and from an
+  // idle prefetch that is an unhandled rejection in the console rather than a
+  // fact anyone can act on. The card that needs the chunk reports its own.
+  const warm = () => { void loadMessageParts().catch(() => undefined); };
   if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
   else setTimeout(warm, 0);
 }
@@ -798,7 +802,8 @@ function warmMessageParts(): void {
  * status tag is the W6 surface every fresh cockpit's chat stage takes.
  */
 function warmAgentRuntimeStatus(): void {
-  const warm = () => { void loadAgentRuntimeStatus(); };
+  // Same unwatched prefetch, same reason it must not reject into the console.
+  const warm = () => { void loadAgentRuntimeStatus().catch(() => undefined); };
   if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
   else setTimeout(warm, 0);
 }
@@ -842,16 +847,23 @@ let messagePartsView: ((props: MessagePartsViewProps) => VNode) | undefined;
 
 function DeferredMessageParts(props: MessagePartsViewProps) {
   const [View, setView] = useState<((props: MessagePartsViewProps) => VNode) | undefined>(() => messagePartsView);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (messagePartsView) return;
     let live = true;
     void loadMessageParts().then((module) => {
       messagePartsView = module.MessagePartsView;
       if (live) setView(() => module.MessagePartsView);
-    });
+    }).catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
   }, []);
-  return View ? <View {...props} /> : null;
+  if (View) return <View {...props} />;
+  // The renderer is on the far side of a fetch that did not land, and
+  // `loadRetryableChunk` has already spent its retry. Rendering `null` here
+  // gave every row that has parts a labelled empty card, so a reloaded offline
+  // conversation looked wiped. The words are local either way: say them, in the
+  // same plain shape the card uses for a message with no parts at all.
+  return failed ? <p>{messagePlainText(props.parts)}</p> : null;
 }
 
 function developmentChunkEntry(path: string): string | undefined {
@@ -1226,6 +1238,13 @@ function markComposerScroll(element: HTMLTextAreaElement): void {
 
 /** Reconcile the composer's box with the value currently in its DOM authority. */
 function fitComposerTextarea(element: HTMLTextAreaElement): void {
+  // Drop the ceiling this function wrote last time before reading the declared
+  // one. An inline `max-height` outranks the stylesheet, so measuring without
+  // clearing it fed the previous viewport-derived cap back in as the declared
+  // cap — and the cap can only shrink, so one soft-keyboard raise left the
+  // composer permanently capped at a third of the shrunken viewport, with the
+  // dismissal that should have given the 180px back unable to.
+  element.style.maxHeight = "";
   const style = getComputedStyle(element);
   const minimum = parseFloat(style.minHeight) || 44;
   // The cap is a share of what is *visible*, not of the document: with a
@@ -1237,7 +1256,20 @@ function fitComposerTextarea(element: HTMLTextAreaElement): void {
   );
   element.style.height = `${minimum}px`;
   element.style.maxHeight = `${maximum}px`;
-  const natural = element.scrollHeight;
+  /*
+   * An empty box is the one height that is known rather than measured.
+   *
+   * Growth still asks the element how tall its text wants to be. Emptiness
+   * does not have to ask, and asking is what kept the composer open: measured
+   * on this build at 320, 390, 430, 768, 1024, 1440 and 1920, clearing a draft
+   * left the textarea sitting at exactly the cap — 180px of nothing above the
+   * footer, with the transcript's one sentence pushed off a 320px phone —
+   * because `scrollHeight` answered with the extent the box had grown to and
+   * not with the extent an empty value needs, and every later refit measured
+   * the same stuck answer. Blurring the composer did not release it either, so
+   * it was not a focus affordance — it was 136px the person could not get back.
+   */
+  const natural = element.value ? element.scrollHeight : minimum;
   element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
   element.style.overflowY = natural > maximum ? "auto" : "hidden";
   markComposerScroll(element);
@@ -2915,37 +2947,6 @@ export function App() {
       onFork: () => { if (lastAnswer) void forkFromMessage(lastAnswer, "fork"); },
     });
   }, [paletteActionsModule, messages, busy, sessionLibrary, activeSessionRecord]);
-  /*
-   * Land the "Return to this turn" once the transcript it names has rendered.
-   *
-   * Keyed on the message list because the conversation is usually still being
-   * resumed when the route changes — running on navigation alone scrolled an
-   * empty stage and reported success. The request is one-shot in every branch,
-   * including the one where the transcript does not hold the turn: a control
-   * that says it will return you and then leaves the screen unchanged is the
-   * defect, and a silent retry loop would be a slower version of it.
-   */
-  useEffect(() => {
-    const request = pendingTranscriptReturn;
-    if (view !== "chat" || !request || request.sessionId !== sessionId || messages.length === 0) return;
-    setPendingTranscriptReturn(undefined);
-    /*
-     * Unpin first, synchronously, and before the pin effect below runs.
-     * Measured: the return marked and outlined the right card at top -1317 and
-     * left the reader at the bottom of the thread, because the pin-to-latest
-     * frame is queued after this one and wins. Unpinning is also the honest
-     * state — the reader is now away from the newest turn — so the jump control
-     * appears, which is the way back.
-     */
-    transcriptPinned.current = false;
-    setTranscriptDetached(true);
-    const frame = requestAnimationFrame(() => {
-      if (focusTranscriptTurn(request.turnId) === "not-rendered") {
-        setRuntimeStatus("That turn has no card in this transcript — a local command mints no receipt, so there is no id to land on. The conversation is open.");
-      }
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [view, sessionId, messages, pendingTranscriptReturn]);
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
     openPreferences: () => requestDeferredOverlay("Preferences"),
@@ -3031,6 +3032,72 @@ export function App() {
     () => proofResolvableReceipts(ancillaryReceipts, messages, sessionId),
     [ancillaryReceipts, messages, sessionId],
   );
+  /*
+   * Land the "Return to this turn" once the transcript it names has rendered.
+   *
+   * Keyed on the message list because the conversation is usually still being
+   * resumed when the route changes — running on navigation alone scrolled an
+   * empty stage and reported success. The request is one-shot in every branch,
+   * including the one where the transcript does not hold the turn: a control
+   * that says it will return you and then leaves the screen unchanged is the
+   * defect, and a silent retry loop would be a slower version of it.
+   *
+   * Declared below `useWindowedTranscript` because it needs the window's
+   * geometry: past 60 rows the transcript renders a slice, so the card being
+   * returned to is usually not in the DOM at all and cannot be found by a scan.
+   */
+  useEffect(() => {
+    const request = pendingTranscriptReturn;
+    if (view !== "chat" || !request || request.sessionId !== sessionId || messages.length === 0) return;
+    setPendingTranscriptReturn(undefined);
+    /*
+     * Unpin first, synchronously, and before the pin effect below runs.
+     * Measured: the return marked and outlined the right card at top -1317 and
+     * left the reader at the bottom of the thread, because the pin-to-latest
+     * frame is queued after this one and wins. Unpinning is also the honest
+     * state — the reader is now away from the newest turn — so the jump control
+     * appears, which is the way back.
+     */
+    transcriptPinned.current = false;
+    setTranscriptDetached(true);
+    const index = messages.findIndex((message) => message.receipt?.turnId === request.turnId);
+    if (index < 0) {
+      // The one case the sentence is true about: no row in this conversation
+      // carries that turn id, so there is nothing to land on. Said of a merely
+      // unmounted card it blamed local commands for what virtualization did.
+      setRuntimeStatus("That turn has no card in this transcript — a local command mints no receipt, so there is no id to land on. The conversation is open.");
+      return;
+    }
+    let frame: number | undefined;
+    let pass = 0;
+    const land = () => {
+      // Scroll by the index's offset rather than by the card: the card mounts
+      // only once the window covers it. Reapplied on each pass because the
+      // window replaces estimated heights with measured ones as rows arrive,
+      // which moves the offset under the coordinate just written. The scroller
+      // is read per pass, not captured, because the transcript may still be
+      // mounting on the frame this effect runs from.
+      const element = transcriptElement.current;
+      if (element) {
+        element.scrollTop = Math.min(
+          windowedTranscript.offsetForIndex(index),
+          Math.max(0, element.scrollHeight - element.clientHeight),
+        );
+      }
+      if (focusTranscriptTurn(request.turnId) === "landed") return;
+      pass += 1;
+      // The same bounded retry the viewport restore above uses, and for the
+      // same reason: the scroll listener defers its viewport read to a frame of
+      // its own, so one frame is never enough for the row to exist.
+      if (pass < 8) {
+        frame = requestAnimationFrame(land);
+        return;
+      }
+      setRuntimeStatus("That turn is in this conversation, but its card did not mount in time to land on. Scroll up to it, or open it again from Proof.");
+    };
+    frame = requestAnimationFrame(land);
+    return () => { if (frame !== undefined) cancelAnimationFrame(frame); };
+  }, [view, sessionId, messages, pendingTranscriptReturn]);
 
   useLayoutEffect(() => {
     const element = textarea.current;
@@ -3371,6 +3438,30 @@ export function App() {
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
     if (!draftSessionId) return;
+    /*
+     * The first claim of the page's life is a conversation *arriving*, not a
+     * conversation being switched away from.
+     *
+     * The composer is editable from the first paint, and on a cold `#chat`
+     * boot there is no conversation behind it yet: the session is minted a
+     * beat later and its id is pushed into the address. Until this guard, the
+     * hydration that pass performed read the brand-new conversation's stored
+     * draft — necessarily empty — and set it over whatever had been typed in
+     * the meantime. Measured against `narrow-viewport-overflow`'s three
+     * paragraph specs at 320, 390 and 768: `/help` typed into the composer,
+     * then an empty composer with `Send message` permanently disabled and no
+     * word anywhere about where the text went. A person who types the instant
+     * the page paints gets the same silence.
+     *
+     * So the boot claim carries the live composer into the identity that just
+     * landed — the same thing `preserveComposerForDraftIdentity` does for a
+     * fork, and the same ordering the durable half below uses for its slower
+     * read. An empty composer still hydrates normally, which is what keeps a
+     * deep link to `#chat/<id>` restoring that conversation's own draft. Every
+     * later claim is a real switch and still replaces the composer with the
+     * arriving conversation's draft, empty included.
+     */
+    const bootClaim = draftHydrationIdentity.current === undefined;
     const hydration = claimThreadDraftHydration(
       draftHydrationIdentity,
       draftSessionId,
@@ -3382,11 +3473,12 @@ export function App() {
       return;
     }
     try {
-      setInput(readThreadDraft(draftSessionId, sessionStorage));
+      const stored = readThreadDraft(draftSessionId, sessionStorage);
+      setInput((current) => (bootClaim && current ? current : stored));
     } catch {
-      setInput("");
+      setInput((current) => (bootClaim && current ? current : ""));
     }
-    setAttachments([]);
+    setAttachments((current) => (bootClaim && current.length ? current : []));
   }, [chatRouteRequest, sessionId]);
   /*
    * The durable half of draft hydration.
@@ -4727,7 +4819,19 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const ownerRuntime = runtime.current;
     const ownerProfile = activeProfileRef.current;
     const ownerSessionId = activeSessionIdentity.current;
-    if (!ownerRuntime || !ownerProfile || !ownerSessionId) { navigate("sessions"); return; }
+    if (!ownerRuntime || !ownerProfile || !ownerSessionId) {
+      // The bail itself is architectural — an open is performed against the
+      // active conversation's runtime authority — but it was silent, and
+      // deleting the active conversation clears that identity with nothing to
+      // re-establish it. Every rail row, palette row and switcher entry then
+      // produced the library with no word about why, so the refusal names
+      // itself and keeps the row that was clicked selected, where the disabled
+      // Resume repeats the same reason.
+      setSessionsFocusId(targetSessionId);
+      setRuntimeStatus("No conversation is open, so there is no active runtime to open this one against. Start a new conversation first.");
+      navigate("sessions");
+      return;
+    }
     try {
       const [target, authoritySession] = await Promise.all([
         ownerRuntime.journal.getSession(targetSessionId),
@@ -5405,6 +5509,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   // "more below" rather than as a sliced row. Re-bind when the state or the
   // nesting changes the content height so the fade cannot go stale.
   useScrollEdges(primaryNav, `${String(shellMounted)}:${railState}:${view}`);
+
+  // The route scroller earns the same affordance, and unlike the rail it earns
+  // it at every viewport this product ships to: `.main` is bounded by the
+  // topbar above and the navigation band below, so a short viewport ends the
+  // content on a hard line and cuts whatever row is crossing it. `routes.css`
+  // turns this reading into a 26px fade on the edge that is genuinely hiding
+  // something. Re-bind on `view` because each route brings its own height, and
+  // on `railState` because collapsing the rail rewidens every route and
+  // rewraps its text — both change the overflow without a scroll event.
+  useScrollEdges(mainRegion, `${String(shellMounted)}:${railState}:${view}`);
 
   // `data-rail` is on the document element, not the shell, because the topbar
   // and the app grid both size their first column from `--rail-width`. This is
@@ -6520,7 +6634,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
 
   function editQueuedMessage(item: QueuedComposerItem): void {
     if (!sessionId) return;
-    setQueuePausedForSession(sessionId, false);
+    // Same rule as Stop and the failure path: never clobber a newer draft the
+    // person typed. The queue panel is only on screen while a turn runs, which
+    // is exactly when the composer holds the next follow-up — and an
+    // attachment-only composer would have been emptied with its object URLs
+    // leaked. The queued item is safe where it is, so refuse and say so rather
+    // than trade an unsent draft for it with no undo.
+    if (input.trim() || attachments.length) {
+      setComposerNotice("Clear or queue the composer before editing a queued message");
+      return;
+    }
+    // No `setQueuePausedForSession` here. Pulling an item back into the
+    // composer is not a send, and an explicit send is the only thing that lifts
+    // a Stop; resuming here dispatched the very queued turns the reader had
+    // pressed Stop to prevent.
     removeQueuedMessage(sessionId, item.id);
     setInput(item.prompt);
     setAttachments(item.attachments);
@@ -6562,11 +6689,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       || activeTurn.current
       || localCommandAdmission.current
       || inferenceRouteChanging.current
-      || sessionNavigationChanging.current
-      || catalogAuthorityChanging.current
       || vaultProviderSwitchingRef.current
       || localDeviceBusy
     ) return false;
+    // These two latches are the ones with no mirror on the surface:
+    // `composerTransitionPending` covers the route, Vault and local-device
+    // transitions, so Send is disabled and Enter names the wait for those. A
+    // conversation fork or a Profile storage change left Send enabled, the
+    // legend still reading "↵ send", and Enter doing nothing whatsoever. It is
+    // the same wait as the authority mismatch below, so it is the same
+    // sentence.
+    if (sessionNavigationChanging.current || catalogAuthorityChanging.current) {
+      setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
+      return false;
+    }
     const admissionRuntime = runtime.current;
     const admissionSessionId = sessionId;
     const admissionProfile = activeProfileRef.current;
@@ -7059,11 +7195,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       clearPendingDelta(assistantId);
       flushPendingToolOutput();
       const cancelled = controller.signal.aborted;
+      // The whole classification, not only its sentence: `turn-recovery` owns a
+      // cause vocabulary — rate limit, out of credit, access rejected, provider
+      // unreachable — and passing it nothing meant every failure over a working
+      // connection closed on "Turn failed", the one cause it could still not
+      // have been. An import that does not land still degrades to the
+      // unclassified footer rather than losing the card's sentence.
+      const mapped = cancelled
+        ? undefined
+        : await import("./request-state")
+          .then(({ mapUnknownRequestFailure }) => mapUnknownRequestFailure(error, online))
+          .catch(() => undefined);
       const failureMessage = cancelled
         ? "Turn stopped"
-        : await import("./request-state")
-          .then(({ mapUnknownRequestFailure }) => mapUnknownRequestFailure(error, online).message)
-          .catch(() => "Request failed. Local state was kept; no remote success is assumed.");
+        : mapped?.message ?? "Request failed. Local state was kept; no remote success is assumed.";
       const recovery = await loadTurnRecovery().catch(() => undefined);
       if (activeSessionIdentity.current === turnSessionId) {
         setMessages((current) =>
@@ -7081,7 +7226,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                   // recoverable than a completed turn.
                   ...(turnRequestBoundary ? { sourcePoint: turnRequestBoundary, turnStartPoint: turnRequestBoundary } : {}),
                   parts: recovery
-                    ? recovery.recoverPartialTurn(message.parts ?? [], "", pending, cancelled, undefined, Boolean(turnRequestBoundary || message.originatingPrompt))
+                    ? recovery.recoverPartialTurn(message.parts ?? [], "", pending, cancelled, mapped?.kind, Boolean(turnRequestBoundary || message.originatingPrompt))
                     : message.parts,
                   status: undefined,
                   liveToolOutput: undefined,
@@ -11128,7 +11273,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         same semantics; only the place it stands changes. The two are
         display-exclusives, so a reader never gets it twice.
       */}
-      <div class="runtime-line runtime-line--phone" role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
+      {/*
+        `data-empty` collapses the band without unmounting it. The element has
+        to stay in the accessibility tree for `aria-live` to announce the
+        sentence when one arrives — `display: none` would take it out and the
+        announcement with it — but a phone should not spend 34px of its shortest
+        dimension on a status that says nothing. It reads as a stripe of dead
+        `--ground` under the topbar, which is exactly what the nav band's own
+        keyboard rule two blocks down exists to prevent for the same reason.
+      */}
+      <div class="runtime-line runtime-line--phone" data-empty={runtimeStatus ? undefined : "true"} role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
 
       <Rail
         view={view}
@@ -14564,7 +14718,10 @@ function ProfileManagerView({
             {profiles.map((profile) => (
               <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
                 <span class="profile-monogram" style={profileBadgeStyle(profileThemeFor(catalog, profile.profileId))}>{profileMonogram(profile.name)}</span>
-                <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
+                {/* The catalog clamps a long name to three lines so one profile
+                    cannot set the height of the whole row; the title is how the
+                    rest of it is recovered without selecting the card. */}
+                <span><strong title={profile.name}>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
                     the revision strip beside it. It used to be typed out here with a
                     comment claiming `profiles-governance` was not in the startup
                     chunk — which was false: `chat/message-parts-view` imports
@@ -14712,7 +14869,12 @@ function ProfileManagerView({
               <p class="profile-boundary-note">{PROFILE_BOUNDARY_NOTE}</p>
             </details>
             <div class="revision-strip">
-              <span><small>Runtime</small>{selected.providerId} · {selected.model}</span>
+              {/* Every cell in this strip is `nowrap` with an ellipsis, and a
+                  quarter of the strip is not enough for a provider and a model
+                  name: "airship-demo · airship…" truncated at 1920px, with no
+                  hover recovery anywhere. The `title` is the same recovery the
+                  terminal's shell path already uses for the same reason. */}
+              <span title={`${selected.providerId} · ${selected.model}`}><small>Runtime</small>{selected.providerId} · {selected.model}</span>
               <span><PostureChip posture={selected.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
               <span><small>Skills resolved</small>{effectiveSkillIds(selected, catalog).length}</span>
               <span><small>Parent</small>{selected.parentRevision?.slice(-8) ?? "origin"}</span>
@@ -14728,7 +14890,16 @@ function ProfileManagerView({
                 * confirmation. Only the previewed theme field goes back.
                 */}
               {previewThemeId ? <button class="small-button" type="button" onClick={() => { const theme = previewRestore.current?.theme; if (theme) applyThemeWithPreferences(theme, preferences); setDraft((current) => ({ ...current, themeId: selected.theme.themeId })); setPreviewThemeId(undefined); }}>Cancel preview</button> : null}
-              {previewThemeId ? <span>Previewing — not saved</span> : null}
+              {/*
+                * `save()` deliberately leaves the preview armed — the paint
+                * bookkeeping and its unmount restore both depend on the flag —
+                * so this claim has to be about the theme rather than about the
+                * flag. Unconditional, it sat beside "Revision saved to the
+                * encrypted Vault" calling the saved theme unsaved, and a reader
+                * who believed it pressed "Cancel preview" on a theme it had
+                * just kept.
+                */}
+              {previewThemeId ? <span>{previewThemeId === selected.theme.themeId ? "Previewing this profile's saved theme" : "Previewing — not saved"}</span> : null}
               {status ? <span role="status" aria-live="polite">{status}</span> : null}
             </div>
             <details class="profile-danger-disclosure">

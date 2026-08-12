@@ -1,5 +1,5 @@
 # Airship Definitive Build Plan
-**Repo root:** `/Users/chrisk/chutes-jumpmaster/airship` (all paths below are absolute)
+**Repo root:** this repository (all paths below are repository-relative)
 **Input:** 70 adversarially-verified gaps across 8 dimensions. 22 refuted items are excluded and listed at the end as "do not re-raise."
 
 ---
@@ -32,18 +32,18 @@ These are the only places where two packages want the same file. Obey these or y
 
 | File | Packages | Rule |
 |---|---|---|
-| `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` | W3 (UX, lines ~4020–4460, 5460–5970), W6 (vault, ~1080–1170, 3049, 4680), W16 (inference, ~3400–3700, 4978, 5066–5183), W20 (chat parts, 2294), W23 (subagent, 1504) | Regions are disjoint. **W3 owns the file in Wave 1**; W6 lands first (Wave 1, tiny, vault region only) then W3 rebases. W16/W20/W23 are Wave 2/3 and must rebase onto W3. Never two app.tsx packages in the same wave except W3+W6 (with W6 first). |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/tools/execution-tools.ts` | W8 (all 8 execution findings), W12 (jsh shell tool), W29 (terminal bridge) | **W8 is sole owner.** W12 is a strict follow-on that adds one `case` to the dispatch W8 leaves in place. W29 is BUILD AFTER. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/git/workspace-adapter.ts` | W7 (stat fix + gitignore + seed), W18 (history/merge/remotes), W19 (CSP origin gate) | **W7 first** (touches `stat()` in `workspace-fs.ts` and `stage()`/`initializeSeed()`), then **W19** (adds gate at `clone`/`fetch`/`push` heads), then **W18** (adds new adapter methods). Strictly serial. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/capabilities/browser-runtime.ts` | W1 (`start()` kick), W10 (all dead-field work + SW probe) | **W1 first** (3-line addition), W10 rebases. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-transformers-loader.ts` | W5 (`PACK_ROOT` base path), W10 (`powerPreference`, `numThreads`) | **W5 first** (one-line `PACK_ROOT`), W10 rebases. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/retrieval/federated-turn-context.ts` | W11 (ranker extraction), W14 (lineage export), W30 (graph prior) | **W11 first**, W14 second (imports the extracted `memoryLineage`), W30 is BUILD AFTER. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/vault/encrypted-workspace.ts` | W21 (block reuse / manifest coalescing), W22 (segmented text writes), W26 (transactional scope) | All three BUILD AFTER. Order: **W26 scope → W21 growth → W22 ranges.** |
+| `src/ui/app.tsx` | W3 (UX, lines ~4020–4460, 5460–5970), W6 (vault, ~1080–1170, 3049, 4680), W16 (inference, ~3400–3700, 4978, 5066–5183), W20 (chat parts, 2294), W23 (subagent, 1504) | Regions are disjoint. **W3 owns the file in Wave 1**; W6 lands first (Wave 1, tiny, vault region only) then W3 rebases. W16/W20/W23 are Wave 2/3 and must rebase onto W3. Never two app.tsx packages in the same wave except W3+W6 (with W6 first). |
+| `src/tools/execution-tools.ts` | W8 (all 8 execution findings), W12 (jsh shell tool), W29 (terminal bridge) | **W8 is sole owner.** W12 is a strict follow-on that adds one `case` to the dispatch W8 leaves in place. W29 is BUILD AFTER. |
+| `src/git/workspace-adapter.ts` | W7 (stat fix + gitignore + seed), W18 (history/merge/remotes), W19 (CSP origin gate) | **W7 first** (touches `stat()` in `workspace-fs.ts` and `stage()`/`initializeSeed()`), then **W19** (adds gate at `clone`/`fetch`/`push` heads), then **W18** (adds new adapter methods). Strictly serial. |
+| `src/capabilities/browser-runtime.ts` | W1 (`start()` kick), W10 (all dead-field work + SW probe) | **W1 first** (3-line addition), W10 rebases. |
+| `src/indexing/semantic-transformers-loader.ts` | W5 (`PACK_ROOT` base path), W10 (`powerPreference`, `numThreads`) | **W5 first** (one-line `PACK_ROOT`), W10 rebases. |
+| `src/retrieval/federated-turn-context.ts` | W11 (ranker extraction), W14 (lineage export), W30 (graph prior) | **W11 first**, W14 second (imports the extracted `memoryLineage`), W30 is BUILD AFTER. |
+| `src/vault/encrypted-workspace.ts` | W21 (block reuse / manifest coalescing), W22 (segmented text writes), W26 (transactional scope) | All three BUILD AFTER. Order: **W26 scope → W21 growth → W22 ranges.** |
 | `index.html` + `public/_headers` (**serialized**) | W13 (`api.tavily.com`), W19 (git-remote origin constant, read-only) | `scripts/check-static-security.mjs` fails the build on any divergence between the two. **W13 is the only package that edits the CSP.** W19 reads it and adds a subset assertion. Any later CSP need queues behind W13. |
-| `/Users/chrisk/chutes-jumpmaster/airship/scripts/release-gate.mjs` (**serialized**) | W5 (semantic pack classifier + budget), W7 (`airship-memory-git` absence check), W8 (WASI artifact budget), W10 (second e2ee wasm artifact) | Land in this order: **W7 → W5 → W8 → W10.** Each adds one classifier/budget; conflicts are trivial if serialized, brutal if not. |
-| `/Users/chrisk/chutes-jumpmaster/airship/docs/MASTER_PROMPT_ACCEPTANCE.md` (**serialized**) | Nearly all | Each package appends its own row to its own section as the **final commit of the package**. Run a serialized "ledger merge" step at the end of each wave. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css` | W3 (`.skip-link`, `.transcript.no-turns`), W9 (`--tok-*` tokens in `:root`) | Different regions; W3 first. `src/ui/design-contract.test.ts` and `src/ui/css-variable-contract.test.ts` will catch violations either way. |
-| `/Users/chrisk/chutes-jumpmaster/airship/src/core/operating-charter.ts` | W13 (capability-boundary section), W16 (model facets), W24 (carried-context sentence) | **Charter version bumps rotate every new session's prompt digest and require updating the pinned digest at `operating-charter.test.ts:11-15`.** Allow **at most one** charter-version bump per wave. W13 owns the bump in Wave 2; W16 adds fields without a bump; W24 gets its own bump in a later wave. |
+| `scripts/release-gate.mjs` (**serialized**) | W5 (semantic pack classifier + budget), W7 (`airship-memory-git` absence check), W8 (WASI artifact budget), W10 (second e2ee wasm artifact) | Land in this order: **W7 → W5 → W8 → W10.** Each adds one classifier/budget; conflicts are trivial if serialized, brutal if not. |
+| `docs/MASTER_PROMPT_ACCEPTANCE.md` (**serialized**) | Nearly all | Each package appends its own row to its own section as the **final commit of the package**. Run a serialized "ledger merge" step at the end of each wave. |
+| `src/ui/styles.css` | W3 (`.skip-link`, `.transcript.no-turns`), W9 (`--tok-*` tokens in `:root`) | Different regions; W3 first. `src/ui/design-contract.test.ts` and `src/ui/css-variable-contract.test.ts` will catch violations either way. |
+| `src/core/operating-charter.ts` | W13 (capability-boundary section), W16 (model facets), W24 (carried-context sentence) | **Charter version bumps rotate every new session's prompt digest and require updating the pinned digest at `operating-charter.test.ts:11-15`.** Allow **at most one** charter-version bump per wave. W13 owns the bump in Wave 2; W16 adds fields without a bump; W24 gets its own bump in a later wave. |
 
 ---
 
@@ -57,17 +57,17 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** On a WebGPU-capable machine with semantic embeddings enabled, the semantic worker must latch **WebGPU**, not WASM. Today the capability refresh is two deferred dynamic imports behind a 120 ms indexing debounce, so at ≥150 ms RTT the first embed permanently pins WASM for the page lifetime — and the UI honestly reports the wrong backend.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-browser-provider.ts` (:41 options type, :53 default, :56 predicate)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-worker-provider.ts` (:104 `webgpuAvailable` widen, :152-173 `ensureReady`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/capabilities/browser-runtime.ts` (:377-394 `start()`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/main.tsx` (early non-blocking refresh)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/retrieval/client-context-runtime.ts` (:71-79 `setEmbeddingMode` disposes provider)
-- Tests: `semantic-browser-provider.test.ts`, `semantic-worker-provider.test.ts`, `/Users/chrisk/chutes-jumpmaster/airship/e2e/live-semantic-embedding.spec.ts`
+- `src/indexing/semantic-browser-provider.ts` (:41 options type, :53 default, :56 predicate)
+- `src/indexing/semantic-worker-provider.ts` (:104 `webgpuAvailable` widen, :152-173 `ensureReady`)
+- `src/capabilities/browser-runtime.ts` (:377-394 `start()`)
+- `src/main.tsx` (early non-blocking refresh)
+- `src/retrieval/client-context-runtime.ts` (:71-79 `setEmbeddingMode` disposes provider)
+- Tests: `semantic-browser-provider.test.ts`, `semantic-worker-provider.test.ts`, `e2e/live-semantic-embedding.spec.ts`
 
 **Approach.** Make the decision *await* the probe instead of racing it. Change `BrowserSemanticProviderOptions.capabilities` to return a `Promise`, defaulting to `getBrowserCapabilityRegistry().refresh().catch(() => undefined)`. Widen `webgpuAvailable` to `() => boolean | Promise<boolean>` and await it inside `ensureReady()` before the `initialize` postMessage (already async; probe is deadline-bounded at 3 s/sub-probe). Add `void this.refresh().catch(() => undefined)` at the end of `start()` and an early kick in `main.tsx` purely to hide latency — **not** as the fix, since the registry is first touched from inside `webgpuAvailable()` itself. Dispose the semantic provider on `setEmbeddingMode("semantic")` so a mislatched page can recover.
 **Do not** touch `client-context-runtime.ts:247-252` scheduling fallback — `client-context-engine.ts:460` re-reads the closure per generation, so it is deliberate and self-correcting.
 
-**Acceptance test (real).** Extend `/Users/chrisk/chutes-jumpmaster/airship/e2e/live-semantic-embedding.spec.ts` (run under `playwright.semantic.config.ts` against a real prepared pack): apply `Network.emulateNetworkConditions` with 300 ms latency via CDP, enable Local semantic, and assert (a) the worker's `initialize` message carries `preferredBackend: "webgpu"`, and (b) the UI's *active backend* readout (`src/ui/context-view.tsx:364`) reads `webgpu`. This test **fails today** (measured: `"wasm"` latched at t=1968 ms, probe started t=2167 ms) and passes after. Add a hermetic vitest companion asserting that an `undefined` synchronous snapshot plus a resolving `refresh()` still yields `"webgpu"`.
+**Acceptance test (real).** Extend `e2e/live-semantic-embedding.spec.ts` (run under `playwright.semantic.config.ts` against a real prepared pack): apply `Network.emulateNetworkConditions` with 300 ms latency via CDP, enable Local semantic, and assert (a) the worker's `initialize` message carries `preferredBackend: "webgpu"`, and (b) the UI's *active backend* readout (`src/ui/context-view.tsx:364`) reads `webgpu`. This test **fails today** (measured: `"wasm"` latched at t=1968 ms, probe started t=2167 ms) and passes after. Add a hermetic vitest companion asserting that an `undefined` synchronous snapshot plus a resolving `refresh()` still yields `"webgpu"`.
 
 ---
 
@@ -77,8 +77,8 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** Any same-byte-length edit written inside the same wall-clock second is currently invisible to `git status`/`diff`/`stage`/`commit` — permanently, not just for one second. Agent tool loops and editor autosave hit this constantly. This is the single worst class of defect in the whole audit: a change is on disk, differs from HEAD, and Airship reports "clean."
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/workspace-fs.ts` (:176 stat construction, :245 `ino`, :247 constructor)
-- Tests: `/Users/chrisk/chutes-jumpmaster/airship/src/git/workspace-adapter.test.ts`, `/Users/chrisk/chutes-jumpmaster/airship/src/git/encrypted-workspace-adapter.test.ts`
+- `src/git/workspace-fs.ts` (:176 stat construction, :245 `ino`, :247 constructor)
+- Tests: `src/git/workspace-adapter.test.ts`, `src/git/encrypted-workspace-adapter.test.ts`
 
 **Approach.** ~6 lines. Make `ino` a constructor parameter defaulting to `0` (so the directory branch at `:177` is untouched), and pass `revisionInode(file.revision)` — an FNV-1a hash of the workspace revision clamped to `uint32` (isomorphic-git's `GitIndex._entryToBuffer` writes `ino` with `writeUInt32BE`). Every `WorkspacePort.write` mints a fresh revision (`src/workspace/memory.ts:48`, `src/workspace/indexeddb.ts:78`, `src/vault/encrypted-workspace.ts:120`) and `workspace-fs.ts:113` short-circuits identical content, so the inode changes exactly when bytes may have. Bonus: this also fixes the identical stale-cache hole on `.git/index` itself in isomorphic-git's `GitIndexManager`.
 
@@ -92,12 +92,12 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** Every visitor to the deployed build currently gets Google Drive as the default provider, a red developer-facing error, and a silently ephemeral runtime — while a fully working, zero-config, encrypted, offline Local Device vault sits one dropdown away and is never suggested.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.tsx` (:227-232 `resolveDefaultVaultBackend`, **:244 `loadPreferenceOverrides` — the second hardcoded default the naive fix misses**)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.test.ts` (:7-10 pins old behavior)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/google-drive-setup.tsx` (:123-125 developer alert → user card + `onUseLocalDevice` prop)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` (:4680 wire `onUseLocalDevice` → existing `changeVaultProvider` at :3049) — **vault region only; land before W3**
-- `/Users/chrisk/chutes-jumpmaster/airship/.github/workflows/pages.yml` (:36-41 env block)
-- `/Users/chrisk/chutes-jumpmaster/airship/docs/MASTER_PROMPT_ACCEPTANCE.md` (new row; do **not** edit the existing :85 row — its evidence text is accurate)
+- `src/ui/platform-shell.tsx` (:227-232 `resolveDefaultVaultBackend`, **:244 `loadPreferenceOverrides` — the second hardcoded default the naive fix misses**)
+- `src/ui/platform-shell.test.ts` (:7-10 pins old behavior)
+- `src/ui/google-drive-setup.tsx` (:123-125 developer alert → user card + `onUseLocalDevice` prop)
+- `src/ui/app.tsx` (:4680 wire `onUseLocalDevice` → existing `changeVaultProvider` at :3049) — **vault region only; land before W3**
+- `.github/workflows/pages.yml` (:36-41 env block)
+- `docs/MASTER_PROMPT_ACCEPTANCE.md` (new row; do **not** edit the existing :85 row — its evidence text is accurate)
 
 **Approach.** Make the default deployment-aware as a **pure function taking the client ID as an explicit argument** (keeps it testable). Reuse the exact regex from `src/storage/google-drive-auth.ts:102` so a malformed value can never ship a default that throws at construction. Critically, patch **both** defaults: `:244` must downgrade a *persisted* `"google-drive"` when no valid client ID exists, because `app.tsx:1553-1560` already wrote that value to `airship.display-preferences.v1` for every existing visitor. Replace the red operator notice with a user-facing card ("Google Drive is not configured on this deployment") + primary "Use Local Device" button, operator detail inside `<details>`. Add `VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}` to the Pages workflow — load-bearing, because Vite strips the entire connect branch without it.
 
@@ -111,21 +111,21 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** Make the documented import→review→stage→commit loop actually completable on a real repository; stop the terminal lying about worktrees; guard `.gitignore` with tests and fix its wrong error; remove the 1,400-line Git *simulation* from the shipped bundle.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/validation.ts` (:12 limits, `validatePathList` optional limit)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/operations.ts` (:31-37 stage/unstage normalization — **mandatory**, `describeGitOperation` re-runs normalization at approval time, so a client-only fix changes nothing)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/client.ts` (:112-120 chunked stage/unstage with chained `expectedWorktreeVersion`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/terminal-commands.ts` (:93-94 worktree case → real `list/add/remove`; :377-393 `help()`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/workspace-adapter.ts` (:306 stage error → gated `isIgnored` check; :618 `initializeSeed` diagnostic)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/memory-adapter.ts` (:220-231 same ignore treatment — reachable via encrypted vault path)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/index.ts` (:3 delete `export * from "./memory-adapter"`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/deferred-capabilities.ts` (line 13, `EncryptedWorkspaceGitAdapter` — **verified present**)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/git-tools.ts` (:53 `maxItems`)
-- `/Users/chrisk/chutes-jumpmaster/airship/scripts/release-gate.mjs` (new `airship-memory-git` absence assertion — **first in the serialized release-gate queue**)
+- `src/git/validation.ts` (:12 limits, `validatePathList` optional limit)
+- `src/git/operations.ts` (:31-37 stage/unstage normalization — **mandatory**, `describeGitOperation` re-runs normalization at approval time, so a client-only fix changes nothing)
+- `src/git/client.ts` (:112-120 chunked stage/unstage with chained `expectedWorktreeVersion`)
+- `src/git/terminal-commands.ts` (:93-94 worktree case → real `list/add/remove`; :377-393 `help()`)
+- `src/git/workspace-adapter.ts` (:306 stage error → gated `isIgnored` check; :618 `initializeSeed` diagnostic)
+- `src/git/memory-adapter.ts` (:220-231 same ignore treatment — reachable via encrypted vault path)
+- `src/git/index.ts` (:3 delete `export * from "./memory-adapter"`)
+- `src/deferred-capabilities.ts` (line 13, `EncryptedWorkspaceGitAdapter` — **verified present**)
+- `src/tools/git-tools.ts` (:53 `maxItems`)
+- `scripts/release-gate.mjs` (new `airship-memory-git` absence assertion — **first in the serialized release-gate queue**)
 - Test import repoints: `src/tools/airship-tools.test.ts:2`, `src/core/airship-agent.live.test.ts:3`, `src/profiles/catalog.test.ts:4`
 
 **Approach.** Keep `maxPathsPerOperation = 512` as the per-adapter-call bound; add `maxPathsPerRequest = 4096` (≥ the importer's 2,000 default) validated in `operations.ts`, and chunk in `client.ts` inside a single `mutate("stage", …)` scope with the version fence chained from each chunk's returned worktree version. Partial failure must report *how many paths were actually staged* — staging is durable and must never be reported as rolled back. **Do not** add a `git.add({filepath: "."})` fast path: it throws `NotFoundError` on deletions and would stage outside the reviewed set. For `.gitignore`, gate the new `path-ignored` error on *untracked-ness first* (`git.listFiles`) — `isIgnored` returns true for already-tracked clean files, so the naive fix swaps one wrong message for another; and thread `force` through `operations.ts`'s `frozen()` whitelist or it is silently stripped.
 
-**Acceptance test (real).** (1) New `src/git/terminal-commands.test.ts` case: build a 600-change worktree, run `git add -A`, assert all 600 staged and one commit succeeds — fails today with `Select between 1 and 512 paths.` (2) `git worktree list/add/remove` round trip against the memory adapter. (3) New `/Users/chrisk/chutes-jumpmaster/airship/src/git/gitignore.test.ts`: untracked-ignored absent from status; `.git/info/exclude` honored; negation re-includes; **file tracked before the pattern was added still reports modified**; seeded `.gitignore` no longer silently drops seed files. (4) `npm run build && grep -rl "airship-memory-git" dist` returns nothing, enforced in `release-gate.mjs`.
+**Acceptance test (real).** (1) New `src/git/terminal-commands.test.ts` case: build a 600-change worktree, run `git add -A`, assert all 600 staged and one commit succeeds — fails today with `Select between 1 and 512 paths.` (2) `git worktree list/add/remove` round trip against the memory adapter. (3) New `src/git/gitignore.test.ts`: untracked-ignored absent from status; `.git/info/exclude` honored; negation re-includes; **file tracked before the pattern was added still reports modified**; seeded `.gitignore` no longer silently drops seed files. (4) `npm run build && grep -rl "airship-memory-git" dist` returns nothing, enforced in `release-gate.mjs`.
 
 ---
 
@@ -135,13 +135,13 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** Six small, independently verifiable fixes that together remove every remaining "example app" tell on the primary screen.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` — `main` id (:4248-4250), skip cluster in `.app-shell` (:4043), transcript class (:4339), composer autofocus (:4452-4466), overlay flag (:4023), header copy (:4328), attestation labels (:5550, :5606), Retry gate (:5838), resumed-row `originatingPrompt` (:2810-2817, :3950-3960), confirm dialogs (:5937, :5961)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css` (`.skip-link` beside `.sr-only` :4553; `.transcript.no-turns` after :1160; `.transcript-jump` justify-self)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/approval-dock.tsx` (Tab trap + focus restore)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.tsx` (extract trap; new `ConfirmDialog`), `/Users/chrisk/chutes-jumpmaster/airship/src/ui/platform-shell.css`
-- New `/Users/chrisk/chutes-jumpmaster/airship/src/ui/focus-trap.ts`; `/Users/chrisk/chutes-jumpmaster/airship/src/ui/mobile-navigation.tsx` (:283 delete duplicate)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/attestation-seal.test.ts`
-- e2e updates: `/Users/chrisk/chutes-jumpmaster/airship/e2e/master-browser-acceptance.spec.ts:122`, `/Users/chrisk/chutes-jumpmaster/airship/e2e/conversation-navigation.spec.ts:79` (both currently `dialog.accept()` on native confirm)
+- `src/ui/app.tsx` — `main` id (:4248-4250), skip cluster in `.app-shell` (:4043), transcript class (:4339), composer autofocus (:4452-4466), overlay flag (:4023), header copy (:4328), attestation labels (:5550, :5606), Retry gate (:5838), resumed-row `originatingPrompt` (:2810-2817, :3950-3960), confirm dialogs (:5937, :5961)
+- `src/ui/styles.css` (`.skip-link` beside `.sr-only` :4553; `.transcript.no-turns` after :1160; `.transcript-jump` justify-self)
+- `src/ui/approval-dock.tsx` (Tab trap + focus restore)
+- `src/ui/platform-shell.tsx` (extract trap; new `ConfirmDialog`), `src/ui/platform-shell.css`
+- New `src/ui/focus-trap.ts`; `src/ui/mobile-navigation.tsx` (:283 delete duplicate)
+- `src/ui/attestation-seal.test.ts`
+- e2e updates: `e2e/master-browser-acceptance.spec.ts:122`, `e2e/conversation-navigation.spec.ts:79` (both currently `dialog.accept()` on native confirm)
 
 **Approach — the four non-obvious details.**
 - **Autofocus:** an effect calling `textarea.current?.focus()` at mount is **dead code** — the identical pattern already exists at `app.tsx:1681-1684` and provably never fires at mount (`document.activeElement` stays `BODY` through the first 3.5 s). Use the file's established deferred pattern: `requestAnimationFrame(() => textarea.current?.focus({preventScroll:true}))`, keyed on the composer being mounted, guarded on no overlay open, and skipped at ≤640px so the mobile keyboard never pops. Note the side effect: `useGlobalNavigationJumps` bails on typing targets (`platform-shell.tsx:193`), so `g`-chords are suppressed while the composer holds focus — either accept (chat-first) or exempt an empty composer.
@@ -150,8 +150,8 @@ These are the only places where two packages want the same file. Obey these or y
 - **Retry:** gate on `originatingPrompt` only, keep the label **"Retry"** (blueprint vocabulary), route through the existing same-session `onRetry` — **not** `onBranch`, which forks with `historyCopied: false` and would destroy the conversation. Populate `originatingPrompt` on resumed sessions or the ungated button never renders after reload.
 
 **Acceptance test (real).**
-- New `/Users/chrisk/chutes-jumpmaster/airship/e2e/keyboard-and-zero-state.spec.ts` against built `dist`: Tab from `document.body` reaches the composer in ≤2 stops (**35 today**); the skip link is visible on focus; at 1440×1000 the transcript's first child `offsetTop > 150`; at 1100×520 and 390×844 its `offsetTop >= 0` (regression guard for `safe center`).
-- Approval trap: extend `/Users/chrisk/chutes-jumpmaster/airship/e2e/github-import.spec.ts` — trigger the real approval, press Tab 12 times, assert `document.activeElement` stays inside `[role="dialog"]` on every press and that `<main>` has `inert`.
+- New `e2e/keyboard-and-zero-state.spec.ts` against built `dist`: Tab from `document.body` reaches the composer in ≤2 stops (**35 today**); the skip link is visible on focus; at 1440×1000 the transcript's first child `offsetTop > 150`; at 1100×520 and 390×844 its `offsetTop >= 0` (regression guard for `safe center`).
+- Approval trap: extend `e2e/github-import.spec.ts` — trigger the real approval, press Tab 12 times, assert `document.activeElement` stays inside `[role="dialog"]` on every press and that `<main>` has `inert`.
 - Retry: with the real `DemoInferenceTransport` (zero setup), send a turn, click Retry on the **successful** assistant message, assert a second assistant turn streams and the journal holds two `turn.completed` events.
 - Confirm dialogs: assert `page.on("dialog")` **never** fires during profile archive/discard and that the in-app `[role="dialog"]` appears.
 - Copy: assert the chat header no longer matches `/page-journal/` and no seal label equals `"TEE not checked"`.
@@ -164,11 +164,11 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** `read_file` currently hard-fails on any file over ~1 MiB with an error that points at an output budget instead of a fix. `search_text` scans only the *alphabetically first* 512 files with no continuation, so searching Airship's own repo from `/workspace` reads `.github/`, `docs/`, `e2e/` and returns confident false negatives before reaching `src/`. These are the agent's two most-used primitives.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/workspace-tools.ts` (:74-99 `read_file`, :168-251 `searchText`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/workspace/content-codec.ts` (extract shared UTF-8-boundary window helper)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx:5335-5349` (dedupe into the shared helper — **read-only region, no conflict with W3**)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/registry.ts` (:136-138 message only)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/workspace-tools.test.ts`
+- `src/tools/workspace-tools.ts` (:74-99 `read_file`, :168-251 `searchText`)
+- `src/workspace/content-codec.ts` (extract shared UTF-8-boundary window helper)
+- `src/ui/app.tsx:5335-5349` (dedupe into the shared helper — **read-only region, no conflict with W3**)
+- `src/tools/registry.ts` (:136-138 message only)
+- `src/tools/workspace-tools.test.ts`
 
 **Approach.** `read_file` gains `offsetBytes` / `maxBytes` (default & max 262144) and **always clamps itself** — do **not** gate on `workspace.readBounded`, which is a trap: `GitSynchronizedWorkspace.readBounded` delegates to `this.workspace.read` when the inner port lacks it (`IndexedDbWorkspace` does), so the method is *present* on the wired workspace and returns the whole file. Trim trailing partial UTF-8 sequences and report *post-trim* byte counts so `nextOffsetBytes = offsetBytes + returnedBytes` resumes exactly.
 `search_text` gains `include`/`exclude` globs applied **before** the 512 slice (ordering is load-bearing) and a `cursor` (both backends return `localeCompare`-sorted lists, so paging is deterministic). **The critical correction:** `metadata.truncated` is invisible to the model — `agent.ts:750` and `session-audit.ts:1123,1151` forward only `payload.content`. The truncation notice and `nextCursor` must be embedded in **`content`** on both the match and no-match branches. Skip regex, or gate it fail-closed — a step counter cannot bound a JS `RegExp`; one `exec()` runs to completion in the engine and catastrophic backtracking freezes the whole main-thread agent.
@@ -185,11 +185,11 @@ These are the only places where two packages want the same file. Obey these or y
 **Conflict resolution (mandatory).** Finding A says "replace with BM25, bump `indexFormat` to `bounded-bm25-recent-v1`." Finding B says "extract verbatim, keep `bounded-lexical-recent-v1`, do NOT introduce BM25." **Do both, in order, in one package:** (step 1) extract the existing ranker verbatim into a shared module and repoint all three call sites with zero behavior change; (step 2) upgrade that one function to BM25 and bump the lineage label **once**. Doing them as separate packages guarantees a merge conflict on the same 16 lines and two lineage-label churns.
 
 **Files.**
-- New `/Users/chrisk/chutes-jumpmaster/airship/src/retrieval/memory-ranking.ts`
-- `/Users/chrisk/chutes-jumpmaster/airship/src/retrieval/federated-turn-context.ts` (:148-164 ranker, :181 `indexFormat`, :186 tokenize)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/federated-memory.ts` (:102-105 filter; :29/:156 **ProfileGroup label only** — leave the identical ThreadGroup string at :22/:150 alone, that lane genuinely is reverse-chronological substring)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/memory-tools.ts` (:60-63; **preserve the `!query ||` branch** — `memory-tools.test.ts:28,67,94` call `recall_memory` with `{}`)
-- `/Users/chrisk/chutes-jumpmaster/airship/docs/MEMORY_CONTEXT_SCOPE.md:17` (stale: claims automatic injection does not happen; it does)
+- New `src/retrieval/memory-ranking.ts`
+- `src/retrieval/federated-turn-context.ts` (:148-164 ranker, :181 `indexFormat`, :186 tokenize)
+- `src/tools/federated-memory.ts` (:102-105 filter; :29/:156 **ProfileGroup label only** — leave the identical ThreadGroup string at :22/:150 alone, that lane genuinely is reverse-chronological substring)
+- `src/tools/memory-tools.ts` (:60-63; **preserve the `!query ||` branch** — `memory-tools.test.ts:28,67,94` call `recall_memory` with `{}`)
+- `docs/MEMORY_CONTEXT_SCOPE.md:17` (stale: claims automatic injection does not happen; it does)
 
 **Approach.** BM25 (k1=1.2, b=0.75) over the already-scoped ≤512 records, with a query-bigram bonus replacing the whole-query substring term. **Two guardrails the naive fix gets wrong:** normalize by the *theoretical ideal-document score* (all query terms at saturating tf, average length), **never** by the observed corpus maximum — observed-max normalization pins the best candidate at 1.0 every turn, so the `> 0.25` gate can never return empty and an irrelevant memory is injected as context on every single turn, converting a recall bug into a precision/honesty bug. And keep the recency prior strictly below the threshold so a genuine no-match turn still injects nothing. `indexFormat` is a free bounded string validated only by `boundedString(...,256)`; `verifyContextSelection` does not re-derive scores, so no sealed-record contract breaks.
 
@@ -205,13 +205,13 @@ These are the only places where two packages want the same file. Obey these or y
 **Goal.** This is the one place in the git dimension where the app states something **untrue**. `capabilities.features.clone/fetch/push` all report `available: true`, and when a clone fails the error says *the remote refused this browser CORS* — but the request never left the page: the deployed `connect-src` allowlists `api.github.com` and `raw.githubusercontent.com` and **no Git host at all**. Users go configure CORS on servers they don't control.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/validation.ts` (new `GIT_REMOTE_CONNECT_ORIGINS` + `assertRemoteOriginPermitted`; leave `validateRemoteUrl` intact so existing registry records stay valid)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/workspace-adapter.ts` (gate at `clone` :491, `fetch` :530, `push` :545; `permittedOrigins` in the capability block :1075-1080; rewrite `directHttpError` :1162)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/types.ts` (:37-42 remote capability shape)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/git/terminal-commands.ts` (:279-296 pre-flight before approval; :389 help)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx` (:353-359 render permitted origins + route to the snapshot importer that works)
-- `/Users/chrisk/chutes-jumpmaster/airship/scripts/check-static-security.mjs` (assert the constant is a subset of the shipped `connect-src` — one gate, no drift)
-- `/Users/chrisk/chutes-jumpmaster/airship/docs/BROWSER_GIT.md` (new CSP subsection ~124-148)
+- `src/git/validation.ts` (new `GIT_REMOTE_CONNECT_ORIGINS` + `assertRemoteOriginPermitted`; leave `validateRemoteUrl` intact so existing registry records stay valid)
+- `src/git/workspace-adapter.ts` (gate at `clone` :491, `fetch` :530, `push` :545; `permittedOrigins` in the capability block :1075-1080; rewrite `directHttpError` :1162)
+- `src/git/types.ts` (:37-42 remote capability shape)
+- `src/git/terminal-commands.ts` (:279-296 pre-flight before approval; :389 help)
+- `src/ui/sources-view.tsx` (:353-359 render permitted origins + route to the snapshot importer that works)
+- `scripts/check-static-security.mjs` (assert the constant is a subset of the shipped `connect-src` — one gate, no drift)
+- `docs/BROWSER_GIT.md` (new CSP subsection ~124-148)
 
 **Approach.** Gate first, then the surviving `TypeError: Failed to fetch` is genuinely remote-side and the existing CORS wording becomes true by construction. Throw a new `GitDomainError("remote-origin-not-permitted")` naming *Airship's own CSP*, listing permitted origins, pointing at the snapshot importer. **Do not** add a `fetch(url,{mode:"no-cors"})` sentinel — it rejects identically on DNS/offline failure so it distinguishes nothing and emits an unwanted cross-origin request. **Do not** ship a corsProxy: that would require rewriting four standing "Airship never inserts a proxy" claims and is a separate reviewed decision.
 
@@ -256,7 +256,7 @@ runtime and Trusted Types paths derive from `import.meta.env.BASE_URL`.
 
 **Goal.** The Capabilities panel is scrupulously honest everywhere except one row that prints "N workers" for a pool that does not exist. Meanwhile a laptop at 15% battery gets the discrete GPU while the panel says "low-power," a metered 2G connection with data-saver on pulls 38–46 MB while the panel says "Manual," and `preferredWorkspaceStorage` has literally zero consumers.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/capabilities/browser-runtime.ts` (:67, :171-202, :243-244, :274, :277, :310-317, :426-435, :608-621) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/capabilities-view.tsx` (:105) · `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-worker-provider.ts` (:38, :65-70, :102-104, :164-168, :255-259) · `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-browser-provider.ts` (:44-57) · `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-transformers-loader.ts` (:19-20, :36-37) · `/Users/chrisk/chutes-jumpmaster/airship/src/storage/client-ciphertext-cache.ts` (:64-68, :155-165) · `/Users/chrisk/chutes-jumpmaster/airship/src/vault/coordinator.ts` (:467) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/context-view.tsx` (:107-112) · `/Users/chrisk/chutes-jumpmaster/airship/scripts/build-e2ee.mjs`, `/Users/chrisk/chutes-jumpmaster/airship/src/inference/chutes/crypto.ts:31` · fixtures: `browser-runtime.test.ts:73,165`, `semantic-browser-provider.test.ts:106`, `e2e/edge-portability.spec.ts:31,110`
+**Files.** `src/capabilities/browser-runtime.ts` (:67, :171-202, :243-244, :274, :277, :310-317, :426-435, :608-621) · `src/ui/capabilities-view.tsx` (:105) · `src/indexing/semantic-worker-provider.ts` (:38, :65-70, :102-104, :164-168, :255-259) · `src/indexing/semantic-browser-provider.ts` (:44-57) · `src/indexing/semantic-transformers-loader.ts` (:19-20, :36-37) · `src/storage/client-ciphertext-cache.ts` (:64-68, :155-165) · `src/vault/coordinator.ts` (:467) · `src/ui/context-view.tsx` (:107-112) · `scripts/build-e2ee.mjs`, `src/inference/chutes/crypto.ts:31` · fixtures: `browser-runtime.test.ts:73,165`, `semantic-browser-provider.test.ts:106`, `e2e/edge-portability.spec.ts:31,110`
 
 **Approach — in cost order.**
 1. **Honesty (hours).** Replace `"{maxWorkerConcurrency} workers"` with `"{maxIndexingConcurrency} indexing lanes"` (the value actually consumed by `concurrentMap`) and rename/delete `maxWorkerConcurrency` on the policy type — a UI-only edit is insufficient because `src/tools/browser-capabilities.ts` serializes the whole report to the model. Drop or qualify `heavyPackLoading` in the same row.
@@ -277,11 +277,11 @@ runtime and Trusted Types paths derive from `import.meta.env.BASE_URL`.
 **Goal.** The prompt manifest is a positive list only. The model cannot distinguish "Airship has no push" from "push exists but is human-only" — exactly the hallucination class the charter tries to prevent. And there is no web search at all, while `fetch_url`'s failure message blames the *remote* for what is in fact Airship's own policy refusal.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/src/core/operating-charter.ts` (new `[Airship declared capability boundary]` section beside `installedToolSection` :134; **owns the single charter version bump for this wave**, `AIRSHIP_CORE_CHARTER_VERSION` 6→7)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/core/operating-charter.test.ts` (:11-15 pinned digest **must** be updated; new sync test)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/tools/network-tools.ts` (new `web_search`; :50 fix the misleading CORS message; :200-213 `safeHttpUrl` pre-fetch origin check against the CSP list)
+- `src/core/operating-charter.ts` (new `[Airship declared capability boundary]` section beside `installedToolSection` :134; **owns the single charter version bump for this wave**, `AIRSHIP_CORE_CHARTER_VERSION` 6→7)
+- `src/core/operating-charter.test.ts` (:11-15 pinned digest **must** be updated; new sync test)
+- `src/tools/network-tools.ts` (new `web_search`; :50 fix the misleading CORS message; :200-213 `safeHttpUrl` pre-fetch origin check against the CSP list)
 - `index.html:13` + `public/_headers:2` (**serialized CSP edit — this package only**): add exact origin `https://api.tavily.com`
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/vault-view.tsx:222` (already surfaces the connect-src list — reuse it)
+- `src/ui/vault-view.tsx:222` (already surfaces the connect-src list — reuse it)
 
 **Approach.** Scope the boundary section to the **bounded, code-derivable** set: capabilities another surface in this same build demonstrably has but the agent tool set withholds — exactly `{push, worktree-create, worktree-remove}`. **Do not** add a host-bash entry (charter line 15 already covers it). Phrase web-search manifest-relative ("no search tool is present in the manifest above") so a host-registered `additionalTool` can't turn the line into a lie. Enforce anti-rot with a **test**, not runtime derivation, since the composer only receives `{name, description, effect}`.
 For search: **Tavily, not Brave.** Verified: Tavily's preflight reflects Origin and permits `content-type,authorization`, and the POST returns `access-control-allow-origin: *`. Brave's preflight returns **405 with no CORS headers** — shipping it would be a permanently broken tool. Register `web_search` only when a key is present so the manifest never advertises a dead capability. Disclose in the tool description that query text egresses to a non-TEE third party.
@@ -296,7 +296,7 @@ For search: **Tavily, not Brave.** Verified: Tavily's preflight reflects Origin 
 
 **Goal.** The WASI runner is the strongest under-used asset in the repo (a real `std` Rust binary exercised argv/env/cwd/read/write/rename/copy/mkdir/seek/truncate/readdir/1 MiB files/clock/`exit(7)` correctly). It is practically inert because the only way to supply a binary is 2.4 M characters of base64 in a tool argument. Plus four correctness bugs that make every runtime feel broken.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/execution/wasi-preview1-pack.ts`, `wasi-preview1-worker.ts`, `wasi-preview1-contract.ts`, `runtime-registry.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/execution-tools.ts`, `execution-tool-proxies.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/execution/wasix-pack.ts` (delegate to shared guard) · new `/Users/chrisk/chutes-jumpmaster/airship/src/execution/workspace-egress.ts` · `/Users/chrisk/chutes-jumpmaster/airship/e2e/browser-worker.spec.ts`, `e2e/fixtures/rust-wasi-preview1.{ts,rs}` · `/Users/chrisk/chutes-jumpmaster/airship/scripts/release-gate.mjs` (**third in queue**) · `/Users/chrisk/chutes-jumpmaster/airship/docs/BROWSER_EXECUTION_PACKS.md`
+**Files.** `src/execution/wasi-preview1-pack.ts`, `wasi-preview1-worker.ts`, `wasi-preview1-contract.ts`, `runtime-registry.ts` · `src/tools/execution-tools.ts`, `execution-tool-proxies.ts` · `src/execution/wasix-pack.ts` (delegate to shared guard) · new `src/execution/workspace-egress.ts` · `e2e/browser-worker.spec.ts`, `e2e/fixtures/rust-wasi-preview1.{ts,rs}` · `scripts/release-gate.mjs` (**third in queue**) · `docs/BROWSER_EXECUTION_PACKS.md`
 
 **Approach — ordered, with the traps.**
 1. **`wasmPath` (unblocks everything).** Add to both schemas; resolve with `normalizeWorkspacePath`; require a bound workspace; reject in the `javascript-worker`/`python-pyodide` branches or the "accepts only code and timeoutMs" contract silently gains a hole. **Read the artifact OUTSIDE `captureWorkspace`** — the snapshot enforces 512 KiB/file, so a >512 KiB `.wasm` inside the mounted root makes the mount throw before the run starts. Ship base64→bytes as `Uint8Array` over structured clone, but **keep a base64 entry point or update `e2e/browser-worker.spec.ts:60,95,109,127,155`**, which drives `runDisposableWasi` with `RUST_WASI_PREVIEW1_BASE64` and is the gate cited in the acceptance ledger.
@@ -308,7 +308,7 @@ For search: **Tavily, not Brave.** Verified: Tavily's preflight reflects Origin 
 7. **`poll_oneoff`.** Wrap the import table (`{...wasi.wasiImport, poll_oneoff}`) — safe, the shim closes over `const self = this`. Use `Atomics.wait` on a pre-allocated `SharedArrayBuffer` (legal in a dedicated worker; COOP/COEP are already served). Where SAB is absent, cap the spin at ~50 ms and return `ERRNO_NOTSUP` rather than melting a core. **Change the engine provenance string** (`browser-wasi-shim-0.4.2-worker+poll_oneoff`) — `docs/BROWSER_EXECUTION_PACKS.md:57-58` currently states the shim is unmodified upstream.
 8. **stdin.** `stdin?: string` on `ExecutionRequest` + schema (`additionalProperties: false` means it's mandatory, not optional), `WASI_PREVIEW1_MAX_STDIN_BYTES`, `decodeWorkspaceBytes` so binary works, `new OpenFile(new File(message.stdin ?? new Uint8Array()))`. Add `stdin: "batch" | "streaming" | "none"` to `ExecutionCapability`. Streaming stdin is BUILD AFTER (needs `crossOriginIsolated` gating and a `fd_fdstat_get` character-device filetype).
 
-**Acceptance test (real).** All in `/Users/chrisk/chutes-jumpmaster/airship/e2e/browser-worker.spec.ts` (real Chromium, real WASI shim, real Pyodide):
+**Acceptance test (real).** All in `e2e/browser-worker.spec.ts` (real Chromium, real WASI shim, real Pyodide):
 - Write the existing pinned Rust `wasm32-wasip1` fixture bytes into the workspace via `encodeWorkspaceBytes`, run `execute_code` with **`wasmPath`**, assert `exit 7` and the fixture's stdout.
 - A new stdin fixture (compiled with the installed rustc, digest-pinned like the existing one) echoes fd 0 → assert byte-exact round trip including a binary payload.
 - Python job printing `ok`, exiting 0, and writing a 600 KiB file → assert stdout `ok`, `exitCode 0`, `isError true`, `workspaceError` present, and **zero workspace writes**.
@@ -324,7 +324,7 @@ For search: **Tavily, not Brave.** Verified: Tavily's preflight reflects Origin 
 
 **Goal.** Every code block the agent emits and every file the user opens renders as undifferentiated monospace — the most visible quality gap versus competitors, on a product whose own principle is "The Transcript is the Instrument." Meanwhile italics, strikethrough, nested lists, rules and images render wrong or flattened.
 
-**Files.** New `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/highlight.ts` + `highlight.test.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/markdown.tsx` (:13, :43-62, :129-132, :142-153, :171-173), `markdown.test.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/message-parts-view.css` (:17-21) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/styles.css` (`:root` `--tok-*`) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/workspace-view.tsx` (:462 gutter), `workspace-view.css`
+**Files.** New `src/ui/chat/highlight.ts` + `highlight.test.ts` · `src/ui/chat/markdown.tsx` (:13, :43-62, :129-132, :142-153, :171-173), `markdown.test.ts` · `src/ui/chat/message-parts-view.css` (:17-21) · `src/ui/styles.css` (`:root` `--tok-*`) · `src/ui/workspace-view.tsx` (:462 gutter), `workspace-view.css`
 
 **Approach.** Zero-dependency ordered-regex scanner returning non-overlapping spans; unknown language → `[]` (fail-open to today's plain rendering, never a wrong-language guess). Normalize the language key by first whitespace word — ` ```ts title=foo ` yields `"ts title=foo"` through `boundedLabel`, so raw equality silently misses. Render via `createElement` only (`require-trusted-types-for 'script'` + `script-src 'self' 'wasm-unsafe-eval'` stay intact). **Streaming is the trap:** `IncrementalMarkdownView` re-renders the trailing block every flush, so tokenize **per block inside `MarkdownBlockView`** on already-frozen block objects — re-tokenizing the frozen prefix turns the O(n) streaming property into O(n²).
 Define a dedicated `--tok-kw/str/num/com/fn` family. **Do not** reuse `--v-verified/--v-caution/--v-failed/--copper` — `design-contract.test.ts:37-50` locks those as verdict tones, `type-floor.test.ts:29-32` forbids `--copper` in `message-parts-view.css`, and `DESIGN_LANGUAGE.md:49` says color must never carry meaning: a keyword must not look like a proof state.
@@ -339,7 +339,7 @@ For markdown: `**bold**` must precede `*italic*` in **both** the alternation and
 
 **Goal.** "Full lineage on every retrieval" holds for injected turn context and fails for everything the agent *fetches deliberately*. Most consequentially, `search_context` drops the `embedding.posture` field — so the model cannot tell whether its hits came from the deterministic hash bootstrap or the real semantic model, and will reason about lexical-overlap hits as semantic matches.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/tools/context-tools.ts` (:15 limit, :28-50) · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/federated-memory.ts` (:153-167) · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/memory-tools.ts` (:64-74) · `/Users/chrisk/chutes-jumpmaster/airship/src/core/context-selection.ts` (:41, :304-306 retriever enum) · `/Users/chrisk/chutes-jumpmaster/airship/src/retrieval/federated-turn-context.ts` (:166 export `memoryLineage` — **after W11**)
+**Files.** `src/tools/context-tools.ts` (:15 limit, :28-50) · `src/tools/federated-memory.ts` (:153-167) · `src/tools/memory-tools.ts` (:64-74) · `src/core/context-selection.ts` (:41, :304-306 retriever enum) · `src/retrieval/federated-turn-context.ts` (:166 export `memoryLineage` — **after W11**)
 
 **Approach.** Attach lineage from the runtime's own generation. Two honest options for the digest — **pick one and be explicit**: (a) clamp the tool to the canonical contract (limit 20→`MAX_HITS`=8, same 32 KiB byte budget, per-hit `textDigest`) and call `sealContextSelection`; or (b) keep 20 hits and emit `sha256(stableStringify(payload))` labeled a **payload digest, not a `selectionDigest`**. Never seal a >8-hit, byte-unaccounted payload — `canonicalContextSelection` would reject it and the digest would be a false badge. Add a distinct retriever id (`airship-workspace-tool-search-v1`) to **both** the union and the validator; reusing the turn-context id would misdescribe the retriever. In vault mode, read lineage from the local memory-only runtime and report `persistence: "memory-only"` — never copy the turn selection's lineage, which may describe an encrypted mirror with a different generation id.
 
@@ -352,11 +352,11 @@ For markdown: `**bold**` must precede `*italic*` in **both** the alternation and
 
 **Goal.** Import any real repository today and you get a repo that is not the repository: no images, fonts, wasm, or binary lockfiles. The workspace already has a lossless binary path (`encodeWorkspaceBytes`) that the importer simply never calls.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/tools/repository-import.ts` (:138-142, :27/:197 `skippedBinary`, :112-115 caps) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx` (:317-319, :330, :583) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` (:2578, :2586 approval copy — **read-only region**) · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/network-tools.ts:78` · `/Users/chrisk/chutes-jumpmaster/airship/docs/BROWSER_GIT.md:84-86`, `docs/EDGE_RUNTIME_CAPABILITY_LADDER.md`
+**Files.** `src/tools/repository-import.ts` (:138-142, :27/:197 `skippedBinary`, :112-115 caps) · `src/ui/sources-view.tsx` (:317-319, :330, :583) · `src/ui/app.tsx` (:2578, :2586 approval copy — **read-only region**) · `src/tools/network-tools.ts:78` · `docs/BROWSER_GIT.md:84-86`, `docs/EDGE_RUNTIME_CAPABILITY_LADDER.md`
 
 **Approach.** `content: encodeWorkspaceBytes(bytes)`. **The size accounting is the trap:** `validateFileContent` measures the *envelope string* against `GIT_LIMITS.maxFileBytes` (8 MiB), and base64 inflates ~1.34×, so a 7 MiB asset imports into the Workspace and then fails Git admission, **rolling back the entire import**. Cap binaries at ~6 MiB decoded (or raise the limit), charge encoded length against `maxBytes`, and report it in `bytesWritten`. Retire or redefine `skippedBinary` and its receipt row. Keep `raw.githubusercontent.com` (uncapped CDN) as the anonymous transport.
 
-**Acceptance test (real).** Extend `/Users/chrisk/chutes-jumpmaster/airship/e2e/github-import.spec.ts`: import a fixture repository containing a PNG, assert the workspace file round-trips byte-identically through `decodeWorkspaceBytes`, assert `git status` sees it, and assert the receipt no longer reports it as skipped. Add a unit case: a 7 MiB binary is rejected **before** staging with an explicit reason and the import of the remaining files still succeeds.
+**Acceptance test (real).** Extend `e2e/github-import.spec.ts`: import a fixture repository containing a PNG, assert the workspace file round-trips byte-identically through `decodeWorkspaceBytes`, assert `git status` sees it, and assert the receipt no longer reports it as skipped. Add a unit case: a 7 MiB binary is rejected **before** staging with an explicit reason and the import of the remaining files still succeeds.
 
 ---
 
@@ -365,7 +365,7 @@ For markdown: `**bold**` must precede `*italic*` in **both** the alternation and
 
 **Goal.** Every claim in the context dimension is true in the durable journal and invisible in the product. A user cannot see that their turn pulled three workspace chunks and one profile memory, which files, that the session compressed at 82%, or that the model summarizer failed and the deterministic extractive fallback ran. For a project whose thesis is that *shown claims must be true*, the deeper failure is that **true claims are not shown**.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/message-parts.ts` (:5-14 kinds, :284-410 event branches, :571-578, :691) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/message-parts-view.tsx` (:128-136) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/chat/session-message-presentation.ts` (:449-456) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` (:2294 — **rebase onto W3**) · corresponding `.test.ts` files
+**Files.** `src/ui/chat/message-parts.ts` (:5-14 kinds, :284-410 event branches, :571-578, :691) · `src/ui/chat/message-parts-view.tsx` (:128-136) · `src/ui/chat/session-message-presentation.ts` (:449-456) · `src/ui/app.tsx` (:2294 — **rebase onto W3**) · corresponding `.test.ts` files
 
 **Approach.** Additive and **fail-closed**: run `turn.context.selected` payloads through `canonicalContextSelection()` and `context.summary.updated` through `canonicalContextSummary()`; if canonicalization returns `undefined`, **emit nothing** — never render an unvalidated payload. Cheapest correct rendering path is the already-registered-but-never-produced `"citation"` part kind whose renderer exists. To land the retrieval row under the *user* message, `userPartsForGroup` must also receive the group's `turn.context.selected` event (it currently passes only `[group.request]`). `lineage` is optional (required only for v2) — say plainly "historical v1 selection, no lineage recorded" rather than hiding the row. Surface `summaryMethod` and, when `summarizerAttempt` is present, state that the model summarizer failed and the deterministic fallback ran.
 
@@ -381,7 +381,7 @@ For markdown: `**bold**` must precede `*italic*` in **both** the alternation and
 
 **Goal.** The commit graph is written but never readable — no `log`, `show`, `blame`, so the agent literally cannot reason about *why* code is the way it is. Branching is write-only. And `push` / worktree create-remove are implemented and human-reachable but withheld from the model with no declaration.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/git/types.ts` (:3-14 `GIT_CAPABILITIES`, :37-42, :110-145, :176, :233-266, :288-310) · `client.ts` (:61, :112-120, :224-234 `validateCapabilities`) · `workspace-adapter.ts` · `memory-adapter.ts` · `encrypted-workspace-adapter.ts` · `operations.ts` · `terminal-commands.ts` (:63-97, :377-393) · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/git-tools.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/sources-view.tsx` · `docs/BROWSER_GIT.md`, `docs/PRODUCT_SPEC.md:127`
+**Files.** `src/git/types.ts` (:3-14 `GIT_CAPABILITIES`, :37-42, :110-145, :176, :233-266, :288-310) · `client.ts` (:61, :112-120, :224-234 `validateCapabilities`) · `workspace-adapter.ts` · `memory-adapter.ts` · `encrypted-workspace-adapter.ts` · `operations.ts` · `terminal-commands.ts` (:63-97, :377-393) · `src/tools/git-tools.ts` · `src/ui/sources-view.tsx` · `docs/BROWSER_GIT.md`, `docs/PRODUCT_SPEC.md:127`
 
 **Approach — the four traps.** (1) Adding a capability to `GIT_CAPABILITIES` is a **three-adapter** change: `validateCapabilities` rejects any adapter that omits one or marks it unavailable without a reason. (2) `git.log` already accepts `filepath`/`follow`/`since`/`depth` — no `git.walk` needed for path history. (3) **`git.merge` alone does NOT update the working tree** — `_merge` writes only the ref on the fast-forward path; isomorphic-git's own `_pull` calls `_merge` then `_checkout`. Omitting the checkout silently desynchronizes `WorkspacePort` from HEAD. (4) `push` is a **separate tool with `effect: "identity"`** (per `operations.ts:126`), not an action on `git_remote` (whose effect is `"network"`); tool effect is per-tool, and mislabeling it corrupts the approval descriptor. Also: catch `GitDomainError` and return `{ok:false, code, message}` — `agent.ts:323` journals only `error.message`, so `push-outcome-unknown` would otherwise be lost. Worktree actions on `git_change` need `required` to become per-action (`expectedRepositoryVersion` vs `expectedWorktreeVersion`).
 Phase 2 (defer): `cherryPick` is a direct call; `rebase` and `revert` have **no isomorphic-git export** and must stay labeled unavailable.
@@ -395,7 +395,7 @@ Phase 2 (defer): `cherryPick` is a direct call; `rebase` and `revert` have **no 
 
 **Goal.** OpenAI/Anthropic/xAI sessions run with **context compression completely disabled** — no window is ever discovered, so `contextPolicy` is `undefined` and the conversation grows until the vendor 400s, while the identical conversation on Chutes compresses correctly. Anthropic additionally ships a hardcoded `max_tokens: 8192` that **exceeds the limit of models Anthropic still lists**, so those turns 400 today. And the agent's roster is close to a bare ID list — no window, no output cap, no price — so "use the cheap model" is unanswerable.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/inference/providers/browser-cloud.ts` (:35, :111, :702-717) · `contracts.ts` (:143-158, :257-263) · `session-route.ts` (:168-178) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/provider-connections-view.tsx` (:296-310, :534) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` (:4978-4990, :5066-5083, :5164-5183 — **rebase onto W3**) · `/Users/chrisk/chutes-jumpmaster/airship/src/core/operating-charter.ts` (:42-46, :96-105 — **no version bump**) · `/Users/chrisk/chutes-jumpmaster/airship/src/core/context-policy.ts` (:173-182)
+**Files.** `src/inference/providers/browser-cloud.ts` (:35, :111, :702-717) · `contracts.ts` (:143-158, :257-263) · `session-route.ts` (:168-178) · `src/ui/provider-connections-view.tsx` (:296-310, :534) · `src/ui/app.tsx` (:4978-4990, :5066-5083, :5164-5183 — **rebase onto W3**) · `src/core/operating-charter.ts` (:42-46, :96-105 — **no version bump**) · `src/core/context-policy.ts` (:173-182)
 
 **Approach.** **Do not** build a model-name/family capability table — explicitly forbidden by `docs/PROVIDER_FABRIC.md:23` invariant 5 and by comments in `agent.ts:167-168`. Build the **operator-declared** path: a per-model window/output override on the connection surface, persisted as a model row with `source: {kind:"manual"}` (already validated and labeled "Manual metadata"). Branch `contextPolicyForProviderModel` to emit `{kind:"runtime-config", label:"operator-declared context window"}` — an already-accepted variant, no contract change. **Anthropic's cap must be per-request, not per-transport** — transports are built per *connection*, before any model is selected, and cached by connection id. Lower the unconfigured default below the smallest limit Anthropic accepts. When no window is declared, the connection card must **state that context compression is unavailable for this model** (CANON 3.5: missing capability stays visibly unavailable).
 For metadata: the finding's plumbing **skips a hop** — `InferenceModelPromptDefinition` (`operating-charter.ts:42-46`) and `inferenceDirectoryFromAvailability` (`app.tsx:5164-5183`) have no context/price fields, so editing the emitter alone is invisible. Also `InferenceModelDescriptor` has **no pricing field** — either add one or keep pricing on the Chutes path. And `in$=3.00` **throws**: `$` fails both `promptToken` and `promptFacet` regexes; use facet-safe keys (`usd-in=3.00`) with a numeric guard.
@@ -412,11 +412,11 @@ For metadata: the finding's plumbing **skips a hop** — `InferenceModelPromptDe
 
 **Scope correction:** mid-session ~1-hour token expiry is **already solved** (`coordinator.ts:333-339` `reauthorizeGoogleDrive`, wired to a renew button). The gap is page reload / new tab / restart only.
 
-**Files.** New `/Users/chrisk/chutes-jumpmaster/airship/src/storage/workspace-key-handle-store.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/storage/local-device-keyring.ts` (export `equivalentWorkspaceKeys`, currently private **and duplicated** at `local-device-vault-setup.tsx:849`) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/google-drive-setup.tsx` (:80-90) · `/Users/chrisk/chutes-jumpmaster/airship/src/storage/google-drive-workspace.ts` · `/Users/chrisk/chutes-jumpmaster/airship/docs/GOOGLE_DRIVE_VAULT.md:51-53`
+**Files.** New `src/storage/workspace-key-handle-store.ts` · `src/storage/local-device-keyring.ts` (export `equivalentWorkspaceKeys`, currently private **and duplicated** at `local-device-vault-setup.tsx:849`) · `src/ui/google-drive-setup.tsx` (:80-90) · `src/storage/google-drive-workspace.ts` · `docs/GOOGLE_DRIVE_VAULT.md:51-53`
 
 **Approach.** New IndexedDB database (`airship-workspace-key-handles-v1`) — **do not** bump `airship-local-device-keyring-v1`, which would force a migration of existing enrollments for no benefit. **Partition keying must differ from the obvious proposal:** `google-drive:<folderId>:<subject>` is unusable as the primary key because neither component is known before authorization, so nothing could be looked up to render the reconnect affordance. Key by `google-drive:<googleSubject>` and store the non-secret `GoogleDriveWorkspace` descriptor + account email alongside, with a `list()` so the UI can render "Reconnect &lt;email&gt; → &lt;folder&gt;" before any click. The existing `keyRecord()` validator silently drops unknown fields and would discard the descriptor — the new module needs its own bounded validator. Fail closed on adoption: re-run `connectExisting()` and assert the rediscovered `workspaceFolderId` and `namespaceId` equal the stored ones. Store only the structured-cloned **non-extractable `CryptoKey`** — raw bytes are never a fallback. Label it "browser-profile unlock"; recovery paste stays the only cross-device route.
 
-**Acceptance test (real).** `/Users/chrisk/chutes-jumpmaster/airship/e2e/google-drive-vault.spec.ts` extension using the existing deterministic GIS boundary + a real IndexedDB: connect, write a workspace file, **reload the page**, and complete adoption with a single authorize click and **zero recovery-key entry**; assert the file reads back. Negative case: mutate the stored `namespaceId` → adoption refuses and falls back to recovery paste. Unit: `persistedHandle()` round-trips through the store and `equivalentWorkspaceKeys` accepts it while a foreign key is rejected.
+**Acceptance test (real).** `e2e/google-drive-vault.spec.ts` extension using the existing deterministic GIS boundary + a real IndexedDB: connect, write a workspace file, **reload the page**, and complete adoption with a single authorize click and **zero recovery-key entry**; assert the file reads back. Negative case: mutate the stored `namespaceId` → adoption refuses and falls back to recovery paste. Unit: `persistedHandle()` round-trips through the store and `equivalentWorkspaceKeys` accepts it while a foreign key is rejected.
 
 ---
 
@@ -426,11 +426,11 @@ For metadata: the finding's plumbing **skips a hop** — `InferenceModelPromptDe
 
 **Goal.** A real WebContainer `jsh` is already spawned in this codebase for the human terminal and is reachable through `execute_node_project` today — yet that tool's own description tells the model *"No shell string or host Bash is involved."* A real capability is inert **and actively discouraged**.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/tools/execution-tools.ts` (new registered tool + dispatch case; **:338 and :505 hardcode `shell: "none"`, contradicting `node-webcontainer-adapter.ts:43`**) · `execution-tool-proxies.ts` (byte-identical frozen definition) · `/Users/chrisk/chutes-jumpmaster/airship/src/execution/runtime-registry.ts` (:42-57 `shellScript?`) · `node-webcontainer-adapter.ts` (:60-70) · `/Users/chrisk/chutes-jumpmaster/airship/e2e/live-webcontainer.spec.ts` · `docs/MASTER_PROMPT_ACCEPTANCE.md`, `docs/BROWSER_EXECUTION_PACKS.md`
+**Files.** `src/tools/execution-tools.ts` (new registered tool + dispatch case; **:338 and :505 hardcode `shell: "none"`, contradicting `node-webcontainer-adapter.ts:43`**) · `execution-tool-proxies.ts` (byte-identical frozen definition) · `src/execution/runtime-registry.ts` (:42-57 `shellScript?`) · `node-webcontainer-adapter.ts` (:60-70) · `e2e/live-webcontainer.spec.ts` · `docs/MASTER_PROMPT_ACCEPTANCE.md`, `docs/BROWSER_EXECUTION_PACKS.md`
 
 **Approach.** **Gate first, then ship.** Add the opt-in live probe before advertising anything. Then add `execute_shell_command` with an honest description ("one WebContainer jsh script — BusyBox-class builtins, pipes, `&&` sequencing. This is not host Bash: no sudo/apt, no host filesystem, no host processes"). Handle `shellScript` explicitly in the adapter (force `command: "jsh"`, `args: ["-c", script]`) while **keeping** the existing `COMMAND_PATTERN` rejection on the `command` field so the "never routes a shell expression through a hidden shell" invariant (`node-webcontainer-adapter.test.ts:68`) still holds. Emit `shell: "webcontainer-jsh"`, `output: "combined"`. **Do not touch `operating-charter.ts`** — it already names jsh correctly and any edit rotates every prompt digest.
 
-**Acceptance test (real).** `/Users/chrisk/chutes-jumpmaster/airship/e2e/live-webcontainer.spec.ts`, gated on `AIRSHIP_LIVE_WEBCONTAINER=1`, against real StackBlitz WebContainer: `jsh -c 'exit 7'` → `exitCode 7`; `jsh -c 'cd sub && printf x > out.txt'` at exit 0 → adopted writeback; at nonzero exit → **nothing adopted**; `AbortSignal` kills the process. **Not** in `browser-worker.spec.ts` — line 336 there asserts node-webcontainer is *not* ready.
+**Acceptance test (real).** `e2e/live-webcontainer.spec.ts`, gated on `AIRSHIP_LIVE_WEBCONTAINER=1`, against real StackBlitz WebContainer: `jsh -c 'exit 7'` → `exitCode 7`; `jsh -c 'cd sub && printf x > out.txt'` at exit 0 → adopted writeback; at nonzero exit → **nothing adopted**; `AbortSignal` kills the process. **Not** in `browser-worker.spec.ts` — line 336 there asserts node-webcontainer is *not* ready.
 
 ---
 
@@ -439,7 +439,7 @@ For metadata: the finding's plumbing **skips a hop** — `InferenceModelPromptDe
 
 **Goal.** After ~4 compressions the earliest summarized conversation stops being sent — the session "remembers" and then quietly forgets its own beginning, which is precisely the property iterative compression exists to avoid. Compression runs once per turn before a 32-step tool loop that can overflow the window it was meant to protect. And the trigger uses a fixed bytes/3.6 guess whose error (25–40%) is larger than the entire 80–85% band, while real `prompt_tokens` sit one event away, unused.
 
-**Files.** `/Users/chrisk/chutes-jumpmaster/airship/src/core/context-summary-projection.ts` (:6, :20-45, :54-108, :134-193) · `context-compressor.ts` (:43, :159-170, :177-307) · `context-policy.ts` · `agent.ts` (:179, :203-209, :214, :229-245) · `session-audit.ts` (:35-56, :663-706, :1221-1256) · tests
+**Files.** `src/core/context-summary-projection.ts` (:6, :20-45, :54-108, :134-193) · `context-compressor.ts` (:43, :159-170, :177-307) · `context-policy.ts` · `agent.ts` (:179, :203-209, :214, :229-245) · `session-audit.ts` (:35-56, :663-706, :1221-1256) · tests
 
 **Approach — three corrections.**
 - **Meta-compaction:** cheapest correct variant is to keep the existing `context.summary.updated` event type and add optional `compactionLevel` / `compactedSummaryDigests` fields, avoiding the `KNOWN_EVENT_TYPES` + new-audit-arm work entirely. `planContextCompression`'s `prior = canonicalSummaries(events).at(-1)` must still resolve to the newest **level-0** summary or `coveredThrough` breaks. Fix the independent scaling bug in the same package: `MAX_SUMMARY_PROJECTION_BYTES` is a fixed 48 KiB regardless of a session's pinned window, so a 1M-token model still gets 48 KiB of summary — derive it from `contextWindowTokens` with 48 KiB as the floor.
@@ -455,11 +455,11 @@ For metadata: the finding's plumbing **skips a hop** — `InferenceModelPromptDe
 
 **Goal.** Broad exploration ("find every call site of X and summarize") must burn the parent window step by step, with no way to isolate noisy search into a disposable context. Unlike Bash, **nothing about the browser prevents this** — the codebase already performs nested `transport.stream()` calls in two places (the safety reviewer and the inference summarizer).
 
-**Files.** New `/Users/chrisk/chutes-jumpmaster/airship/src/tools/subagent-tool.ts` · `/Users/chrisk/chutes-jumpmaster/airship/src/tools/registry.ts` (add `subset(names)`) · `/Users/chrisk/chutes-jumpmaster/airship/src/ui/app.tsx` (inject via the existing `additionalTools` seam at :1504 — **rebase onto W3**) · `/Users/chrisk/chutes-jumpmaster/airship/src/load-agent-runtime.ts`
+**Files.** New `src/tools/subagent-tool.ts` · `src/tools/registry.ts` (add `subset(names)`) · `src/ui/app.tsx` (inject via the existing `additionalTools` seam at :1504 — **rebase onto W3**) · `src/load-agent-runtime.ts`
 
 **Approach — five traps.** (1) **Do not** register it in `tool-bundle.ts` — `AirshipToolRegistryOptions` carries no transport, and the transport is per-runtime and user-switchable; construct in the UI and inject via `additionalTools` (the precedent `providerAvailabilityTool` already uses). (2) **Register unconditionally** with a live transport accessor and fail closed inside `execute` — conditional registration makes `toolManifestDigest` connectivity-dependent and trips "The tool manifest changed. Fork the session" on every reconnect. (3) Import `runTurn` lazily via `load-agent-runtime.ts`, never statically. (4) The child manifest must inherit `providerId`/`model`/`systemPrompt` from the parent (`agent.ts:85-89` rejects a mismatched transport id), be built from the **subset** registry's `definitions()` (`:90-95` digest check), and leave `turnContext` at the default unless the subset also forwards the context runtime (`:467-473` throws otherwise). (5) Journal `subagent.started/completed` on the **parent** session — `EventJournal.append` re-reads the head each call, so tool-side appends interleave safely with a suspended parent turn. Pass the parent's `ApprovalPolicy` through unchanged; **do not** couple this to a turn-scoped grant scheme (separate change to the permission model).
 
-**Acceptance test (real).** `/Users/chrisk/chutes-jumpmaster/airship/src/core/` integration test with the real `DemoInferenceTransport`: a parent turn calls `run_subagent` with `allowedTools: ["search_text","read_file"]`; assert (a) the child completes and returns bounded content, (b) the child's tool calls are **absent** from the parent's materialized messages, (c) the parent journal contains `subagent.started`/`completed` with the parent `turnId`, (d) a child attempting `write_file` fails because it is not in the subset, (e) aborting the parent's signal terminates the child and still writes a durable terminal record, (f) the full journal audits as verified.
+**Acceptance test (real).** `src/core/` integration test with the real `DemoInferenceTransport`: a parent turn calls `run_subagent` with `allowedTools: ["search_text","read_file"]`; assert (a) the child completes and returns bounded content, (b) the child's tool calls are **absent** from the parent's materialized messages, (c) the parent journal contains `subagent.started`/`completed` with the parent `turnId`, (d) a child attempting `write_file` fails because it is not in the subset, (e) aborting the parent's signal terminates the child and still writes a durable terminal record, (f) the full journal audits as verified.
 
 ---
 
@@ -488,7 +488,7 @@ Each entry states exactly what is missing. In every case the **code** may still 
 
 ### C1 — Live OpenAI / Anthropic / xAI gates
 **Gap:** `no-live-cloud-provider-gate`. Three of five advertised providers have **never executed a real request**; any could be broken and every test would pass.
-**Buildable now:** the harness — `/Users/chrisk/chutes-jumpmaster/airship/src/inference/providers/browser-cloud.live.test.ts` (env-gated per vendor, mirroring `chutes/transport.live.test.ts:11-14`) plus `e2e/live-cloud-providers.spec.ts` + `playwright.live-cloud.config.ts` (traces/video **off** so memory-only credentials are never recorded). Wire as optional stages in `scripts/release-live.mjs`, not `release-gate.mjs`.
+**Buildable now:** the harness — `src/inference/providers/browser-cloud.live.test.ts` (env-gated per vendor, mirroring `chutes/transport.live.test.ts:11-14`) plus `e2e/live-cloud-providers.spec.ts` + `playwright.live-cloud.config.ts` (traces/video **off** so memory-only credentials are never recorded). Wire as optional stages in `scripts/release-live.mjs`, not `release-gate.mjs`.
 **User must supply:** `AIRSHIP_OPENAI_API_KEY`, `AIRSHIP_ANTHROPIC_API_KEY`, `AIRSHIP_XAI_API_KEY` (disposable, spend-capped) + a model id each.
 **Note:** do **not** assert `access-control-allow-origin` on the response — it is not a CORS-safelisted response header, so browsers always return `null`, and Node/undici sends no Origin and issues no preflight. The successful authenticated streamed response from a real cross-origin page **is** the CORS proof.
 

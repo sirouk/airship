@@ -155,6 +155,30 @@ describe("ceremony continuity contracts", () => {
     expect(styles).toContain(".local-device-vault__replacement > .local-device-vault__actions");
   });
 
+  /*
+   * Measured on the shipped build with the ceremony revealed: the alert was
+   * `position: sticky; top: 45px`, and at 320x568 the pinned band landed across
+   * the ceremony's own paragraph and hid the clause "restoring needs this key
+   * *and* an encrypted backup file" — on the one screen whose entire job is to
+   * say what can recover the data. The 45px was clearance for a trust-hub tab
+   * strip that no longer exists in `platform-shell.css`, so the pin cleared
+   * nothing and only ever occluded.
+   */
+  it("leaves the one-time-secret alert in flow rather than painting it over the ceremony", () => {
+    const alert = /\.local-device-vault__ceremony-alert\s*\{([^}]*)\}/u.exec(styles)?.[1] ?? "";
+
+    expect(alert, "the alert rule has to be found for the rest of this test to mean anything").not.toBe("");
+    expect(alert).not.toContain("position: sticky");
+    // `top` and `z-index` are the pin's two other halves: either one left
+    // behind would let a later edit restore the overlap with one word.
+    expect(alert).not.toContain("top:");
+    expect(alert).not.toContain("z-index");
+    // It is still the caution-coloured band it was — un-pinning is not a
+    // quieter warning, and the colour is not the sole carrier either way.
+    expect(alert).toContain("color: var(--v-caution);");
+    expect(alert).toContain("font-weight: var(--fw-strong);");
+  });
+
   it("hands focus to the commit button when acknowledgement unmounts the checkbox", () => {
     // The acknowledge transition swaps the revealed panel (with the focused
     // checkbox) for the acknowledged panel; without this handoff focus drops

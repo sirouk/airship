@@ -46,13 +46,16 @@ is what an unowned finding costs, and it is the argument for the gate above.
 
 ## Standing rules this pass did not bend
 
-- **The entry ceiling did not move.** 112 KiB gzip, first paint. Everything added
-  this pass was either deferred or paid for out of the lazy graph. Entry is
-  measured at 111.98 KiB — it passes, and that is 20 bytes of headroom. The next
-  entry-path change has to defer its way in.
+- **The entry ceiling did not move during this pass.** It stood at 112 KiB gzip,
+  first paint, and entry measured 111.98 KiB — it passed with 20 bytes of
+  headroom. Everything added this pass was either deferred or paid for out of
+  the lazy graph. (It has ratcheted since; the ceiling in force is the one in
+  `scripts/release-gate.mjs` and its mirrored row in `docs/RELEASE_GATE.md`,
+  which the gate checks against each other. Read that pair, not this dated
+  number, before sizing an entry-path change.)
 - **Budgets ratchet with a measurement and a reason, or not at all.** Two whole-KiB
   steps moved this pass; both comments record what crossed them and what it
-  bought. `scripts/release-gate.test.ts` still demands the tightest whole-KiB step.
+  bought. `scripts/release-gate.test.mjs` still demands the tightest whole-KiB step.
 - **No test was weakened to make a failure go away.** Every spec fix in this pass
   made the test measure the thing it claimed to measure — waiting for the element
   under assertion rather than a proxy for it. Where a change traded one durability

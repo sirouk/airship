@@ -563,9 +563,22 @@ function CloudProviderCard({
           : <Icon name="model" size={18} />}
         <div><h4>{provider.label}</h4><span>API key · page memory</span></div>
       </header>
+      {/* The measured sentence answers "is OAuth possible here", and for OpenAI
+          it answers yes — a reviewed public-PKCE client whose token endpoint
+          returns `access-control-allow-origin: *`, so the exchange completes in
+          the page. It does not answer "is it wired into this build", and nothing
+          calls `connectOAuth`: the fabric exposes `connectCloud` and
+          `connectLocal` only. So an operator read a paragraph explaining that
+          sign-in works, found no control for it on the card, and the Connect
+          route two clicks away said the opposite in plain words. The descriptor
+          stays the single source of the first fact; the second is the card's own
+          to state, in the codex lane's wording. */}
       <details class="provider-auth-contract">
         <summary>Why API key instead of OAuth?</summary>
         <p>{provider.oauth.detail}</p>
+        {provider.oauth.state === "configured-public-pkce"
+          ? <p>This route connects API keys only — no account sign-in is wired into this build for {provider.label}.</p>
+          : null}
       </details>
       <label class="provider-key-field" for={inputId}>
         <span>{apiKeyMethod.label} · page memory only</span>

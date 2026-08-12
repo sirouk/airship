@@ -28,11 +28,17 @@ ARG VITE_AIRSHIP_PUBLIC_ORIGIN=
 # which is why the default vault provider below moves with it.
 ARG VITE_GOOGLE_CLIENT_ID=
 ARG VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=
+# Where the companion extension is published. Empty falls back to the copy this
+# build ships at `<base>extension/index.html`, which is right for a deployment
+# that serves its own; a store listing needs to say so here, because the value
+# is inlined and cannot be supplied at `docker run`.
+ARG VITE_AIRSHIP_EXTENSION_INSTALL_URL=
 
 ENV AIRSHIP_PUBLIC_BASE_PATH=${AIRSHIP_PUBLIC_BASE_PATH} \
     VITE_AIRSHIP_PUBLIC_ORIGIN=${VITE_AIRSHIP_PUBLIC_ORIGIN} \
     VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID} \
-    VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID}
+    VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID} \
+    VITE_AIRSHIP_EXTENSION_INSTALL_URL=${VITE_AIRSHIP_EXTENSION_INSTALL_URL}
 
 # Fail closed on an unconfigured deployment: start in explicit page-memory mode
 # rather than silently creating durable storage the person did not choose.
@@ -50,9 +56,17 @@ RUN cp dist/index.html dist/404.html
 
 FROM caddy:2-alpine AS runtime
 
+# The base path the build compiled against, redeclared because an ARG does not
+# cross a stage boundary. Caddy answers a URL by mapping its path onto the
+# filesystem, so the bundle has to land where its own inlined URLs point: with
+# `/airship/` compiled in, `/srv/airship/assets/…` must exist, or every asset
+# request falls through the SPA fallback and the browser is handed HTML where it
+# asked for JavaScript. The Pages workflow does the same thing to the same build.
+ARG AIRSHIP_PUBLIC_BASE_PATH=/
+
 # Static output only. No node, no npm, no source — nothing at runtime can
 # execute application code, because at runtime there is no application.
-COPY --from=build /app/dist /srv
+COPY --from=build /app/dist /srv${AIRSHIP_PUBLIC_BASE_PATH}
 
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY caddy-entrypoint.sh /caddy-entrypoint.sh

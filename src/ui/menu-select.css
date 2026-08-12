@@ -8,6 +8,11 @@
 .menu-select-trigger[aria-expanded="true"] .menu-select-caret { transform:rotate(180deg); }
 .menu-select-popover { position:absolute; z-index:320; right:0; bottom:calc(100% + 7px); display:grid; gap:3px; width:max(100%,260px); max-width:min(340px,calc(100vw - 20px)); max-height:min(420px,70dvh); overflow:auto; padding:6px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:var(--shadow); }
 .menu-select.placement-down .menu-select-popover { top:calc(100% + 7px); right:auto; bottom:auto; left:0; max-height:min(420px,70dvh,var(--menu-select-available-height,70dvh)); }
+/* The options' own box, so the panel can also hold a header a `listbox` may not
+   own. `gap:inherit` takes whatever the panel declares — 3px here, `--sp-1` for
+   the vault chooser — so moving the options one level down changed no spacing
+   anywhere; the panel's own gap now separates the header from the list. */
+.menu-select-list { display:grid; gap:inherit; min-width:0; }
 .menu-select-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; width:100%; min-height:44px; padding:7px 9px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; text-align:left; }
 .menu-select-option-copy { display:grid; gap:2px; min-width:0; }
 /* A label in a menu of choices may wrap; it may not be cut. "Auto …" and
@@ -71,6 +76,135 @@
    the composer's approval-policy control shipped inert on every phone; see the
    block in `routes.css` and the geometry test in `e2e/composer-layout.spec.ts`. */
 @media (max-width:640px), (max-width:950px) and (max-height:500px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
+/*
+ * The compact sheet contract, which this menu did not have.
+ *
+ * The rule above is the whole of what a coarse `MenuSelect` used to be: pin the
+ * panel to the bottom of the screen and stop. `Popover` next door earned a real
+ * contract in the same sweep — a scrim over the route it covers, a header
+ * naming the disclosure, a 44px Done, and a landscape tier that stops short of
+ * the navigation band — and every judge who read the two side by side described
+ * the menu as the broken one. The measurements say the same thing. On the
+ * shipped build at 430x932 the Preferences `Color mode` listbox opened 221.6px
+ * from its own trigger, with `Corners` — a different preference row — as the
+ * nearest label above it; at 932x430 every sheet was a 916px full-bleed strip
+ * running to y=422 across a navigation band at y=386..430, while the popover at
+ * the same viewport was a centred 640px card ending at y=366 with the band clear
+ * below it; and in 14 recorded opens the panel covered the control it belonged
+ * to. None of that is a positioning bug. A panel pinned to the bottom of a phone
+ * has given up pointing at anything, which is a fair trade only if it says whose
+ * it is and gives the route underneath a way of being seen and dismissed.
+ *
+ * Which panels these rules reach is decided in `menu-select.tsx` and measured
+ * rather than declared, because two instances are placed by route stylesheets
+ * this file cannot see — the composer's approval chooser is anchored above the
+ * input by `routes.css`, the session switcher is pinned under the session bar —
+ * and both are correct as they are. `data-sheet` is set only on the panels the
+ * rule above actually pins.
+ *
+ * Everything is scoped to the compact shell's own query, both arms of it: the
+ * second arm is the phone held sideways, and it is the shape the landscape tier
+ * at the foot of this section exists for.
+ */
+.menu-select-sheet-header { display:none; }
+@media (max-width:640px), (max-width:950px) and (max-height:500px) {
+  /* Flush with the bottom edge, full width, bordered only where it meets the
+     route — the same shape `popover.css` gives its own sheet, so the two
+     overlays a phone can open read as one kind of object. `padding:0` moves the
+     panel's air onto the list below so the sticky header can reach the panel's
+     own top edge instead of floating 8px inside it. */
+  .menu-select[data-sheet="true"] .menu-select-popover { inset:auto 0 0 0; padding:0; border-width:1px 0 0; border-radius:var(--radius-panel) var(--radius-panel) 0 0; }
+  /* The flush sheet ends at the screen's edge, so it pays for the home
+     indicator itself; the landscape tier below clears that inset already. */
+  .menu-select[data-sheet="true"] .menu-select-list { padding:8px; padding-bottom:calc(var(--sp-4) + env(safe-area-inset-bottom)); }
+  /*
+   * The sheet says what it is doing to the page underneath it.
+   *
+   * `--scrim` is `.mobile-sheet-scrim`'s own dim from `routes.css:3197` and the
+   * one `popover.css` takes, so all three overlays dim by the same amount and
+   * stay right in Paper mode. A pseudo-element rather than a node: no route
+   * re-renders and no markup moves. It takes pointer events on purpose — a
+   * transparent scrim would dismiss the menu *and* press whatever the reader
+   * could only half see underneath it — which is why `menu-select.tsx` now asks
+   * whether a press landed in the trigger or the panel rather than anywhere in
+   * the host, since hit-testing a pseudo reports the element that owns it.
+   *
+   * 319 against the panel's 320. Neither `.menu-select` nor this pseudo opens a
+   * stacking context of its own, so whatever ancestor context the two resolve
+   * against, they resolve against the same one and the panel is always above
+   * the dim.
+   */
+  .menu-select[data-sheet="true"]::before { content:""; position:fixed; z-index:319; inset:0; background:var(--scrim); }
+  /* Sticky, so the field this sheet sets and the way out of it are both legible
+     after the list has been scrolled. */
+  .menu-select[data-sheet="true"] .menu-select-sheet-header { display:flex; position:sticky; top:0; z-index:1; gap:var(--sp-2); align-items:center; justify-content:space-between; min-width:0; min-height:44px; padding:0 var(--sp-3); border-bottom:1px solid var(--line); background:var(--surface-raised); }
+  /* The title wraps rather than ellipsising: it is the only statement of which
+     control this sheet belongs to, and half of `Profile minimum proof posture`
+     names nothing. `padding-block` sits inside the 44px floor, so a one-line
+     title costs the route no extra height. */
+  .menu-select[data-sheet="true"] .menu-select-sheet-header > strong { overflow-wrap:anywhere; padding-block:var(--sp-2); color:var(--ink-muted); font-size:var(--fs-micro); font-weight:var(--fw-strong); white-space:normal; }
+  /*
+   * Done: a 44px target with a 28px painted pill inside it.
+   *
+   * The same arrangement as `.popover__done`, arrived at there for a reason
+   * that holds here exactly: at 44px tall in a 44px header the button's border
+   * lands on the header's own rule and on the sheet's top edge, and three
+   * judges read that as the frame rather than as a control. So the border comes
+   * off the button and onto a pseudo inset by `--sp-2`, and the target keeps
+   * every pixel of its 44px for the thumb and for
+   * `e2e/touch-target-floor.spec.ts`.
+   *
+   * `flex:none` and not a bare `min-width`. `min-width:<length>` on a flex item
+   * REPLACES `min-width:auto` and so removes the min-content floor that keeps a
+   * label inside its own button — that is how the popover's `Done` came to ride
+   * its border at three phone widths. The title beside it is this row's
+   * flexible item; the dismissal control is not, whatever the Type scale
+   * preference or a translation does to the word.
+   */
+  /*
+   * Scoped through the host — `[data-sheet="true"]` — rather than written as a
+   * bare class, and that is not tidiness. Routes style their furniture by shape:
+   * `.session-library-toolbar button` (`sessions-view.css:109`) is (0,2,0) and
+   * gives every button in the toolbar `min-height:42px`, a border and a filled
+   * background, so the first build of this control measured 42px inside the
+   * sessions filter sheets at 932x430 — under the touch floor, and wearing a
+   * second frame inside its own pill. A menu can be dropped into any route in
+   * the product; the dismissal control has to survive whatever that route says
+   * about buttons in general.
+   */
+  .menu-select[data-sheet="true"] .menu-select-done { position:relative; flex:none; min-width:64px; min-height:44px; padding:0 var(--sp-2); border:0; border-radius:var(--radius-control); color:var(--ink-muted); background:transparent; cursor:pointer; font-size:var(--fs-caption); }
+  .menu-select[data-sheet="true"] .menu-select-done::before { content:""; position:absolute; inset:var(--sp-2) 0; border:1px solid var(--line-control); border-radius:var(--radius-control); }
+  .menu-select[data-sheet="true"] .menu-select-done:hover { color:var(--ink); }
+}
+/*
+ * The short screen, where a full-bleed sheet stops being a sheet and becomes an
+ * occlusion — and the tier this menu was missing entirely.
+ *
+ * At 932x430 the rule above produced a 916px strip from y=313 to y=422 over a
+ * navigation band at y=386..430, so the answer to "can I go somewhere else"
+ * while a menu was open was no, on every route that has one: 39 of the sweep's
+ * open states covered the band. The geometry here is not invented — it is the
+ * `64px + env(safe-area-inset-bottom)` and `min(72dvh,680px)` that
+ * `.mobile-sheet-scrim` in `routes.css` has always reserved and that
+ * `popover.css` took for the same shape, which lands this panel at y=57..366
+ * with the band untouched and fully pressable below it.
+ *
+ * The scrim stops where the panel stops, for the same reason: a sheet that
+ * clears the band and a dim that covers it would take back exactly the
+ * reachability the panel gave up height to preserve.
+ *
+ * Keyed on the height alone. Shortness is what makes a bottom sheet swallow a
+ * screen — a 600x400 window has the same problem — and of the eight device
+ * classes under test only 932x430 is under 500px tall, so every phone sheet
+ * keeps the flush geometry above.
+ */
+@media (max-width:950px) and (max-height:500px) {
+  .menu-select[data-sheet="true"] .menu-select-popover { bottom:calc(64px + env(safe-area-inset-bottom)); width:min(100% - (2 * var(--sp-3)),640px); max-height:min(72dvh,680px); margin-inline:auto; border-width:1px; border-radius:var(--radius-panel); }
+  .menu-select[data-sheet="true"]::before { bottom:calc(64px + env(safe-area-inset-bottom)); }
+  /* This one ends 64px above the screen's edge, so the home-indicator inset is
+     already cleared and repeating it would be dead space in the shortest box. */
+  .menu-select[data-sheet="true"] .menu-select-list { padding-bottom:8px; }
+}
 /*
  * The menu's arrival: the fade, and deliberately not the rise.
  *

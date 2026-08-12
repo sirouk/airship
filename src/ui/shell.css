@@ -139,6 +139,41 @@
 .topbar-posture-chip[data-state="failed"] { color: var(--v-failed); }
 .topbar-posture-chip[data-state="attention"] { color: var(--v-caution); }
 
+/*
+ * The floor for the two topbar controls, keyed on the pointer rather than on
+ * the viewport.
+ *
+ * Both already carried a correct 44px rule — inside
+ * `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`, the compact
+ * shell pair. That query answers "is this shell narrow or short", which is a
+ * layout question, and it was being asked in place of "is a finger doing the
+ * pointing", which is not the same question and has a different answer on a
+ * tablet. Measured on the built tree at 768×1024 with `hasTouch`/`isMobile` and
+ * `(pointer: coarse)` matching true: `.topbar-posture-chip` 214.5×28 and
+ * `.topbar-connect-action` 130.8×32, on all fourteen routes — the shell chrome
+ * every route shows, 16px and 12px under the floor, on the one viewport class
+ * that is both touch-driven and wider than every phone breakpoint. The same two
+ * controls measure 44px at 932×430 only because a landscape phone happens to be
+ * 430px tall and trips the second arm of that pair.
+ *
+ * `popover.css:44` has keyed its floor this way since the primitive took the
+ * rule off the routes; this is the same move for the chrome around it.
+ *
+ * Added rather than moved. The width-scoped copies also floor a *narrow
+ * desktop* window, where a resized mouse-driven viewport keeps
+ * `(pointer: coarse)` false — the same argument `tokens.css:660` makes for
+ * keeping the density floor in both places.
+ *
+ * Height only. `min-width` stays where it is: the chip is `min-width: 0` so its
+ * label may ellipsize inside a crowded topbar, and both controls measure well
+ * over 44px wide at every viewport that reaches this rule. A `min-width` here
+ * would buy nothing and would replace the min-content floor these flex items
+ * lay out against.
+ */
+@media (pointer: coarse) {
+  .topbar-posture-chip { min-height: var(--touch-target); }
+}
+
 .topbar-posture-chip__count {
   flex: 0 0 auto;
   color: var(--ink-faint);
@@ -515,6 +550,14 @@
 
 .topbar-connect-action:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface-soft)); }
 
+/* The other half of the topbar floor — see the long note beside
+   `.topbar-posture-chip` above for why the pointer and not the width. Measured
+   130.8×32 at 768×1024 on all fourteen routes; this is the topbar's primary
+   action and the only route into a model. */
+@media (pointer: coarse) {
+  .topbar-connect-action { min-height: var(--touch-target); }
+}
+
 /* The native `<select>` wrapper this block styled was retired when the topbar
    switcher became a `MenuSelect`. No element has carried its class since, and
    the rules that survived it were two `display: none` declarations at phone
@@ -604,6 +647,10 @@
   flex-direction: column;
   width: 100%;
   min-height: 0;
+  /* No gutter is held back for the seam. `.rail-collapse` is centred on this
+     box's right edge and is a floating grip rather than a flow item, so the
+     room a finger needs is hung off that edge — see the coarse-pointer block
+     below — instead of being reserved here, where every route pays for it. */
   border-right: 1px solid var(--line-strong);
   background: var(--surface-soft);
 }
@@ -1067,6 +1114,38 @@
   min-height: var(--rail-item-height);
 }
 
+/*
+ * And the decision `tokens.css:667` deferred: on a coarse pointer the floor
+ * outranks the hierarchy signal.
+ *
+ * That comment left `.nav-item--nested` out of the density floor on purpose —
+ * "whether the hierarchy signal outranks the floor is a separate decision" —
+ * and the sweep has now measured what deferring it ships as. At 768×1024 with
+ * `(pointer: coarse)` true, `Editor` and `Terminal` render 71×36 in the rail on
+ * workspace, editor and terminal: 8px under the floor, in the primary
+ * navigation, on the only viewport in the product that has both a rail and a
+ * finger. Phones never showed it because `.sidebar` is `display: none` there,
+ * which is exactly why a width query was the wrong instrument.
+ *
+ * The signal survives the change intact, because height was never carrying it:
+ * `.nav-item--nested` above says so in as many words — "nesting is carried by
+ * the indent, the 1px rule and `aria-level`" — and it also spends a
+ * `--fs-caption` type step and `--ink-faint` on the same job. Measured after:
+ * a nested row is 44px against a primary destination's 46px at Comfortable, so
+ * it still reads shorter, and it reads shorter on a mouse by the full 10px
+ * because nothing below reaches a fine pointer.
+ *
+ * (0,4,0) and placed after, to match the rule above it: `--rail-item-height` is
+ * read by three selectors at three specificities in this sheet, so a floor that
+ * did not restate the whole chain would lose to one of them the way the
+ * variable alone lost to `:root[data-density] .nav-item`.
+ */
+@media (pointer: coarse) {
+  :root[data-density] .nav-item.nav-item--nested {
+    min-height: var(--touch-target);
+  }
+}
+
 .nav-item.active {
   color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 19%, transparent);
@@ -1194,7 +1273,6 @@
 .menu-select-popover__header,
 .preferences-dialog__divider,
 .popover__header > strong,
-.profile-governs__cell small,
 .proof-counts dt,
 .proof-ceilings__rule small,
 .proof-posture dt,
@@ -1364,7 +1442,31 @@
 @media (hover: none) {
   /* Measured, not guessed: 84px is the narrowest column in which `Connection`
      — the longest destination name — renders without `scrollWidth` exceeding
-     `clientWidth` at the comfortable density's micro step. */
+     `clientWidth` at the comfortable density's micro step.
+
+     84px is what the labels need, and it is all the track is asked for: the
+     collapse grip on the seam is paid for out of its own overhang, not out of
+     this number, so the column is the same 84px whether or not a finger is
+     what is driving and the route beside it starts at the same x either way.
+
+     Read against `tokens.css`'s 60px this looks inverted — the sweep filed it
+     that way, as "1024 shows less rail than 768 does" — and it is worth saying
+     in the sheet why it is not, so the next reader does not straighten it.
+     These two numbers are not two viewport widths; they are two *renderings*.
+     At 60px the labels are clipped and live in `title`, which is a hover
+     affordance; at 84px they are painted under the glyph, because the rule
+     below un-clips them for a pointer that has no hover to ask with. 84px is
+     the width that rendering needs and 60px is the width the other one needs.
+
+     What a person can actually cross is the width band, and measured on this
+     build `.rail` never narrows as a device gets wider. Coarse pointer:
+     84px at 768 and 860, then 232px from 861 up — `defaultRailState` hands a
+     touch tablet the standard rail at `RAIL_TOUCH_STANDARD_MIN_WIDTH`, so an
+     iPad at 1024 reads 232px, not 60px. Fine pointer: 60px to 1361, then 232px
+     from 1362. Both sequences are monotonic, and at every width the coarse
+     pointer's rail is the wider of the two — 84 against 60 below 861, 232
+     against 60 from 1024 to 1361, and 232 against 232 above it. The finger is
+     never shown less than the mouse. `rail.test.ts` pins that ordering. */
   :root[data-rail="rail"] { --rail-width: 84px; }
 
   .sidebar[data-rail-state="rail"] .nav-item {
@@ -1514,10 +1616,19 @@
   right: 0;
   display: grid;
   place-items: center;
-  width: 13px;
+  /* The painted width, and the border that thickens it, each named once and
+     read again by the touch extension in the coarse block below. Both matter
+     to that arithmetic: `box-sizing` is `border-box` product-wide, so `width`
+     is the *outer* box and the extension's offsets resolve against the padding
+     box two `--grip-edge`s inside it. Leaving that pair of pixels out is how
+     the extension used to sum to 42px while every comment about it said 44. */
+  --grip-design-body: 13px;
+  --grip-body: var(--grip-design-body);
+  --grip-edge: 1px;
+  width: var(--grip-body);
   height: 46px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: var(--grip-edge) solid var(--line);
   border-radius: var(--radius-chip);
   color: var(--ink-faint);
   background: var(--surface-soft);
@@ -1537,10 +1648,165 @@
 .rail-collapse:focus-visible { color: var(--ink); border-color: var(--line-strong); opacity: 1; }
 
 @media (pointer: coarse) {
-  /* A 13px grip is not a target. On a coarse pointer it becomes a 44px round
-     handle on the same seam, in the same place — the shape changes, the
-     gesture and the position do not. */
-  .rail-collapse { width: 44px; }
+  /* A 13px grip is not a target. On a coarse pointer the room a finger needs is
+     hung off it as a transparent extension — the gesture, the position and now
+     the paint are all exactly what a fine pointer gets.
+
+     This rule has been four things, and the first three each charged a
+     different neighbour for the same 44px.
+
+     Painted 44px wide, it is centred on the seam, so 22px of a `z-index: 1`
+     control lies across the nav column: measured at 768 it sat over the tail
+     of `Connection` — in a rail whose 84px is itself measured to hold exactly
+     that word — washing the final `n` out, and the right end of that row
+     collapsed the rail instead of opening the destination. That charged the
+     labels. Narrowing the paint to 24px left a 44×24 control, which is WCAG
+     2.5.8's floor but under this product's own: tokens.css states
+     `--touch-target` on both axes because "a target's smaller dimension is the
+     one a finger has to find". That charged the finger. Widening the rail by
+     half a touch target so the inner half landed in reserved gutter kept the
+     label and the target and charged everything else — the seam went from x=83
+     to x=105 with the nav icons still centred on x=41, every route's content
+     column shifted 22px at tablet-768, and because `.topbar` shares
+     `--rail-width` the brand track grew with it and the posture chip lost 13px
+     at every touch width, truncating the runtime name a character or three
+     earlier on twelve routes.
+
+     The fourth separated the painted body from the pressable box, which was
+     right and is kept: paint is paint, room is room, and room hung off an edge
+     costs no track. But it left the body at 24px — a number measured back when
+     the body *was* the target, and carried forward once the target moved off
+     it. Nothing re-derived it, and 24px centred on the seam still reaches 12px
+     inward, into a collapsed rail whose rows are inset by `--sp-1`. Measured on
+     that build at tablet-768: seam x=83, grip painted x=71..95, and the ink of
+     `Connection` ending at x=72 — the handle drawn over the word's last letter,
+     which is the original defect at 1px instead of 22px. Five route audits
+     reported it, as the handle sitting flush against (#memory, #chat), being
+     clipped by the seam and colliding with (#connection), re-overlapping
+     (#preferences), and tightening clearance against (#capabilities) that
+     label. The extension's `left: 0` then put a further 7px of pressable
+     control over the row's right end, so the tap that was meant to open
+     `Connection` still collapsed the rail.
+
+     So the body stops being widened for a coarse pointer at all. It is the
+     13px the design draws everywhere, centred on the seam as specified, and
+     6.5px is all that lands inside the rail — clear of every destination row's
+     ink at the narrowest rail this product paints. That is not a new geometry
+     to be afraid of: it is the geometry every fine-pointer width has shipped
+     with since the handle moved to the seam, and no audit has ever reported it.
+
+     The cost, measured and not asserted, at tablet-768 — the only viewport that
+     has both a rail and a coarse pointer, because `.sidebar` is `display: none`
+     under `(max-width: 640px), (max-width: 950px) and (max-height: 500px)`,
+     which is all three phones and landscape-932, where navigation is the bottom
+     tab bar and no grip is drawn at all.
+
+     Inward, every pixel is given back. The paint retreats x=71 → x=76.5, so
+     the 1px overlap with `Connection`'s ink becomes 4.5px of clearance, and it
+     is clearance no label can ever eat: `Connection` is the longest
+     destination name and 84px is the width measured to hold it. The pressable
+     box retreats x=72 → x=72.5.
+
+     Outward, the paint also retreats, x=95 → x=89.5. Only the invisible box
+     grows, x=114 → x=116.5 — and it grows because it was never 44px in the
+     first place: `border-box` sizing put the two 1px borders inside `width`,
+     so the old extension summed to 42. Two of those 2.5px are the floor being
+     met rather than territory being taken. Read off all fourteen route captures
+     in the grip's band (y=518..563), x=114..117 holds a card's background or
+     the first glyph of body text on every one of them and a control on none;
+     the nearest control in any route is the profile avatar on `profiles`, whose
+     left edge is x=121 and which stays 4.5px clear. The same 2.5px is added to
+     the strip in which a touch-drag finds the grip instead of the route's
+     scroller.
+
+     Nothing here applies to a fine pointer — the base rule is untouched and the
+     coarse block no longer overrides the paint — so every laptop, desktop and
+     wide capture is byte-identical. No route loses layout width at any
+     viewport, which is the entire point of paying in overhang rather than in
+     track.
+
+     `touch-target-floor.spec.ts` cannot check this one, and never could: it is
+     a coarse-pointer rule, its only coarse project is a phone, and `.sidebar`
+     is `display: none` there, so the grip measures 0×0 and is skipped. It also
+     measures the element's own border box, which a pseudo's room does not
+     enter — so if a coarse tablet project is ever added, expect that spec to
+     read 13×46 here and read this before excepting anything. The arithmetic
+     below is what actually holds the floor, and rail.test.ts is what holds the
+     arithmetic. */
+
+  /* The room, without the width, and with no literal that can drift: the four
+     terms sum to `--touch-target` by construction.
+
+     `inset-block` pulls out by one `--grip-edge` so the room is the grip's
+     whole 46px border box rather than the 44px padding box inside it; that axis
+     is over floor either way, but deriving it means a future change to `height`
+     cannot quietly take it under.
+
+     Horizontally the box reaches inward by one `--sp-1` — the gutter
+     `.primary-nav` is inset by in the collapsed rail, so the extension stops
+     inside the destination row's own padding and never under its label — and
+     spends the entire remainder outward, over the route's left gutter, which is
+     the one direction the captures show holds no control. Splitting it evenly
+     would put it straight back across `Connection`; hanging all of it outward,
+     now that the paint absorbs 13px instead of 24px, would reach x=121.5 and
+     take the `profiles` avatar instead. Inward as far as the row's padding and
+     no further is the only split that charges neither. */
+  .rail-collapse::after {
+    content: "";
+    position: absolute;
+    inset-block: calc(-1 * var(--grip-edge));
+    left: calc(-1 * (var(--sp-1) + var(--grip-edge)));
+    right: calc(var(--sp-1) + var(--grip-body) - var(--touch-target) - var(--grip-edge));
+  }
+
+  /* And the paint, for the one pointer that never gets to approach.
+   *
+   * "Ever so subtle" is a rest state, and on a mouse it is only ever half the
+   * sentence: the base rule fades this control to `opacity: .5` because hover
+   * and focus bring it back to 1, so what a person actually reaches for is the
+   * bright grip. A finger has no hover. On a coarse pointer the faded rest
+   * state is the *only* state that exists, and the sweep measured what that
+   * ships as at tablet-768 — the sole viewport with both a rail and a coarse
+   * pointer: a 13×46 sliver at 0.5, painted in `--surface-soft` on a rail that
+   * is `--surface-soft`, with a `--line` border at half strength to separate
+   * them. The sweep raised this cluster from eight route audits, which read the
+   * control as invisible or as an unexplained sliver on the seam. The room was
+   * never the problem — the extension above
+   * has measured 44×46 at that viewport, over the floor on both axes, since it
+   * was derived. The paint was.
+   *
+   * So on a coarse pointer the grip states itself: full opacity, and a body
+   * wide enough to read as a handle rather than as a seam artefact.
+   *
+   * Where those extra 11px come from is the whole care of this rule, because
+   * widening this control has broken something every previous time it was
+   * tried. Every added pixel is spent *outward*. `right` pulls the box back out
+   * of the rail by exactly half the growth, so the painted left edge stays
+   * where a 13px body centred on the seam always put it — 6.5px inside it,
+   * x=76.5 at tablet-768, clearing the ink of `Connection` (which ends at
+   * x=73.1) by 3.4px, the same clearance the sliver had. Not one pixel of new
+   * paint lands on a destination label.
+   *
+   * Outward it reaches x=100.5, and it does not claim a single pixel that was
+   * not already this control's: the transparent extension above is pressable
+   * from x=72.5 to x=116.5, so the wider body is painted *inside the room it
+   * already owns*. The pressable box does not change, `--rail-width` does not
+   * change — the grip still hangs off the seam and charges no track, which is
+   * the law the 22px seam reserve broke with 34 regressions — and no route's
+   * content column moves at any width. The extension's own arithmetic reads
+   * `--grip-body`, so it re-derives against 24px and lands on the identical
+   * box: left inset −5px and right inset −17px, still summing to
+   * `--touch-target` once `border-box` sizing is paid for.
+   *
+   * Nothing here reaches a fine pointer. Every laptop, desktop and wide capture
+   * is byte-identical, and the fade the design asked for is untouched wherever
+   * there is a hover to lift it. */
+  .rail-collapse {
+    --grip-body: 24px;
+    right: calc((var(--grip-design-body) - var(--grip-body)) / 2);
+    opacity: 1;
+  }
+
   .chat-nav-disclosure,
   .rail-expander,
   .chat-nav-new { min-height: 44px; min-width: 44px; }
@@ -1554,6 +1820,11 @@
 :root[data-rail="rail"] .edition,
 :root[data-rail="focus"] .brand { display: none; }
 
+/* No inset to correct for. `.topbar` shares `--rail-width` with `.app-shell`
+   "so the brand block keeps tracking the rail exactly", and the track is now
+   exactly the rail's contents again — nothing is held back at the seam — so
+   centring in the track centres over the icon column, which is what it is
+   drawn above. */
 :root[data-rail="rail"] .brand { justify-content: center; padding: 0; }
 
 /* `.topbar-center` is deliberately absent from the rule above. Focus mode may
@@ -1642,7 +1913,54 @@
   font-size: var(--fs-micro);
 }
 
+/*
+ * The pane is the containing block for what it contains. One declaration, and
+ * it is the largest measured repair in this sheet.
+ *
+ * `.main` was `position: static`, so every absolutely-positioned box inside a
+ * route resolved against the *initial* containing block rather than against
+ * this pane — and a box positioned against the ICB is a box this pane's own
+ * `overflow: auto` has no standing to clip. The routes are full of them: the
+ * screen-reader spans (`.sr-only`, `.seal__label`, `.session-library-visually-
+ * hidden`) are `position: absolute` with no offsets, so each one landed at its
+ * static position *in the document*, hundreds of pixels below a viewport it was
+ * never measured against, and `documentElement.scrollHeight` grew to hold it.
+ *
+ * Measured before, at phone-320: `#proof` reported scrollHeight 1141 against
+ * clientHeight 568, the deepest leak being a 1px-tall `span.seal__label`
+ * reading "Journal structure passed" whose bottom sat at y=1140.6. `#memory`
+ * and `#context` reported 1061. The cost is not the scrollbar. `.app-shell` is
+ * a fixed-height grid whose last row is the mobile navigation, so the document
+ * scrolling means the *whole shell* scrolls: at maximum scroll on `#proof` the
+ * nav's rect read y=-61..-5 — the primary navigation above the top of the
+ * screen, with 573px of empty ground below it. `#context` arrived already
+ * scrolled by 82px, so the void was visible without touching anything.
+ * Nine route/viewport pairs measured it, from 32px on `#proof` at phone-430 to
+ * 573px at phone-320, and it reached fine-pointer widths too: `#proof` at
+ * laptop-1024 read 816 against 768.
+ *
+ * `position: relative` and not `contain`, `transform` or `filter`, all of which
+ * would also have made this a containing block. Those three capture
+ * `position: fixed` descendants as well, and the four overlay surfaces —
+ * command palette, preferences dialog, trust sheet, approval dock — are
+ * `position: fixed` in sheet mode precisely so they can rise from the edge of
+ * the *viewport*; a sheet re-anchored to this pane would open inside the
+ * scroller it is meant to cover. `position: relative` moves only the absolute
+ * ones, which is exactly the leak. No `z-index` with it, so no stacking context
+ * is created and nothing that paints over this pane changes order.
+ *
+ * `.app-shell { overflow: clip }` was measured first and changes nothing: the
+ * escaping boxes are not this pane's overflow, they are the document's layout.
+ *
+ * After, on all 14 routes × 8 viewports: `documentElement.scrollHeight ===
+ * clientHeight` everywhere, and the mobile nav's bottom sits on the viewport's
+ * bottom edge on every phone width. Nothing visible moves — the census that
+ * flipped this at runtime and compared every box in `main` against the shell's
+ * own origin found the only boxes to change place were the clipped 1px spans
+ * that were never on screen.
+ */
 .main {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: auto;

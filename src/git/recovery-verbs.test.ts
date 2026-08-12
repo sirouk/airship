@@ -260,6 +260,32 @@ describe("browser Git restore and reset", () => {
     }
   });
 
+  it("refuses to restore a staged-but-uncommitted path from HEAD instead of deleting it", async () => {
+    // The index plane alone satisfied the untracked guard, so the request
+    // reached checkout — which reads "staged, never committed" as a deletion
+    // and unlinks the file. Nothing but the workspace holds this content.
+    for (const modified of [false, true]) {
+      const { client, workspace } = await seeded({ "README.md": "committed\n" });
+      await write(client, "notes/draft.md", "hours of staged work\n");
+      await client.stage({ repositoryId, worktreeId, paths: ["notes/draft.md"], expectedWorktreeVersion: await version(client) }, signal);
+      if (modified) await write(client, "notes/draft.md", "hours of staged work, then edited\n");
+
+      await expect(client.restore({
+        repositoryId,
+        worktreeId,
+        paths: ["notes/draft.md"],
+        source: "head",
+        expectedWorktreeVersion: await version(client),
+      }, signal)).rejects.toMatchObject({ code: "path-not-tracked" });
+
+      expect((await workspace.read("/workspace/notes/draft.md"))?.content)
+        .toBe(modified ? "hours of staged work, then edited\n" : "hours of staged work\n");
+      // The index entry has to survive too: checkout drops it along with the file.
+      const after = await client.status({ repositoryId, worktreeId }, signal);
+      expect(after.status).toEqual([expect.objectContaining({ path: "notes/draft.md", index: { kind: "added" } })]);
+    }
+  });
+
   it("refuses the whole request when one named path is untracked, before discarding its siblings", async () => {
     const { client, workspace } = await seeded({ "README.md": "committed\n" });
     await write(client, "README.md", "edited\n");

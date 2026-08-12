@@ -216,6 +216,54 @@ describe("VaultCoordinator", () => {
     expect(second.evidence.cleanup.warning).toContain("remove the listed keys out-of-band");
   });
 
+  it("counts and purges what the store actually holds, because the store is already namespace-confined", async () => {
+    /*
+     * `S3ObjectStore` is constructed with `prefix: config.namespace` and
+     * prepends it to every logical key; the Drive store's keys are logical for
+     * the same reason. Naming the namespace a second time asked the provider
+     * for `namespace/namespace/`, which matches nothing — so the usage panel
+     * reported an empty Vault however full it was, and "Wipe storage" listed
+     * nothing, trashed nothing, and returned an empty `retained` that read as
+     * total success. Both verbs pass a namespace-relative prefix now, which is
+     * what every other caller already did.
+     */
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new ReclaimingMemoryObjectStore();
+    const coordinator = new VaultCoordinator();
+    coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_usage",
+        workspaceName: "Airship Usage",
+        rootFolderId: "drive_root_usage",
+        segmentsFolderId: "drive_segments_usage",
+        namespaceId: "opaque-drive-namespace",
+      },
+      store,
+      workspaceKey: key,
+      accountLabel: "operator@example.test",
+      now: () => new Date(startedAt),
+    });
+    const snapshot = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "driveusage001" });
+    if (snapshot.phase !== "ready") throw new Error("expected ready snapshot");
+
+    // Two logical objects, written the way the Vault writes them: no namespace
+    // in the key, because the store owns that.
+    await store.putIfAbsent("workspace/manifest", new Uint8Array(64));
+    await store.putIfAbsent("journal/segment-0001", new Uint8Array(128));
+
+    const stats = await coordinator.collectStorageStats();
+    expect(stats).toMatchObject({ objectCount: 2, totalBytes: 192 });
+
+    const purged = await coordinator.purgeStoredObjects();
+    expect(purged).toEqual({ objectCount: 2 });
+    expect(await store.get("workspace/manifest")).toBeUndefined();
+    expect(await store.get("journal/segment-0001")).toBeUndefined();
+
+    // And the panel agrees afterwards rather than reporting the same 0 it
+    // would have reported before.
+    expect(await coordinator.collectStorageStats()).toMatchObject({ objectCount: 0, totalBytes: 0 });
+  });
+
 it("refuses a reclamation sweep before a verified runtime exists", async () => {
     const coordinator = new VaultCoordinator();
     await expect(coordinator.runReclamationSweep()).rejects.toThrow("requires a verified Vault runtime");

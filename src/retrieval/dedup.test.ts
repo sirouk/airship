@@ -21,6 +21,12 @@ describe("normalizeDedupText", () => {
   it("keeps CJK text comparable across scripts without mangling", () => {
     expect(normalizeDedupText("lios docu menta nos")).toBe("lios docu menta nos");
     expect(normalizeDedupText("ACME — 42")).toBe("acme 42");
+    // The class that survives normalization is `\p{L}\p{N}`, not `a-z0-9`:
+    // Han and Kana are letters and stay, while the CJK comma and full stop
+    // fold to a space like any other punctuation. Narrow that class and every
+    // non-Latin memory normalizes to the empty string, which the exact lane
+    // would then read as one enormous group of identical facts.
+    expect(normalizeDedupText("東京は晴れ、42度。")).toBe("東京は晴れ 42度");
   });
 });
 
@@ -52,6 +58,21 @@ describe("findDuplicatePairs", () => {
       r("The turbine pressure limit is 42 bar at inlet."),
     ], select);
     expect(pairs.some((pair) => !pair.exact && pair.similarity > 0.87)).toBe(true);
+  });
+
+  it("NEVER merges records whose text normalizes away to nothing", () => {
+    /*
+     * The hazard the CJK test above names in prose: anything that reduces to
+     * the empty string — punctuation-only notes, an emoji, a lone arrow —
+     * shared one group key, and the exact lane reported every pair of them at
+     * similarity 1. That is the strongest claim this module makes, resting on
+     * no surviving content at all. Two records with nothing in common are not
+     * duplicates because normalization left them both empty.
+     */
+    expect(normalizeDedupText("!!! ---")).toBe("");
+    expect(normalizeDedupText("→→→")).toBe("");
+    const pairs = findDuplicatePairs([r("!!! ---"), r("→→→"), r("?? ...")], select);
+    expect(pairs).toHaveLength(0);
   });
 
   it("NEVER merges same-frame different-fact records (Berlin vs Paris)", () => {
@@ -125,7 +146,10 @@ describe("clusters and representatives", () => {
       r("The deployment key rotates every ninety days."),
     ];
     const clusters = findDuplicateClusters(records, select);
-    expect(clusters.length).toBeLessThanOrEqual(2);
+    // Exactly two clusters, each holding its own world: a bound of "at most
+    // two" is also satisfied by finding nothing at all, which is a recall
+    // collapse rather than the separation this test is named for.
+    expect(clusters.map((cluster) => cluster.members)).toEqual([[0, 1], [2, 3]]);
     // The two worlds must never fuse into one cluster of four.
     expect(clusters.some((cluster) => cluster.members.length === 4)).toBe(false);
   });

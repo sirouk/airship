@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CHAIN_LINKS,
@@ -195,6 +198,37 @@ describe("the journey atlas gate", () => {
   it("accepts the block it generates", () => {
     const source = sourceOf([finding()]);
     expect(verifyChainLinks(source, renderChainLinks(source).join("\n"))).toEqual([]);
+  });
+
+  it("names the anchor it actually searches for when the Atlas has lost it", () => {
+    // The message used to quote `## Chain-link weakness`, a heading
+    // `renderChainLinks` always generates and so never the missing one, sending
+    // the reader after a section that is already there.
+    const source = sourceOf([finding()]);
+    expect(() => regenerate(source, "# Atlas\n\nno anchor here\n")).toThrow(/## Personas/u);
+  });
+
+  it("still runs when it is invoked through a symlinked path", () => {
+    /*
+     * The entrypoint check compared `import.meta.url` against a raw
+     * `file://${process.argv[1]}`, which is false whenever the invoking path
+     * crosses a symlink — Node resolves the module to its real path and
+     * `process.argv[1]` keeps the link. The gate then printed nothing and
+     * exited 0 while `npm run check` counted it green.
+     */
+    const scratch = mkdtempSync(join(tmpdir(), "journey-atlas-gate-"));
+    const link = join(scratch, "repo");
+    try {
+      symlinkSync(process.cwd(), link);
+      const result = spawnSync(process.execPath, [join(link, "scripts", "journey-atlas-gate.mjs")], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      // Either verdict proves `main()` ran; silence is the defect.
+      expect(`${result.stdout}${result.stderr}`).toMatch(/Journey Atlas/u);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it("holds the shipped documents to all of the above", () => {

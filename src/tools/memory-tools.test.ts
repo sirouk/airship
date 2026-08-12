@@ -4,6 +4,7 @@ import { createSessionManifest } from "../core/agent";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { sha256 } from "../core/hash";
+import { createSlashCommandRegistry } from "../commands/registry";
 import { MemoryWorkspace } from "../workspace/memory";
 import { createAirshipToolRegistry } from "./airship-tools";
 import { MEMORY_PATH, parseMemoryDocument } from "./memory-tools";
@@ -215,6 +216,25 @@ describe("memory duplicates (phase 1: the hunter at the tool seam)", () => {
     expect(again.metadata).not.toMatchObject({ status: "already-remembered" });
     const engineerReview = await run(harness, engineer, "recall_memory", { duplicates: true }, "review-eng");
     expect(JSON.parse(engineerReview.content)).toHaveLength(0);
+  });
+});
+
+describe("what /help update-memory tells a person to type", () => {
+  it("names the option each verb needs, because the usage line binds positionals in schema order", async () => {
+    const harness = await setup();
+    const descriptor = createSlashCommandRegistry({ tools: harness.registry }).resolve("update-memory")!;
+
+    // The usage line is derived from declaration order and can only mark
+    // `action` required, so someone following it with
+    // `/update-memory remember "Chris prefers dark mode" "chat"` binds the fact
+    // to `id`, the source to `content`, and is then told that `source` — the
+    // argument they typed last — must be a non-empty string. The description is
+    // printed directly beneath that line, which is where the per-verb
+    // requirement has to be stated for it to reach the person in time.
+    expect(descriptor.usage).toContain("<action> [id] [content] [source]");
+    expect(descriptor.summary).toContain("--content");
+    expect(descriptor.summary).toContain("--source");
+    expect(descriptor.summary).toContain("--id");
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { PendingApproval } from "../approvals/broker";
 import { approvalDerivationInput } from "../approvals/consequence";
@@ -112,10 +113,35 @@ describe("the spoken outcome of a security decision", () => {
 });
 
 describe("the deadline, which was inaudible", () => {
-  it("states the window once, in the words the expiry outcome uses", () => {
-    expect(approvalDeadlineSentence(request())).toBe(
-      "You have 5 minutes to decide. If the clock runs out, nothing runs and no decision is recorded.",
+  it("states what is left, in the words the expiry outcome uses", () => {
+    expect(approvalDeadlineSentence(request(), Date.parse("2026-07-31T12:00:00.000Z"))).toBe(
+      "You have 5 minutes left to decide. If the clock runs out, nothing runs and no decision is recorded.",
     );
+  });
+
+  it("does not restate the original budget to someone returning from a defer", () => {
+    /*
+     * Escape puts the request down without deciding it and the broker keeps the
+     * original `requestedAt`/`expiresAt`, so a sentence computed as
+     * `expiresAt - requestedAt` announced "5 minutes" to a listener re-entering
+     * the dialog four minutes later — while the countdown beside it read 01:00
+     * and the assertive warning was about to fire.
+     */
+    const resumed = approvalDeadlineSentence(request(), Date.parse("2026-07-31T12:04:00.000Z"));
+    expect(resumed).toContain("60 seconds left to decide");
+    expect(resumed).not.toContain("5 minutes");
+    // An elapsed request has no window left to offer; it must not read as one.
+    expect(approvalDeadlineSentence(request(), Date.parse("2026-07-31T12:06:00.000Z")))
+      .toContain("1 second left to decide");
+  });
+
+  it("reads the sentence at open rather than churning it once a second", () => {
+    // The dialog's `aria-describedby` points at this span, and the design is
+    // explicit that the deadline is announced on open and assertively as it
+    // runs out — never as per-second text. `clock` ticks; the open does not.
+    const source = readFileSync(new URL("./approval-dock.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const openedAt = useMemo(() => Date.now(), [current?.id]);");
+    expect(source).toContain("{approvalDeadlineSentence(current, openedAt)}");
   });
 
   it("warns assertively and names what expiry costs", () => {

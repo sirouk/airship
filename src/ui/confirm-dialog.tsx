@@ -60,6 +60,28 @@ export function ConfirmDialog({
   const box = boxRef ?? fallbackRef;
   const titleId = useId();
 
+  // Whoever asked the question gets the keyboard back when it is answered.
+  //
+  // Measured on Preferences: `Reset preferences` opens this gate, Cancel tears
+  // it down with `setResetArmed(false)`, and with nothing handing focus back it
+  // landed on `<body>` — outside the element carrying the parent dialog's own
+  // `Tab`/`trapFocus` handler, so the next Tab was the browser's and walked
+  // into the shell behind the scrim. The trap was not merely lost, it was
+  // escaped. `useOpenerRestore` cannot do this job: it deliberately ignores
+  // openers inside OVERLAY_ROOTS, and every opener of this primitive is a
+  // control inside the surface that is still open behind it. Captured on mount
+  // only, because nothing here inerts the opener before effects run — the one
+  // race that hook exists for.
+  const opener = useRef<HTMLElement>();
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) opener.current = active;
+    return () => {
+      const target = opener.current;
+      if (target?.isConnected) target.focus({ preventScroll: true });
+    };
+  }, []);
+
   // Keyed on the subject, not on mount: the Workspace dialog stays mounted
   // while its kind changes underneath it, and a modal that reused a previous
   // dialog's focus would leave the keyboard on a button that now means

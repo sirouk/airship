@@ -26,13 +26,13 @@ Honest and substantially as reported. The three grant shapes, the injectable tra
 
 ## Issues
 
-1. Dead fallback endpoint: /Users/chrisk/chutes-jumpmaster/airship/src/auth/provider-oauth/registrations.ts:132 lists https://console.anthropic.com/v1/oauth/token as the Anthropic token fallback, but Anthropic is bridge-only and the bridge destination allowlist (src/inference/bridge/protocol.ts:32-36, enforced at :307 isBridgeDestination) has no console.anthropic.com prefix, so the fallback can never execute in production.
+1. Dead fallback endpoint: src/auth/provider-oauth/registrations.ts:132 lists https://console.anthropic.com/v1/oauth/token as the Anthropic token fallback, but Anthropic is bridge-only and the bridge destination allowlist (src/inference/bridge/protocol.ts:32-36, enforced at :307 isBridgeDestination) has no console.anthropic.com prefix, so the fallback can never execute in production.
 
-2. Test proves an impossible path: /Users/chrisk/chutes-jumpmaster/airship/src/auth/provider-oauth/token-set.test.ts:168 ('moves to the documented fallback host only when the first is unreachable') passes only because its stub bridge does not enforce the destination allowlist the real bridge enforces; the green test overstates the fallback's reality.
+2. Test proves an impossible path: src/auth/provider-oauth/token-set.test.ts:168 ('moves to the documented fallback host only when the first is unreachable') passes only because its stub bridge does not enforce the destination allowlist the real bridge enforces; the green test overstates the fallback's reality.
 
-3. Doc/code contradiction introduced and not flagged: /Users/chrisk/chutes-jumpmaster/airship/docs/INFERENCE_PROVIDER_REGISTRY.md:82 says 'An OpenAI, Anthropic, or xAI first-party product login does not satisfy this gate', and the table at :20 still lists OpenAI as API-key only, but src/inference/providers/official-providers.ts:51 now ships exactly such a login as a reviewed oauth-public-pkce method. notDone flagged CSP and EXTENSION_BRIDGE.md but not this.
+3. Doc/code contradiction introduced and not flagged: docs/INFERENCE_PROVIDER_REGISTRY.md:82 says 'An OpenAI, Anthropic, or xAI first-party product login does not satisfy this gate', and the table at :20 still lists OpenAI as API-key only, but src/inference/providers/official-providers.ts:51 now ships exactly such a login as a reviewed oauth-public-pkce method. notDone flagged CSP and EXTENSION_BRIDGE.md but not this.
 
-4. Comment drift: /Users/chrisk/chutes-jumpmaster/airship/src/auth/provider-oauth/pkce.ts:11-12 says '32 random bytes -> a 43-character verifier, the RFC 7636 minimum length' while PKCE_VERIFIER_BYTES = 48 (64 chars); those numbers describe PKCE_STATE_BYTES instead.
+4. Comment drift: src/auth/provider-oauth/pkce.ts:11-12 says '32 random bytes -> a 43-character verifier, the RFC 7636 minimum length' while PKCE_VERIFIER_BYTES = 48 (64 chars); those numbers describe PKCE_STATE_BYTES instead.
 
 5. Release-gate failure confirmed present ('Production must contain exactly five optional inference-provider packs; found 4', no assets/openai-*.js emitted). Attribution to the foreign browser-cloud/fabric restructure is plausible (no dynamic import of browser-cloud remains in src) but I did not stash-verify because other packages are editing the tree concurrently.
 

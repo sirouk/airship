@@ -897,6 +897,18 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
           `${path} is not tracked by this repository, so there is no staged or committed version to discard back to. Delete it from the workspace yourself if that is what you meant.`,
         );
       }
+      // A staged-but-never-committed path has an index plane and no HEAD plane,
+      // so the check above admits it — but `--source=HEAD` has nothing to give
+      // it back. checkout reads that shape (stage present, commit absent) as a
+      // deletion and unlinks the file while dropping its index entry, destroying
+      // content no commit ever recorded. Git refuses the same request with
+      // "path ... does not exist in 'HEAD'".
+      if (request.source === "head" && !plane.head) {
+        throw new GitDomainError(
+          "path-not-tracked",
+          `${path} is staged but has never been committed, so HEAD holds no version to restore it from. Unstage it first, or delete it from the workspace yourself if that is what you meant.`,
+        );
+      }
     }
     if (request.source === "head") {
       const branch = await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true });

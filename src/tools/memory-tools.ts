@@ -184,7 +184,14 @@ export function registerMemoryTools(
   const update: Tool = {
     definition: {
       name: "update_memory",
-      description: "Remember or forget one explicit memory in this session's pinned profile scope. Exact re-pins are idempotent (returned as `already-remembered`); rephrased re-pins report their near-twins in `duplicates`. Profile identity is derived from the accountable session, never tool arguments.",
+      // The printed usage line binds positionals in schema order — `action`,
+      // `id`, `content`, `source` — but which of them are required depends on
+      // the verb, and `required: ["action"]` cannot say so. Someone following
+      // that line with `/update-memory remember "…" "chat"` had the fact bound
+      // to `id` and was then told `source must be a non-empty string`, naming
+      // as missing the argument they had just typed. The description is printed
+      // directly beneath the usage line, so it is where that is said.
+      description: "Remember or forget one explicit memory in this session's pinned profile scope. Positionals bind in schema order (action, id, content, source), so use the named form: remember needs --content and --source and ignores --id; forget needs --id. Exact re-pins are idempotent (returned as `already-remembered`); rephrased re-pins report their near-twins in `duplicates`. Profile identity is derived from the accountable session, never tool arguments.",
       effect: "write",
       inputSchema: {
         type: "object",

@@ -107,6 +107,22 @@ describe("provider connection component contract", () => {
     expect(source).not.toContain("const CLOUD =");
   });
 
+  it("says the configured grant is not wired into this build, beside the measurement that says it could be", () => {
+    /*
+     * OpenAI's `oauth.detail` reports a measured, product-owner-approved public
+     * PKCE client whose token endpoint answers `access-control-allow-origin: *`
+     * — all true, and all about the provider rather than about Airship. Nothing
+     * in the product calls `connectOAuth`, so the card printed a paragraph
+     * explaining that sign-in completes in the page while offering no control to
+     * do it and while the Connect route said the opposite. The build fact is
+     * added; the measured sentence is not edited, because a descriptor is the
+     * one source both surfaces read.
+     */
+    expect(source).toContain('provider.oauth.state === "configured-public-pkce"');
+    expect(source).toContain("This route connects API keys only — no account sign-in is wired into this build for {provider.label}.");
+    expect(source).toContain("provider.oauth.detail");
+  });
+
   it("requires confirmation for the active route and protects an exact return pin even when inactive", () => {
     expect(source).toContain("Confirm disconnect");
     expect(source).toContain("if (activeModel && !disconnectArmed)");
@@ -253,6 +269,58 @@ describe("provider connection component contract", () => {
     expect(styles).not.toContain("var(--radius-pill)");
   });
 });
+
+describe("the lock beside the loopback sentence", () => {
+  it("keeps a gap between the glyph and the word it sits against", () => {
+    /*
+     * This paragraph was deliberately taken out of the `.provider-fabric__notice`
+     * flex group, because flex made every `<strong>` and `<code>` in the
+     * sentence an unwrappable flex item. That was right, but the group's
+     * `gap: 9px` was also the only thing separating the lock from the text, and
+     * prose has no gap — so the icon has been welded to the "A" of "Airship
+     * connects only to the loopback origins" at every width since.
+     */
+    const rule = /\.provider-fabric__local-requirements p > svg\s*\{([^}]+)\}/u.exec(declarations)?.[1] ?? "";
+    expect(rule).toContain("margin-right: 6px");
+    expect(rule).toContain("vertical-align: text-bottom");
+  });
+
+  it("does not buy the gap by making the sentence a flex row again", () => {
+    // The regression this paragraph's own comment exists to record: 455px of
+    // unwrappable row inside a 294px column at 320px.
+    const paragraph = [...declarations.matchAll(/\.provider-fabric__local-requirements p\s*\{([^}]+)\}/gu)]
+      .map((match) => match[1] ?? "");
+    expect(paragraph.length).toBeGreaterThan(0);
+    for (const rule of paragraph) expect(rule).not.toContain("display: flex");
+    expect(source).toContain('<p><Icon name="lock" size={15} />Airship connects only to the loopback origins');
+  });
+});
+
+
+describe("the card's call to action is sized for the finger that presses it", () => {
+  it("floors the setup button on a coarse pointer, and does so by height alone", async () => {
+    /*
+     * These buttons carry no class of their own, which is why the campaign's
+     * touch-floor pass missed them: they are bare `<button>`s inside
+     * `.provider-setup-card` taking the generic 40px control height. Measured
+     * at 768x1024 with a touch pointer once every other floor had landed,
+     * `Connect OpenAI` / `Connect Anthropic` / `Connect xAI` were 272x40 and
+     * `Check Ollama` / `Check LM Studio` were 285x40 — five of the six
+     * remaining sub-floor controls anywhere in the product.
+     *
+     * Keyed on the pointer rather than on a width, because that is what the
+     * floor is for; and `min-height` only, because these are already 272-285px
+     * wide and a declared `min-width` on a flex item replaces the min-content
+     * floor that keeps a label inside its own box.
+     */
+    const sheet = await readFile(new URL("./provider-connections-view.css", import.meta.url), "utf8");
+    const coarse = sheet.slice(sheet.lastIndexOf("@media (pointer: coarse) {"));
+    expect(coarse).toContain(".provider-setup-card button");
+    expect(coarse).toContain("min-height: var(--touch-target)");
+    expect(coarse).not.toContain("min-width:");
+  });
+});
+
 
 function fixtureModel(
   capabilities: InferenceModelDescriptor["capabilities"],

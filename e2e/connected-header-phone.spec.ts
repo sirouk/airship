@@ -204,6 +204,20 @@ test.describe("connected chat header on a phone", () => {
    * bar's own padding is 47px measured; 56px allows a density change to move it
    * and still fails a second line. The header fraction is the number the review
    * actually used, and 95/932 is 10.2%.
+   *
+   * The fraction moved to 0.16 when the phone shell stopped drawing its runtime
+   * status line on top of the conversation. `.main` and `.mobile-nav` still
+   * carried the row numbers they were given when this grid had three tracks, so
+   * the 34px status band inserted above them shared a cell with `.main` instead
+   * of taking its own: the band cost the header nothing precisely because it was
+   * overlapping the thing it sits above — and swallowing its taps, which is what
+   * made the phone unnavigable. Measured 144.3/932 = 15.5% with the band
+   * showing "Local kernel ready"; 0.16 leaves a little room and still fails a
+   * second bar row.
+   *
+   * The two assertions below it are the ones that catch the complaint this file
+   * was written for, and neither moved: a wrapping model id grows `barHeight`
+   * and `triggerHeight`, not the band above them.
    */
   test("stays one row: a wrapping model id may not grow the header", async ({ page }) => {
     await mockChutes(page);
@@ -222,7 +236,7 @@ test.describe("connected chat header on a phone", () => {
 
     expect(geometry.barHeight).toBeLessThanOrEqual(56);
     expect(geometry.triggerHeight).toBeLessThanOrEqual(48);
-    expect(geometry.headerFraction).toBeLessThanOrEqual(0.13);
+    expect(geometry.headerFraction).toBeLessThanOrEqual(0.16);
   });
 
   test("keeps catalogue option focus on Search and restores the model trigger", async ({ page }) => {

@@ -231,6 +231,45 @@ describe("live load surface", () => {
     // The card's own remediation control is a button and is sized with them.
     expect(mobile).toContain(".capability-probe-action { min-height: 44px; }");
   });
+
+  /*
+   * The panel's subject is how fresh its own reading is, and both of the facts
+   * that say so were being clipped by presentation rather than by the code that
+   * builds them. At 320 the summary pill read `3/6 runtimes ready · observed
+   * A…` — the timestamp entirely gone — and the PAGE MEMORY tile read `Not
+   * measurable i…`; at 768 the pill lost the zone and the tile still clipped
+   * mid-word. Neither has a hover to recover it on touch, so a fact that does
+   * not fit has to wrap, not truncate.
+   */
+  it("wraps the observed-at claim and the stat-tile sentence rather than truncating either", () => {
+    const seal = styles.slice(styles.indexOf('.capability-summary > .seal[data-density="chip"] .seal__label'));
+    expect(seal.slice(0, seal.indexOf("}"))).toContain("white-space: normal");
+    const tile = styles.slice(styles.indexOf(".capability-signal-strip dd"));
+    const declarations = tile.slice(0, tile.indexOf("}"));
+    expect(declarations).not.toContain("white-space: nowrap");
+    expect(declarations).not.toContain("text-overflow: ellipsis");
+    expect(declarations).toContain("overflow-wrap: anywhere");
+  });
+
+  /*
+   * `Seal` renders its root as a `<span>`, so `.capability-summary > span` — a
+   * rule written for the approval-policy sentence at the far end of the row,
+   * which is read back towards the pill and so is set right — also reached the
+   * freshness pill. That was invisible only while the pill could not wrap. The
+   * moment it took a second line, the tail of that line ("EDT") right-aligned
+   * itself under a full-width first line and read as a misalignment. The one
+   * width where it was already correct, ≤760, was correct by accident: a
+   * counter-rule in the phone block happened to flip it back.
+   */
+  it("sets the freshness pill from its own glyph at every width, not from the sentence beside it", () => {
+    for (const rule of [...styles.matchAll(/\.capability-summary > span[^{]*\{[^}]*text-align[^}]*\}/gu)].map((match) => match[0])) {
+      expect(rule).toContain(":not(.seal)");
+    }
+    // The sentence keeps both of its readings: set right across the row, and
+    // left once the phone stack puts it under the pill rather than opposite it.
+    expect(styles).toContain(".capability-summary > span:not(.seal) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }");
+    expect(styles).toContain(".capability-summary > span:not(.seal) { text-align: left; }");
+  });
 });
 
 describe("extension capability surface", () => {
@@ -328,5 +367,34 @@ describe("probe evidence a reader can act on", () => {
     // two differently-aged reports on one screen.
     expect(source).toContain("onReprobe={() => void refresh()}");
     expect(source).toContain("probeAction(observation, onReprobe)");
+  });
+});
+
+/*
+ * SO083. The route's phone block pairs the two agent-layer actions into two
+ * columns, which is right down to the width where a cell can still hold a
+ * label on one line and wrong below it. Measured on the shipped build:
+ *
+ *   phone-320 → 124.8 x 62px, label over three lines
+ *   phone-340 → 134.8 x 44px
+ *   phone-360 → 144.8 x 44px   ← last width where the pair costs nothing
+ *   phone-390 → 159.8 x 44px, label on one line
+ *
+ * The 62px box is the defect: the leading glyph is a flex item centred against
+ * the full button height and pinned left while the wrapped label centres
+ * itself independently, so the icon floats alone and shares neither a baseline
+ * nor a left edge with any line of its own label. Measured after at phone-320:
+ * 258 x 44px, one line, icon beside its word.
+ */
+describe("the agent-layer actions at the narrow tier", () => {
+  it("takes one column where two cannot hold a label on one line", () => {
+    const tier = styles.slice(styles.indexOf("@media (max-width: 760px)"));
+    expect(tier).toMatch(/@media \(max-width: 360px\) \{\s*\.capability-extension > div:last-child \{ grid-template-columns: minmax\(0, 1fr\); \}/u);
+    // The icon rejoins its label rather than floating at the far edge.
+    expect(tier).toContain(".capability-extension > div:last-child > button { justify-content: center; }");
+    // 360 is the sub-tier this stylesheet family already owns (routes.css:3067
+    // for the topbar posture chip, routes.css:4275 for the profile hub tabs),
+    // not a number minted for this route. The pair survives above it.
+    expect(tier).toContain(".capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }");
   });
 });

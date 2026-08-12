@@ -290,10 +290,14 @@ describe("release gate", () => {
     // AMENDED again for the same reason: the editor-theme pass recorded a
     // third, larger pair in this block, and a claim that blanks two of three
     // readings proves nothing while the operative one survives.
-    // The current editor-workbench block has three operative readings. Blank
-    // all three; leaving any one of them would let the largest pair keep
+    // AMENDED once more: the surface sweep's dock repairs recorded a fourth,
+    // larger pair, and the same reasoning applies — the guard reads the largest
+    // pair stated, so the newest reading is now the operative one.
+    // The current editor-workbench block has four operative readings. Blank
+    // all four; leaving any one of them would let the largest pair keep
     // justifying the ceiling.
     expect(() => assertDocumentedBudgetMeasurements(source
+      .replace("Re-measured at 88,281 B raw / 28,166 B gzip", "Re-weighed at 88,281 B and 28,166 B")
       .replace("Re-measured on this build: 87,281 B raw / 27,902 B gzip", "Re-weighed at 87,281 B and 27,902 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
@@ -320,7 +324,11 @@ describe("release gate", () => {
       // and its comment now pays for the second step in as many words — "27 KiB
       // gzip would have left 62 bytes". So the ceiling is 28 KiB and the step
       // granted without a sentence behind it is 29.
-      ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
+      // AMENDED again: the surface sweep re-measured the pack at 28,172 B gzip
+      // and its comment pays for the second step in as many words — "28 KiB
+      // gzip would have left 500 B". So the ceiling is 29 KiB and the step
+      // granted without a sentence behind it is 30.
+      ["optionalWorkspaceWorkbench", "gzip: 29 * 1024", "gzip: 30 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 128 KiB after the conversation-proof cleanup operation, and the
       // step this row grants without paying for it is now the one past it.
@@ -328,7 +336,15 @@ describe("release gate", () => {
       // queue and bounded sweep) re-measured the pack and the budget comment
       // pays for 131 KiB with the 130-Would-have-left-143-B sentence, so the
       // unpaid step is the one past that.
-      ["deferredCapabilities", "gzip: 131 * 1024", "gzip: 132 * 1024"],
+      // AMENDED again: the surface-repair sweep re-measured the pack at
+      // 133,743 B gzip. The ceiling did not move — 131 KiB still clears it —
+      // but the reading it is measured against did, so the second step this
+      // comment already pays for now lands on 132 and the step granted without
+      // a sentence behind it is 133.
+// AMENDED again: the closing surface waves re-measured the pack at 134,239 B
+      // gzip, so the second step this comment already pays for now lands on 133
+      // and the step granted without a sentence behind it is 134.
+      ["deferredCapabilities", "gzip: 133 * 1024", "gzip: 134 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
@@ -364,7 +380,11 @@ describe("release gate", () => {
     // held to the ceiling beside it.
     const overlays = entries.find((entry) => entry.name === "optionalShellOverlays");
     expect(overlays.prose).toContain("110.54 KiB gzip");
-    expect(overlays.figures.map((figure) => figure.text)).toEqual(["6.23 KiB", "2.46 KiB"]);
+    // The entry-chunk figure this comment quotes to explain *why* the overlays
+    // were moved out stays excluded; both of this budget's own readings — the
+    // original and the surface-repair re-measurement — are counted.
+    expect(overlays.figures.map((figure) => figure.text))
+      .toEqual(["6.23 KiB", "2.46 KiB", "7,219 B", "2,816 B"]);
   });
 
   /*
@@ -444,7 +464,10 @@ describe("release gate", () => {
     expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| Service worker |", "| Initial JavaScript and module preloads | 640 KiB | 132 KiB |\n| Service worker |")))
       .toThrow(/the table row "Initial JavaScript and module preloads" names no ceiling this file exports/u);
     // Dropping a figure from a multi-class row hides whichever class it omitted.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 60 KiB |", "| 32 / 56 / 10 KiB |")))
+    // AMENDED: the execution-tools ceiling fell to 58 KiB when the dead eager
+    // registrar came out, so the row this assertion mutilates is spelled with
+    // the number it now carries.
+    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 58 KiB |", "| 32 / 56 / 10 KiB |")))
       .toThrow(/"Optional execution broker \/ engine \/ support \/ tools" raw: the table states 3 figure\(s\) for 4 ceiling\(s\)/u);
   });
 

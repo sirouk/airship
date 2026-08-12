@@ -465,3 +465,47 @@ describe("configuring the remote the panel reports on", () => {
     expect(source).toContain("setRemoteDraft(event.currentTarget.value)");
   });
 });
+
+/*
+ * The advanced sheet is the only place the browser source controls exist on a
+ * phone, and at 320px its title read "Repositories & wor" — the serif heading
+ * cut flush by the screen edge, mid-word, with no ellipsis to admit it. The
+ * cause was never the heading: `.route-title` has carried `min-width: 0`,
+ * `overflow: hidden` and `text-overflow: ellipsis` all along. It was the box
+ * above it, twice over. These rules pin that box, so an edit that re-opens
+ * either escape has to argue with this file first.
+ */
+describe("the advanced sheet fits the phone it opens on", () => {
+  const sheet = readFileSync(new URL("./sources-view.css", import.meta.url), "utf8");
+  const rule = (source: string, selector: string): string => {
+    const start = source.indexOf(`${selector} {`);
+    expect(start, `missing ${selector}`).toBeGreaterThanOrEqual(0);
+    const bodyStart = source.indexOf("{", start) + 1;
+    return source.slice(bodyStart, source.indexOf("}", bodyStart));
+  };
+
+  it("clamps the header's implicit column so a nowrap title cannot widen the sheet", () => {
+    // `<RouteHeader>` is a grid with no declared column, and an `auto` track is
+    // floored by its widest child's min-content contribution — which for a
+    // `white-space: nowrap` heading is the entire string. Only a track whose
+    // min sizing function is fixed refuses to grow past the sheet.
+    expect(rule(sheet, ".git-sources-header.route-header")).toContain("grid-template-columns: minmax(0, 1fr)");
+  });
+
+  it("keeps the embedded sheet to one inline gutter rather than two", () => {
+    // `.git-sources--embedded` already pads 16px inline. The primitive's own
+    // inset stacked a second 16px on top of it, so the title and its verbs
+    // started 32px in while every card below them started at 16px — and the
+    // title had 32px less to truncate into than the sheet actually offered.
+    expect(rule(sheet, ".git-sources--embedded .git-sources-header.route-header")).toMatch(/padding-inline:\s*0/u);
+    expect(rule(sheet, ".git-sources--embedded")).toContain("padding: 0 var(--sp-4) var(--sp-4)");
+  });
+
+  it("still asks the title to truncate, which is the whole point of clamping the box", () => {
+    const routes = readFileSync(new URL("./routes.css", import.meta.url), "utf8");
+    const title = rule(routes, ".route-title");
+    expect(title).toContain("white-space: nowrap");
+    expect(title).toContain("text-overflow: ellipsis");
+    expect(title).toContain("overflow: hidden");
+  });
+});

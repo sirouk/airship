@@ -47,6 +47,25 @@ describe("destructive confirmation", () => {
     expect(primitive).toContain('destructive ? "danger" : "primary"');
   });
 
+  /*
+   * A gate that takes the keyboard has to give it back. Measured on Preferences:
+   * `Reset preferences` opens this dialog, Cancel unmounts it, and with no
+   * restoration focus fell to `<body>` — outside the element that carries the
+   * *parent* dialog's `Tab`/`trapFocus` handler, so the next Tab was the
+   * browser's and walked into the shell behind the scrim. That is an escaped
+   * trap, not merely a lost one, and it is invisible to a pointer user.
+   *
+   * `useOpenerRestore` is asserted absent on purpose: it skips openers inside
+   * OVERLAY_ROOTS, and every opener of this primitive is a control inside the
+   * surface still open behind it, so it would send focus out of that surface.
+   */
+  it("hands the keyboard back to whoever asked the question", async () => {
+    const primitive = await readFile(new URL("./confirm-dialog.tsx", import.meta.url), "utf8");
+    expect(primitive).toContain("const active = document.activeElement;");
+    expect(primitive).toContain("target?.isConnected) target.focus({ preventScroll: true })");
+    expect(primitive).not.toContain("useOpenerRestore(");
+  });
+
   it("has every gated surface import that one primitive rather than rebuild it", async () => {
     for (const file of ["workspace-view.tsx", "sources-view.tsx", "terminal-view.tsx"]) {
       const source = await readFile(new URL(`./${file}`, import.meta.url), "utf8");
@@ -54,5 +73,41 @@ describe("destructive confirmation", () => {
       // No surface may keep a second copy of the modal shell.
       expect(source, file).not.toContain('class="workbench-dialog-scrim"');
     }
+  });
+
+  /*
+   * Asking is half of it; the other half is what the page says afterwards.
+   *
+   * Removing an authored skill left a class-less `<p>` inheriting the route's
+   * body ink — 17px at `--ink`, the same type as ordinary prose, transparent
+   * ground, no border, no padding — floating in the gutter between the card
+   * grid and the boundary callout. Measured at desktop-1440 it was a 1156px
+   * line reading "Audit probe removed." with nothing around it, which is how a
+   * page renders text it has no opinion about. It was the only in-page record
+   * that a skill had been destroyed, and the least emphasised thing on screen.
+   * A styled topbar toast fires in parallel and is what catches the eye; this
+   * is what remains once that has gone.
+   */
+  it("leaves a found-able record behind, not unstyled prose in a gutter", async () => {
+    const view = await readFile(new URL("./skills-manager-view.tsx", import.meta.url), "utf8");
+    expect(view).toContain('<p class="skills-action-status" role="status" aria-live="polite">');
+    // The class-less spelling is the defect; a status paragraph with no class
+    // is a status paragraph with no box.
+    expect(view).not.toContain('<p role="status" aria-live="polite">{status}</p>');
+
+    const routes = await readFile(new URL("./routes.css", import.meta.url), "utf8");
+    const chip = /\n\.skills-action-status \{([^}]+)\}/u.exec(routes)?.[1] ?? "";
+    expect(chip).toContain("border: 1px solid var(--line)");
+    expect(chip).toContain("border-radius: var(--radius-control)");
+    expect(chip).toContain("background: var(--surface-soft)");
+    /*
+     * Neutral, and the width of its own sentence. The destruction already
+     * happened and succeeded, so painting it in danger ink is how danger ink
+     * stops being read; and a chip stretched across a 1160px measure is a
+     * banner, which is what the toast already was.
+     */
+    expect(chip).toContain("justify-self: start");
+    expect(chip).not.toContain("var(--danger)");
+    expect(chip).not.toContain("var(--v-failed)");
   });
 });

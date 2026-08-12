@@ -117,6 +117,82 @@ describe("tool-loop repeat guardrails", () => {
   });
 });
 
+describe("a call the registry refuses before it decides anything", () => {
+  it("journals arguments that miss the schema as the decision it is, leaving the conversation auditable", async () => {
+    // The review throws inside `validate` before producing any decision. It
+    // used to be journaled as a bare tool.failed, which the audit reads as a
+    // terminal without an approval — and one mistyped argument then marked the
+    // whole conversation, and every later turn in it, permanently invalid.
+    const execute = vi.fn<Tool["execute"]>(async () => ({ content: "read" }));
+    const tools = registryWith(execute);
+    const { journal, sessionId } = await sessionFixture(tools);
+
+    await expect(runTurn({
+      sessionId,
+      content: "Read the record.",
+      transport: repeatingTransport(1, () => ({ pat: "notes/a.md" }), true),
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ content: "I could not read either record." });
+
+    expect(execute).not.toHaveBeenCalled();
+    const events = await journal.readEvents(sessionId);
+    const session = await journal.getSession(sessionId);
+    const report = await auditSessionHistory({ session: session!, events });
+    expect(report.findings).toEqual([]);
+    expect(report.status).toBe("verified");
+    expect(events.some((event) => event.type === "tool.failed")).toBe(false);
+    expect(toolContents(events, "tool.denied")).toEqual(["Tool arguments /path are required."]);
+  });
+
+  it("tells the model a hallucinated tool does not exist rather than that it was denied permission", async () => {
+    const execute = vi.fn<Tool["execute"]>(async () => ({ content: "read" }));
+    const tools = registryWith(execute);
+    const { journal, sessionId } = await sessionFixture(tools);
+
+    await expect(runTurn({
+      sessionId,
+      content: "Read the record.",
+      transport: namedCallTransport("search_the_web", { query: "airship" }),
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({ content: "There is no such tool." });
+
+    expect(execute).not.toHaveBeenCalled();
+    const events = await journal.readEvents(sessionId);
+    // "Permission denied" invites the model to ask for access to a tool that
+    // was never registered; the registry's own sentence for this fact does not.
+    expect(toolContents(events, "tool.denied")).toEqual(["Unknown tool: search_the_web."]);
+
+    const session = await journal.getSession(sessionId);
+    const report = await auditSessionHistory({ session: session!, events });
+    expect(report.findings).toEqual([]);
+  });
+});
+
+/** One call to `name`, then a plain answer on the following step. */
+function namedCallTransport(name: string, argumentsValue: JsonValue): InferenceTransport {
+  let step = 0;
+  return {
+    id: "scripted",
+    posture: "local",
+    async *stream(_request: InferenceRequest, signal: AbortSignal) {
+      if (signal.aborted) throw signal.reason;
+      if (step++ === 0) {
+        yield { type: "tool-call", call: { id: "call-0", name, arguments: argumentsValue } } satisfies InferenceEvent;
+        yield { type: "completed", finishReason: "tool-calls" } satisfies InferenceEvent;
+        return;
+      }
+      yield { type: "text-delta", text: "There is no such tool." } satisfies InferenceEvent;
+      yield { type: "completed", finishReason: "stop" } satisfies InferenceEvent;
+    },
+  };
+}
+
 function toolContents(events: readonly DurableEvent[], type: string): string[] {
   return events
     .filter((event) => event.type === type)

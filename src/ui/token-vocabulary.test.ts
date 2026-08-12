@@ -240,8 +240,24 @@ describe("the tab strips agree on a height", () => {
     // Capabilities, beside a Trust hub strip that took 44px in the identical
     // phone query.
     expect(routes).toContain(".profile-hub-tabs > button { min-height: var(--tab-height);");
-    const coarse = routes.match(/@media \(pointer: coarse\) \{\n((?:[^@]|\n)*?)\n\}/u)?.[1] ?? "";
-    expect(coarse).toContain(".profile-hub-tabs > button");
+    /*
+     * Brace-matched rather than pattern-matched, and the reason is a landmine
+     * this cost someone half an hour to find.
+     *
+     * This read `/@media \(pointer: coarse\) \{\n((?:[^@]|\n)*?)\n\}/`, whose
+     * `(?:[^@]|\n)` alternation is ambiguous — `[^@]` already matches a
+     * newline, so every character has two derivations and a body the pattern
+     * cannot terminate is explored exponentially. It also meant the block was
+     * defined as "up to the next at-sign anywhere", so writing the word
+     * `@media` inside a COMMENT in that block did not fail this test: it hung
+     * `vitest run src/ui/` forever, with no failure and no output. A test that
+     * can only hang is worse than a test that can only fail.
+     *
+     * Counting braces terminates on any input, and asking for the block that
+     * actually carries the selector is what the assertion always meant.
+     */
+    const coarse = coarseBlocks(routes).find((block) => block.includes(".profile-hub-tabs > button")) ?? "";
+    expect(coarse, "no coarse-pointer block carries the hub tab floor").not.toBe("");
     expect(coarse).toContain("min-height: var(--touch-target)");
   });
 });
@@ -332,4 +348,28 @@ function spacingLiterals(source: string): readonly number[] {
     .flatMap((declaration) => [...(declaration[1] ?? "").matchAll(/(?<![\w.\-])(\d+)px/gu)])
     .map((match) => Number(match[1]))
     .filter((px) => px > 0);
+}
+
+/**
+ * Every `@media (pointer: coarse)` block in a stylesheet, by balanced braces.
+ *
+ * At-rules nest, comments contain at-signs, and a stylesheet is not a regular
+ * language — so this counts depth instead of guessing where a block ends. See
+ * the comment at the call site for the specific failure that made it worth
+ * writing out.
+ */
+function coarseBlocks(source: string): string[] {
+  const marker = "@media (pointer: coarse) {";
+  const blocks: string[] = [];
+  for (let at = source.indexOf(marker); at >= 0; at = source.indexOf(marker, at + marker.length)) {
+    let depth = 1;
+    let index = at + marker.length;
+    while (index < source.length && depth > 0) {
+      if (source[index] === "{") depth += 1;
+      else if (source[index] === "}") depth -= 1;
+      index += 1;
+    }
+    if (depth === 0) blocks.push(source.slice(at + marker.length, index - 1));
+  }
+  return blocks;
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { MemoryObjectStore } from "../storage/memory-object-store";
 import type {
+  ObjectReclamationOutcome,
+  ObjectReclamationReceipt,
   ObjectStore,
   UntrackedProviderObjectPage,
   UntrackedProviderReclamationReceipt,
@@ -34,6 +36,32 @@ function withoutReclamation(store: ObjectStore): ObjectStore {
     compareAndSwap: (key, etag, bytes, signal) => store.compareAndSwap(key, etag, bytes, signal),
     list: (prefix, signal) => store.list(prefix, signal),
   };
+}
+
+/**
+ * Google Drive's two-phase reclamation: the CAS drops the index entry first,
+ * and a body whose `trashed: true` PATCH was then refused comes back as
+ * `not-indexed` on every later run, because the fileId that could retry it
+ * lived only in the entry the CAS deleted.
+ */
+class NotIndexedTrashStore extends MemoryObjectStore {
+  readonly notIndexed = new Set<string>();
+
+  override async trash(keys: readonly string[]): Promise<ObjectReclamationReceipt> {
+    const held = keys.filter((key) => !this.notIndexed.has(key));
+    const confirmed = await super.trash(held);
+    const outcomes: ObjectReclamationOutcome[] = [
+      ...confirmed.outcomes,
+      ...keys.filter((key) => this.notIndexed.has(key))
+        .map((key) => Object.freeze({ key, reclaimed: false as const, reason: "not-indexed" as const })),
+    ];
+    return Object.freeze({
+      requested: keys.length,
+      reclaimed: confirmed.reclaimed,
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
+  }
 }
 
 describe("runVaultReclamationSweep — aged supersession queue", () => {
@@ -184,6 +212,36 @@ describe("runVaultReclamationSweep — aged supersession queue", () => {
     expect((await queue.readEntries()).length).toBe(1);
   });
 
+  it("drops an entry the authority index no longer names, while still reporting it as unconfirmed", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new NotIndexedTrashStore();
+    const queue = new VaultReclamationQueue(store, key, () => T0.toISOString());
+    const workspace = new EncryptedObjectWorkspace(store, key, "state/workspace/v1", () => T0.toISOString(), undefined, queue);
+    const stranded = "context/segments/entry-dropped-body-refused";
+    store.notIndexed.add(stranded);
+    await queue.record([{ kind: "context-segment", cloudKey: stranded }]);
+
+    const agedNow = new Date(T0.getTime() + DEFAULT_RECLAMATION_SAFETY_AGE_MS + DAY_MS);
+    const receipt = await runVaultReclamationSweep({
+      store, workspace, queue, now: () => agedNow, runId: "sweep-noidx-01",
+      resolveReferences: async () => new Set<string>(),
+    });
+
+    // The receipt stays literally true about what the provider confirmed.
+    expect(receipt.queue).toMatchObject({
+      aged: 1, requested: 1, reclaimed: 0, retained: 1,
+      retainedKeys: [stranded], confirmationCommitted: "committed",
+    });
+    // The entry still leaves: no later run could ever get a different answer
+    // for it, and re-offering it forever is how the count stopped going down.
+    expect(await queue.readEntries()).toEqual([]);
+    const again = await runVaultReclamationSweep({
+      store, workspace, queue, now: () => agedNow, runId: "sweep-noidx-02",
+      resolveReferences: async () => new Set<string>(),
+    });
+    expect(again.queue).toMatchObject({ queued: 0, requested: 0, retained: 0 });
+  });
+
   it("aborts without sweeping anything when the caller's signal is already raised", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const store = new MemoryObjectStore();
@@ -267,6 +325,31 @@ describe("runVaultReclamationSweep — provider-side untracked enumeration", () 
     });
     expect([...store.bodies.keys()].sort()).toEqual(["undated-d", "won-the-race-e", "young-c"]);
     expect(receipt.queue).toMatchObject({ queued: 0, requested: 0 });
+  });
+
+  it("says truncated when enumeration stops at its page ceiling with a cursor still outstanding", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new UntrackedFakeStore();
+    const queue = new VaultReclamationQueue(store, key, () => T0.toISOString());
+    const workspace = new EncryptedObjectWorkspace(store, key, "state/workspace/v1", () => T0.toISOString(), undefined, queue);
+
+    const old = new Date(T0.getTime() - 30 * DAY_MS).toISOString();
+    // One body more than the run's 200 single-object pages can reach, and far
+    // fewer than its removal budget, so only the page ceiling can truncate it.
+    for (let index = 0; index <= 200; index += 1) store.plant(`orphan-${String(index)}`, { size: 1, createdAt: old });
+
+    const receipt = await runVaultReclamationSweep({
+      store, workspace, queue, now: () => T0, runId: "sweep-untr-003",
+      safetyAgeMs: MIN_RECLAMATION_SAFETY_AGE_MS,
+    });
+
+    expect(receipt.untracked).toMatchObject({
+      status: "truncated", examined: 200, agedCandidates: 200, requested: 200, reclaimed: 200, retained: 0,
+      note: expect.stringContaining("page ceiling") as unknown as string,
+    });
+    // The body enumeration never reached is untouched, and the receipt is what
+    // tells the person to run again for it.
+    expect([...store.bodies.keys()]).toEqual(["orphan-200"]);
   });
 
   it("never treats an untracked listing failure as license to remove anything", async () => {

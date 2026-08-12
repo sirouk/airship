@@ -6,6 +6,7 @@ import {
   hexToBytes,
   sha256Hex,
 } from "./encoding";
+import type { TdxRuntimeMeasurements } from "./provider-types";
 import type { LocalKeyBindingCheck, ParsedTdxQuote } from "./types";
 
 // Chutes' third-party verification guide follows Intel TDX quote-v4 layout:
@@ -111,6 +112,37 @@ export function parseTdxQuote(quoteBase64: string): ParsedTdxQuote {
 
 /** @deprecated The name is retained for callers; the parser accepts quote v4 and v5. */
 export const parseTdxQuoteV4 = parseTdxQuote;
+
+/**
+ * The MRTD and the four RTMRs, read straight out of the parsed quote body.
+ *
+ * This is quote-layout work — five byte offsets into the same structure
+ * `parseTdxQuote` above just measured — so it lives with the parser that owns
+ * those offsets rather than with the policy code that compares its output.
+ * It was written next to that comparison in `provider-client`, which made the
+ * endpoint-evidence record store import the whole provider client to read five
+ * fields; the build then had no shared `tdx` module to split out, folded it
+ * into `provider-client`, and the release gate counted five Proof-surface
+ * chunks where the deferral contract names six. Nothing about first paint
+ * actually changed — but a chunk boundary the gate is written to protect did,
+ * and the honest fix is for the dependency never to have pointed that way.
+ */
+export function extractTdxRuntimeMeasurements(quote: ParsedTdxQuote): TdxRuntimeMeasurements {
+  const bodyOffset = quote.reportBodyOffset;
+  return Object.freeze({
+    mrtd: sliceHex(quote.bytes, bodyOffset + 136, 48),
+    rtmr0: sliceHex(quote.bytes, bodyOffset + 328, 48),
+    rtmr1: sliceHex(quote.bytes, bodyOffset + 376, 48),
+    rtmr2: sliceHex(quote.bytes, bodyOffset + 424, 48),
+    rtmr3: sliceHex(quote.bytes, bodyOffset + 472, 48),
+  });
+}
+
+function sliceHex(bytes: Uint8Array, offset: number, length: number): string {
+  const slice = bytes.slice(offset, offset + length);
+  if (slice.byteLength !== length) throw new Error("TDX quote is truncated before measurements");
+  return bytesToHex(slice);
+}
 
 export function validateChutesE2ePublicKey(e2ePublicKey: string): Uint8Array {
   return decodeCanonicalBase64({

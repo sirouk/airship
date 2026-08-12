@@ -34,9 +34,10 @@ import { SCROLL_EDGE_EPSILON, scrollEdges, type ScrollEdges } from "./scroll-aff
  * - scrolls the active tab into view whenever it changes;
  * - paints an edge fade only on the side that genuinely hides tabs
  *   (`data-scroll-edges`, the shipped, measured affordance);
- * - grows a `⌄ n` overflow control the moment a tab is cut off, whose panel
- *   lists **every** tab with its full untruncated `detail`, so a name that is
- *   clipped on the strip is still readable somewhere that is not a tooltip;
+ * - grows a `⌄ n` overflow control whenever the tabs do not fit the row that
+ *   control is *not* in (`tabStripOverflows`), whose panel lists **every** tab
+ *   with its full untruncated `detail`, so a name that is clipped on the strip
+ *   is still readable somewhere that is not a tooltip;
  * - roving tabindex with ←/→/Home/End, per the tablist pattern.
  *
  * Counts ride with the label as plain text (`Source Control 3`), never as a
@@ -144,6 +145,40 @@ export function tabStripEdges(metrics: Readonly<{
     scrollHeight: metrics.scrollWidth,
     clientHeight: metrics.clientWidth,
   });
+}
+
+/**
+ * Whether the strip is cutting anything off — measured against the row it would
+ * have if the `⌄ n` control were not standing in it.
+ *
+ * The control is the strip's *sibling* inside `.tabs`, so the instant it
+ * appears it takes ~52px (a 44px target plus the row's gap) off the very box
+ * whose fullness decided it should appear. That gives one row two stable
+ * readings: 347px of tabs in the 374px row that has no control is "nothing
+ * hidden", and the same 347px in the 322px row that has one is "one hidden".
+ * Both are self-consistent, so whichever the strip happens to arrive in is the
+ * one it keeps — a transient during load is enough to latch it, and nothing
+ * afterwards can unwind it. Measured doing exactly that to the Workspace pane
+ * switcher at 390px, which read "…lorer | Editor | Source Contro  ⌄ 1" — a
+ * third of a phone's only navigation into that route behind a chevron — while
+ * the container it sits in never changed width.
+ *
+ * Deciding the control's *presence* here is what has a single answer, because
+ * neither term moves when the control does: the content is the tabs' own width
+ * and the row is the container's. What the strip then *reports* is still
+ * measured against the row it actually has, so `⌄ n` stays an honest count of
+ * what cannot be read right now rather than of what could not be read in a
+ * wider row that is no longer on screen.
+ */
+export function tabStripOverflows(metrics: Readonly<{
+  contentWidth: number;
+  rowWidth: number;
+}>): boolean {
+  // Written as an assertion that the tabs overflow, never as a negation of
+  // their fitting: a strip read before layout has widths that compare false
+  // either way round, and `!(content <= row)` would turn that into a chevron
+  // grown over a row nobody has measured — this same latch by another door.
+  return metrics.contentWidth > metrics.rowWidth + SCROLL_EDGE_EPSILON;
 }
 
 /**
@@ -423,8 +458,35 @@ export function stripViewport(strip: HTMLElement): TabViewport {
   return { start: strip.scrollLeft, end: strip.scrollLeft + strip.clientWidth };
 }
 
+/**
+ * The scrollable width the strip would have with no `⌄ n` control beside it.
+ *
+ * `.tabs` holds exactly two children — this strip and, when there is something
+ * to report, the overflow control — so the strip may occupy the whole of its
+ * container's content box. That number is the one thing in this measurement
+ * the control cannot move, which is why `tabStripOverflows` decides against it.
+ * `scrollWidth` is read in the strip's padding box, so the comparison is made
+ * there too: whatever of the strip's own box is border rather than scrollable
+ * area comes back off.
+ */
+function tabStripRowWidth(strip: HTMLElement): number {
+  const row = strip.parentElement;
+  if (!row) return strip.clientWidth;
+  const style = getComputedStyle(row);
+  const inner = row.clientWidth
+    - (Number.parseFloat(style.paddingLeft) || 0)
+    - (Number.parseFloat(style.paddingRight) || 0);
+  return Math.max(0, inner - (strip.offsetWidth - strip.clientWidth));
+}
+
 /** Reads the live strip geometry. The rules it feeds are pure and tested above. */
 function measureTabOverflow(strip: HTMLElement): TabOverflow {
+  // Asked before anything else, and of the row without the control in it: a
+  // strip that fits once the chevron is gone has nothing to fade and nothing to
+  // list, and saying so here is what stops the two readings from latching.
+  if (!tabStripOverflows({ contentWidth: strip.scrollWidth, rowWidth: tabStripRowWidth(strip) })) {
+    return NO_OVERFLOW;
+  }
   const boxes: TabBox[] = [];
   for (let index = 0; index < strip.children.length; index += 1) {
     const child = strip.children[index];

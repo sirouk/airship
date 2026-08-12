@@ -274,6 +274,471 @@ describe("conversation library below the full-width toolbar", () => {
 });
 
 /*
+ * What a row and a pane are allowed to spend their width and height on.
+ *
+ * Every case below was measured on a screenshot of the running route, and every
+ * one of them is a rule that reserved space for something the reader could not
+ * use — a hidden control, a floor taller than the viewport, a field's own
+ * min-content — and took it out of the one thing on that line they were reading.
+ */
+describe("conversation library space budget", () => {
+  /*
+   * Measured at 1440px: the same conversation read "Investigate th…" in RECENT
+   * and "Inv…" under FAVORITES, in a card of identical width, with a band of
+   * empty row between the Active verb and the star. `opacity: 0` hides a
+   * control; it does not stop it holding 66px of a 330px panel.
+   */
+  it("collapses the hidden reorder cluster instead of reserving its width", () => {
+    const rest = ruleBody(".session-library-favorite-order");
+    expect(rest).toContain("width: 0;");
+    expect(rest).toContain("opacity: 0;");
+    expect(rest).toContain("overflow: hidden;");
+
+    const revealed = styles.slice(styles.indexOf(".session-library-row:hover .session-library-favorite-order,"));
+    expect(revealed.slice(0, revealed.indexOf("}"))).toContain("width: auto;");
+
+    /*
+     * And a pointer with no hover has to be given the box back. A collapse the
+     * coarse-pointer rule does not undo turns a control that was merely
+     * invisible into one with nothing to press — a worse failure than the
+     * starved title this collapse exists to fix.
+     */
+    const coarse = styles.slice(styles.lastIndexOf("@media (pointer: coarse)"));
+    const reopened = coarse.slice(coarse.indexOf(".session-library-favorite-order {"));
+    expect(reopened).toContain("width: auto;");
+    expect(reopened.slice(0, reopened.indexOf("}"))).toContain("opacity: 1;");
+  });
+
+  /*
+   * Measured at 1440px and 1920px alike: the second line read
+   * "Active · 23 events · general · a" and stopped. The model was squeezed to
+   * about 18px, which is narrower than its own ellipsis, so the row lost its
+   * last discriminating fact and read as a rendering fault rather than as an
+   * abbreviation.
+   */
+  it("spends the row's last line on the model, not on the scope the toolbar already names", () => {
+    const profile = ruleBody(".session-library-card-profile");
+    expect(profile).toContain("min-width: 4ch;");
+    expect(profile).toContain("overflow: hidden;");
+    expect(profile).toContain("text-overflow: ellipsis;");
+
+    /*
+     * The model stays the item that absorbs what is left, with no floor of its
+     * own on purpose: a `min-width` here can exceed what the other three facts
+     * leave on a 260px panel, and `.session-library-card-line2` clips — taking
+     * the ellipsis with it and restoring the one-bare-letter reading.
+     */
+    expect(ruleBody(".session-library-card-model")).toContain("min-width: 0;");
+    expect(ruleBody(".session-library-card-line2")).toContain("overflow: hidden;");
+  });
+
+  /*
+   * …and tuning that shrink order was never going to be enough, because the
+   * column it shrinks inside was 330px at 1024px, at 1440px and at 1920px
+   * alike. Measured at 1920px: the layout stopped at x=1655 with the list still
+   * 330px, the detail pane beside it 828px wide and empty below y=490, and the
+   * row's second line reading "Active  23 events  ge…  a…" — two facts reduced
+   * to two characters each next to several hundred pixels of unused canvas.
+   *
+   * Two rules answer it, and the pair is the point: the column grows where
+   * there is width to grow into, and the line wraps where there is not.
+   */
+  it("lets the list column grow with the canvas instead of pinning it to 330px", () => {
+    const layout = ruleBody(".session-library-layout") ?? "";
+    expect(layout).toContain("grid-template-columns: minmax(260px, clamp(330px, 38%, 430px)) minmax(0, 1fr);");
+
+    /*
+     * The floor of the clamp is what stops this from being a raid on the detail
+     * pane at widths where the pane is the scarce one. Lowering that floor would
+     * take width from a pane that has none to give.
+     *
+     * It was once claimed here that the floor also protects the narrow two-pane
+     * widths outright, because 38% does not reach 330px until the container is
+     * about 868px. That is the right threshold and the wrong conclusion: every
+     * two-pane container in the sweep is above it (905px at 932x430, 917px at
+     * 1024px, the nav rail accounting for why those are so close), so the floor
+     * protects neither. The landscape phone is protected by the rule pinned in
+     * the test below instead.
+     */
+    expect(layout, "the growth may never drop the column below the width it has today")
+      .toMatch(/clamp\(330px,/u);
+    /*
+     * And the second track has to stay allowed to shrink, or the first one's
+     * new maximum is bought by overflowing the panel rather than by the detail
+     * pane yielding.
+     */
+    expect(layout).toContain("minmax(0, 1fr)");
+  });
+
+  /*
+   * Below that 868px container the column cannot grow, so the line has to be
+   * able to answer the deficit some other way than shrinking the model — which
+   * is the only thing `flex-wrap: nowrap` left it able to do, and the reason
+   * the model still read as one character at laptop widths after the shrink
+   * order was corrected. Flex lines are broken at content size before any item
+   * is shrunk, so in the two-pane layout the model drops to its own line whole:
+   * measured at 1024x768 it reads `airship/demo-v1` entire.
+   */
+  it("wraps the row's last line rather than grinding the model down to a character", () => {
+    const twoPaneAndTall =
+      styles.match(/@media \(min-width: 861px\) and \(min-height: 561px\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(twoPaneAndTall).toContain(".session-library-card-line2");
+    expect(twoPaneAndTall).toContain("flex-wrap: wrap;");
+    /*
+     * `white-space: nowrap` has to survive alongside it. It governs text inside
+     * each fact, not the flex line, so it is what keeps a break falling between
+     * "23 events" and the model rather than inside either of them.
+     */
+    expect(ruleBody(".session-library-card-line2")).toContain("white-space: nowrap;");
+  });
+
+  /*
+   * …and that wrap has to stay an exception, because a second line is only a
+   * wider line where a column sets the line's width. Below 861px the route is a
+   * single column and the line's width is set by the row's sibling tracks — the
+   * opener, the state pill, the star, and the reorder cluster that is held open
+   * from 560px down because touch has no hover to expand it. Wrapping moves
+   * none of them. Measured at 320px on a favourited row it split one ~160px
+   * line into three ~50px ones, so `24 events` came out `24 eve`, `general`
+   * came out `gen…` and `airship/demo-v1` came out `air…` — strictly more
+   * truncation than the line it replaced.
+   *
+   * And the ~19px it costs comes out of whatever sits below the list. At
+   * 932x430 that was the favourited row's entire right-hand control cluster —
+   * the pill's label, the drag handle, ↑, ↓ and the unstar — carried below the
+   * mobile tab bar, which is a control made unreachable to abbreviate a fact
+   * less. That trade only ever runs one way.
+   */
+  it("does not wrap the line where a second line cannot be a wider one", () => {
+    expect(
+      ruleBody(".session-library-card-line2"),
+      "the unconditional wrap put five hit targets below the fold at 932x430",
+    ).toContain("flex-wrap: nowrap;");
+
+    /*
+     * The gate is two conditions and needs both. Width alone would still wrap
+     * the 932x430 phone held sideways, which is where the controls were lost;
+     * height alone would still wrap every phone, which is where the facts
+     * truncated harder. Assert the conjunction, not merely that a query exists.
+     */
+    expect(styles).toContain("@media (min-width: 861px) and (min-height: 561px) {");
+  });
+
+  /*
+   * The conversation that had no name.
+   *
+   * Measured on the shipped build at 320x568, after pressing the star on row 1:
+   * `.session-library-card` was 83.9x65 at x=24, and the `<strong>` holding
+   * `Investigate the flaky kitten pipeline test` reported clientWidth 0 against
+   * scrollWidth 280 — an ellipsis with nothing in front of it — while `just now`
+   * (28/28) and `3 events` (59/59) beside it rendered whole. The model id was
+   * 0 of 115 in the same card. The same press cost the title 84px at 390, 84px
+   * at 430, 66px at 932x430 (99 -> 33) and 66px at 1024x768 (124 -> 58).
+   *
+   * The row is not short of width by accident: 60px of opener, 84px of reorder
+   * arrows and a 44px star are each at or under the touch floor and none of them
+   * can give a pixel back. Only the arrows can move, and the only place they can
+   * move to is a line of their own — which is what these four rules do, keyed to
+   * the width of the list column rather than of the viewport, because 330px of
+   * list exists at 932x430, at 1024x768 and at 1440x900 alike.
+   */
+  it("moves the reorder arrows out of the title's band wherever the list column is narrow", () => {
+    // The container has to exist before a container query can mean anything,
+    // and it has to be the list column — the panel whose width the two-pane
+    // clamp sets — not the route and not the viewport.
+    expect(ruleBody(".session-library-list-panel")).toContain("container: session-list / inline-size;");
+
+    const narrowColumn = styles.slice(styles.indexOf("@container session-list (max-width: 560px) {"));
+    expect(narrowColumn, "the query has to be a real block, not a comment about one").not.toBe("");
+    const block = narrowColumn.slice(0, narrowColumn.indexOf("\n}\n"));
+
+    // Four tracks and a second row: the arrows come out of the band and the
+    // star closes it up, so the card's track is 84px wider than it was.
+    expect(block).toContain("grid-template-columns: minmax(0, 1fr) auto auto auto;");
+    expect(block).toContain("grid-template-rows: auto auto;");
+    expect(block).toContain(".session-library-row > .session-library-pin { grid-area: 1 / 4; }");
+
+    const stacked = block.slice(block.indexOf(".session-library-row > .session-library-favorite-order {"));
+    expect(stacked).toContain("grid-area: 2 / 1 / 3 / -1;");
+    expect(stacked).toContain("justify-self: end;");
+    /*
+     * And on its own line the cluster is simply visible. The collapse above
+     * exists to stop it holding width in the title's band; a strip that is
+     * already outside that band gains nothing by being invisible, and hiding it
+     * there would reserve the height anyway or make the row jump 44px under the
+     * pointer.
+     */
+    expect(stacked).toContain("width: auto;");
+    expect(stacked).toContain("opacity: 1;");
+  });
+
+  /*
+   * …and the reason that works is that every control names its own column.
+   *
+   * Two of the row's five children are conditional — the lineage jump and the
+   * reorder cluster — so under auto-placement the column a control landed in
+   * depended on which of its siblings had rendered. Moving one item would then
+   * slide the rest along behind it. An empty `auto` track is zero pixels wide,
+   * so naming a column for an absent control costs nothing at any width.
+   */
+  it("names the column of every control on the row rather than filling them in order", () => {
+    expect(ruleBody(".session-library-card")).toContain("grid-area: 1 / 1;");
+    expect(ruleBody(".session-library-open")).toContain("grid-area: 1 / 2;");
+    expect(ruleBody(".session-library-lineage-jump")).toContain("grid-area: 1 / 3;");
+    expect(ruleBody(".session-library-favorite-order")).toContain("grid-area: 1 / 4;");
+    expect(ruleBody(".session-library-pin")).toContain("grid-area: 1 / 5;");
+    // Five names for five columns, in the order the base template declares them.
+    expect(ruleBody(".session-library-row")).toContain("grid-template-columns: minmax(0, 1fr) auto auto auto auto;");
+  });
+
+  /*
+   * The floor under the name, and the one thing on its line allowed to yield.
+   *
+   * `minmax(0, 1fr)` was not a guarantee of anything: an `fr` is handed only the
+   * *free* space, so once a 16px mark, a 50px `just now` and two 8px gaps had
+   * taken a 60px lane, the free space was zero and the title got exactly zero.
+   * The floor is what makes the track flexible rather than expendable.
+   *
+   * The relative time is the escape rather than the title because it is the one
+   * fact on this line stated somewhere else as well — in the row's `title`, in
+   * the card's accessible name, and in the pane's `Created … · updated …` line.
+   * The conversation's name is stated nowhere else in the row.
+   */
+  it("gives the title a floor and makes the timestamp the thing that yields", () => {
+    const top = ruleBody(".session-library-card-top") ?? "";
+    expect(top).toContain("grid-template-columns: 16px minmax(8ch, 1fr) minmax(0, auto);");
+    /*
+     * `ch`, not px: this route is reachable at 200% zoom, where a px floor stops
+     * being eight characters and starts being four.
+     */
+    expect(top).toMatch(/minmax\(8ch,/u);
+    // Without this the floor is bought by laying the name over the opener beside
+    // it rather than by the time abbreviating.
+    expect(top).toContain("overflow: hidden;");
+
+    const time = ruleBody(".session-library-card-top time") ?? "";
+    expect(time).toContain("min-width: 0;");
+    expect(time).toContain("text-overflow: ellipsis;");
+    // The abbreviation has to be visible. A clip with no ellipsis is the reading
+    // this whole line is written against.
+    expect(time).toContain("overflow: hidden;");
+    expect(time).not.toContain("flex: 0 0 auto;");
+  });
+
+  /*
+   * Measured at 320x568 on a favourited row: `3 events` rendered 59 of 59 while
+   * `general` was 32 of 45 and `airship/demo-v1` was 0 of 115. The count had no
+   * rule at all, which in flex is `flex: 0 1 auto` with an automatic min-content
+   * minimum — a word that cannot be shrunk by a pixel — so the whole deficit
+   * fell on the two facts that tell one conversation from another.
+   */
+  it("takes the row's last line from the count before it takes it from the identity", () => {
+    // The hook first: without the class the rule below would be unreachable and
+    // this guard would pass for the wrong reason.
+    expect(source).toContain('<span class="session-library-card-events">{sessionEventCount(item.headSequence)}</span>');
+
+    const events = ruleBody(".session-library-card-events") ?? "";
+    // Eight against the profile's and the model's one: first to be taken from,
+    // last to be protected.
+    expect(events).toContain("flex: 0 8 auto;");
+    // …and never all the way to a bare ellipsis, so the row still says a count
+    // exists. The number itself survives in the card's accessible name.
+    expect(events).toContain("min-width: 4ch;");
+    expect(events).toContain("text-overflow: ellipsis;");
+    expect(ruleBody(".session-library-card-profile")).toContain("flex: 0 1 auto;");
+    expect(ruleBody(".session-library-card-model")).toContain("flex: 0 1 auto;");
+  });
+
+  /*
+   * A grid template names positions, not elements.
+   *
+   * `minmax(260px, 1fr)` was written as the search's track, back when the search
+   * was the first thing in this row. `Profile · General` was later added ahead
+   * of it in the DOM and inherited the flexible column without a word being
+   * changed. Measured at 1440x900 and 1920x1080: the scope chip rendered 389.2px
+   * and 393.2px around a 121px nowrap label, while the search input reported
+   * clientWidth 189 against a placeholder that needs 252px — the one control
+   * that says what this row is for could not say its own name at either width.
+   */
+  it("spends the toolbar's flexible track on the search, not on a nowrap chip", () => {
+    const toolbar = ruleBody(".session-library-toolbar") ?? "";
+    expect(toolbar).toContain("grid-template-columns: auto minmax(16rem, 1fr) repeat(3, minmax(126px, auto)) auto auto;");
+    // The chip is sized to its content and nothing else.
+    expect(toolbar).not.toContain("minmax(260px, 1fr)");
+    /*
+     * The search's floor is deliberately under the placeholder's own 252px: the
+     * sum of every track's minimum has to stay inside the narrowest grid this
+     * rule ever runs in, which is 1181px — the first pixel above the block that
+     * turns this row into a wrapping flex line. Above that the `1fr` does the
+     * work, and it is measured: 369px of field at 1181, 456px at 1440.
+     */
+    expect(toolbar).toMatch(/minmax\(16rem, 1fr\)/u);
+    expect(styles).toContain("@media (max-width: 1180px)");
+    // The scope chip still may not wrap; sizing it to content is only honest if
+    // the content is whole.
+    expect(ruleBody(".session-library-profile-scope")).toContain("white-space: nowrap;");
+  });
+
+  /*
+   * Measured at 320px: an input's min-content width is its own `size`, and
+   * `min-width: 0` permits flexing below it without lowering it — so the nowrap
+   * rename row demanded about 345px, the detail card grew to match, and
+   * `Cancel` was sliced to "Ca" against the right edge of a viewport with no
+   * horizontal scroller.
+   */
+  it("wraps the rename row rather than letting its field set the detail column's width", () => {
+    const base = styles.slice(styles.indexOf(".session-library-rename { display: flex;"));
+    expect(base.slice(0, base.indexOf("}"))).toContain("flex-wrap: wrap;");
+
+    const shorthand = styles.indexOf(".session-library-rename input { flex: 1 1 22em;");
+    expect(shorthand).toBeGreaterThan(0);
+    const field = styles.slice(styles.indexOf(".session-library-rename input {", shorthand + 1));
+    expect(field.slice(0, field.indexOf("}"))).toContain("flex-basis: 100%;");
+
+    /*
+     * And it has to be stated after that shorthand. Both selectors weigh
+     * (0,1,1), a media query adds nothing, and `flex` resets `flex-basis` — so
+     * the same declaration written beside the route's other 560px rules is
+     * inert, and inert in the silent way that reads as fixed.
+     */
+    expect(styles.lastIndexOf("flex-basis: 100%;")).toBeGreaterThan(shorthand);
+  });
+
+  /*
+   * The field is focused by an effect, so the browser picks the scroll offset,
+   * and unaided it picks flush. Measured at 932x430 on the shipped build, where
+   * `.main` ends at the mobile tab bar: the field's top ring is a 2px band at
+   * y=364-365 above its border at y=367, and below its border at y=385 there is
+   * one partial row and then the bar — the matching band is off screen. The one
+   * control the reader was just sent to is drawn half off the viewport.
+   *
+   * The answer belongs in `scroll-margin`, not in a shorter row or a taller
+   * pane: it is read only while something scrolls this field into view, so it
+   * moves no box at any viewport and takes width and height from nothing.
+   */
+  it("stops the rename field from being scrolled flush against the fold", () => {
+    const shorthand = styles.indexOf(".session-library-rename input { flex: 1 1 22em;");
+    const field = styles.slice(shorthand, styles.indexOf("}", shorthand));
+
+    expect(field).toContain("scroll-margin-block-end:");
+    /*
+     * Sized to the verbs, not to the ring. The field wraps and `Save rename`
+     * sits on the line beneath it, at the 44px coarse-pointer floor; stopping
+     * the scroll 3px early clears the outline and still leaves the control that
+     * commits the rename below the fold.
+     */
+    expect(field).toContain("calc(var(--touch-target, 44px) + var(--sp-5, 24px))");
+  });
+
+  /*
+   * `Active` was printed twice in one row band, and the duplicate was paid for
+   * by the two facts beside it. `.session-library-card-active` renders only
+   * when `active` is true, which is exactly when `.session-library-open` — ten
+   * pixels to its right — is disabled and reads `Active` in a bordered pill.
+   *
+   * Measured on the shipped build at rest: the card's text lane is 124px at
+   * 320x568, and the copy plus its gap is 45px of it. The line's content and
+   * the 4ch floors overran the lane, so `.session-library-card-line2` clipped
+   * the tail — the profile came out as a bare `g` with its own ellipsis cut
+   * off, and `airship/demo-v1` did not render at all. At 932x430 the same line
+   * read `Active  23 events  ge…  a…`.
+   */
+  it("prints the row's active word once, and keeps it in the accessible name", () => {
+    expect(source).toContain('<em class="session-library-card-active">Active</em>');
+    expect(source).toContain('>{active ? "Active" : "Open"}</button>');
+
+    /*
+     * Hidden by the route's one visually-hidden recipe, so the word survives
+     * for a reader who cannot see the pill. Absolute positioning is also what
+     * makes this free: an absolutely positioned child is not a flex item, so it
+     * contributes neither a box nor a `gap` to the line it was starving.
+     */
+    const recipe = styles.indexOf(".session-library-visually-hidden,\n.session-library-card-active {");
+    expect(recipe, "the active word has to share the visually-hidden recipe, not a copy of it")
+      .toBeGreaterThan(0);
+    expect(styles.slice(recipe, styles.indexOf("}", recipe))).toContain("position: absolute !important;");
+
+    /*
+     * And that recipe is the class's only rule in the sheet. A second one is
+     * how this regresses: the copy carried `flex: 0 0 auto` and a `--signal`
+     * colour before, and either of those written again gives it a box on the
+     * line and takes the 45px back off the facts.
+     */
+    expect([...styles.matchAll(/^\.session-library-card-active\b/gmu)]).toHaveLength(1);
+  });
+
+  /*
+   * Measured at 932x430, a phone held sideways: every media query in the sheet
+   * asks about width, so none of them fired, and the pane laid itself out with
+   * a desktop's vertical room. The action row — Rename, Proof, Fork, Delete —
+   * ended up below the fold showing about 8px of each button's top corner.
+   */
+  it("stops asking a 430px-tall viewport for 420px of pane and a stacked heading", () => {
+    const short = styles.slice(styles.indexOf("@media (max-height: 560px) {"));
+    const guard = short.slice(0, short.indexOf("@media (prefers-reduced-motion"));
+
+    expect(guard).toContain(".session-library-detail {");
+    expect(guard).toContain("min-height: 0;");
+
+    /*
+     * The heading returns to a row only where width is not the scarce axis.
+     * Below 861px the route is already one column, and stacking the actions
+     * under the title is what is right there — this guard has to know the
+     * difference, or it undoes the 1180px rule on a phone in portrait.
+     */
+    expect(guard).toContain("@media (max-height: 560px) and (min-width: 861px) {");
+    expect(guard).toContain(".session-library-detail-heading {");
+    expect(guard).toContain("display: flex;");
+  });
+
+  /*
+   * …and sitting the actions beside the heading is what makes this pane's width
+   * critical, so the same block has to stop the list column growing into it.
+   *
+   * In the grid heading the eyebrow spans the pane. In the flex one it shares
+   * the line with the action cluster and takes whatever proportional shrink
+   * leaves it, and the block carrying it has no `min-width: 0` to make that
+   * share predictable — so a small loss on the pane lands amplified on the id.
+   * Measured at 932x430, where the layout container is 905px in every build:
+   * with the column at 330px the pane is 574px, the eyebrow's block is 271px,
+   * and `Conversation B924F3C2…F142` (232px) sits on one line. Let 38% take the
+   * column to 344px and the pane falls to 560px, the block to 236px, and the id
+   * breaks mid-token. The extra line costs 19px, which is exactly the margin
+   * this viewport has: `Created … · updated …` was legible above the tab bar
+   * and is pushed under it.
+   */
+  it("stops the list column growing into the pane whose heading it just widened", () => {
+    const landscape =
+      styles.match(/@media \(max-height: 560px\) and \(min-width: 861px\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(landscape).toContain(".session-library-layout {");
+    expect(landscape).toContain("grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);");
+
+    /*
+     * 330px is the clamp's own floor, not a new number: this is the growth
+     * handed back, not the column cut below what it had before the growth
+     * existed.
+     */
+    expect(ruleBody(".session-library-layout")).toContain("clamp(330px,");
+
+    /*
+     * And the hold has to be stated after the base rule. Both selectors weigh
+     * (0,1,0) and a media query adds nothing to specificity, so source order is
+     * the only thing deciding this — written above the base rule it is inert,
+     * and inert in the silent way that reads as fixed. Same trap as the rename
+     * field's `flex-basis` two tests above.
+     */
+    expect(styles.indexOf("@media (max-height: 560px) and (min-width: 861px) {"))
+      .toBeGreaterThan(styles.indexOf(".session-library-layout {"));
+
+    /*
+     * The narrowing may never reach a portrait phone, where the route is one
+     * column and the list *is* the route: `min-width: 861px` is load-bearing.
+     */
+    expect(styles).not.toContain("@media (max-height: 560px) {\n  .session-library-layout");
+  });
+});
+
+/*
  * The list and its own heading must agree about how much is on screen.
  *
  * Measured: `limit: 200` with no `offset` anywhere in the file, beneath a

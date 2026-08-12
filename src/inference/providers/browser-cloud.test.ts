@@ -7,6 +7,7 @@ import {
   XaiBrowserTransport,
   type ProviderFetch,
 } from "./browser-cloud";
+import { ExtensionBridgeError } from "../bridge/protocol";
 import { InferenceConnectionRegistry } from "./connection-registry";
 import { MAX_MODEL_OUTPUT_TOKENS } from "./contracts";
 import { OFFICIAL_CLOUD_PROVIDERS } from "./official-providers";
@@ -500,6 +501,36 @@ describe("browser-direct cloud inference adapters", () => {
     expect(error).toBeInstanceOf(ProviderTransportError);
     expect(error).toMatchObject({ code: "network-or-cors" });
     expect((error as Error).message).toMatch(/may be network reachability, provider availability, or CORS/u);
+  });
+
+  /*
+   * A bridged body fails through the stream rather than at the call, so the
+   * bounded reader is the branch that has to name the provider. It named a
+   * literal "The provider" into sentences that already supply their own
+   * article, and the operator was shown "could not complete the The provider
+   * request" — an unreadable sentence in the one place whose whole job is
+   * saying which provider broke.
+   */
+  it("names the provider when a bridged catalog body fails mid-read", async () => {
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new ExtensionBridgeError("bridge-error", "The relay closed."));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    });
+
+    const error = await transport.listModels().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ProviderTransportError);
+    expect(error).toMatchObject({ code: "bridge-refused" });
+    expect((error as Error).message).toContain("could not complete the Anthropic request");
   });
 
   it("rejects oversized model directories before parsing provider data", async () => {

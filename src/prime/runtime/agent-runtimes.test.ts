@@ -14,17 +14,24 @@ import {
 
 const PINNED_AIRSHIP_LINE = "engine: airship-core (pinned by journal evidence — fork the session to switch)";
 const PINNED_PRIME_LINE = "engine: prime (pinned by journal evidence — fork the session to switch)";
-const DEFAULT_PRIME_LINE = "engine: prime (default)";
+/*
+ * The unpinned line names the engine the gate actually runs, not a
+ * preference: `src/load-agent-runtime.ts` routes every unpinned journal with
+ * a transport attached to airship-core, and `transport` is required of every
+ * caller. The tag beside a title must not promise an engine no fresh session
+ * reaches.
+ */
+const DEFAULT_LINE = "engine: airship-core (default)";
 
 describe("getAgentRuntimeStatus", () => {
-  it("leaves an empty journal unpinned, prime by default, with no fork question to answer", () => {
+  it("leaves an empty journal unpinned, running the gate's unpinned default, with no fork question to answer", () => {
     const status = getAgentRuntimeStatus({ sessionId: "s-empty", events: [] });
     expect(status.pinnedEngine).toBeNull();
-    expect(status.defaultEngine).toBe("prime");
+    expect(status.defaultEngine).toBe("airship-core");
     expect(status.evidenceType).toBe("empty");
     expect(status.canForkSwitch).toBe(false);
     expect(status.forkRemedy).toBeUndefined();
-    expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_PRIME_LINE);
+    expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_LINE);
   });
 
   it("reads a journal holding only bootstrapping records as the same unclaimed land", () => {
@@ -35,7 +42,7 @@ describe("getAgentRuntimeStatus", () => {
     expect(status.pinnedEngine).toBeNull();
     expect(status.evidenceType).toBe("empty");
     expect(status.canForkSwitch).toBe(false);
-    expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_PRIME_LINE);
+    expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_LINE);
   });
 
   it("pins prime on any prime.* record, before the first turn's seal exists", () => {

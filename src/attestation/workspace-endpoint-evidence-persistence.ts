@@ -2,12 +2,13 @@ import { deepFreeze } from "../core/freeze";
 import { sha256, stableStringify } from "../core/hash";
 import { WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import { decodeCanonicalBase64, sha256Hex } from "./encoding";
-import { parseTdxQuote } from "./tdx";
+import { extractTdxRuntimeMeasurements, parseTdxQuote } from "./tdx";
 import type {
   AttestationClaimKey,
   AttestationClaimState,
   ChutesEndpointEvidenceRecord,
 } from "./provider-types";
+import type { ParsedTdxQuote } from "./types";
 
 const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
@@ -583,10 +584,17 @@ export async function validateEndpointEvidenceRecord(
   }
 
   const claims = validateClaims(record.claims);
+  // Freshness and endpoint-key are not independent verdicts: acquisition defines
+  // both as the binding disposition itself. Storage that flipped them to a
+  // stronger state while leaving the digests intact would otherwise survive every
+  // recomputation above and reach the Proof surface as a checked claim.
+  if (claims.nonceFreshness.state !== bindingState || claims.endpointKey.state !== bindingState) {
+    throw new Error("The endpoint-evidence freshness and endpoint-key claims disagree with the recomputed binding disposition.");
+  }
   const warnings = validateWarnings(record.warnings);
   const publishedPolicy = record.publishedPolicy === undefined
     ? undefined
-    : validatePublishedPolicy(record.publishedPolicy);
+    : validatePublishedPolicy(record.publishedPolicy, parsedQuote);
   const expectedRecordIdDigest = await sha256(stableStringify({
     version: 1,
     provider: "chutes",
@@ -755,7 +763,10 @@ function validateWarnings(value: unknown): readonly string[] {
   return Object.freeze(value.map((warning, index) => safePublicText(warning, `endpoint-evidence warning ${index}`)));
 }
 
-function validatePublishedPolicy(value: unknown): NonNullable<ChutesEndpointEvidenceRecord["publishedPolicy"]> {
+function validatePublishedPolicy(
+  value: unknown,
+  parsedQuote: ParsedTdxQuote,
+): NonNullable<ChutesEndpointEvidenceRecord["publishedPolicy"]> {
   const policy = exactObject(value, "published endpoint policy", [
     "sourceUrl", "fetchedAt", "cache", "policyDigest", "policyCount", "quoteMeasurements", "state", "matches",
   ]);
@@ -767,12 +778,21 @@ function validatePublishedPolicy(value: unknown): NonNullable<ChutesEndpointEvid
   const measurements = exactObject(policy.quoteMeasurements, "published policy quote measurements", [
     "mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3",
   ]);
+  // The Proof surface prints these as the quote's own MRTD/RTMRs, so a
+  // well-formed hex string is not enough: they must still be the bytes the
+  // retained quote carries, not measurements a rewritten checkpoint chose.
+  const quoteMeasurements = extractTdxRuntimeMeasurements(parsedQuote);
   for (const key of ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"] as const) {
-    patternedString(measurements[key], `published policy ${key}`, /^[0-9a-f]{96}$/u, 96);
+    if (patternedString(measurements[key], `published policy ${key}`, /^[0-9a-f]{96}$/u, 96) !== quoteMeasurements[key]) {
+      throw new Error("The retained published-policy quote measurements do not match the raw TDX quote.");
+    }
   }
-  enumString(policy.state, "published policy state", ["matched", "failed"] as const);
+  const policyState = enumString(policy.state, "published policy state", ["matched", "failed"] as const);
   if (!Array.isArray(policy.matches) || policy.matches.length > MAX_PUBLISHED_POLICY_MATCHES) {
     throw new Error(`Published policy matches exceed ${MAX_PUBLISHED_POLICY_MATCHES} entries.`);
+  }
+  if ((policy.matches.length > 0) !== (policyState === "matched")) {
+    throw new Error("The published-policy disposition disagrees with its retained matches.");
   }
   for (const [index, match] of policy.matches.entries()) {
     const candidate = exactObject(match, `published policy match ${index}`, ["version", "name", "expectedGpus", "gpuCount"]);

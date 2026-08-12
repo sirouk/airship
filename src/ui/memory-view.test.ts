@@ -68,8 +68,24 @@ describe("unified Memory surface", () => {
     expect(source).toContain("groupMemoryRelationships(selectedEdges, relationshipLimit)");
     expect(source).toContain("<ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch}");
     expect(source).toContain("if (open) setIndexMounted(true)");
-    expect(source).toContain('indexRef.current?.scrollIntoView({ block: "start" })');
-    expect(source).toContain('onReady={initialTab === "index" ? alignIndex : undefined}');
+    /*
+     * The Index arrival opens a disclosure and folds another. It does not move
+     * the page, and this is the assertion that keeps it that way: the arrival
+     * used to run `scrollIntoView` on the section, which made `#context` the
+     * only one of the 14 routes that did not mount at `.main` scrollTop 0 —
+     * 1043 of 2695 at tablet-768, 936 of 2315 at laptop-1024, 828 at
+     * desktop-1440, 922 at phone-320, with the route's own `<h1>` at y=-962.
+     */
+    expect(source).toContain('detailExpanded={initialTab === "index"}');
+    // No ref on the section and no effect that could reach for one: the two
+    // halves of the arrival scroll, asserted gone rather than merely unused.
+    expect(source).toContain('<details\n        id="memory-index"');
+    expect(source).not.toContain("ref={indexRef}");
+    expect(source).not.toContain("requestAnimationFrame(alignIndex)");
+    expect(source).not.toContain("onReady=");
+    expect(contextSource).not.toContain("onReady");
+    // The one scroll-to-section this route keeps is the one a press asked for.
+    expect(source).toContain('scrollToMemorySection("memory-relationships")');
   });
 
   it("labels the shared control and every destination it updates", () => {
@@ -130,6 +146,49 @@ describe("unified Memory surface", () => {
     // was removed: it restated counts the sections below already carry and
     // jumped to headings one scroll away. Search leads the route now.
     expect(styles).not.toContain(".memory-scope-rail");
+  });
+
+  /*
+   * The cost of the 44px floor above, on the one control that had a cap over
+   * it, and the second half of the same repair.
+   *
+   * `routes.css` caps `.memory-legend` at `max-height:92px` below 641px. 92px
+   * was two rows of the 32px chips the floor above replaced, plus the row gap
+   * and the band's 9px padding — an exact fit for the legend as it stood. The
+   * chips grew 12px and the cap did not move.
+   *
+   * Measured on the shipped build at phone-320: clientHeight 91 against
+   * scrollHeight 218, six chips over four rows, "session" and "message" inside
+   * the box and "workspace-file", "profile", "skill" and "term" outside it,
+   * with the third row sliced mid-glyph. At phone-390 and phone-430 the wrap is
+   * three rows, 91 of 166, and four of the six are still out.
+   *
+   * Every chip in this band is a `<button>` with `aria-pressed`, and the band
+   * is the graph's only filter. So this is not clipped decoration: it is four
+   * of the six ways to interrogate the graph, removed on the device class with
+   * the least screen to interrogate it with. `overflow-y:auto` does not answer
+   * it — overlay scrollbars paint nothing at rest, so nothing on the frame says
+   * a control exists past the edge.
+   *
+   * The cap goes rather than growing a scroll affordance behind it: the legend
+   * sits at y=1971 inside a route `main` already scrolls, so the 126px it saved
+   * was 126px of a scroll the reader was taking anyway, bought with four
+   * filters. Re-measured after: max-height `none` and all six chips inside the
+   * band's own box at every one of the eight device classes.
+   */
+  it("never puts a cap over the graph's only filter", () => {
+    const legend = cssRule(styles, ".memory-view .memory-legend");
+    expect(legend).toContain("max-height: none");
+    expect(legend).toContain("overflow: visible");
+    // A scoped cap here would be the same defect written closer to home, and a
+    // clamp would be it written in lines instead of pixels. Read off the rules
+    // rather than the sheet: this file's prose quotes the cap it removed.
+    const legendRules = [...styles.replace(/\/\*[\s\S]*?\*\//gu, "").matchAll(/([^{}]*\.memory-legend[^{}]*)\{([^}]*)\}/gu)];
+    expect(legendRules.length).toBeGreaterThan(0);
+    for (const [, selector, body] of legendRules) {
+      for (const [, value] of body.matchAll(/max-height:\s*([^;]+)/gu)) expect(value.trim(), `capped by ${selector.trim()}`).toBe("none");
+      expect(body, `clamped by ${selector.trim()}`).not.toMatch(/line-clamp/u);
+    }
   });
 
   /*
@@ -803,9 +862,50 @@ describe("memory as a corpus a person can act on", () => {
     expect(source).toContain('eyebrow={initialTab === "index" ? "Memory index · revision-bound local materialization"');
     expect(source).toContain("Opened at the on-device index:");
     // At `tool` density the eyebrow and description are the ⓘ panel's, so the
-    // arrival also states itself where the link actually lands, and the
-    // section's own control takes focus so the move is visible.
+    // arrival also states itself where the link actually lands.
     expect(source).toContain('<p class="memory-index-arrival" role="status">Opened from the Memory index destination.');
-    expect(source).toContain('indexRef.current?.querySelector("summary")?.focus({ preventScroll: true })');
+    /*
+     * And it states itself in words, not by moving the page or the keyboard.
+     * The arrival used to focus the section's own summary with
+     * `preventScroll: true`, which was coherent only alongside the
+     * `scrollIntoView` that went with it: without the scroll it parks the
+     * keyboard on a control ~900px below the fold, and with it the route mounts
+     * scrolled. Route arrival focus is `.main`, set by `app.tsx` for all 14
+     * routes, and this route is no longer the exception.
+     */
+    expect(source).not.toContain('?.focus({ preventScroll: true })');
+  });
+});
+
+/*
+ * SO020. The graph's height floor was written three times and had never once
+ * taken effect. `MemoryGraphRenderer` set `minHeight` as an inline style, and
+ * an inline style beats any stylesheet, so this file's 360px compact rule and
+ * routes.css's 390px one both matched at phone widths and both lost: the
+ * canvas measured a computed 470px at every viewport — 83% of a 320x568
+ * screen. The renderer now publishes the floor as `--memory-graph-min-height`,
+ * with the prop as the default for any caller that does not set it, and the
+ * tiers set the property instead of a losing `min-height`.
+ *
+ * The `dvh` arm is the part 320 needs. The complaint was never the absolute
+ * height — it is that the node cloud occupies ~170px of it and the rest is
+ * empty ground that pushes the legend and the toolbar off the screen, so the
+ * graph fills the frame while saying nothing about what is in it. Measured
+ * after, with the disclosure open: 295px at 320x568 (52%), 224px at 932x430
+ * (52%), 360px at 430x932, and legend and toolbar in view at all three.
+ */
+describe("the graph canvas's height floor", () => {
+  it("is a property a viewport tier can lower, not an inline style that outranks every tier", async () => {
+    const renderer = await readFile(new URL("../memory-graph/renderer.tsx", import.meta.url), "utf8");
+    expect(renderer).toContain("minHeight: `var(--memory-graph-min-height, ${Math.max(160, minHeight)}px)`");
+    expect(renderer).not.toMatch(/minHeight: Math\.max\(160, minHeight\),/u);
+  });
+
+  it("caps the canvas against the viewport it is drawn in, not against a fixed number", () => {
+    const compact = styles.slice(styles.indexOf("@media (max-width: 620px)"));
+    expect(compact).toMatch(/\.memory-view \.memory-canvas \{\s*--memory-graph-min-height: min\(360px, 52dvh\);/u);
+    // A losing `min-height` left beside the property would read as the rule in
+    // force, which is exactly how this defect survived four waves.
+    expect(compact).not.toMatch(/\.memory-view \.memory-canvas \{\s*min-height:/u);
   });
 });

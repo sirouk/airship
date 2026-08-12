@@ -56,6 +56,24 @@ class AbortAfterCasObjectStore extends MemoryObjectStore {
   }
 }
 
+/**
+ * A store that throws from `trash` the way real providers do: Google Drive
+ * rejects a call naming more than its key limit outright, and both it and S3
+ * can throw mid-sweep on an exhausted retry budget or a raised signal.
+ */
+class ThrowingTrashObjectStore extends MemoryObjectStore {
+  readonly trashBatchSizes: number[] = [];
+  maxKeysPerCall = Number.MAX_SAFE_INTEGER;
+  throwAfterCalls = Number.MAX_SAFE_INTEGER;
+
+  override async trash(keys: readonly string[]) {
+    this.trashBatchSizes.push(keys.length);
+    if (keys.length > this.maxKeysPerCall) throw new Error("Vault reclamation exceeds the client key limit.");
+    if (this.trashBatchSizes.length > this.throwAfterCalls) throw new Error("Vault reclamation retry budget was exhausted.");
+    return super.trash(keys);
+  }
+}
+
 describe("EncryptedObjectJournalBackend", () => {
   it("round-trips cloud-authoritative sessions without plaintext object bytes", async () => {
     const { key } = await WorkspaceRootKey.generate();
@@ -208,6 +226,50 @@ describe("EncryptedObjectJournalBackend deletion", () => {
       .rejects.toThrow(JournalConflictError);
     expect(await journal.getSession(session.id)).toBeDefined();
   });
+
+  it("does not report a committed deletion as failed when the segment sweep throws", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new ThrowingTrashObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Doomed", await manifest());
+    await journal.append(session.id, [{ type: "message.user", payload: { content: "delete me" } }]);
+    // The head removal commits; everything after it fails, as a provider error
+    // mid-sweep does.
+    store.throwAfterCalls = 1;
+
+    const record = (await journal.getSession(session.id))!;
+    await expect(journal.deleteSession(session.id, { sequence: record.headSequence, digest: record.headDigest }))
+      .resolves.toBeUndefined();
+
+    // The conversation really is gone; only unreachable ciphertext was left.
+    expect(await journal.getSession(session.id)).toBeUndefined();
+    expect(await journal.listSessions()).toEqual([]);
+    expect(store.trashBatchSizes.length).toBe(2);
+  });
+
+  it("sweeps a long conversation's segments in batches no provider will reject outright", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new ThrowingTrashObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Long-running", await manifest());
+    // One segment per append, plus the one `session.created` wrote: 501 in all,
+    // more than a single sweep batch and enough that an unbatched call to a
+    // real Drive vault would refuse the whole set.
+    for (let index = 0; index < 500; index += 1) {
+      await journal.append(session.id, [{ type: "message.user", payload: { index } }]);
+    }
+    store.maxKeysPerCall = 500;
+
+    const record = (await journal.getSession(session.id))!;
+    await journal.deleteSession(session.id, { sequence: record.headSequence, digest: record.headDigest });
+
+    // Head, then the segments in provider-safe batches — and nothing survives.
+    expect(store.trashBatchSizes).toEqual([1, 500, 1]);
+    expect(await journal.getSession(session.id)).toBeUndefined();
+    expect(await store.list("airship/v1/")).toEqual([]);
+  }, 60_000);
 
   it("says so rather than reporting a deletion a store cannot perform", async () => {
     const { key } = await WorkspaceRootKey.generate();

@@ -115,14 +115,6 @@ export class PipeBuffer implements ByteSink {
 /** Discards writes. Used by `>/dev/null` and by a closed descriptor. */
 export const NULL_SINK: ByteSink = Object.freeze({ write(): void {} });
 
-/** A sink that appends into an existing collector, used by `2>&1`. */
-export class TeeSink implements ByteSink {
-  constructor(private readonly target: ByteSink) {}
-
-  write(bytes: Uint8Array): void {
-    this.target.write(bytes);
-  }
-}
 
 /**
  * A fully materialized input. Every stdin in this interpreter comes from a

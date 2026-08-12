@@ -161,4 +161,32 @@ describe("evidence comprehension hierarchy", () => {
     expect(styles).toContain(".attestation-claim-group > div { grid-template-columns: 1fr; }");
     expect(styles).not.toMatch(/@media \(max-width: 480px\)[\s\S]*\.attestations-inspector\s*\{[^}]*display:\s*none/u);
   });
+
+  /*
+   * Right-aligned in the row and left-aligned in the text are two different
+   * claims, and only the first one was ever wanted.
+   *
+   * `text-align: right` sat in the base rule and was reset to `left` only
+   * inside the 860px band, so every viewport wide enough to read comfortably
+   * was the one getting the ragged left margin. Measured at desktop-1440, the
+   * sentence explaining what a manual re-acquisition is *not* wrapped inside a
+   * 343px box with every line starting at a different x and "a receipt."
+   * orphaned on the last. Flush-right is for a label or a figure; a run of
+   * prose set that way makes the eye hunt for each line's start.
+   *
+   * Position was never this declaration's to give: the parent
+   * `.attestations-heading-actions` is a flex row with `justify-content: end`,
+   * so the block sits at the row's right edge either way.
+   */
+  it("sets the acquisition caption as prose rather than flush against the row's edge", () => {
+    const base = /\n\.attestations-acquisition-mode \{([^}]+)\}/u.exec(styles)?.[1] ?? "";
+    expect(base).not.toContain("text-align");
+    expect(base).toContain("max-width: 32ch");
+    expect(/\.attestations-heading-actions \{([^}]+)\}/u.exec(styles)?.[1]).toContain("justify-content: end");
+
+    // The narrow override used to restate `left` against a base that said
+    // `right`; with nothing to override it would be describing a conflict that
+    // no longer exists.
+    expect(styles).not.toMatch(/\.attestations-acquisition-mode \{[^}]*text-align:\s*left/u);
+  });
 });

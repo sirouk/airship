@@ -6,7 +6,8 @@
  * engine, and whatever is rendered beside a conversation's title. The gate's
  * rule is durable evidence — any `prime.*` record pins the session to prime,
  * airship turn-protocol records pin it to airship-core, and a journal with
- * neither is unclaimed land that primes by default. This module is the
+ * neither is unclaimed land that runs whichever engine the gate's unpinned
+ * branch currently selects. This module is the
  * read-side of that same rule: it imports the gate's `sessionRuntimeKind`
  * rather than restating it, narrows *which* prime evidence pinned (the
  * first-turn seal versus later prime records), and states what a person can
@@ -52,8 +53,17 @@ export type AgentRuntimeStatusEvidence = "seal" | "prime-events" | "airship-hist
 export type AgentRuntimeStatus = Readonly<{
   /** The engine journal evidence pins, or `null` while nothing is pinned. */
   pinnedEngine: PinnedAgentEngine | null;
-  /** What runs when nothing is pinned. Constant today, carried so renderers do not hardcode it. */
-  defaultEngine: "prime";
+  /**
+   * What actually runs when nothing is pinned. Not a preference — the gate's
+   * answer, read off `src/load-agent-runtime.ts`: an unpinned journal takes
+   * the airship-core lane whenever a transport is attached, and `transport`
+   * is a required field of `RunTurnOptions`, so every unpinned session the
+   * shipped app starts routes there. It flips back to prime when
+   * `runPrimeTurn` is taught to forward the vendor stream and its key getter
+   * and that branch goes away; carried as a value so renderers keep reading
+   * the gate instead of hardcoding an engine name.
+   */
+  defaultEngine: PinnedAgentEngine;
   evidenceType: AgentRuntimeStatusEvidence;
   /**
    * Whether switching engines is possible at all for this session. Pinned:
@@ -78,7 +88,7 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
   if (kind === "unpinned") {
     return Object.freeze({
       pinnedEngine: null,
-      defaultEngine: "prime",
+      defaultEngine: "airship-core",
       evidenceType: "empty",
       canForkSwitch: false,
     });
@@ -88,7 +98,7 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
   const other: PinnedAgentEngine = kind === "prime" ? "airship-core" : "prime";
   return Object.freeze({
     pinnedEngine: kind,
-    defaultEngine: "prime",
+    defaultEngine: "airship-core",
     evidenceType: sealed ? "seal" : kind === "prime" ? "prime-events" : "airship-history",
     canForkSwitch: true,
     // Verbatim remedy vocabulary of the gate's refusals, so the status and

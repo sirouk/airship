@@ -28,7 +28,15 @@ async function answerReset(page: Page, reset: Locator, answer: "cancel" | "confi
   // The consequence before the commitment, and the boundary of the change in
   // the same breath: the dialog has to say what it does NOT touch, or
   // "Conversations·profiles·vault" stays guesswork.
-  await expect(dialog).toContainText("Display, durability, and legacy approval preferences return to their defaults.");
+  //
+  // Durability is named on the *excluded* side now. It used to be listed among
+  // the things that return to their defaults, one sentence above the promise
+  // that the vault is not touched — and both could not be true, because the
+  // Durability row is the vault backend: resetting it starts a real provider
+  // transition and detaches the adopted Vault. The reset keeps it instead of
+  // the sentence keeping quiet about it.
+  await expect(dialog).toContainText("Display and legacy approval preferences return to their defaults.");
+  await expect(dialog).toContainText("Durability stays where you set it");
   await expect(dialog).toContainText("conversations, profiles, vault, and workspaces are not touched");
   await dialog.getByRole("button", { name: answer === "confirm" ? "Reset to defaults" : "Cancel" }).click();
 }
@@ -40,9 +48,13 @@ test("Preferences reset preserves changes on Cancel and restores named defaults 
     density: "comfortable",
     corners: "subtle",
     bodyFont: "system-sans",
-    // The generic browser fixture advertises a deployable Google client ID,
-    // making this the named default and keeping Reset focused on display state.
-    vaultBackend: "google-drive",
+    // Deliberately NOT the default. The generic browser fixture advertises a
+    // deployable Google client ID, so `google-drive` is what a whole-object
+    // write of the defaults would put here — which is exactly the write that
+    // used to detach the vault behind a dialog promising it would not. Starting
+    // from the other side is what lets the assertion after Confirm fail if the
+    // reset ever reaches the Durability row again.
+    vaultBackend: "ephemeral",
     approvalMode: "ask-first",
     transcriptOperations: "summary",
   })));
@@ -84,4 +96,11 @@ test("Preferences reset preserves changes on Cancel and restores named defaults 
     const stored = JSON.parse(localStorage.getItem("airship.display-preferences.v1") ?? "null") as { mode?: string; density?: string } | null;
     return stored ? `${stored.mode ?? ""}/${stored.density ?? ""}` : "missing";
   })).toBe("dark/comfortable");
+  // …and the storage destination is still the one that was chosen, not the one
+  // the defaults would have written. Reset restores display state; it does not
+  // move where the work lives.
+  await expect.poll(() => page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("airship.display-preferences.v1") ?? "null") as { vaultBackend?: string } | null;
+    return stored?.vaultBackend ?? "missing";
+  })).toBe("ephemeral");
 });

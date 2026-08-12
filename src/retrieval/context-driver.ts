@@ -69,6 +69,14 @@ export class ContextFabricDriver {
         completedExperts += 1;
         const expert = selected[outcome.index]!.expert;
         if (!outcome.ok) {
+          // The deadline signal fires for two unrelated reasons, and only the
+          // caller's own signal separates them. A cancelled turn that was
+          // reported as `timeout` fell through to the `complete` event below,
+          // so the vault provider sealed and journaled a context commitment for
+          // a turn the caller had asked to abandon, blaming the latency budget
+          // for it. Reject the way ClientContextEngine.search does and reserve
+          // `timeout` for the deadline timer alone.
+          if (signal?.aborted) throw signal.reason ?? new DOMException("The context retrieval was aborted.", "AbortError");
           if (deadline.signal.aborted) {
             timedOut = true;
             yield { type: "warning", expertId: expert.id, code: "timeout", message: "Context retrieval reached its latency budget." };

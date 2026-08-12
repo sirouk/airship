@@ -20,10 +20,31 @@
   gap: var(--sp-2);
   align-items: baseline;
   justify-content: space-between;
+  /*
+   * The `min-width: 0` below on the `<code>` was never reachable. A grid item's
+   * automatic minimum size is its min-content, and this header's min-content is
+   * the code's — the proposed skill ID is `white-space: nowrap`, so a long name
+   * makes it one unbreakable run — so the panel's auto track was floored at the
+   * whole ID string and the panel rendered wider than a 390px phone: no right
+   * border, the Skill ID placeholder off-screen, and the Name input's own left
+   * edge scrolled out of view. Floor the header at 0 and the track resolves to
+   * the container, which is the width the code then ellipsises against.
+   */
+  min-width: 0;
+}
+
+/*
+ * The header's own two flex items, for the same reason one level down: the
+ * title wrapper is the item that never got the allowance, and a name typed as
+ * one long word has no break opportunity for the h2 to wrap at.
+ */
+.skill-editor > header > div {
+  min-width: 0;
 }
 
 .skill-editor > header h2 {
   margin: 4px 0 0;
+  overflow-wrap: anywhere;
   font: var(--fw-strong) var(--fs-lead)/1.25 var(--font-display);
 }
 
@@ -77,6 +98,23 @@
   cursor: not-allowed;
 }
 
+/*
+ * The refused field says so on itself, in the colour its own refusal is set in.
+ *
+ * A save that scrolls a field into the middle of the frame and puts the
+ * keyboard in it has moved the person somewhere without saying why they are
+ * there. `--v-failed` is what `.skill-editor-status` below uses for the
+ * sentence, so the border and the sentence are one claim rather than two.
+ *
+ * Keyed on `aria-invalid` and not on a `data-` twin of it: the attribute that
+ * tells assistive technology and the attribute that paints must be the same
+ * one, or one of them can go stale without the other noticing. Same recipe as
+ * `.connect-paste__field input[aria-invalid="true"]`.
+ */
+.skill-editor-fields input[aria-invalid="true"] {
+  border-color: var(--v-failed);
+}
+
 .skill-editor-wide {
   grid-column: 1 / -1;
 }
@@ -97,6 +135,16 @@
 
 .skill-editor-status {
   margin: 0;
+  /*
+   * The panel scrolls this into view when a save is refused, and `nearest`
+   * stops the moment the sentence's own margin box is inside the scrollport —
+   * which without this leaves it flush against the bottom edge of the window
+   * with the panel's padding, border and the gap to the grid still below the
+   * fold, so the one sentence a person needs arrives looking like the top of
+   * something else. The two lengths are the panel's own bottom padding and its
+   * `margin-bottom` above; the refusal arrives with the panel's foot under it.
+   */
+  scroll-margin-block-end: calc(var(--sp-3) + 14px);
   color: var(--v-failed);
   font-size: var(--fs-caption);
   line-height: 1.5;

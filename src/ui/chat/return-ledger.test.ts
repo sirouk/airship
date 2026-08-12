@@ -126,9 +126,10 @@ describe("the return ledger", () => {
 
   it("keeps reporting until the person dismisses it", () => {
     /*
-     * The shared entry() fixture dates itself 2026-07-28, past the ledger's
+     * The shared `entry()` fixture dates itself 2026-07-28, past the ledger's
      * 14-day tombstone life once the calendar crosses 2026-08-11 — a lifecycle
-     * assertion must not age into an expiry one. Fresh-timestamp the entry.
+     * assertion must not age into an expiry one. The file's own pattern is a
+     * stated `now`; a fresh timestamp on the entry says the same thing.
      */
     const fresh = new Date().toISOString();
     const storage = memoryStorage();

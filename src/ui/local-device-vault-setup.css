@@ -117,19 +117,42 @@
   min-height: 44px;
 }
 
-/* A one-time secret on screen is a page-level condition, so it says so at the
-   top of the panel and stays there while the user scrolls the ceremony. */
+/*
+ * A one-time secret on screen is a page-level condition, so it says so at the
+ * top of the panel — in flow, where it cannot paint over the thing it is about.
+ *
+ * It used to be `position: sticky; top: 45px; z-index: 7`, and the 45px was
+ * clearance for a trust-hub tab strip that this sheet's own comment cited at
+ * `platform-shell.css:20,148`. That strip is gone: the only `position: sticky`
+ * left in `platform-shell.css` is the Preferences dialog header, and nothing on
+ * `#vault` pins to the top of `.main` at all. So the offset cleared nothing,
+ * and the pin's one remaining effect was to carry an opaque band down over the
+ * ceremony as the reader scrolled it.
+ *
+ * Measured on the shipped build, ceremony revealed: at 320x568 the band landed
+ * across the middle of the ceremony's own paragraph and hid three lines —
+ * "browser profile's storage. If that profile is cleared, evicted or lost,
+ * restoring needs this key" — so the sentence read "...encrypted objects live
+ * in this" straight into "and an encrypted backup file". The clause it ate is
+ * the one that says the key alone will not restore anything. At 932x430 it hid
+ * two lines of the same paragraph, and at 1440x900 it sat across the bottom of
+ * the `Open this browser's Vault` card. This is a screen that exists to tell
+ * someone the only fact that can recover their encrypted data; a warning that
+ * covers the instructions is worse than one that scrolls.
+ *
+ * Un-pinning is not a smaller warning, and it takes no space from anything: a
+ * sticky box keeps its flow box, so every element on this route sits at exactly
+ * the pixel it sat at before, at every width. What the pin bought — the
+ * sentence held on screen while the ceremony scrolls — is stated inside the
+ * ceremony card instead, where it travels with the key rather than over it:
+ * `Not copied or downloaded yet.` sits under the Copy and Download buttons
+ * until one of them is used, and the acknowledgement checkbox is the gate out.
+ * The alternative was to hoist this band into the shell's fixed chrome, which
+ * would have bought its persistence with ~36px of `.main` at every route — at
+ * 932x430 that is 11% of the reading area on the one screen where this
+ * paragraph already does not fit.
+ */
 .local-device-vault__ceremony-alert {
-  position: sticky;
-  /*
-   * Not `top: 0`. This panel only ever renders on `#vault`, whose trust-hub tab
-   * strip is itself `position: sticky; top: 0` at 44px desktop / 45px phone
-   * (`platform-shell.css:20,148`) with `z-index: 8`. Pinning to 0 parked the
-   * one page-level warning about a live one-time secret *behind* that strip —
-   * measured, scrolled to the bottom of the ceremony on iPhone 14 Pro Max.
-   */
-  top: 45px;
-  z-index: 7;
   margin: 0;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid color-mix(in srgb, var(--v-caution) 55%, transparent);

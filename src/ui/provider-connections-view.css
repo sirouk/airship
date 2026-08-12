@@ -441,6 +441,28 @@
   line-height: 1.5;
 }
 
+/*
+ * The gap the flex row used to provide, given back to the one glyph that still
+ * needs it.
+ *
+ * Taking this paragraph out of the `.provider-fabric__notice` group was right —
+ * flex made every `<strong>` and `<code>` in a sentence an unwrappable flex
+ * item — but the group's `gap: 9px` was the only thing separating the lock from
+ * the sentence, and prose has no gap. The lock has been welded to the "A" of
+ * "Airship connects only to the loopback origins" at every width since, which
+ * reads as a font that failed to load rather than as an icon.
+ *
+ * Margin rather than a return to flex: it separates the glyph without making
+ * the sentence's inline elements into flex items again, which is the failure
+ * the comment above this block exists to record. `text-bottom` sits the 15px
+ * lock on the first line's baseline box instead of letting it ride high enough
+ * to open a ragged gap above the paragraph.
+ */
+.provider-fabric__local-requirements p > svg {
+  margin-right: 6px;
+  vertical-align: text-bottom;
+}
+
 .provider-fabric__empty {
   margin: 0;
   padding: 14px;
@@ -508,5 +530,29 @@
     grid-column: 2;
     justify-self: start;
     white-space: normal;
+  }
+}
+
+/*
+ * The one control on this card a finger has to hit, floored for the finger.
+ *
+ * The campaign's touch-floor pass keyed every floor it could find on
+ * `(pointer: coarse)` rather than on viewport width, and this card was missed
+ * because its call to action carries no class of its own — it is a bare
+ * `<button>` inside `.provider-setup-card`, taking its 40px from the generic
+ * control height. Measured on the shipped build at 768x1024 with a touch
+ * pointer, after every other floor had landed: `Connect OpenAI`, `Connect
+ * Anthropic` and `Connect xAI` at 272x40, `Check Ollama` and `Check LM Studio`
+ * at 285x40 — five of the six remaining sub-floor controls in the whole
+ * product, and the six were all on this route.
+ *
+ * Height only. These buttons are already 272-285px wide, so the floor has
+ * nothing to say about their inline axis, and `min-height` on a block-level
+ * button cannot take the min-content escape that once let a `Done` label ride
+ * out of its own box.
+ */
+@media (pointer: coarse) {
+  .provider-setup-card button {
+    min-height: var(--touch-target);
   }
 }

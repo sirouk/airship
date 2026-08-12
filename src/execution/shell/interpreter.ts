@@ -2,7 +2,13 @@ import type { AndOrList, Command, CommandList, Pipeline, Redirection, Word } fro
 import { BUILTINS, SPECIAL_BUILTINS } from "./builtins";
 import type { ShellBudget } from "./budget";
 import type { CommandContext, CommandIo, CommandKind, ShellOptions, ShellRuntime } from "./command";
-import { AIRSHIP_SH_MAX_DEPTH, AIRSHIP_SH_MAX_POSITIONAL, AIRSHIP_SH_MAX_VARIABLES, AIRSHIP_SH_STATUS } from "./contract";
+import {
+  AIRSHIP_SH_MAX_DEPTH,
+  AIRSHIP_SH_MAX_FUNCTIONS,
+  AIRSHIP_SH_MAX_POSITIONAL,
+  AIRSHIP_SH_MAX_VARIABLES,
+  AIRSHIP_SH_STATUS,
+} from "./contract";
 import { ShellCommandError, ShellFatalError, ShellParseError } from "./errors";
 import { expandToFields, expandToPattern, expandToString, type ExpansionHost } from "./expansion";
 import type { ShellFileSystem } from "./filesystem";
@@ -18,6 +24,8 @@ type Descriptor =
   | Readonly<{ direction: "write"; sink: ByteSink }>;
 
 type Descriptors = Map<number, Descriptor>;
+
+type AppliedRedirections = Readonly<{ fds: Descriptors; sinks: readonly FileSink[]; close: () => void }>;
 
 type Variable = { value: string; exported: boolean };
 
@@ -313,7 +321,11 @@ export class Interpreter implements ShellRuntime {
       statuses.push(await this.withCondition(true, () => this.executeCommand(command, stage)));
       input = buffer ? new ByteReader(buffer.bytes()) : ByteReader.empty();
     }
-    const failure = statuses.find((value) => value !== 0);
+    // `pipefail` answers with the rightmost stage that failed, matching bash and
+    // ksh, which define the option this engine borrowed the name from. Taking
+    // the leftmost would let a producer's benign warning mask the hard failure
+    // of the stage that consumed its output.
+    const failure = [...statuses].reverse().find((value) => value !== 0);
     const status = this.options.pipefail && failure !== undefined ? failure : statuses[statuses.length - 1];
     return pipeline.negated ? (status === 0 ? 1 : 0) : status;
   }
@@ -321,12 +333,22 @@ export class Interpreter implements ShellRuntime {
   private async executeCommand(command: Command, fds: Descriptors): Promise<number> {
     await this.tick();
     if (command.kind === "function") {
+      // The function table is bounded like every other axis of shell state.
+      // Redefinition is free, so a loop that rewrites one name never trips it.
+      if (!this.functions.has(command.name) && this.functions.size >= AIRSHIP_SH_MAX_FUNCTIONS) {
+        throw new ShellCommandError(`airship-sh exceeded ${AIRSHIP_SH_MAX_FUNCTIONS} shell functions`);
+      }
       this.functions.set(command.name, command.body);
       return 0;
     }
     if (command.kind === "simple") return this.executeSimple(command, fds);
 
-    const applied = await this.applyRedirections(command.redirections, fds);
+    let applied: AppliedRedirections;
+    try {
+      applied = await this.applyRedirections(command.redirections, fds);
+    } catch (error) {
+      return this.reportRedirectionFailure(error, fds);
+    }
     try {
       switch (command.kind) {
         case "group":
@@ -421,7 +443,18 @@ export class Interpreter implements ShellRuntime {
       this.activeIo = previousIo;
     }
 
-    const applied = await this.applyRedirections(command.redirections, fds);
+    let applied: AppliedRedirections;
+    try {
+      applied = await this.applyRedirections(command.redirections, fds);
+    } catch (error) {
+      // POSIX XCU 2.8.1 ends a non-interactive shell on a redirection error
+      // only for a special builtin. For every other command the redirection
+      // failure is that command's failure, so `cat < missing || echo default`
+      // still reaches its fallback and the EXIT trap still sees the status the
+      // script chose. A command with no words takes the same path, as in bash.
+      if (SPECIAL_BUILTINS.has(argv[0])) throw error;
+      return this.reportRedirectionFailure(error, fds);
+    }
     const io = ioFor(applied.fds, this.rootIo);
     if (argv.length === 0) {
       // A bare assignment list still performs its redirections, so `> out`
@@ -682,10 +715,7 @@ export class Interpreter implements ShellRuntime {
     ]);
   }
 
-  private async applyRedirections(
-    redirections: readonly Redirection[],
-    fds: Descriptors,
-  ): Promise<Readonly<{ fds: Descriptors; sinks: readonly FileSink[]; close: () => void }>> {
+  private async applyRedirections(redirections: readonly Redirection[], fds: Descriptors): Promise<AppliedRedirections> {
     if (redirections.length === 0) {
       return Object.freeze({ fds, sinks: Object.freeze([]), close: () => {} });
     }
@@ -720,12 +750,14 @@ export class Interpreter implements ShellRuntime {
         continue;
       }
       if (redirection.operator === "<>") {
+        // `<>` opens the named descriptor — `exec 3<>f` is fd 3, and a bare
+        // `<>f` is fd 0 — never fd 1. Installing a sink on stdout here stole
+        // the script's own output and wrote it into the opened file. A
+        // `Descriptor` carries one direction, so the write half of `<>` is not
+        // representable; the read half is honoured on the fd that was asked for.
         const path = this.fs.resolve(target);
         if (!this.fs.isFile(path)) this.fs.writeFile(path, new Uint8Array());
-        next.set(0, { direction: "read", reader: new ByteReader(this.fs.readFile(path)) });
-        const sink = new FileSink(this.fs, path, true);
-        sinks.push(sink);
-        next.set(1, { direction: "write", sink });
+        next.set(redirection.fd, { direction: "read", reader: new ByteReader(this.fs.readFile(path)) });
         continue;
       }
       const sink = new FileSink(this.fs, this.fs.resolve(target), redirection.operator === ">>");
@@ -742,15 +774,23 @@ export class Interpreter implements ShellRuntime {
   }
 
   /**
+   * Reports a redirection that could not be opened. The diagnostic goes to the
+   * descriptors the command inherited rather than the ones it asked for,
+   * because the set it asked for never came into being.
+   */
+  private reportRedirectionFailure(error: unknown, fds: Descriptors): number {
+    if (!(error instanceof ShellCommandError)) throw error;
+    ioFor(fds, this.rootIo).stderr.write(encodeText(`airship-sh: ${error.message}\n`));
+    return error.status;
+  }
+
+  /**
    * Closes a command's redirections, or — after `exec` with no command —
    * promotes them into the enclosing descriptor set so later commands inherit
    * them. The enclosing map is mutated in place because it is the same object
    * every command in the list already holds.
    */
-  private settleRedirections(
-    applied: Readonly<{ fds: Descriptors; sinks: readonly FileSink[]; close: () => void }>,
-    enclosing: Descriptors,
-  ): void {
+  private settleRedirections(applied: AppliedRedirections, enclosing: Descriptors): void {
     if (this.persistNextRedirections) {
       this.persistNextRedirections = false;
       for (const [fd, descriptor] of applied.fds) enclosing.set(fd, descriptor);

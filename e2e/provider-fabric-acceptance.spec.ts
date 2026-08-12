@@ -75,7 +75,19 @@ test.describe("inference provider fabric browser contract", () => {
       has: page.locator("strong").filter({ hasText: /^OpenAI$/u }),
     });
     const openAiModel = openAiCard.getByRole("button", { name: "OpenAI discovered model" });
-    await expect(openAiModel).toContainText("GPT Alpha");
+    /*
+     * Before a choice, the picker must not name a model. `selectedModelId` is
+     * `stagedModelId ?? activeModel?.id ?? ""` — nothing is staged here — and
+     * this test's own title is the reason that matters: a pair is sent only
+     * after an explicit choice. The trigger used to read "GPT Alpha" anyway,
+     * because `MenuSelect` clamped a no-match to index 0 and rendered the first
+     * option as chosen. That put a model's name under the reader's eyes beside
+     * an activation button the same empty value keeps disabled, which is the
+     * surface disagreeing with itself rather than a default.
+     */
+    await expect(openAiModel).toContainText("Choose");
+    await expect(openAiModel).not.toContainText("GPT Alpha");
+    await expect(openAiCard.getByRole("button", { name: "Use in new thread" })).toBeDisabled();
     await openAiModel.click();
     await page.getByRole("listbox", { name: "OpenAI discovered model" })
       .getByRole("option", { name: /GPT Beta/u })
@@ -91,8 +103,10 @@ test.describe("inference provider fabric browser contract", () => {
       modelId: "gpt-beta",
     }]);
 
+    // The neighbouring connection was never touched, so it still names no
+    // model — and staging one on OpenAI did not stage one here.
     const anthropicModel = host.getByRole("button", { name: "Anthropic discovered model" });
-    await expect(anthropicModel).toContainText("Claude Review");
+    await expect(anthropicModel).toContainText("Choose");
     await expect.poll(() => page.evaluate(() => (
       globalThis as typeof globalThis & {
         __airshipProviderAcceptance?: { activations?: unknown[] };

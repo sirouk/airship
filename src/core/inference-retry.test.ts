@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ChutesTransportError } from "../inference/chutes/errors";
 import { LocalProviderError } from "../inference/local/endpoint-policy";
 import { ProviderTransportError } from "../inference/providers/browser-cloud";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "./contracts";
@@ -119,13 +120,57 @@ describe("retry classification", () => {
     expect(isRetryableTransportFailure(failure!)).toBe(true);
   });
 
+  it("reads the shape the Chutes transport really throws", () => {
+    // The flagship provider spells the same failures in SCREAMING_SNAKE. Until
+    // this module knew that vocabulary, a Chutes 503 matched nothing and was
+    // the only lane with no in-turn retry at all.
+    const gatewayRefusal = namedTransportFailure(
+      new ChutesTransportError("HTTP_ERROR", "Chutes returned HTTP 503.", { status: 503, operation: "invoke" }),
+    );
+    expect(gatewayRefusal).toEqual({ code: "HTTP_ERROR", status: 503 });
+    expect(isRetryableTransportFailure(gatewayRefusal!)).toBe(true);
+
+    const droppedStream = namedTransportFailure(
+      new ChutesTransportError("STREAM_TRUNCATED", "Chutes response stream ended early."),
+    );
+    expect(isRetryableTransportFailure(droppedStream!)).toBe(true);
+
+    // A refusal the request itself caused is still a verdict, whatever the
+    // spelling — and an HTTP_ERROR raised before any request went out has no
+    // status to judge.
+    expect(isRetryableTransportFailure(
+      namedTransportFailure(new ChutesTransportError("HTTP_ERROR", "Chutes rejected the key.", { status: 401 }))!,
+    )).toBe(false);
+    expect(isRetryableTransportFailure(
+      namedTransportFailure(new ChutesTransportError("HTTP_ERROR", "A Chutes API key is required."))!,
+    )).toBe(false);
+    expect(isRetryableTransportFailure(
+      namedTransportFailure(new ChutesTransportError("ATTESTATION_FAILED", "The instance did not attest."))!,
+    )).toBe(false);
+    // The 300s lifetime is not a carriage failure: three of them is a quarter
+    // of an hour of silence.
+    expect(isRetryableTransportFailure(
+      namedTransportFailure(new ChutesTransportError("TIMEOUT", "Chutes inference exceeded its lifetime limit."))!,
+    )).toBe(false);
+  });
+
   it("gives no retry to a failure nobody classified", () => {
     expect(namedTransportFailure(new Error("something went wrong"))).toBeUndefined();
     expect(namedTransportFailure("not an error")).toBeUndefined();
   });
 
   it("retries carriage failures and refuses content verdicts", () => {
-    for (const code of ["network-or-cors", "offline", "timeout", "stream-truncated", "stream-interrupted"]) {
+    // `cors-or-private-network-access` is the local lane's spelling of
+    // `network-or-cors`; a local model server that drops the connection is the
+    // same carriage failure as a cloud one that does.
+    for (const code of [
+      "network-or-cors",
+      "cors-or-private-network-access",
+      "offline",
+      "timeout",
+      "stream-truncated",
+      "stream-interrupted",
+    ]) {
       expect(isRetryableTransportFailure({ code })).toBe(true);
     }
     for (const code of ["invalid-response", "tool-call-invalid", "cancelled", "bridge-unavailable"]) {

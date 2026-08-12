@@ -150,11 +150,27 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
   const [resetArmed, setResetArmed] = useState(false);
+  /*
+   * Whether the sheet has been scrolled off its first pixel, which is the only
+   * thing CSS cannot ask about itself.
+   *
+   * Capped to a bottom sheet the header is held so "Done" cannot scroll away,
+   * and holding it pins its eyebrow and description too — 135px of a 477px
+   * sheet at phone-320, 101px of a 361px sheet at landscape-932, permanently,
+   * for prose introducing a dialog the reader is already inside. The stylesheet
+   * collapses that introduction under `.is-scrolled`; this is where the fact
+   * comes from. The threshold is 2px rather than 0 so a sub-pixel scroll offset
+   * cannot sit on the boundary and flip the class back and forth.
+   */
+  const [scrolled, setScrolled] = useState(false);
   // Same defect and the same fix as the palette: the `document.activeElement`
   // capture here ran a commit too late and could only ever read `<body>`.
   useOpenerRestore(open);
   useEffect(() => {
     if (!open) return;
+    // Closing unmounts the dialog, so a reopened one is back at scrollTop 0 with
+    // no scroll event to say so. Without this reset it would reopen collapsed.
+    setScrolled(false);
     const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
   }, [open]);
@@ -170,7 +186,7 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
     : vaultAdopted ? "connected" : "not-connected";
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); } else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
+      <div ref={dialog} class={scrolled ? "preferences-dialog is-scrolled" : "preferences-dialog"} role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 2)} onKeyDown={(event) => { if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); } else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
         <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change presentation and durability. Agent behavior remains pinned to its profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
         {profileApproval ? <div class="profile-approval-preference">
           <div><span>Active profile approvals</span><strong>{approvalModeLabel(profileApproval.mode)}</strong></div>
@@ -226,11 +242,21 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
             onCancel={() => setResetArmed(false)}
             onConfirm={() => {
               setResetArmed(false);
-              onChange(DEFAULT_PREFERENCES);
+              // The storage destination survives the reset, because the host's
+              // `onChange` is not a state write: a `vaultBackend` that differs
+              // from the current one starts a real provider transition, which
+              // detaches the adopted Vault and re-adopts the runtime into page
+              // memory. A whole-object write of the defaults therefore made
+              // "Reset preferences" disconnect the vault the sentence below
+              // promises it will not touch — and it bypassed the Durability row,
+              // which is the surface that owns the feasibility check and the
+              // disabled-while-switching state a provider change needs.
+              onChange(Object.freeze({ ...DEFAULT_PREFERENCES, vaultBackend: value.vaultBackend }));
             }}
           >
             <>
-              Display, durability, and legacy approval preferences return to their defaults.
+              Display and legacy approval preferences return to their defaults.
+              Durability stays where you set it; change it in the Storage row above.
               Your conversations, profiles, vault, and workspaces are not touched — nothing
               outside this dialog changes.
             </>

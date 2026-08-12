@@ -122,10 +122,13 @@ describe("canonical navigation model", () => {
       profiles: "more",
       capabilities: "more",
       skills: "more",
-      vault: "trust",
-      billing: "trust",
+      // Trust is #proof and nothing else. These three are More's rows, and a
+      // phone on #account used to light Trust — a section that neither holds
+      // the route nor leads back to it — while More read inactive.
+      vault: "more",
+      billing: "more",
+      access: "more",
       proof: "trust",
-      access: "trust",
     });
   });
 

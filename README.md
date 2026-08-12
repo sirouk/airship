@@ -158,7 +158,7 @@ adapter are in
 - immutable profile revisions, semantic whole-interface themes, globally or
   per-profile resolved skills whose exact revisions remain visible on the
   conversation, Profile-local workspace/session/terminal/index authorities,
-  and a lazy WebGL relationship graph derived from real page-memory lineage;
+  and a lazy 2D-canvas relationship graph derived from real page-memory lineage;
 - proactive browser capability observation shared by the agent and UI, including
   WebGPU, WebNN, WebAssembly, OPFS, extension-companion state, executable runtime
   activation paths, and honest current/peak in-page execution-load readings on
@@ -186,10 +186,16 @@ requires stable Rust and `wasm-pack`.
 
 ```bash
 npm install
+npx playwright install chromium
 npm run dev
 npm run check
 npm run build
 ```
+
+`npm run check` ends with two browser geometry specs, so it needs a Chromium —
+the same install `.github/workflows/ci.yml` performs before it runs the gate.
+Skip that line and the check fails at the last stage on a machine that has
+everything else it needs.
 
 `npm run check` intentionally leaves the long browser matrices separate. Before
 accepting a browser release candidate, also run the full and specialized command

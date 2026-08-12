@@ -54,6 +54,72 @@
     var(--route-gutter-inline-start);
 }
 
+/*
+ * The route scroller's own edges, faded rather than guillotined.
+ *
+ * `.route-layout` is `.main`, and `.main` is one `overflow: auto` scroller
+ * whose box is bounded above by the topbar and below by the mobile navigation
+ * band. A scroller ends its content on a hard pixel line, so at a short
+ * viewport every resting scroll position terminates some row in the middle of
+ * its letterforms: measured at landscape-932 on #capabilities with all
+ * boundaries open, 11 of 13 resting stops cut at least one text leaf, and at
+ * scrollTop 0 — the state a reader actually arrives in — both "Live
+ * page-memory probe" and the amber performance-schedule pill are sliced
+ * through their midline by the tab bar. #skills with the editor open is 8 of
+ * 12. A half-drawn glyph reads as a broken layout, not as "there is more".
+ *
+ * This is the `data-scroll-edges` recipe `.primary-nav` has carried since the
+ * rail could overflow (shell.css), applied to the only other scroller in the
+ * shell. It is measured, never assumed: `useScrollEdges` writes the attribute
+ * from the live overflow, so a route that fits keeps a hard edge and nothing
+ * is asserted about content that is not there.
+ *
+ * The `:has()` guard is what makes it safe here, and it is the difference
+ * between this scroller and the rail. A mask is a group effect: it applies to
+ * the element's whole painted subtree, including `position: fixed`
+ * descendants, which is exactly the capture `.main`'s own `position: relative`
+ * comment took care to avoid. Popovers open *inside* `main` and in sheet mode
+ * are `position: fixed` against the viewport — measured at phone-320, the
+ * proof claim-stack sheet is `main`'s descendant and its box runs to y=568
+ * while `main`'s own bottom is y=512, so an unguarded mask would not soften
+ * that sheet's last line, it would erase it. While a sheet is open the reader
+ * is not reading the scroller behind it, so the fade has nothing to say and
+ * stands down for as long as the panel is up.
+ *
+ * Both overlay primitives, because this product has two and they became the
+ * same shape in the same campaign. `MenuSelect` earned the bottom-sheet
+ * contract — header, scrim, `position: fixed` — after the popover did, and its
+ * panels open inside `main` on the routes that carry settings. Measured at
+ * phone-320 with the mask live: nine open listboxes on #profiles, #skills and
+ * #vault are `main`'s descendants and overhang its bottom edge by 56px each,
+ * so the guard that named only `.popover` was erasing the last 56px of a
+ * control the reader had just opened — the band holding `Done` and the
+ * home-indicator inset. A guard against a group effect has to name every
+ * group, and a second overlay is not a special case of the first.
+ *
+ * `aria-expanded` on the trigger rather than a state attribute on the panel,
+ * because that is the marker `MenuSelect` already publishes; asking the DOM
+ * for something it does not write would be a guard that silently never fires.
+ */
+.route-layout[data-scroll-edges="start"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px); }
+.route-layout[data-scroll-edges="end"] { --route-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%); }
+.route-layout[data-scroll-edges="both"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
+
+.route-layout[data-scroll-edges]:not([data-scroll-edges="none"]):not(:has(.popover[data-open="true"])):not(:has(.menu-select-trigger[aria-expanded="true"])) {
+  -webkit-mask-image: var(--route-scroll-fade);
+  mask-image: var(--route-scroll-fade);
+}
+
+/* A fade carries no forced-colors equivalent; keep every row at full contrast
+   and let the scrollbar carry the affordance instead. Same escape hatch, and
+   for the same reason, as the rail's. */
+@media (forced-colors: active) {
+  .route-layout[data-scroll-edges]:not([data-scroll-edges="none"]) {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
 .route-layout > * {
   width: min(1160px, 100%);
   margin-inline: auto;
@@ -265,7 +331,123 @@
 .proof-surface-panel { min-width: 0; }
 
 @media (max-width: 760px) {
-  .proof-surface-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  /*
+   * A phone-width fix for this strip was first written as `1fr 1fr`, and it was
+   * written on the wrong box.
+   *
+   * This class sits on the `.tabs` root, whose two children are the scrolling
+   * strip and the `⌄ n` overflow control — so the halving gave the strip half a
+   * 320px screen and the chevron the other half. Both labels still laid out at
+   * their nowrap widths inside that half, the strip scrolled the selected one
+   * into view, and `Receipt & journal` rendered as an 8px sliver of glyph beside
+   * a permanent overflow badge: a two-item switcher reading as a rendering
+   * fault, on the one route whose content is meaningless without knowing which
+   * view you are in.
+   *
+   * Moving the halving down to the strip fixed 320px and then charged every
+   * width up to 760 for it: two equal tracks are two equal tracks whether or not
+   * the labels need cutting, so at 430px — where both labels had always fitted
+   * whole — `Attestation evidence` was ellipsised to `Attestation evide…` while
+   * `Receipt & journal` sat in a half it did not fill. An equal split is the
+   * right answer only at the widths where there is nothing to split fairly.
+   *
+   * The `flex: 1 1 auto` written next was meant to be that answer and was not.
+   * Applied to both the tab and the button it wraps, it reproduced the halving
+   * it replaced: measured on the shipped build, the active tab is 141px of a
+   * 286px strip at 320, 176px of 356px at 390 and 196px of 396px at 430 — one
+   * pixel-exact half at every width, which is what a zero basis grows to, not
+   * what a content basis shrinks from. So 430 kept paying: `Receipt & journal`
+   * needs 175px and was handed 196, while `Attestation evidence` needs 207px,
+   * was handed the same 196, and lost its last five characters. The strip has
+   * 396px and the pair wants 386 — the cut was manufactured by the split, not
+   * required by the width.
+   *
+   * Scoping that growth to ≤400px removed 430's cut and sent the bill to 390,
+   * because an even split is only fair while both tabs are equally worth
+   * reading, and they never are. The strip is the viewport less 34px of gutter,
+   * border and padding — measured 286px at 320, 356 at 390, 396 at 430 — and
+   * the pair wants 386 (175 for `Receipt & journal`, 207 for `Attestation
+   * evidence`, 4 of gap). At 390 the split handed the selected tab 176 of 356
+   * and it fitted its 175px label by one pixel on one machine's fonts; below
+   * 400 the split proper handed it 161 and `Receipt & journal` rendered as
+   * `Receipt & jou…` while it was the tab being read. The same split cut
+   * `Attestation evidence` at both 320 and 390 whenever *it* was the selected
+   * one, which the 390 frame had been showing since before either wave.
+   *
+   * A tab that cannot say its own name while it is the one you are looking at
+   * is the worst outcome available here, and it is the only truncation with no
+   * way out: there is no gesture that reveals it, because you are already on
+   * it. So the shortfall was charged to the tab you are not reading — the
+   * selected tab did not shrink, the other absorbed all of it and ellipsised,
+   * and that cut is self-healing, since tapping it makes it the selected tab
+   * and hands the cut back. That reasoning is sound and it still overshot,
+   * because it was costed in only one of the two directions it applies to.
+   *
+   * The note it shipped with recorded 320 as "the other tab holds 107px", which
+   * is what is left of a 286px strip after `Receipt & journal` takes its 175.
+   * Select the other tab and the subtraction changes: `Attestation evidence`
+   * needs 207, the remainder is 286 − 207 − 4 = 75px, and the strip rendered
+   * `Rec…`. Three characters is not a label a reader recognises and chooses, it
+   * is a stub — the rule was measured in the state where it was cheap and
+   * shipped in the state where it was not.
+   *
+   * So the trade is withdrawn rather than re-balanced. Its whole premise was
+   * that someone must absorb an unavoidable cut, and the cut is avoidable: at
+   * 320 there is no split of 286px that seats 386px of *nowrap* label, but the
+   * pair only wants 386px of line because the button forbids a second one.
+   * `white-space: normal` lifts that, both tabs then shrink normally in
+   * proportion to their content, and both stay whole:
+   *
+   *   320  strip 286, deficit 100 → `Receipt & journal` 129px, `Attestation
+   *        evidence` 153px. Each wraps to two lines. Neither is cut.
+   *   390  strip 356, deficit 30 → 161px and 191px. Both wrap, both whole,
+   *        recovering the ~one character 390 used to lose.
+   *   430  strip 396 for a pair wanting 386. No shrink, no wrap, one line each
+   *        — byte-identical to the build before this rule, which is what keeps
+   *        430's earlier repair intact rather than re-paying for it.
+   *
+   * THE COST, and it is vertical and it is inside the strip. Two lines at
+   * `--fs-lead`/1.2 is ~40.5px against the 44px touch floor these buttons
+   * already hold, so a wrapped label almost fits the box it is in for free —
+   * and "almost" is how the popover header ended up with 2px between a glyph
+   * and a border. The `padding-block` below declares that air rather than
+   * borrowing it, making the button ~48.5px where it wraps: the strip grows
+   * about 4.5px at 320 and 390, and nothing at 430 and above, where no wrap
+   * occurs and the padding stays inside the 44px floor. That height comes out
+   * of the panel below, which scrolls. Nothing horizontal moves at any width —
+   * this control is `width: 100%` inside this query and `fit-content` above it,
+   * both untouched — and the query does not reach landscape-932 at all, so the
+   * viewport with no height to spare pays none of it.
+   *
+   * `min-width: 0` on the tab and its button is gone with the ellipsis it
+   * existed to enable. Restoring the flex default — `min-width: auto`, the
+   * min-content floor — is what keeps the wrap from ever becoming a clip: a tab
+   * cannot be shrunk below its longest word (~126px for `Attestation`, ~89px
+   * for `Receipt`; 219px for the pair against 286px of strip, and that margin
+   * only widens as labels wrap further). Should a large enough `--type-scale`
+   * exceed it, the strip overflows into `.tabs`'s own `⌄ n` control, which
+   * lists every tab with its full label — the component's designed fallback,
+   * and the one the block above already defers to.
+   *
+   * `flex-wrap: wrap` on the *strip* remains deliberately absent, for the
+   * reason recorded on that block: a lone item on a wrapped line stops
+   * stretching to the line height and the overflow trigger drops under the 44px
+   * touch floor. Wrapping text inside a button is a different thing and touches
+   * neither the strip's line count nor the trigger's height.
+   */
+  .proof-surface-tabs { width: 100%; }
+
+  .proof-surface-tabs .tabs__strip { flex: 1 1 auto; }
+
+  .proof-surface-tabs .tabs__tab-button {
+    /* The base rule sets `font: … /1 …`, and two lines set solid at a unitless
+       1 collide. The leading is restated here beside the wrap that makes it
+       matter rather than left to be discovered. */
+    white-space: normal;
+    line-height: 1.2;
+    padding-block: var(--sp-1);
+  }
+
   .proof-surface-tabs button { min-height: var(--touch-target); }
 }
 
@@ -793,7 +975,54 @@
 .profile-card .posture-chip > small { margin: 0 0 2px; }
 .profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/*
+ * A profile name is whatever its author typed, and nothing upstream clips it.
+ * The middle track is `minmax(0, 1fr)` so the *track* may shrink, but a name
+ * with no break opportunity in it — one 49-character word — has a min-content
+ * width of the whole string, so it simply painted outside its own card: off the
+ * right edge of the viewport at 390, and clean across the panel divider at 1440,
+ * where it ran under the Profile revision panel's NAME and ROLE labels and put
+ * two panels' text on one baseline.
+ *
+ * `anywhere` rather than `break-word` because only `anywhere` also shrinks the
+ * element's min-content contribution, which is the number the grid track is
+ * sized against; `break-word` would still have handed the track the whole word.
+ * Wrapping rather than the one-line ellipsis recipe the posture chip above uses:
+ * a catalog row is how a person tells two profiles apart, and cutting names that
+ * share a prefix to the same string makes the list unpickable.
+ *
+ * Wrapping without a floor only moves the cost, though. Unclamped, the same
+ * name took seven lines at landscape-932 and ten in the phone column, and
+ * because the cards share a flex line there it set the height of every sibling:
+ * the catalog went ragged, and Research and Developer were pushed most of a
+ * screen down by a name. That is the argument for a clamp, and it is an
+ * argument about the narrow band only — it is stated with the override in the
+ * `max-width: 640px` block, next to the `display: flex` that creates the
+ * coupling it is about.
+ *
+ * Here, where the catalog is the stacked one-column grid above, no card can set
+ * another's height; a long name costs only its own card, inside a panel that
+ * scrolls with the page. Five lines is what that reading affords: the
+ * 119-character name this was written against takes four lines at desktop-1440
+ * and five at laptop-1024, so it now renders whole at every width where the
+ * column is wide enough to want it, and the narrowest stacked column —
+ * tablet-768, about thirteen characters to a line — is still bounded, at five
+ * lines instead of the ten it wanted.
+ *
+ * The clamp was three everywhere before this, which is where it cost more than
+ * it bought: measured at laptop-1024 it saved 38px on one card of a panel that
+ * ended 46px above a fold the page scrolls past anyway, and spent the last 27
+ * characters of the name to do it. Past the clamp the name is `title`d on the
+ * element and printed in full in the revision form the click opens, so nothing
+ * is only ever half-known.
+ */
 .profile-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  overflow-wrap: anywhere;
   font-size: var(--fs-micro);
 }
 
@@ -1018,15 +1247,56 @@
   font-size: var(--fs-micro);
 }
 
+/* The card is the size of the sentence that tells the themes apart.
+ *
+ * Each card carries a swatch and two of these: `theme.description`, which is
+ * the only place the card says what the theme IS ("Curated · warm cocoa
+ * surfaces with a soft mauve accent"), and the presentation summary, which
+ * names the typography and layout activation will change and that a 32×43
+ * swatch cannot show. Both were clamped to two lines here and to one below
+ * 861px, and neither number survives contact with the width the card gets.
+ *
+ * Measured on the shipped build. At 1024 the library is three columns of 123px
+ * and a caption at that width is three lines: 26 of the 27 captions on the
+ * route read clientHeight 32 against scrollHeight 47, one 32 against 63, every
+ * one cut at the end of line two — no ellipsis reaches the reader's eye as an
+ * invitation when the cut lands mid-phrase in the middle of a card. At 768 the
+ * library is a single column and the clamp dropped to one line, so a full-width
+ * 307px card showed 16px of 32: "Curated · warm cocoa surfaces with a", and the
+ * rest of the sentence was not anywhere on the route. The three phone widths
+ * showed the same single line, 17 of 34, across 26 captions.
+ *
+ * That is the proof the clamp was arbitrary rather than a budget: it clipped
+ * hardest at 768, where the card is at its WIDEST and there is the most room to
+ * simply print the sentence. There is no height budget here to defend — the
+ * library is a `repeat(3, minmax(0,1fr))` grid inside a disclosure inside a
+ * route `main` already scrolls, and the cards are `min-height:67px` with
+ * `align-items:center`, so a third line costs 15px of a scroll the reader is
+ * taking anyway. Nor is a scroll affordance the answer: a two-line sentence
+ * inside its own 32px scroller would read worse than the ellipsis it replaced.
+ *
+ * So the cap goes and the caption wraps. `display:-webkit-box` stays because
+ * that box is what lays the caption out and unwinding it would be a second,
+ * unrelated change to how the card flows; the clamp is what was doing the
+ * hiding, and `overflow` goes back to visible so this element cannot clip in
+ * silence again. Re-measured at all eight device classes: no caption on the
+ * route is short of its own content.
+ *
+ * `.profile-prompt-preview` above is deliberately NOT part of this: it clamps a
+ * system prompt to two lines and measured 35px of 123, but it is the summary OF
+ * a disclosure — `[open]` withdraws it, the full prompt is in the textarea
+ * underneath, and the summary carries a `›`. A cap that hides content with no
+ * way to reach it is a defect; a cap that summarises content with the way to
+ * the rest attached to it is a summary. */
 .theme-option small {
   display: -webkit-box;
   margin-top: var(--sp-1);
-  overflow: hidden;
+  overflow: visible;
   color: var(--ink-faint);
   font-size: var(--fs-micro);
   line-height: 1.35;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: none;
 }
 
 .theme-swatch {
@@ -1036,9 +1306,23 @@
   border-radius: 4px;
 }
 
+/*
+ * Four equal quarters spent the same width on a cell holding one digit and a
+ * cell holding a provider and a model name, so the strip ran short in the only
+ * place it had anything to say. At 768 a quarter was 97px against a 104px
+ * label, and the second cell rendered "MINIMUM PROO" with the F taken by the
+ * divider; at 1920 the runtime cell still held "airship-demo · airship…" while
+ * three cells beside it sat on width their own contents did not use.
+ *
+ * The three cells whose content is a fixed label over a short value take what
+ * they measure; the runtime cell, whose value is an unbounded identifier, takes
+ * the remainder. Nothing is squeezed to pay for this — the quarters were
+ * already narrower than the labels they had to hold, which is what the chopping
+ * was, so every track ends up at least as wide as it was.
+ */
 .revision-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, auto));
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
@@ -1058,10 +1342,21 @@
   border-left: 1px solid var(--line);
 }
 
+/*
+ * The label needs a clipping recipe of its own. `text-overflow` is not
+ * inherited, and the cell's ellipsis governs only the cell's own inline
+ * content, so this block-level label was left to the cell's `overflow: hidden`
+ * — a hard cut mid-letter, which reads as a shorter word rather than as a
+ * truncated one. "MINIMUM PROOF" became "MINIMUM PROO", a label naming a
+ * posture nobody can look up. The track sizing above should now leave every
+ * label its full width; this is what happens on the day it does not.
+ */
 .revision-strip small {
   display: block;
   margin-bottom: 5px;
+  overflow: hidden;
   color: var(--ink-faint);
+  text-overflow: ellipsis;
   text-transform: uppercase;
 }
 
@@ -1072,9 +1367,37 @@
 .posture-chip { display: grid; gap: var(--sp-1); min-width: 0; justify-items: start; }
 .posture-chip > small { color: var(--ink-faint); font-size: var(--fs-micro); }
 
+/*
+ * Three named tracks could not say how many actions this row has.
+ *
+ * `auto minmax(190px, 0.55fr) minmax(0, 1fr)` described the two-button rest
+ * state and left the third action holding whatever was left over. Measured at
+ * tablet-768 with a theme preview armed, that leftover was 52.69px: "Save new
+ * revision" took its 130.78px and "Switch to this profile" took its 190px
+ * floor, and "Cancel preview" — the control that abandons the preview, so the
+ * one a reader reaches for when they have changed their mind — stacked into
+ * "Cancel" / "preview" inside a 53px slot. The same template overshot in the
+ * other direction at desktop-1440, where the leftover made that button 385px
+ * wide beside a 131px sibling.
+ *
+ * The row does not fit at 768, and that is a fact about the labels rather than
+ * a thing to argue with: the three buttons want ~131 + ~164 + ~115px plus two
+ * 8px gaps against a 389px row. So the row is told to wrap instead of told how
+ * to divide. `max-content` as each track's maximum is the whole repair — a
+ * track can never be narrower than the label standing in it, at any type scale
+ * or Density, so no button in this row can be crushed again no matter how many
+ * arrive or how long their words are. The 150px minimum decides only how many
+ * columns fit before wrapping, and `auto-fit` collapses the ones nothing lands
+ * in, so the two-button rest state keeps two tracks and does not stretch to
+ * fill the route.
+ *
+ * The phone band below still restates `1fr`, and still means it: at 320px the
+ * answer is one full-width action per row, which is a different statement from
+ * this one rather than a special case of it.
+ */
 .profile-actions {
   display: grid;
-  grid-template-columns: auto minmax(190px, 0.55fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
   gap: var(--sp-2);
   align-items: center;
 }
@@ -1087,7 +1410,11 @@
   cursor: pointer;
 }
 
+/* The spans in this row — "Previewing — not saved" and the save status — are
+   claims about the row, not a fourth action in it. Pinned across every track so
+   they cannot be dealt into a button-sized cell as the column count changes. */
 .profile-actions > span {
+  grid-column: 1 / -1;
   color: var(--ink-muted);
   font-size: var(--fs-micro);
   line-height: 1.45;
@@ -1101,7 +1428,89 @@
   overflow-wrap: anywhere;
 }
 
-.profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1320px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
+/*
+ * The strip shares the measure of the route it heads — 1160px, the same literal
+ * `.route-layout > *` above writes and the same one `.proof-surface-panel--prose`
+ * re-enters one level down. This is not a new number; it is the repo's only
+ * measure, applied to a control that had quietly kept a second one.
+ *
+ * Measured at wide-1920 before the change: the segmented `Profiles / Skills /
+ * Capabilities` strip ran x=416..1736 (1320px) while the cards it heads ran
+ * x=496..1656 (1160px). Both were centred on x=1076, so the strip overhung the
+ * column it names by exactly 80px on each side and every eyebrow, H1 and card
+ * beneath it started 80px inside the control above it. At desktop-1440 the two
+ * already agreed (258..1414 for both) because `min(…, 100%)` bottomed out on
+ * the gutter box — which is why this only ever broke at 1920, and why the
+ * screenshot diff for the whole sweep showed nothing here at any other width.
+ */
+.profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1160px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
+/*
+ * The one indicator of which of the three hub pages you are on, held against
+ * the scroll that hides it.
+ *
+ * Profiles, Skills and Capabilities are one hub reached only through this
+ * strip, and it is the first child of `main.route-layout` — the pane that
+ * scrolls — so it was the first thing off the top of every scroll. Measured on
+ * the shipped build on `#skills` with the new-skill editor open, which is the
+ * gesture that scrolls the pane on its own: the strip sat at y=-466 at
+ * phone-320, -459 at landscape-932, y=6..58 against a pane starting at y=58 at
+ * tablet-768 (out of frame by two pixels), and bottom=-3 at desktop-1440.
+ * Four for four, and scrolling to the pane's foot puts it a further thousand
+ * pixels away. A person editing a skill had nothing on screen saying which of
+ * the three pages they were on or how to leave for the other two.
+ *
+ * Sticky and not fixed, for the same reason `platform-shell.css` sticks the
+ * preferences dialog's header rather than docking it: the strip is a child of
+ * the scroller, there is no separate middle that could scroll on its own, and
+ * a fixed box would have to re-derive the pane's inline geometry from nothing.
+ * The cost is the strip's own height, held back from the rows while scrolled,
+ * which is the trade that sheet already makes.
+ *
+ * `top: 0` is the scrollport's PADDING edge, not its border edge — which is
+ * why the band above needs painting. `.route-layout` carries a
+ * `--route-gutter-block` of top padding (14px at phone widths, up to ~25px at
+ * desktop-1440), and content scrolling up through that band would pass over
+ * the clear above the held strip. `platform-shell.css` answers this by moving
+ * the container's top padding onto the sticky header itself; that is not
+ * available here, because the padding belongs to `.route-layout`, which every
+ * route shares and only these three have a strip in. So the strip paints the
+ * band instead: a pseudo-element in the page's own `--ground`, spanning the
+ * full width of the pane by cancelling the same two gutter variables the
+ * padding is written from, so it reaches the pane's edges at every width
+ * rather than only where the strip does.
+ *
+ * `z-index: 2` is against the route's own content only. `.menu-select-popover`
+ * is z-index 320 and the Skills scope dropdown sits directly beneath this
+ * strip, so an upward-opening menu still paints over it rather than under it.
+ */
+.profile-hub-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.profile-hub-tabs::before {
+  content: "";
+  position: absolute;
+  inset-inline: calc(-1 * var(--route-gutter-inline-start)) calc(-1 * var(--route-gutter-inline-end));
+  /*
+   * Strictly above the strip and never over it. Overlapping would put the
+   * page's ground across the top of the pill: a pseudo-element of a
+   * stacking-context parent paints after that parent's own background, so
+   * there is no depth here at which a band could hide behind the strip.
+   */
+  bottom: 100%;
+  /*
+   * Deliberately taller than the gutter it is covering. A sticky box is held by
+   * its MARGIN edge, and the phone query below gives this strip a `var(--sp-2)`
+   * top margin — so the clear above the stuck strip is the pane's padding plus
+   * that margin, not the padding alone. Overshooting costs nothing: the extra
+   * runs off the top of the scrollport and is clipped, and at rest the whole
+   * band is over the pane's own ground and paints ground onto ground.
+   */
+  height: calc(var(--route-gutter-block) + var(--sp-3));
+  background: var(--ground);
+}
 /* One persistent tab geometry. The scope control used to take the flexible
    `1fr` track and demote the three tabs to `auto`, so activating Skills — the
    route the filter belongs to — physically collapsed the strip to text width
@@ -1121,7 +1530,9 @@
 .profile-hub-scope { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; min-width: 0; margin: var(--sp-3) 0 var(--sp-2); }
 .profile-hub-scope .menu-select { min-width: 0; max-width: min(280px, 100%); }
 .profile-hub-scope > span { color: var(--ink-faint); font: var(--fs-micro)/1 var(--font-mono); text-transform: uppercase; }
-.profile-scope-contract { display: flex; gap: 10px; width: min(1320px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
+/* The contract line sits directly under the strip and must not out-run it:
+   same measure, same reason as `.profile-hub-tabs` above. */
+.profile-scope-contract { display: flex; gap: 10px; width: min(1160px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
 .profile-scope-contract strong { flex: 0 0 auto; color: var(--ink); }
 
 .profile-archive-zone {
@@ -1139,6 +1550,21 @@
 .profile-archive-zone p { max-width: 68ch; margin: var(--sp-1) 0 0; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.45; }
 .profile-archive-zone label { display: grid; gap: 5px; color: var(--ink-faint); font-size: var(--fs-micro); }
 .profile-archive-zone .danger { min-height: 40px; color: var(--v-failed); border-color: color-mix(in srgb, var(--v-failed) 45%, var(--line)); }
+/*
+ * The rule above is unconditional, so it reasserted the full-strength failed
+ * hue and border over `button:disabled` in `tokens.css` and Remove profile read
+ * as live while `disabled` was set — in the same frame where Switch to this
+ * profile, disabled for the same preview, was correctly greyed. That is exactly
+ * the failure tokens.css's baseline exists to prevent, so the disabled state is
+ * handed straight back to it. Same shape as `.skill-authoring .danger:disabled`
+ * below, which is the other destructive verb in this sheet.
+ */
+.profile-archive-zone .danger:disabled {
+  color: var(--ink-disabled);
+  border-color: var(--line);
+  background: var(--surface-disabled);
+  cursor: not-allowed;
+}
 
 .skills-toolbar {
   display: grid;
@@ -1174,6 +1600,49 @@
 
 .skills-toolbar > .skills-toolbar-status.failure {
   color: var(--v-failed);
+}
+
+/*
+ * What is left on the page after a skill has been destroyed.
+ *
+ * The removal confirmation used to be an unclassed paragraph inheriting the
+ * route's body ink — 17px at `--ink`, the same type as ordinary prose, on a
+ * transparent ground with no border and no padding, sitting in the gap between
+ * the card grid and the Conversation boundary callout. Measured at
+ * desktop-1440 it was a 1156px-wide line reading "Audit probe removed." with
+ * nothing around it, which is how a page renders text it has no opinion about.
+ * The one sentence recording an irreversible act should not be the one piece of
+ * type on the route that was never given a box.
+ *
+ * The recipe is `.attestations-alert`'s, because that is already this product's
+ * word for "a status you may need to come back and read": bordered, inset,
+ * caption-sized, with a glyph carrying the kind of event so the meaning is not
+ * left to the sentence alone. Neutral `--line`/`--surface-soft` rather than a
+ * danger colour — the destruction already happened and succeeded, and painting
+ * a completed action in alarm ink is how alarm ink stops being read. `justify-
+ * self: start` keeps it the width of its own sentence: a chip stretched across
+ * a 1160px measure is a banner, and a banner is what the toast already was.
+ */
+.skills-action-status {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-self: start;
+  /* The floor has one name, and this sheet is one of the two that may not
+     spell it as a number — see `token-vocabulary.test.ts`. */
+  min-height: var(--touch-target);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: var(--fs-caption);
+}
+
+.skills-action-status svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
 }
 
 .skill-grid {
@@ -1641,8 +2110,21 @@
   white-space: nowrap;
 }
 
+/*
+ * Account is a reading surface, so it takes the reading measure — the same
+ * 1160px every other prose route takes, not a third opinion about it.
+ *
+ * Measured at wide-1920 before the change: `.billing-view` ran x=446..1706
+ * (1260px) while Vault ran 496..1656 and Sessions ran 496..1656 (1160px each),
+ * from the same shell, in the same frame class. Three sibling routes on three
+ * measures — 1160, 1260 and the tab strip's 1320 — is what the judges kept
+ * describing one route at a time as "wastes the width it asked for": a reader
+ * moving Account → Vault watched the column jump 50px on each side for no
+ * reason either page could state. At desktop-1440 all three already collapsed
+ * onto 1156 (the gutter box), so this too was only ever visible past 1400.
+ */
 .billing-view {
-  width: min(1260px, 100%);
+  width: min(1160px, 100%);
 }
 
 .billing-toolbar {
@@ -2567,13 +3049,15 @@
     align-items: stretch;
   }
 
+  /* One column, which is the whole reason the clamp that used to stand under
+     this rule had to go. It dropped the theme caption to a single line at
+     exactly the breakpoint where the card stops being 123px of a three-column
+     grid and becomes the full width of the route — so the caption was cut
+     hardest ("Curated · warm cocoa surfaces with a", 16px of 32 at 768) on the
+     widest card the library ever draws. The base rule carries the reasoning. */
   .theme-options,
   .skill-grid {
     grid-template-columns: 1fr;
-  }
-
-  .theme-option small {
-    -webkit-line-clamp: 1;
   }
 }
 
@@ -2677,8 +3161,24 @@
    * The override must outrank the topbar hide two rules above, so it sits
    * inside the same block rather than borrowing shell.css's base rule.
    */
+  /*
+   * The two declarations this band never inherited.
+   *
+   * `.runtime-line:not(.runtime-line--phone)` in shell.css carries the row's
+   * `align-items: center` and its 7px gap, and by construction that selector
+   * cannot reach this element — so the phone band was a flex row with neither.
+   * Measured at 320x568: `.pulse-dot` is 6px tall with a 3px halo and it has a
+   * height, so stretch left it against the top edge of the band, where the
+   * halo crossed the topbar's own hairline and read as a clipped dot; with no
+   * gap, the "L" of "Local kernel ready" then started inside that halo. A
+   * status indicator overlapping the status it indicates is the one thing this
+   * band exists to avoid, and neither declaration costs the band any height —
+   * it is `min-height: 34px` around a 6px dot either way.
+   */
   .runtime-line--phone {
     display: flex;
+    gap: 7px;
+    align-items: center;
     max-width: none;
     min-width: 0;
     overflow: hidden;
@@ -2687,6 +3187,18 @@
     padding-left: max(13px, env(safe-area-inset-left));
     background: var(--ground);
     border-bottom: 1px solid var(--line);
+  }
+
+  /* Nothing to say, no band to say it in. The element stays mounted so the
+     live region survives; only its box goes away. */
+  .runtime-line--phone[data-empty] {
+    min-height: 0;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .runtime-line--phone[data-empty] > * {
+    display: none;
   }
 
   /* A phone shell never borrows its columns from content lengths: the
@@ -2749,6 +3261,71 @@
   }
 
   /*
+   * Past the point where an ellipsis still leaves a word, the claim steps
+   * behind its own seal.
+   *
+   * The rule above buys the label room by clipping it, and that trade stops
+   * paying: measured at 320px the chip rendered a state ring, the single
+   * character `B` and an ellipsis — `Browser / Edge runtime` reduced to one
+   * letter, with the count already clipped out below to pay for it. A legible
+   * glyph is worth more than a legible fragment, and the fragment is exactly
+   * the defect `topbar.tsx` says the band collapse exists to remove.
+   *
+   * Clipped out of the layout, never removed: the ring keeps the state colour,
+   * the chip keeps its whole 44px target, and the claim itself is still in the
+   * button's accessible name and rendered verbatim in the sheet a tap opens.
+   *
+   * 360px, not the 400px this first shipped at. The session bar's chips yield
+   * at 400 and borrowing that tier looked tidy, but it was measured against the
+   * wrong screen: at 390 the chip reads `Browser / Ed…`, which is truncated and
+   * still names the runtime, and clipping it there traded a legible label for
+   * no label at all. Thirteen route audits reported that loss independently —
+   * the sweep's most-agreed regression, against a defect that only exists at
+   * 320. One width for "this phone has run out of room for words" is right; it
+   * is just not the same width the session bar uses, because these labels are
+   * not the same length.
+   *
+   * A tier chosen from a label's width is only as stable as the chip's width,
+   * and this one has already been measured twice for that reason. Between those
+   * two measurements the rail reserved 22px for its collapse grip; `.topbar`
+   * shares `--rail-width`, so the brand track grew with it and the chip lost
+   * 13px at every touch width, which is how 390 came to read `Browser / E…` —
+   * a word cut after one letter — under a tier written on the promise that 390
+   * would read `Browser / Ed…`. The reserve is gone (shell.css pays for that
+   * grip in overhang now), and the number is re-derived against the restored
+   * chip rather than assumed to have survived: in this block the label's box is
+   * the viewport less 307px, `Browser` sets 48px of ink, and the sheet keeps a
+   * word only while the box holds that ink plus 5px. 53px of box is 360px of
+   * viewport — so 360 is not a round number here, it is the exact width at
+   * which the first word stops fitting, and the rule clips at and below it.
+   *
+   * Which means: anything that takes width off this topbar again invalidates
+   * this tier. Re-measure it, do not re-borrow it.
+   */
+  @media (max-width: 360px) {
+    .topbar-posture-chip .seal__label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    /*
+     * Taking the words out took the width with them. The paragraph above says
+     * the chip "keeps its whole 44px target", and without this it did not: the
+     * ring plus the button's own padding measured 34x44, which
+     * `touch-target-floor` caught on every route at once — the product's own
+     * 44px law, doing exactly what it is for. The floor is restored explicitly
+     * rather than left to whatever the glyph happens to measure.
+     */
+    .topbar-posture-chip {
+      min-width: var(--touch-target);
+      justify-content: center;
+    }
+  }
+
+  /*
    * The claim gets the width; the count keeps only its accessible name.
    *
    * This chip's own contract is that a truncated claim is worse than a
@@ -2780,14 +3357,30 @@
     display: none;
   }
 
+  /*
+   * Rows 3 and 4, not 2 and 3.
+   *
+   * Both numbers were written when this grid had three tracks — topbar,
+   * content, nav band — and they were right then. `dc257d5` gave the phone its
+   * status line back by inserting the `auto` track above, which renumbered
+   * every track below it and renumbered neither of these. `.main` moved into
+   * the status line's track and `.mobile-nav` into the content track, leaving
+   * the 56px band the keyboard override below still reasons about standing
+   * empty, and putting the navigation underneath whatever the route drew.
+   *
+   * What that cost was a phone that could not be navigated: the runtime status
+   * line and the route's own content sat over the band and swallowed the taps,
+   * so `More` — and every destination reached through it — could not be
+   * opened at all. Twelve browser contracts failed on it.
+   */
   .main {
-    grid-row: 2;
+    grid-row: 3;
   }
 
   .mobile-nav {
     z-index: 30;
     display: grid;
-    grid-row: 3;
+    grid-row: 4;
     /* Five destinations, equal shares. The leading `auto` track that used to
        lead this list held the live-load reading, which read `0 · Idle` on a
        phone permanently because it counts execution-pack runs; the reading now
@@ -3069,6 +3662,13 @@
      * thing on the bar to give back.
      */
     padding-block: 0;
+  }
+
+  /* The runtime eyebrow rides this gutter with the bar — see the shared base
+     declaration in `chat.css`. Restated as one rule for both so the tag cannot
+     be left behind at a width where the header moved. */
+  .session-bar,
+  .chat-stage > .agent-runtime-status {
     padding-inline-start: max(var(--sp-3), env(safe-area-inset-left));
     padding-inline-end: max(var(--sp-3), env(safe-area-inset-right));
   }
@@ -3857,6 +4457,30 @@
     grid-template-columns: 1fr;
   }
 
+  /*
+   * The same collapse, at the specificity it actually needs.
+   *
+   * The rule above names `.profile-boundary-grid` at 0,1,0, while the grid a
+   * person actually opens is templated by `.profile-editor-disclosure >
+   * .profile-boundary-grid` at 0,2,1 — so the single column this block declares
+   * never reached it, and order did not help, because specificity is settled
+   * before it. At 430 the base `auto-fit` therefore still made two columns of
+   * 169px and held "Current workspa…", a boundary whose whole job is to say
+   * which workspace the profile is bound to. The type ramp in `tokens.css`
+   * makes this a 430-only defect: 320 and 390 are narrow enough that `auto-fit`
+   * already resolves to one column, and reads in full today.
+   *
+   * Nested at width alone, because the landscape arm of the query above is a
+   * 932px-wide viewport. There the six fields have room for four legible
+   * columns, and stacking them would spend most of a 430px-tall screen on a
+   * disclosure the reader opened to glance at.
+   */
+  @media (max-width: 640px) {
+    .profile-editor-disclosure > .profile-boundary-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .profile-hub-tabs,
   .profile-hub-scope { margin: var(--sp-2) 0; }
   /*
@@ -3872,6 +4496,37 @@
    * `narrow-viewport-overflow` was the only thing that ever said so.
    */
   .profile-hub-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /*
+   * Below 360px the three tabs share the row instead of each taking a third.
+   *
+   * `1fr` is an equal *share*, and the three labels are not equal. Measured at
+   * 320px on `#capabilities`: the strip hands every tab a 93px cell, and
+   * "Capabilities" wants 86px of ink inside it. The word rendered with seven
+   * pixels of air to its left and one to its right — at 3x the trailing "s"
+   * stands on the pill's rounded border — while "Skills" held 38px of ink in
+   * an identical 93px cell. No equal-thirds strip can fit that word at this
+   * width, so the third is what gives way, at the one size where it has to:
+   * 390px already affords 117px a tab and needs none of this.
+   *
+   * `minmax(0, auto)` keeps both properties the `1fr` was there for. The `0`
+   * floor is the one the note above is about — no track may insist on a width
+   * the phone does not have, so the 3px sideways scroll cannot return. The
+   * `auto` ceiling is the repair: a cell grows to at most its own content, and
+   * the grid's default stretch then shares the leftover evenly, so the strip
+   * still fills the row rather than ending ragged. Profiles and Skills give up
+   * only the air they were holding — they land near 88px and 71px against 55px
+   * and 38px of ink — and nothing outside this strip changes size at all.
+   */
+  @media (max-width: 360px) {
+    .profile-hub-tabs { grid-template-columns: repeat(3, minmax(0, auto)); }
+    /*
+     * With the padding stated rather than inherited from the user agent's
+     * button default, which is what "zero inline padding" amounted to: the only
+     * thing holding the label off its own border was a number no rule in this
+     * sheet had ever written down.
+     */
+    .profile-hub-tabs > button { padding-inline: var(--sp-2); }
+  }
   .profile-scope-contract { display: grid; width: 100%; }
 
   .profile-editor {
@@ -3897,6 +4552,25 @@
   .profile-card {
     flex: 1 1 min(78vw, 270px);
     min-height: 68px;
+  }
+
+  /*
+   * Three lines, because here the cards share a flex line.
+   *
+   * A flex line stretches every item to its tallest, so in this band — and only
+   * in this band — one long name sets the height of Research and Developer as
+   * well as its own. At landscape-932, where three cards fit one line, the
+   * unclamped name took seven of them and spent most of a 430px-tall card on a
+   * single string, in the layout with the least height to spend. Three lines is
+   * about 120 characters in a card this wide, far more prefix than any real pair
+   * of profiles needs to be told apart.
+   *
+   * The base sheet clamps at five, which is the reading for the stacked column
+   * where a card's height is nobody's business but its own.
+   */
+  .profile-card strong {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
 
   .profile-card .posture-chip { display: none; }
@@ -3960,8 +4634,13 @@
     margin-top: 10px;
   }
 
+  /* Also never applied until the renderer stopped writing this floor inline —
+     see the note on `.memory-view .memory-canvas` in memory-view.css. This arm
+     of the compact pair is the one that owns a rotated phone, where 390px of a
+     430px-tall viewport would be the entire screen; 52dvh puts it at 224px and
+     leaves the legend and the toolbar in frame. */
   .memory-canvas {
-    min-height: 390px;
+    --memory-graph-min-height: min(390px, 52dvh);
   }
 
   .memory-toolbar > span {
@@ -3978,11 +4657,48 @@
    vertical budget. Keep the full mobile information architecture, then
    collapse only redundant chat chrome so the transcript remains usable. */
 @media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {
+  /*
+   * Four tracks, matching the portrait block: topbar, runtime status line,
+   * conversation, nav band. This template was written when the shell had
+   * three, and `dc257d5` added the status line to the portrait template only —
+   * so a rotated phone put `.main` on the nav's track (44px of conversation)
+   * and pushed the band into an implicit row, while the status line took the
+   * whole `1fr` and painted over the transcript and anything opening inside
+   * it. The approval policy's own popover was landing underneath it.
+   *
+   * The band is `auto` here for the same reason it is there: it collapses to
+   * nothing when there is no status to show, which on a 430px-tall landscape
+   * is the difference between a usable transcript and a stripe.
+   */
   .app-shell {
     grid-template-rows:
       calc(var(--touch-target) + env(safe-area-inset-top))
+      auto
       minmax(0, 1fr)
       calc(var(--touch-target) + env(safe-area-inset-bottom));
+  }
+
+  /*
+   * The status line goes back to the topbar here, and the band above stands
+   * down — which is why that `auto` track costs nothing in this orientation.
+   *
+   * The phone strip exists because a portrait topbar has no horizontal room to
+   * hold a sentence beside the brand and the actions. A rotated phone inverts
+   * exactly that: 667-932px of topbar to spend and 375-430px of height that the
+   * transcript is competing for. Keeping the strip here spent 34px — 9% of a
+   * 375px-tall screen — on a line the topbar could have carried for free, and
+   * it is not a line that goes away: `runtimeStatus` starts at "Starting local
+   * kernel", becomes "Local kernel ready", and is never set empty, so the band
+   * was permanent. The status stays visible; only the axis it is billed to
+   * changes, which is the same reasoning that put it on the phone in the first
+   * place.
+   */
+  .runtime-line--phone {
+    display: none;
+  }
+
+  .runtime-line:not(.runtime-line--phone) {
+    display: flex;
   }
 
   .brand {
@@ -3999,7 +4715,13 @@
      only the title, which the conversation list and `title` still carry. */
   :root[data-density] .session-bar {
     min-height: 48px;
-    padding: 0 max(9px, env(safe-area-inset-right)) 0 max(9px, env(safe-area-inset-left));
+    padding-block: 0;
+  }
+
+  /* Same gutter, same declaration, third and last width band. */
+  :root[data-density] .session-bar,
+  :root[data-density] .chat-stage > .agent-runtime-status {
+    padding-inline: max(9px, env(safe-area-inset-left)) max(9px, env(safe-area-inset-right));
   }
 
   .session-bar__identity.is-renaming { grid-column: 1 / -1; }
@@ -4007,9 +4729,19 @@
   /* Portrait pays for the cluster's honesty with a second row; a ≤500px-tall
      landscape has no height to pay with, so here it stays one line beside the
      folded title. Wrapping stays on, so an overflow costs height inside the
-     cluster's own column rather than clipping a chip mid-text. */
+     cluster's own column rather than clipping a chip mid-text.
+
+     Both axes are released, not just the column. The portrait block above
+     pins the cluster to `grid-row: 1`, and releasing the column alone left it
+     the only child with a definite row — which auto-placement resolves first,
+     so the chips claimed the `minmax(0, 1fr)` title track and the H1, first in
+     the DOM, was pushed into the trailing `auto` column. Measured at 932×430:
+     Demo, the not-saved diamond, the journal chip, the switcher and `+` hard
+     left, the conversation's own name hard right, ~500px of nothing between
+     them — the inversion of the order every other width ships. */
   .session-bar__chips {
     grid-column: auto;
+    grid-row: auto;
     justify-self: start;
   }
 
@@ -4085,6 +4817,16 @@
  */
 .route-title {
   margin: 0;
+  /* The ellipsis below is the whole point of the `nowrap`, and without this it
+     never fired once. `.route-header__bar` is a flex row, a flex item's default
+     `min-width: auto` is its min-content width, and a nowrap heading's
+     min-content width is the entire string — so "Repositories & worktrees" laid
+     out at its full width inside a 320px phone and was cut flush by the screen
+     edge, mid-word and with no ellipsis to say so. Declared here rather than as
+     `.route-header__bar > *` because only this child has a truncation rule to
+     fall back on: the actions cluster would shrink its buttons below their
+     labels with nothing to show for it. */
+  min-width: 0;
   overflow: hidden;
   color: var(--ink);
   font: var(--fw-title) var(--fs-display)/1.15 var(--font-display);
@@ -4115,6 +4857,10 @@
  * The `> * >` chain is load-bearing: it matches the route's own bar and only
  * that. A `<RouteHeader>` nested inside a panel — `.git-sources-header` in the
  * editor's Sources pane — is not a page edge and keeps the primitive's inset.
+ * The one exception is a panel that already pads itself: the advanced
+ * source-controls sheet gives `.git-sources` a 16px inline gutter of its own,
+ * so `sources-view.css` zeroes this inset there rather than let the primitive
+ * stack a second edge on the first.
  */
 .route-layout > * > .route-header {
   padding-inline: 0;
@@ -4125,6 +4871,18 @@
   flex-wrap: wrap;
   gap: var(--sp-2) var(--sp-3);
   align-items: center;
+  /*
+   * The bar is a grid item of `.route-header`, and a grid item's default
+   * `min-width: auto` is its min-content width — which for a wrapping flex row
+   * used to be its widest single child and is now the width of the title and
+   * its ⓘ together, because those two are one item (`.route-header__title-line`
+   * below). Measured at phone-320 on `#sessions` without this line: a 294px
+   * header holding a 360px bar, the ⓘ ending 53px past the right edge of the
+   * screen. The declaration says the bar may be narrower than the sum it
+   * contains; every box inside it that must then give way already carries its
+   * own `min-width: 0` and its own truncation rule.
+   */
+  min-width: 0;
   min-height: var(--density-control);
 }
 
@@ -4159,6 +4917,47 @@
   color: var(--ink);
   font-size: var(--fs-caption);
   line-height: 1.5;
+}
+
+/*
+ * The heading and its ⓘ, as one flex item of the bar. See the comment beside
+ * the element in `route-header.tsx` for what this repairs.
+ *
+ * The column gap is the bar's own `var(--sp-3)`, so nothing moves at any width
+ * where the pair already fitted: measured at desktop-1440 on `#sessions` the
+ * heading ends at x=518 and the ⓘ opens at x=530 both before and after.
+ * `min-width: 0` is the same declaration `.route-title` carries and for the
+ * same reason — a flex item's default `min-width: auto` is its content, and a
+ * nowrap heading's content is the whole string, so without it this box would
+ * refuse to shrink and the ellipsis inside it could never fire.
+ */
+.route-header__title-line {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+}
+
+/*
+ * Inside that pair, the heading is the only box that yields. Shrink is
+ * distributed in proportion to the items' base sizes, so a shrinking pair would
+ * take about a fifth of its deficit out of the ⓘ — narrowing a 44px-floor touch
+ * target and clipping the word beside it — to save the heading a quarter of one
+ * character. The heading has an ellipsis for exactly this; the trigger has
+ * nowhere to put the loss.
+ */
+.route-header__title-line > .route-header__about {
+  flex: none;
+}
+
+/*
+ * Hidden by default and revealed only where the ⓘ had become an orphan. At
+ * every width above a phone the glyph sits immediately after a route name it
+ * plainly belongs to, and a second word there would be a label on a label.
+ */
+.route-header__about-word {
+  display: none;
 }
 
 /*
@@ -4221,10 +5020,65 @@
    * The status cluster wraps to its own line rather than compressing the
    * title into an ellipsis. A route name is not a fact worth truncating to
    * keep a chip on the same row.
+   *
+   * That still holds, and the ⓘ is not one of these. A chip is a fact the
+   * header is reporting; the ⓘ is the heading's own disclosure — its accessible
+   * name is literally "About <title>" — so it belongs to the title's line in a
+   * way a durability seal does not. It is grouped with the heading in
+   * `.route-header__title-line` above, which is why it no longer competes for
+   * this row and no longer wraps to a line of its own.
    */
   .route-header__status,
   .route-header__actions {
     margin-left: 0;
+  }
+
+  /*
+   * The tap target names itself at the one width where it had nothing else to
+   * go on. SO058, on `#sessions` at phone-320: a 46x46 button whose entire
+   * visible content was a 23x24 'ⓘ' ring, alone on a line between the heading
+   * and the durability chip, with no state colour and no word. The full
+   * `aria-label` was already there — this was visual discoverability only, so
+   * the repair is a visible word rather than a new promise.
+   *
+   * The eyebrow's own recipe, because that is what this product already uses
+   * for a small word attached to a larger one, and because a second type
+   * treatment for four characters is how a header stops looking like one thing.
+   * `--fs-micro` keeps the pair narrow: the heading beside it gives up about
+   * 46px of measure, which its own ellipsis absorbs, and the header gives back
+   * the whole 46px row plus its gap that the orphaned glyph was costing — a
+   * profitable trade on a 568px-tall screen.
+   */
+  .route-header__about-word {
+    display: inline;
+    color: currentcolor;
+    font: var(--fs-micro)/1 var(--font-mono);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  /*
+   * With a word inside it the trigger is content-sized, and the square floor
+   * would only pad it wider. The touch promise is unchanged: `min-height`
+   * stays, and the pair measures ~64px across — comfortably past the 44px floor
+   * `pointer: coarse` asks for — because the word alone is broader than the
+   * glyph it stands beside.
+   *
+   * Every pixel here is taken from the heading beside it, which is the reason
+   * the gap is 4px and there is no inline padding at all. Measured at
+   * phone-320 on `#sessions`, where "All conversations" wants 260px of a 294px
+   * row: at the trigger's default air the heading was left 194px and set as
+   * "All conver…"; at this one the trigger is 68px and the heading keeps 214px
+   * and sets as "All conversa…". The heading is still truncated —
+   * no trailing affordance of any width fits beside 260px of ink here, which is
+   * exactly what `.route-title`'s ellipsis contract exists for — but the
+   * truncation is the smallest one that buys back the whole 46px row plus its
+   * gap that the orphaned glyph was spending.
+   */
+  .route-header__about .route-header__about-trigger {
+    gap: var(--sp-1);
+    min-width: 0;
+    padding-inline: 0;
   }
 }
 
@@ -4331,11 +5185,66 @@
    * at 38px, and each is the primary action of a card.
    * `e2e/touch-target-floor.spec.ts` measures `skills` now, which is what keeps
    * this honest: the rule and the rendered box are different claims.
+   *
+   * The Profiles route's six boundary selects join them: they are written from
+   * the same 38px recipe two rules apart in this sheet, and the one that was
+   * enrolled got the floor while the one that was not stayed 38px under the
+   * same finger. Enrolled rather than given a seventh number of their own.
    */
   .toggle-control,
   .profile-hub-scope .menu-select-trigger,
   .skills-toolbar .menu-select-trigger,
-  .skill-controls .menu-select-trigger {
+  .skill-controls .menu-select-trigger,
+  .profile-boundary-grid .menu-select-trigger {
+    min-height: var(--touch-target);
+  }
+
+  /*
+   * Four route controls that the block above could not reach, because the
+   * selector — not the query — was what they were losing to.
+   *
+   * Each one already has a correct 44px rule; every one of those rules is
+   * keyed on a viewport width. `.proof-surface-tabs button` is floored inside
+   * the `max-width: 760px` query, and the other three inside the compact-shell
+   * pair. (Both at-rules are named without their at-sign on purpose.
+   * `token-vocabulary.test.ts` reads this block back with a regex whose body
+   * character class excludes the at-sign, so writing one inside this block
+   * does not merely empty the capture and drop the strip-height claim — that
+   * pattern is a lazy alternation of a negated class with a newline, applied
+   * to a 5,000-line sheet, and it backtracks catastrophically the moment it
+   * cannot match, so the suite hangs rather than fails. Measured: a single
+   * at-sign in this comment took `vitest run src/ui/` from a minute to never
+   * finishing, with no failure printed to say why.)
+   * A tablet at 768x1024 and a landscape phone at 932x430 are coarse and
+   * wider than all of them, so on the built tree with `(pointer: coarse)` true
+   * they measured: the proof route's tab strip 167.2x36 and 198.1x36 at 768
+   * (174.8/207.5 at 932); "Save new revision" 116.7x40 and "Switch to this
+   * profile" 190x40; "Remove profile" 361.5x40 — the one irreversible action
+   * on Profiles; "New conversation with this set" 186.9x38 and "New skill"
+   * 220x38.
+   *
+   * Written out at the same specificity as the design height each overrides,
+   * rather than folded into the shorter selectors above, because that is the
+   * whole reason the existing floors miss. `tokens.css` floors `.small-button`
+   * product-wide at (0,1,0) under this exact query and three of these are
+   * `.small-button`s that still rendered 38 and 40, since `.skills-toolbar
+   * .small-button` and `.profile-archive-zone .danger` are (0,2,0) and outrank
+   * it wherever it is written. `.proof-surface-tabs button` is (0,1,1) and
+   * outranks the `.tabs__tab-button` floor listed above for the same reason.
+   * A floor that has to win on source order alone is a floor that stops
+   * winning the next time a route adds a class — these win on specificity, and
+   * on being last.
+   *
+   * The corresponding note is the one `.profile-archive-zone .danger` already
+   * carries inside the compact-shell block: "the floor is a token, and the
+   * fine-pointer height is not". That was right, and it was written into a
+   * width query.
+   */
+  .proof-surface-tabs button,
+  .profile-actions .small-button,
+  .profile-actions .primary-link,
+  .profile-archive-zone .danger,
+  .skills-toolbar .small-button {
     min-height: var(--touch-target);
   }
 }
@@ -4586,5 +5495,29 @@
 
   .metric-strip__cell:nth-child(n + 3) {
     border-top: 1px solid var(--line);
+  }
+
+  /*
+   * A two-column grid holding an odd number of cells leaves the last row half
+   * empty, and rules drawn per cell then stop where the cells stop.
+   *
+   * Account renders five. Measured at phone-430: "Live headroom" sat alone in
+   * row 3, so the rule closing the CHARGED/TOKENS row was painted only under
+   * column 1 (x 39..215 of a 39..391 strip), the TOKENS cell above it got no
+   * bottom edge at all, and the column divider carried down by cells 2 and 4
+   * terminated in mid-air at y=619. It reads as a table that stopped being
+   * drawn, not as a merged cell — and the reader has no way to tell those two
+   * apart, which is the actual cost: an unfinished rule under a spend figure
+   * invites the question of whether the figure is unfinished too.
+   *
+   * The tail cell spans the row instead. Stated as `last-child:nth-child(odd)`
+   * rather than as `:nth-child(5)` because the strip is a shared primitive and
+   * the count is the caller's business: four cells (Billing) are untouched, and
+   * three, five or seven all close correctly without this sheet being told how
+   * many arrived. `:nth-child(2n)` cannot match an odd cell, so the spanning
+   * cell keeps no left rule and its `border-top` now runs the full width.
+   */
+  .metric-strip__cell:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 }

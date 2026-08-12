@@ -11,6 +11,7 @@ import { decodeCanonicalBase64 } from "./encoding";
 import { verifyNvidiaGpuEvidence, type NvidiaGpuVerification } from "./dcap/nvidia-gpu";
 import {
   checkChutesReportDataBinding,
+  extractTdxRuntimeMeasurements,
   parseTdxQuote,
   validateChutesE2ePublicKey,
 } from "./tdx";
@@ -983,16 +984,12 @@ export function validatePublishedTeePolicies(value: unknown): readonly ChutesTee
   return deepFreeze(value.map((entry, index) => validatePolicy(entry, index)));
 }
 
-export function extractTdxRuntimeMeasurements(quote: ParsedTdxQuote): TdxRuntimeMeasurements {
-  const bodyOffset = quote.reportBodyOffset;
-  return Object.freeze({
-    mrtd: sliceHex(quote.bytes, bodyOffset + 136, 48),
-    rtmr0: sliceHex(quote.bytes, bodyOffset + 328, 48),
-    rtmr1: sliceHex(quote.bytes, bodyOffset + 376, 48),
-    rtmr2: sliceHex(quote.bytes, bodyOffset + 424, 48),
-    rtmr3: sliceHex(quote.bytes, bodyOffset + 472, 48),
-  });
-}
+/*
+ * Re-exported, not defined here. The five offsets are quote layout and now sit
+ * beside the parser that owns them in `./tdx`; this keeps the name reachable
+ * from the module its callers already knew it by.
+ */
+export { extractTdxRuntimeMeasurements } from "./tdx";
 
 export type ExportChutesEndpointEvidenceOptions = Readonly<{
   /** Explicit opt-in: raw quote, certificate, and GPU payloads can be large. */
@@ -1506,7 +1503,10 @@ function buildWarnings(args: {
       : args.nvidiaState === "matched"
         ? "Every NVIDIA SPDM request nonce matched the TDX endpoint binding locally; GPU authenticity, revocation, RIM/firmware, freshness, and confidential-mode policy remain unverified."
         : "NVIDIA evidence is present but complete GPU attestation is not established.");
-    if (args.nvidiaVerifierConfigured && !args.nvidiaVerifierState) {
+    // Only blame the verifier for a missing verdict when it was actually asked:
+    // the port is consulted solely on a local nonce match, so a failed binding
+    // means nothing was retained and nothing misbehaved.
+    if (args.nvidiaVerifierConfigured && args.nvidiaState === "matched" && !args.nvidiaVerifierState) {
       warnings.push("The configured independent NVIDIA verifier did not return a usable result; the local nonce-binding result was retained without promotion.");
     }
   }
@@ -1881,13 +1881,6 @@ function measurementHex(value: unknown, label: string): string {
   return value.toLowerCase();
 }
 
-function sliceHex(bytes: Uint8Array, offset: number, length: number): string {
-  const slice = bytes.slice(offset, offset + length);
-  if (slice.byteLength !== length) throw new Error("TDX quote is truncated before measurements");
-  let value = "";
-  for (const byte of slice) value += byte.toString(16).padStart(2, "0");
-  return value;
-}
 
 function checkedNow(now: () => number): number {
   const value = now();

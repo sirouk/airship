@@ -87,6 +87,19 @@ test("anthropic messages lane: tool call docks for approval before the memory wr
   await expect(page.getByText(FINAL_TEXT).first()).toBeVisible({ timeout: 30_000 });
 
   await page.goto("/#memory");
-  const record = page.getByRole("main").locator("text=Likes mint tea").first();
+  /*
+   * Same disclosure, same reason as the OpenAI lane: the record list starts
+   * closed on a phone (`expanded={!phone}`), so a closed `<details>` gave the
+   * record no box and this could only pass on desktop. One tap, then the
+   * assertion stands on the record rather than on the default.
+   */
+  const records = page.locator("#memory-records");
+  await records.waitFor();
+  if (!(await records.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await records.locator("summary").click();
+  }
+  // Scoped to the record list, same reason as the OpenAI lane: the proof is
+  // that the write is in the profile's corpus, not that the text is on screen.
+  const record = records.locator("text=Likes mint tea").first();
   await expect(record).toBeVisible({ timeout: 15_000 });
 });

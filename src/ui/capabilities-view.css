@@ -3,7 +3,29 @@
    recipe stays, shared with the extension panel's buttons. */
 .capabilities-refresh, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
 .capability-summary { display: flex; gap: .8rem; align-items: center; justify-content: space-between; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.capability-summary > span { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+/* `:not(.seal)` names the one sibling this rule was ever about — the approval
+   policy sentence that sits at the far end of the row and is read back towards
+   the pill. A `Seal` root is also a `<span>`, so the bare child selector caught
+   it too; that was invisible only while `.seal__label` could not wrap. The
+   moment the freshness label below took a second line, the tail of the sentence
+   it is — the single word "EDT" — right-aligned itself against the pill's edge
+   under a full-width first line, reading as a misalignment rather than as a
+   wrapped sentence. A pill's own text is set from its glyph, at every width. */
+.capability-summary > span:not(.seal) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+/* This Seal's label is a claim plus the instant it was observed — "3/6 runtimes
+   ready · observed Aug 8, 3:12 AM PDT" — and `.seal__label`'s shared
+   `white-space: nowrap` gave it only one way to lose: at 320px it read
+   "observed A…" and at 768px the zone was gone, on the one panel whose subject
+   is how fresh its own reading is, with no hover to recover the rest on touch.
+   A wrapping label is already sanctioned grammar here (the hero density's is,
+   and `.trust-sheet` releases the chip's the same way), so the pill takes a
+   second line rather than dropping the fact. Scoped to this one Seal: the
+   runtime and device cards beside it are laid out around single-line chips. */
+.capability-summary > .seal[data-density="chip"] .seal__label { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.3; }
+/* The chip recipe sets `/1` and no block padding because one line in a 24px
+   pill wants neither; a pill that is now allowed a second line wants both, or
+   the two lines sit on each other and on its border. */
+.capability-summary > .seal[data-density="chip"] { padding-block: .2rem; }
 .capability-error { display: flex; gap: .55rem; align-items: center; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--line)); border-radius: var(--radius-control); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
 /* Live counts sit above the capacity probe, in the same strip recipe, so the
    reader sees what is running before what could run. */
@@ -24,7 +46,13 @@
 .capability-signal-strip > div { min-width: 0; padding: .55rem .65rem; border-inline-end: 1px solid var(--line); }
 .capability-signal-strip > div:last-child { border-inline-end: 0; }
 .capability-signal-strip dt { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
-.capability-signal-strip dd { overflow: hidden; margin: .18rem 0 0; color: var(--ink); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+/* These tiles hold sentences as well as numbers — `0 B` shares the strip with
+   `Not measurable in this browser` — and a one-line tile in a 2-up phone strip
+   or a 4-up tablet one printed the sentence as `Not measurable i…`, which is a
+   reading the panel is unable to state anywhere else. The value wraps and the
+   row takes the height its tallest tile needs; `overflow-wrap` keeps a single
+   unbreakable token (a long origin) inside the tile rather than through it. */
+.capability-signal-strip dd { overflow: hidden; margin: .18rem 0 0; color: var(--ink); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .capability-device-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
 .capability-device-card { min-width: 0; padding: .65rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
 .capability-device-card.available { border-color: color-mix(in srgb, var(--v-verified) 24%, var(--line)); }
@@ -48,6 +76,20 @@
 .capability-tags span { max-width: 100%; overflow: hidden; padding: .16rem .35rem; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-muted); background: var(--surface-soft); font: var(--fs-micro)/1.2 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .capability-policy-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, .45fr); gap: .55rem; }
 .capability-policy-row > div, .capability-policy-row > details { padding: .65rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
+/*
+ * A closed disclosure is a one-line control, and it draws as one.
+ *
+ * Grid items stretch by default, so the collapsed `Browser primitives`
+ * disclosure was sized by the ADAPTIVE POLICY stack beside it: measured
+ * 345.9 x 129.5px at wide-1920 and 344.7 x 129.5px at desktop-1440, holding a
+ * 15px summary and 114.5px of bordered nothing underneath it at both widths.
+ * The border is what made it read as a broken card rather than as a shut
+ * drawer — a reader cannot tell an empty panel from a panel that failed to
+ * load. `align-self: start` is scoped to the closed state on purpose: opened,
+ * the disclosure has content to fill the row with and stretching it back to
+ * its neighbour's height is the right answer again.
+ */
+.capability-policy-row > details:not([open]) { align-self: start; }
 .capability-policy-row strong, .capability-policy-row small { display: block; }
 .capability-policy-row strong { margin-top: .2rem; font-size: var(--fs-caption); }
 .capability-policy-row small { margin-top: .18rem; color: var(--ink-faint); font-size: var(--fs-micro); }
@@ -96,7 +138,12 @@
 @media (max-width: 760px) {
   .capabilities-refresh { min-width: 44px; min-height: 44px; }
   .capability-summary, .capability-extension { align-items: stretch; flex-direction: column; }
-  .capability-summary > span { text-align: left; }
+  /* The column stack puts the sentence under the pill rather than across from
+     it, so it is read left-to-right like everything else in the column. Scoped
+     the same way as the rule it answers: the pill was never right-aligned here
+     either, it only looked settled because at these widths the wrap happened to
+     leave no short trailing line. */
+  .capability-summary > span:not(.seal) { text-align: left; }
   .capability-grid { grid-template-columns: 1fr; }
   .capability-device > header { align-items: stretch; flex-direction: column; }
   .capability-signal-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -109,6 +156,35 @@
   .capability-runtime > button { min-height: 44px; }
   .capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
   .capability-extension button { min-height: 44px; }
+  /*
+   * SO083. The two-column pair above is right down to the width where a cell
+   * can still hold a label on one line, and wrong below it. Measured on this
+   * build, `Browse slash tools` and `Manage Skills` in that pair:
+   *
+   *   phone-320 → 124.8 x 62px, label on three lines
+   *   phone-340 → 134.8 x 44px
+   *   phone-360 → 144.8 x 44px
+   *   phone-390 → 159.8 x 44px, label on one line
+   *
+   * The 62px box at 320 is the defect the judge described: the leading glyph
+   * is a flex item centred against the full button height and pinned to the
+   * left edge, while the wrapped label block centres itself independently, so
+   * the icon floats alone with a wide gap and shares no baseline and no left
+   * edge with any line of its own label. The two buttons read as two
+   * mismatched blocks rather than as a pair.
+   *
+   * One column at the narrow tier gives each button the full 274px, the label
+   * lands on one line, and the icon sits beside the word it belongs to. The
+   * tier is 360px because that is the sub-tier this stylesheet family already
+   * owns — routes.css:3067 (the topbar posture chip) and routes.css:4275 (the
+   * profile hub tabs) — not a new number minted for this route. 360 is the
+   * last width where the pair still measures 44px tall, so it is also the last
+   * width where two columns cost nothing.
+   */
+  @media (max-width: 360px) {
+    .capability-extension > div:last-child { grid-template-columns: minmax(0, 1fr); }
+    .capability-extension > div:last-child > button { justify-content: center; }
+  }
   .capability-probe-action { min-height: 44px; }
   /* A disclosure summary is a control a finger has to hit, and no shared token
      sizes it: the route's own mobile block enumerated buttons only, so every

@@ -18,6 +18,7 @@ import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";
 import type { AgentSignal } from "../../core/agent";
 import { randomUuid } from "../../core/id";
+import { sessionRuntimeKind } from "../../load-agent-runtime";
 import {
   PRIME_DEFAULT_SESSION_TITLE,
   primeConversationNamingDrafts,
@@ -177,6 +178,12 @@ export class PrimeRuntime {
    * thread is never nameless; the flag is the journal-record title itself
    * (a default-title record has never met a prompt). Best-effort by
    * construction — titling is presentational and must never fail a turn.
+   *
+   * The once-only latch is the `namingWiring.delete` below and nothing else:
+   * dropping the wiring before the request is issued makes "at most one paid
+   * naming request per attached session" a synchronous fact. Nothing tracks
+   * or cancels the request after that, by design — a presentational request
+   * must not hold up `waitForIdle` or teardown.
    */
   private async prepareConversationNaming(
     sessionId: string,
@@ -294,13 +301,18 @@ export class PrimeRuntime {
 
 export type PrimeRuntimeKind = "airship-core" | "prime";
 
-/** The evidence rule a session's engine: presence of any `prime.*` evidence pins it prime. */
-export function sessionRuntimeKind(events: readonly { type: string }[]): PrimeRuntimeKind {
-  for (const event of events) {
-    if (event.type.startsWith("prime.")) return "prime";
-  }
-  return "airship-core";
-}
+/*
+ * The evidence rule is the gate's, re-exported rather than restated. The local
+ * two-valued copy that used to live here called an empty journal
+ * "airship-core", which docs/PRIME-RUNTIME-GATE.md says is "unpinned" — and
+ * that one word decided everything below: a fresh session's `selection` came
+ * out "airship-core", so the seal the Proof view reads was never written for
+ * any session the gate actually routes here. Importing the eager gate module
+ * from this lazy chunk is acyclic (`load-agent-runtime.ts` only `import
+ * type`s from here and reaches the engines through `import()`), which is the
+ * same move `agent-runtimes.ts` already makes for the read side.
+ */
+export { sessionRuntimeKind };
 
 const apiFromTransportId = new Map<string, string>([
   ["openai-responses-v1", "openai-responses"],
@@ -333,9 +345,14 @@ export function primeModelFromManifest(manifest: SessionManifest): Model<Api> {
 export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRuntimeKind }): Promise<TurnResult> {
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
-  const selection = options.runtime ?? (history === "prime" ? "prime" : "airship-core");
+  // Unpinned journals admit prime (PRIME-RUNTIME-GATE.md item 2); only durable
+  // airship turn history refuses it. The old `events.length > 0` proxy for
+  // "has history" counted the session.created record every real journal
+  // carries, so an explicit `runtime: "prime"` on a fresh session was refused
+  // as if it were airship-pinned.
+  const selection = options.runtime ?? (history === "airship-core" ? "airship-core" : "prime");
 
-  if (selection === "prime" && history !== "prime" && events.length > 0) {
+  if (selection === "prime" && history === "airship-core") {
     throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
   }
   if (selection === "airship-core" && history === "prime") {
@@ -368,39 +385,50 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
     registry: options.tools,
     approvalPolicy: options.approvalPolicy,
   });
-  const session = await runtime.attachSession({
-    sessionId: options.sessionId,
-    manifest,
-    model,
-    /* Whatever the caller was going to carry: a vault-backed resolver, or a
-       connection-pinned API key. The prime lane's provider streams resolve
-       their credential at call time from this, not from ambient page state. */
-    /*
-     * NOTE(2026-08-07): vendor transports reach vendor keys or not vendor keys
-     * — runPrimeTurn must forward the vendor stream AND the key getter before
-     * vault-backed providers can take fresh prime turns. Until that day the
-     * gate at load-agent-runtime.ts routes fresh vendor sessions on the
-     * airship-core lane. Leave this slot empty until then.
-     */
-    onSignal: options.onSignal,
-    maxSteps: options.maxSteps,
-    signal: options.signal,
+  /*
+   * This runtime and its session live exactly one turn, so the turn owns
+   * their teardown: without it every turn left its PrimeKernelHost — and any
+   * worker it booted — running past the turn that created it, one live worker
+   * per turn for the life of the tab. `appendSideband` no-ops once disposed,
+   * so the fire-and-forget prime.* writes cannot throw across the teardown.
+   */
+  try {
+    const session = await runtime.attachSession({
+      sessionId: options.sessionId,
+      manifest,
+      model,
+      /* Whatever the caller was going to carry: a vault-backed resolver, or a
+         connection-pinned API key. The prime lane's provider streams resolve
+         their credential at call time from this, not from ambient page state. */
+      /*
+       * NOTE(2026-08-07): vendor transports reach vendor keys or not vendor keys
+       * — runPrimeTurn must forward the vendor stream AND the key getter before
+       * vault-backed providers can take fresh prime turns. Until that day the
+       * gate at load-agent-runtime.ts routes fresh vendor sessions on the
+       * airship-core lane. Leave this slot empty until then.
+       */
+      onSignal: options.onSignal,
+      maxSteps: options.maxSteps,
+      signal: options.signal,
 
-  });
+    });
 
-  const result = await session.prompt(options.content, options.images);
-  if (result.outcome !== "completed") {
-    throw new Error(
-      result.outcome === "cancelled" ? `prime turn cancelled: ${result.reason}` : `prime turn failed: ${result.error}`,
-    );
+    const result = await session.prompt(options.content, options.images);
+    if (result.outcome !== "completed") {
+      throw new Error(
+        result.outcome === "cancelled" ? `prime turn cancelled: ${result.reason}` : `prime turn failed: ${result.error}`,
+      );
+    }
+    if (result.text === undefined || result.receipt === undefined) {
+      throw new Error("prime turn result was malformed: completed without text or receipt.");
+    }
+    return {
+      turnId: result.turnId,
+      content: result.text,
+      receipt: result.receipt,
+      events: result.events,
+    };
+  } finally {
+    await runtime.dispose();
   }
-  if (result.text === undefined || result.receipt === undefined) {
-    throw new Error("prime turn result was malformed: completed without text or receipt.");
-  }
-  return {
-    turnId: result.turnId,
-    content: result.text,
-    receipt: result.receipt,
-    events: result.events,
-  };
 }

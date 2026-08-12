@@ -96,7 +96,18 @@ export function MemoryGraphRenderer({
       class={className}
       role="group"
       aria-label={ariaLabel}
-      style={{ position: "relative", width: "100%", minHeight: Math.max(160, minHeight), overflow: "hidden", ...style }}
+      /*
+       * The floor is published as a custom property so a stylesheet can lower
+       * it per viewport tier. It could not before: an inline `minHeight` beats
+       * every rule in every sheet, which is why three separately written
+       * compact tiers for `.memory-canvas` — 390px in routes.css, 360px in
+       * memory-view.css, both matching at phone widths — were dead on arrival,
+       * and the graph measured a computed 470px at 320x568 (SO020: 83% of the
+       * viewport). `var(--memory-graph-min-height, <prop>)` keeps the prop as
+       * the default for every caller that does not set the property, so
+       * nothing changes for a surface that has not opted in.
+       */
+      style={{ position: "relative", width: "100%", minHeight: `var(--memory-graph-min-height, ${Math.max(160, minHeight)}px)`, overflow: "hidden", ...style }}
     >
       {Surface && graph.nodes.length > 0 ? (
         <Surface graph={graph} selectedNodeId={selectedNodeId} onSelect={onSelect} hiddenKinds={hiddenKinds} hiddenNodeIds={hiddenNodeIds} onViewportControls={onViewportControls} />

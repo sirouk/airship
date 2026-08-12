@@ -91,18 +91,21 @@ describe("every route states its location to assistive tech, including the five 
 
   it("names the route on every control whose own label is not the route's name", () => {
     /*
-     * The three `trust` views were outside both the fix and its regression net:
-     * on #vault the phone announced "Trust, current page" — a name no route
-     * carries — and tapping the highlighted tab left for Proof. Desktop states
-     * the truth on those same routes (rail.tsx puts `aria-current="page"` on a
-     * row labelled "Vault"), so the phone was the surface that lied.
+     * Vault, Account and Connection were outside both the fix and its
+     * regression net: on #vault the phone announced "Trust, current page" — a
+     * name no route carries — and tapping the highlighted tab left for Proof.
+     * Desktop states the truth on those same routes (rail.tsx puts
+     * `aria-current="page"` on a row labelled "Vault"), so the phone was the
+     * surface that lied. The description fixed the announcement; the highlight
+     * itself has since moved to More, which is where all three routes live and
+     * the only tab a person can follow back to them. Both halves are read here.
      */
     const hinted = (["vault", "billing", "access", "sessions", "editor", "terminal"] as const)
       .map((view) => [view, mobilePrimaryControlForView(view), destinationHintForControl(mobilePrimaryControlForView(view), view)] as const);
     expect(hinted).toEqual([
-      ["vault", "trust", "Vault"],
-      ["billing", "trust", "Account"],
-      ["access", "trust", "Connection"],
+      ["vault", "more", "Vault"],
+      ["billing", "more", "Account"],
+      ["access", "more", "Connection"],
       ["sessions", "chat", "All conversations"],
       ["editor", "workspace", "Editor"],
       ["terminal", "workspace", "Terminal"],

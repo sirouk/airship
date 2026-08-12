@@ -728,10 +728,16 @@ function assertBoundedText(value: string, label: string): void {
   }
 }
 
+/**
+ * Every id `ContinuumRuntimeId` admits, and no fewer: a name missing here makes
+ * the type system promise a call this validator refuses at runtime, which is
+ * how `airship-sh` — the one tier ready in every browser with no pack and no
+ * cross-origin isolation — became the one tier placement could not plan.
+ */
 function assertRuntime(value: string): asserts value is ContinuumRuntimeId {
   const runtimes: readonly ContinuumRuntimeId[] = [
     "javascript-worker", "wasi-preview1", "python-pyodide", "wasix",
-    "node-webcontainer", "linux-process",
+    "node-webcontainer", "airship-sh", "linux-process",
   ];
   if (!runtimes.includes(value as ContinuumRuntimeId)) throw new Error("Continuum runtime is invalid.");
 }

@@ -13,6 +13,34 @@ export type ScrollMetrics = Readonly<{
   clientHeight: number;
 }>;
 
+/** The same three numbers on the other axis, which the DOM spells differently. */
+export type InlineScrollMetrics = Readonly<{
+  scrollLeft: number;
+  scrollWidth: number;
+  clientWidth: number;
+}>;
+
+/**
+ * Which axis a container scrolls on. A row of chips hides content to the right
+ * exactly the way a rail hides it below, and the reader needs to be told in
+ * both cases — but the DOM names the row's three numbers `scrollLeft`,
+ * `scrollWidth` and `clientWidth`, so the reading is translated here rather
+ * than duplicating `scrollEdges` for a second set of property names.
+ */
+export type ScrollAxis = "block" | "inline";
+
+export function axisMetrics(element: ScrollMetrics & Partial<InlineScrollMetrics>, axis: ScrollAxis): ScrollMetrics {
+  if (axis === "block") return element;
+  return {
+    // A right-to-left scroller reports its offset as a negative number in every
+    // engine this ships to; the affordance only cares how far the content has
+    // travelled from the edge it started at.
+    scrollTop: Math.abs(element.scrollLeft ?? 0),
+    scrollHeight: element.scrollWidth ?? 0,
+    clientHeight: element.clientWidth ?? 0,
+  };
+}
+
 /**
  * Sub-pixel layout and fractional device pixel ratios leave `scrollTop` a
  * fraction short of the true extremes, so a bare `> 0` test paints a fade at a
@@ -34,7 +62,7 @@ export function scrollEdges(metrics: ScrollMetrics): ScrollEdges {
 }
 
 /** The scroll container surface this module reads; kept minimal so it is injectable. */
-export type ScrollAffordanceElement = ScrollMetrics & Readonly<{
+export type ScrollAffordanceElement = ScrollMetrics & Partial<InlineScrollMetrics> & Readonly<{
   children: ArrayLike<Element>;
   addEventListener(type: "scroll", listener: () => void, options?: Readonly<{ passive: boolean }>): void;
   removeEventListener(type: "scroll", listener: () => void): void;
@@ -57,10 +85,11 @@ export function observeScrollEdges(
   element: ScrollAffordanceElement,
   apply: (edges: ScrollEdges) => void,
   view: ScrollAffordanceView | undefined = typeof window === "undefined" ? undefined : window,
+  axis: ScrollAxis = "block",
 ): () => void {
   let last: ScrollEdges | undefined;
   const reconcile = () => {
-    const next = scrollEdges(element);
+    const next = scrollEdges(axisMetrics(element, axis));
     if (next === last) return;
     last = next;
     apply(next);
@@ -107,10 +136,11 @@ export function observeScrollEdges(
 export function useScrollEdges(
   target: Readonly<{ current: HTMLElement | null }>,
   revision: unknown,
+  axis: ScrollAxis = "block",
 ): void {
   useEffect(() => {
     const element = target.current;
     if (!element) return;
-    return observeScrollEdges(element, (edges) => { element.dataset.scrollEdges = edges; });
-  }, [target, revision]);
+    return observeScrollEdges(element, (edges) => { element.dataset.scrollEdges = edges; }, undefined, axis);
+  }, [target, revision, axis]);
 }

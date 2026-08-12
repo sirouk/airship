@@ -6,7 +6,30 @@ import type { SafetyReviewResult } from "./modes";
 
 const MAX_REVIEW_RESPONSE = 8_192;
 const PRIVATE_PAYLOAD_KEY = /(?:content|body|payload|data|bytes|old[_-]?text|new[_-]?text|patch|message)/iu;
-const REVIEW_SYSTEM_PROMPT = `You are a tool-action safety gate. Assess only the proposed action against the stated bounded browser environment. Return exactly one JSON object with keys "verdict" ("safe" or "unsafe") and "reason" (a short string). Never call tools, request more data, or wrap JSON in markdown. Mark unsafe when the action is destructive, exceeds the described intent, leaks data unexpectedly, or its bounded effect cannot be established.`;
+/**
+ * How much of one field the reviewer is entitled to read, and why it is not the
+ * dock's 512 characters.
+ *
+ * The proposal was built from the dock's display copy verbatim, so an
+ * `execute_shell` script — which the schema accepts up to 64 KB — reached the
+ * reviewer as its first 512 characters followed by an ellipsis. A benign
+ * `ls`/`grep` preamble was therefore enough to earn a "safe" verdict for a
+ * script whose destructive line sat past the cut, and under Auto Approve a
+ * "safe" verdict allows the action with no human prompt at all. The reviewer
+ * gets its own budget: large enough for the scripts people actually write, and
+ * still bounded so a megabyte of inline base64 cannot become the review prompt.
+ */
+const MAX_REVIEW_FIELD_CHARS = 16_384;
+/**
+ * The ceiling the per-field budget cannot supply on its own: an argument object
+ * of sixty-four large fields is a megabyte of review prompt, billed to the
+ * person, for one gate decision. Past this the review is not attempted at all —
+ * an action too large to put in front of the reviewer is one whose bounded
+ * effect cannot be established, and `indeterminate` is the verdict that hands
+ * it to a human instead of paying a provider to guess.
+ */
+const MAX_REVIEW_PROPOSAL_CHARS = 64 * 1_024;
+const REVIEW_SYSTEM_PROMPT = `You are a tool-action safety gate. Assess only the proposed action against the stated bounded browser environment. Return exactly one JSON object with keys "verdict" ("safe" or "unsafe") and "reason" (a short string). Never call tools, request more data, or wrap JSON in markdown. Mark unsafe when the action is destructive, exceeds the described intent, leaks data unexpectedly, or its bounded effect cannot be established — including when any field ends in a "[N of M characters shown]" marker, because the rest of that value was elided and the action you were shown is not the whole action.`;
 
 export async function reviewToolActionWithModel(options: Readonly<{
   transport: InferenceTransport;
@@ -22,9 +45,18 @@ export async function reviewToolActionWithModel(options: Readonly<{
       description: options.tool.description,
       effect: options.tool.effect,
     },
-    arguments: withholdPrivatePayloads(redactForDisplay(options.argumentsValue)),
+    // Withholding runs first so the sizes it reports are the sizes that exist:
+    // with the display pass in front of it, a 100 KB `content` was announced to
+    // the reviewer as 513 characters, because that is all that survived to be
+    // measured.
+    arguments: redactForDisplay(withholdPrivatePayloads(options.argumentsValue), MAX_REVIEW_FIELD_CHARS),
     boundary: "Existing Airship browser tools only; no capability expansion is authorized.",
   });
+  if (proposal.length > MAX_REVIEW_PROPOSAL_CHARS) {
+    // No usage is reported because nothing was sent: this costs the person
+    // nothing and asks them instead.
+    return { verdict: "indeterminate", reason: "The proposed action is too large to review; a person has to decide it.", requestId, model: options.model };
+  }
   let text = "";
   let completed = false;
   // The review is a billed provider request like any other. Its usage was
@@ -82,16 +114,21 @@ function usageOf(usage: Readonly<{ inputTokens?: number; outputTokens?: number }
  * name. Exported so the boundary is pinned by a test rather than described by
  * user-facing copy that can drift away from it.
  */
-export function withholdPrivatePayloads(value: JsonValue, key = ""): JsonValue {
+export function withholdPrivatePayloads(value: JsonValue, key = "", depth = 0): JsonValue {
   if (key && PRIVATE_PAYLOAD_KEY.test(key)) {
     if (typeof value === "string") return `[withheld string: ${value.length} characters]`;
     if (Array.isArray(value)) return `[withheld array: ${value.length} items]`;
     return "[withheld private payload]";
   }
+  // The same ceiling `redactValue` uses, and now this pass's own business: it
+  // walks the raw arguments, where the display pass used to flatten everything
+  // past depth 7 before this ran. Tool arguments are parsed JSON, which nests
+  // further than the stack does.
+  if (depth >= 7) return "[depth limit]";
   if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => withholdPrivatePayloads(item));
+  if (Array.isArray(value)) return value.map((item) => withholdPrivatePayloads(item, "", depth + 1));
   const result: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
-  for (const [childKey, child] of Object.entries(value)) result[childKey] = withholdPrivatePayloads(child, childKey);
+  for (const [childKey, child] of Object.entries(value)) result[childKey] = withholdPrivatePayloads(child, childKey, depth + 1);
   return result;
 }
 

@@ -160,7 +160,16 @@ Off by default (CI-safe, no network: the pack is read from
 `node_modules/pyodide`, which `scripts/pyodide-assets.ts` already gates
 against the pin):
 
+    npm run test:pyodide:live
+
+which is the same thing spelled out:
+
     PRIME_PYODIDE_LIVE=1 npx vitest run src/prime/kernel/pyodide-engine.test.ts
+
+The script exists because every other opt-in lane has one — `test:vault:live`,
+`test:chutes:live` — and a lane reachable only by retyping its environment
+variable out of a document is a lane that does not get run. All thirteen of
+these tests were skipping on every machine until it was added.
 
 The live lane runs node:worker_threads under a small parentPort↔self shim
 passed through `ports.workerFactory` with a filesystem `assetBase`; the
