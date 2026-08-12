@@ -187,7 +187,16 @@ export function modelControlActivity(
 ): Readonly<{ disabled: boolean; switching: boolean }> {
   const switching = routeSwitching || Boolean(pendingModelId);
   return Object.freeze({
-    disabled: busy || switching,
+    /*
+     * A running turn never disables the chip. The turn's model was pinned at
+     * its start in its own manifest; choosing another now is one durable
+     * event — "this conversation in place, next call governed" — so it
+     * cannot rewrite anything already flowing. Disabling a control whose
+     * semantics commute with a running turn is how a product teaches its
+     * user to distrust it. The only genuinely unsafe moment is while a
+     * selection is *confirming* — `switching`, kept.
+     */
+    disabled: switching,
     switching,
   });
 }

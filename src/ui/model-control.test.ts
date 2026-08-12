@@ -50,9 +50,9 @@ describe("active model proof label", () => {
 });
 
 describe("provider-neutral model control", () => {
-  it("disables model selection during inference without claiming the model is switching", () => {
+  it("never disables model selection during inference and does not claim the model is switching", () => {
     expect(modelControlActivity(true, false)).toEqual({
-      disabled: true,
+      disabled: false,
       switching: false,
     });
   });

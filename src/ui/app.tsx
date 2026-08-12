@@ -10650,7 +10650,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       throw new Error("Wait for the current session or inference route transition before resuming.");
     }
     if (!sessionLibrary || !sessionRuntime || !catalog) throw new Error("The session runtime is not ready.");
-    const preservedTurnSessionId = busy && detail.compatibility?.action === "resume"
+    const preservedTurnSessionId = busy && detail.compatibility?.action !== "blocked"
       ? activeTurnSessionId.current
       : undefined;
     if (preservedTurnSessionId) sessionResumeDuringTurn.current = preservedTurnSessionId;
@@ -10723,8 +10723,22 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     return promise;
   }
 
+  /**
+   * Navigating is not resuming. When a turn is in flight in another thread,
+   * the thread you click opens now — its projection never borrowed the
+   * turn's, and the in-flight turn keeps writing against its own session.
+   * Only the journal-blocked kind waits, because even reading it pretends a
+   * floor the journal does not verify.
+   */
+  /**
+   * Navigating is not resuming. When a turn is in flight in another thread,
+   * the thread you click opens now — its projection never borrowed the
+   * turn's, and the in-flight turn keeps writing against its own session.
+   * Only the journal-blocked kind waits, because even reading it pretends a
+   * floor the journal did not verify.
+   */
   function resumeLibrarySession(detail: SessionLibraryDetail): Promise<void> {
-    if (busy && detail.compatibility?.action === "resume") {
+    if (busy && detail.compatibility?.action !== "blocked") {
       return resumeLibrarySessionNow(detail);
     }
     return queueSessionAction(() => resumeLibrarySessionNow(detail));

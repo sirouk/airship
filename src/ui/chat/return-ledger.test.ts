@@ -125,8 +125,14 @@ describe("the return ledger", () => {
   });
 
   it("keeps reporting until the person dismisses it", () => {
+    /*
+     * The shared entry() fixture dates itself 2026-07-28, past the ledger's
+     * 14-day tombstone life once the calendar crosses 2026-08-11 — a lifecycle
+     * assertion must not age into an expiry one. Fresh-timestamp the entry.
+     */
+    const fresh = new Date().toISOString();
     const storage = memoryStorage();
-    recordReturnLedgerEntry(storage, entry());
+    recordReturnLedgerEntry(storage, entry({ lastActiveAt: fresh }));
     reconcileReturnLedger(storage, { present: new Set(), pageSession: "page-2" });
     expect(reconcileReturnLedger(storage, { present: new Set(), pageSession: "page-3" })).toHaveLength(1);
     forgetReturnLedgerEntries(storage, ["session-a"]);
