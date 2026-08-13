@@ -1,6 +1,7 @@
 import { render } from "preact";
 import { App } from "./ui/app";
 import { applyPreferenceOverrides, loadPreferenceOverrides } from "./ui/platform-shell";
+import { observeKeyboardIntent } from "./ui/keyboard-intent";
 import "./ui/styles.css";
 
 /*
@@ -16,6 +17,9 @@ import "./ui/styles.css";
  */
 applyPreferenceOverrides(loadPreferenceOverrides());
 
+// Modality tracking for the one ring `:focus-visible` cannot decide: focus
+// moved programmatically to the content pane. See `ui/keyboard-intent.ts`.
+observeKeyboardIntent();
 render(<App />, document.getElementById("app")!);
 
 // The capability probe chooses the semantic backend, the ORT thread count and

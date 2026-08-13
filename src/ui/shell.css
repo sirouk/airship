@@ -894,15 +894,29 @@
  */
 .recent-conversation-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px auto;
+  grid-template-columns: minmax(0, 1fr) minmax(18px, auto) auto;
   gap: 2px;
   align-items: center;
   min-width: 0;
 }
 
-.recent-conversation-row > .recent-conversation { grid-column: 1; grid-row: 1; }
+.recent-conversation-row > .recent-conversation { grid-column: 1; grid-row: 1 / span 2; }
+/* The mark and the time stack in one narrow trailing column: two readings of
+   the same fact — when this thread last moved, and whether it is pinned — so
+   they read as one thing rather than as a stripe on one edge and a timestamp
+   on the other. */
 .recent-conversation-row > .recent-conversation__mark { grid-column: 2; grid-row: 1; }
-.recent-conversation-row > .recent-conversation__order { grid-column: 3; grid-row: 1; }
+.recent-conversation-row > .recent-conversation__time { grid-column: 2; grid-row: 2; }
+.recent-conversation-row > .recent-conversation__order { grid-column: 3; grid-row: 1 / span 2; }
+
+.recent-conversation__time {
+  justify-self: center;
+  padding-top: 2px;
+  color: var(--ink-disabled);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 .recent-conversation-row[draggable="true"] { cursor: grab; }
 .recent-conversation-row[data-dragging="true"] { opacity: 0.5; }
@@ -959,6 +973,7 @@
 .recent-conversation__mark {
   display: grid;
   place-items: center;
+  justify-self: center;
   /* Top of the row, not the middle of it: the middle of a three-line thread
      row is beside the preview, and the mark is meant to sit over the time.
      The padding matches `.recent-conversation--thread`'s `padding-block` so
@@ -2048,8 +2063,16 @@
  * browser only matches it when the last interaction was a key. Inset, so the
  * ring reads as "this pane" rather than as a browser artifact at the edge of
  * the window.
+ *
+ * Scoped to a modality this shell tracks itself. `:focus-visible` decides the
+ * programmatic-focus case by engine heuristic, and on at least one engine a
+ * plain mouse click on a conversation painted this ring around the whole
+ * content pane — the box the owner reported twice. `observeKeyboardIntent`
+ * sets the attribute on a navigating key and clears it on any pointer press,
+ * so the affordance survives for the people it was written for and cannot
+ * reach anyone driving with a mouse.
  */
-.main:focus-visible {
+:root[data-keyboard-intent="true"] .main:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-inset);
 }

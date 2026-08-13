@@ -512,6 +512,13 @@ function raceAbort(pending: Promise<unknown>, signal: AbortSignal): Promise<void
 export const SESSION_BOOKKEEPING_EVENT_TYPES: ReadonlySet<string> = new Set([
   "profile.active-conversation.selected",
   "profile.favorite-order.moved",
+  // Starring a conversation is a statement about a list too. `library.ts` had
+  // always excluded it from its own recency derivation while the journals
+  // advanced `updatedAt` for it anyway — two answers to one question, which is
+  // how the selection pointer slipped through: fixing the journals left the
+  // library re-deriving the timestamp from the very record they had stopped
+  // counting.
+  "session.favorite.changed",
 ]);
 
 /**

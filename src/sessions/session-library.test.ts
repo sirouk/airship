@@ -1067,16 +1067,26 @@ describe("SessionLibrary", () => {
     await library.setFavorite(created.id, "profile-1", true);
     expect((await library.list({ profileId: "profile-1" })).items[0]!.updatedAt).toBe(activity);
 
-    // Past `PREFERENCE_TAIL_DEPTH` consecutive preference writes the tail holds
-    // no conversation activity at all. The record's own timestamp is then the
-    // answer — the value this method returned before any derivation existed —
-    // so the row can drift later, never earlier, and never onto invented time.
+    /*
+     * Past `PREFERENCE_TAIL_DEPTH` consecutive preference writes the tail holds
+     * no conversation activity at all, and the answer is still the activity
+     * time.
+     *
+     * This used to assert the opposite — that the record's own timestamp had
+     * drifted past it — because the journals advanced `updatedAt` for every
+     * append including preference writes, and only this class filtered them
+     * back out. Two answers to one question, and the selection pointer went
+     * through the gap: fixing the journals left this deriving the timestamp
+     * from the very record they had stopped counting. One rule now
+     * (`SESSION_BOOKKEEPING_EVENT_TYPES`), applied in the journals and here, so
+     * bookkeeping cannot move a row however deep the tail of it gets.
+     */
     for (let toggle = 0; toggle < PREFERENCE_TAIL_DEPTH; toggle += 1) {
       await library.setFavorite(created.id, "profile-1", toggle % 2 === 0);
     }
     const record = (await fixture.journal.getSession(created.id))!;
     expect((await library.list({ profileId: "profile-1" })).items[0]!.updatedAt).toBe(record.updatedAt);
-    expect(record.updatedAt).not.toBe(activity);
+    expect(record.updatedAt).toBe(activity);
   });
 });
 

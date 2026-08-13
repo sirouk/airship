@@ -9,6 +9,7 @@ import {
   type DurableEvent,
   type JournalBackend,
   type SessionRecord,
+  lastRecencyAdvancingEvent,
 } from "../core/journal";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -187,7 +188,11 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       ...(projectedSessionContextPolicy(events, current.contextPolicyOverride) !== undefined
         ? { contextPolicyOverride: projectedSessionContextPolicy(events, current.contextPolicyOverride) }
         : {}),
-      updatedAt: last.recordedAt,
+      /* Bookkeeping does not make a conversation recent; see
+         `SESSION_BOOKKEEPING_EVENT_TYPES`. This backend is the Vault lane and
+         was missed when the page-memory and IndexedDB lanes were fixed, so
+         clicking a thread still re-sorted the list for anyone on a Vault. */
+      updatedAt: lastRecencyAdvancingEvent(events)?.recordedAt ?? current.updatedAt,
       headSequence: last.sequence,
       headDigest: last.digest,
     };

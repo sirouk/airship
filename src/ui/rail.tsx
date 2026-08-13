@@ -790,6 +790,15 @@ export function Rail({
           <span class={session.id === activeConversationId ? "recent-conversation__mark-ring recent-conversation__mark-ring--active" : "recent-conversation__mark-ring"} aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
           <span class="recent-conversation__mark-star" aria-hidden="true">★</span>
         </button>
+        {/* Under the mark, not beside the preview.
+            The mark was given its own full-height column and the time stayed
+            on the preview line, so the column was a tall stripe holding one
+            glyph while the row's two facts about recency sat on opposite
+            sides. They are one fact — when, and whether it is pinned — so they
+            share one narrow trailing column and the copy keeps the rest. */}
+        <time class="recent-conversation__time" dateTime={session.updatedAt} title={session.updatedAt}>
+          {formatTime(session.updatedAt)}
+        </time>
         <button
           class={[
             "recent-conversation recent-conversation--thread",
@@ -821,11 +830,6 @@ export function Rail({
             <strong title={session.title}>{session.title}</strong>
             <span class="recent-conversation__meta">
               <small>{session.preview}</small>
-              {/* The timestamp used to own a grid track of the title's row,
-                  which is why a desktop rail rendered 'Gener…' beside a roomy
-                  "11:32 AM": facts of recency are secondary, so it travels
-                  with the preview now and the title grows into the space. */}
-              <time dateTime={session.updatedAt} title={session.updatedAt}>{formatTime(session.updatedAt)}</time>
             </span>
             {/* The rows this one stands for. The shortcut shows one row per
                 lineage so three retries cannot evict three unrelated threads,

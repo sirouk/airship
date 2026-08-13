@@ -1,6 +1,6 @@
 import { deepFreeze } from "../core/freeze";
 import type { SessionManifest } from "../core/contracts";
-import { JournalConflictError, type EventJournal, type SessionRecord } from "../core/journal";
+import { JournalConflictError, SESSION_BOOKKEEPING_EVENT_TYPES, type EventJournal, type SessionRecord } from "../core/journal";
 import {
   decideSessionResume,
   extractSessionPins,
@@ -147,9 +147,12 @@ export class SessionLibrary {
         signal,
       );
       throwIfAborted(signal);
-      const activity = [...events].reverse().find((event) =>
-        event.type !== "session.favorite.changed"
-        && event.type !== PROFILE_FAVORITE_ORDER_MOVED_EVENT_TYPE,
+      // The same rule the journals apply, from the same set — this list used
+      // to name two of the three bookkeeping types and re-derived `updatedAt`
+      // from the third, which is why merely opening a conversation kept
+      // floating it to the top after the journals had stopped counting it.
+      const activity = [...events].reverse().find(
+        (event) => !SESSION_BOOKKEEPING_EVENT_TYPES.has(event.type),
       );
       return activity && activity.recordedAt !== record.updatedAt
         ? { ...record, updatedAt: activity.recordedAt }
