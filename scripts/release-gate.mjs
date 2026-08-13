@@ -817,7 +817,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so each takes one further whole step — raw to
   // 2,315 (1,634 B) and gzip to 736 (1,436 B).
   //
-  // Re-measured at 2,372,418 B raw / 753,315 B gzip after the concurrency and
+  // Re-measured at 2,373,600 B raw / 753,315 B gzip after the concurrency and
   // reasoning wave, and every byte of it is a behaviour the product did not
   // have: turns keyed per conversation rather than per page (a set of running
   // sessions, a controller map, and a switchable approval delegate per thread,
@@ -828,12 +828,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // reasoning-delta signal and the turn.reasoning record it never wrote, which
   // is what made reasoning visible at all on the engine that is now the
   // default. All first-party, none of it eager.
-  // — the floor across both build modes, the container reading 26 raw bytes
-  // under the host.
-  // 2,317 KiB raw would have left 190 B and 736 KiB gzip would have left 349 B,
+  // — recorded as a floor a little under the build, for the reason the
+  // backstop below spells out: these readings drift a few bytes between
+  // otherwise identical builds, and a comment pinned to one of them fails the
+  // next.
+  // 2,318 KiB raw would have left 32 B and 736 KiB gzip would have left 349 B,
   // both under the aggregate's 768-byte minifier-rename floor, so each takes
-  // one further whole step — raw to 2,318 (1,214 B) and gzip to 737 (1,373 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2318 * 1024, gzip: 737 * 1024 }),
+  // one further whole step — raw to 2,319 (1,056 B) and gzip to 737 (1,373 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2319 * 1024, gzip: 737 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack

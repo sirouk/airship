@@ -2,6 +2,7 @@ import type { JsonValue, SessionForkContextSeed } from "../../core/contracts";
 import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../../core/contracts";
 import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "../../core/fork-context";
 import type { DurableEvent, SessionRecord } from "../../core/journal";
+import { SESSION_BOOKKEEPING_EVENT_TYPES } from "../../core/journal";
 import type { SessionAuditReport } from "../../core/session-audit";
 import type { ConversationReceipt } from "../../receipts/types";
 import {
@@ -613,6 +614,19 @@ function groupTurns(
       if (event.type === CONVERSATION_NAMED_EVENT_TYPE && event.turnId && event.operationId) {
         ancillaryInferences.set(event.operationId, event.turnId);
       }
+      /*
+       * Journaled, audited, and not in the transcript.
+       *
+       * "Selected as this profile's active conversation." is a fact about
+       * which thread is open, not about this one. Switching between two
+       * conversations wrote it into the middle of whichever you were reading —
+       * three of them in a row directly above the composer, in a thread whose
+       * actual content was two messages. The record is untouched: the head
+       * advances, the audit names the type, and Proof lists every one. This
+       * only declines to narrate it back to the person who caused it by
+       * clicking.
+       */
+      if (SESSION_BOOKKEEPING_EVENT_TYPES.has(event.type)) continue;
       markers.push(sessionMarker(event));
       continue;
     }

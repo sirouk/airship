@@ -487,6 +487,47 @@ function raceAbort(pending: Promise<unknown>, signal: AbortSignal): Promise<void
  * and silently lost by the encrypted object journal, so adopting a Vault threw
  * away the title and stranded the conversation behind it on the next reload.
  */
+/**
+ * Records journaled *about* a conversation's place in the interface rather
+ * than about the conversation.
+ *
+ * Both of these are written into a session's own stream because that is where
+ * the digest chain that makes them tamper-evident lives — but neither is
+ * something the conversation did. Selecting a thread is a statement about
+ * which thread is open; reordering a favorite is a statement about a list.
+ *
+ * Two consequences, and they are the whole reason this set exists. They do not
+ * advance `updatedAt`, so merely clicking into a conversation stops floating it
+ * to the top of "recently active" above threads that were genuinely worked in
+ * — reading a thread is not working in it. And they do not become transcript
+ * markers, so switching between two conversations stops writing "Selected as
+ * this profile's active conversation." into the middle of the one you are
+ * reading, three times in a row, directly above the composer.
+ *
+ * They remain fully journaled, digest-chained and auditable: the head still
+ * advances, `session-audit.ts` still names the type, and the Proof route still
+ * lists every one of them. This changes where they are read, never whether
+ * they were recorded.
+ */
+export const SESSION_BOOKKEEPING_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "profile.active-conversation.selected",
+  "profile.favorite-order.moved",
+]);
+
+/**
+ * The last event that represents the conversation itself changing, which is
+ * what `updatedAt` has always meant to a reader scanning a list by recency.
+ * Undefined when an append carried nothing but bookkeeping, in which case the
+ * caller keeps the timestamp it already had.
+ */
+export function lastRecencyAdvancingEvent(events: readonly DurableEvent[]): DurableEvent | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (!SESSION_BOOKKEEPING_EVENT_TYPES.has(event.type)) return event;
+  }
+  return undefined;
+}
+
 export function projectedSessionTitle(events: readonly DurableEvent[], fallback: string): string {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;

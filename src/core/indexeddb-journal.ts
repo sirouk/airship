@@ -1,5 +1,6 @@
 import {
   JournalConflictError,
+  lastRecencyAdvancingEvent,
   projectedSessionApprovalMode,
   projectedSessionContextPolicy,
   projectedSessionModel,
@@ -193,7 +194,12 @@ export class IndexedDbJournalBackend implements JournalBackend {
       ...(projectedSessionContextPolicy(events, stored.contextPolicyOverride) !== undefined
         ? { contextPolicyOverride: projectedSessionContextPolicy(events, stored.contextPolicyOverride) }
         : {}),
-      updatedAt: last.recordedAt,
+      /* The head is the head — it always advances. `updatedAt` is a
+         reading about the conversation, so a bookkeeping-only append
+         (selecting this thread, reordering a favorite) leaves it where
+         it was rather than floating an unread thread to the top of
+         "recently active". */
+      updatedAt: lastRecencyAdvancingEvent(events)?.recordedAt ?? stored.updatedAt,
       headSequence: last.sequence,
       headDigest: last.digest,
     };

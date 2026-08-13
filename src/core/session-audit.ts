@@ -804,6 +804,26 @@ async function validateProtocol(
   // walk recomputes the override and gets the reason for free.
   let effectiveModel: string = session.manifest.model;
   let effectiveContextPolicy = session.manifest.contextPolicy;
+  /*
+   * …and the approval mode, for exactly the same reason.
+   *
+   * Provenance was compared against the manifest's pin forever, and the
+   * manifest is immutable — so the moment anyone used the approval-mode
+   * control the product ships, every approval after it "claimed a mode the
+   * session manifest did not pin", which is an error-severity finding, which
+   * made the history suspect, which blocked the conversation from ever being
+   * resumed. Choosing Full Access mid-thread quietly cost you the thread.
+   *
+   * The journal already carries the answer: `session.approval-policy-changed`
+   * is a durable, validated record of the mode changing. The walk advances the
+   * effective mode as it passes one, so an approval is checked against the
+   * mode that was actually in force when it happened. Provenance is still
+   * fully checked — an approval claiming a mode nothing ever put in force is
+   * still a finding.
+   */
+  let effectiveApprovalMode = session.manifest.profile && "approvalMode" in session.manifest.profile
+    ? session.manifest.profile.approvalMode
+    : undefined;
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!;
@@ -878,6 +898,10 @@ async function validateProtocol(
     if (event.type === "session.approval-policy-changed") {
       if (event.turnId || event.operationId || !payload || !["ask-first", "auto-approve", "full-access"].includes(String(payload.approvalMode))) {
         add({ severity: "error", category: "protocol", code: "SESSION_APPROVAL_POLICY_MALFORMED", sequence: event.sequence, message: "A session approval-policy change must carry one named mode outside any turn." });
+      } else {
+        // Well formed — the branch above proved the string is one of the three
+        // named modes — so it is what governs from here down the chain.
+        effectiveApprovalMode = payload.approvalMode as NonNullable<typeof effectiveApprovalMode>;
       }
       continue;
     }
@@ -1064,7 +1088,7 @@ async function validateProtocol(
           });
         } else {
           command.approved = true;
-          const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+          const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
           if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
         }
         continue;
@@ -1194,7 +1218,7 @@ async function validateProtocol(
       // finding about a record that exists, not a reason to stop counting it.
       counts.humanIntentDecisions += 1;
       if (decision === "allow") counts.humanIntentAllowed += 1;
-      const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+      const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
       if (issue) {
         add({ ...eventLocation(event), code: "HUMAN_INTENT_PROVENANCE_INVALID", category: "protocol", message: issue });
       }
@@ -1678,7 +1702,7 @@ async function validateProtocol(
       }
       tool.decision = event.type === "tool.approved" ? "approved" : "denied";
       if (event.type === "tool.approved") {
-        const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+        const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
         if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
       }
       if (event.type === "tool.denied") {
@@ -2131,18 +2155,19 @@ function inspectJson(
  * side of the contract validates is not evidence — it is decoration that looks
  * like evidence, which is worse than nothing on a proof surface.
  *
- * The mode is compared against the manifest's pinned `approvalMode` where there
- * is one. A v1 profile pin, or a session with no profile at all, pinned no mode,
- * so there is nothing to disagree with and only the shape is checked.
+ * The mode is compared against whichever mode was in force at this point in
+ * the chain — the manifest's pin as amended by every `session.approval-policy-
+ * changed` record before it. A v1 profile pin, or a session with no profile at
+ * all, pinned no mode, so there is nothing to disagree with and only the shape
+ * is checked.
  */
-function approvalProvenanceIssue(value: unknown, manifest: SessionManifest): string | undefined {
+function approvalProvenanceIssue(value: unknown, inForce: string | undefined): string | undefined {
   const approval = asPlainRecord(value);
   if (!approval) return "An approval must carry the provenance record that authorized it.";
   if (!APPROVAL_SOURCES.has(String(approval.source))) return "Approval provenance names no known authority source.";
   if (!APPROVAL_MODES.has(String(approval.mode))) return "Approval provenance names no known approval mode.";
-  const pinned = manifest.profile && "approvalMode" in manifest.profile ? manifest.profile.approvalMode : undefined;
-  if (pinned && approval.mode !== pinned) {
-    return "Approval provenance claims an approval mode the session manifest did not pin.";
+  if (inForce && approval.mode !== inForce) {
+    return "Approval provenance claims an approval mode that was not in force when it ran.";
   }
   return undefined;
 }

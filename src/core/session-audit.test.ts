@@ -1010,6 +1010,79 @@ describe("auditSessionHistory", () => {
     const report = await auditSessionHistory({ session, events: await fixture.journal.readEvents(session.id) });
     expect(report.findings.map((finding) => finding.code)).toContain("PROFILE_SILO_INVALID");
   });
+
+  /*
+   * Using the approval-mode control cost you the conversation.
+   *
+   * Provenance was compared against `manifest.profile.approvalMode`, and a
+   * manifest is immutable. So the moment anyone switched a thread to Full
+   * Access — a control the composer offers, on the surface where the switch
+   * is made — every approval after it "claimed a mode the session manifest
+   * did not pin". That is error severity, which makes the history suspect,
+   * which is `HISTORY_SUSPECT`, which blocks resume permanently. A shipped
+   * control must not be able to brick the thread it was used in.
+   */
+  it("accepts an approval under a mode the journal put in force after the manifest was pinned", async () => {
+    const fixture = await createFixture([writeTool], await askFirstProfile());
+    // The record the composer's approval-mode control writes.
+    await fixture.journal.append(fixture.session.id, [
+      { type: "session.approval-policy-changed", payload: { approvalMode: "full-access" } },
+    ]);
+
+    const turnId = "turn-approval";
+    const operationId = "inference-approval";
+    const call: ToolCall = {
+      id: "call-approval",
+      name: "write_file",
+      arguments: { path: "/workspace/report.md", content: "verified" },
+    };
+    const user: CanonicalMessage = { role: "user", content: "Create a report." };
+    await fixture.journal.append(fixture.session.id, [{ type: "turn.requested", turnId, payload: { content: user.content } }]);
+    const digest = await inferenceDigest(fixture.session, turnId, 0, [user]);
+    await fixture.journal.append(fixture.session.id, [
+      { type: "inference.started", turnId, operationId, payload: inferencePayload(fixture.session, turnId, 0, digest) },
+      {
+        type: "assistant.completed",
+        turnId,
+        operationId,
+        payload: { message: { role: "assistant", content: "", toolCalls: [call] }, finishReason: "tool-calls" },
+      },
+      { type: "tool.requested", turnId, operationId: call.id, payload: { call } },
+      {
+        type: "tool.approved",
+        turnId,
+        operationId: call.id,
+        // Recorded under the mode actually in force, which is the whole point.
+        payload: { callId: call.id, name: call.name, approval: { mode: "full-access", source: "automatic-read", reason: "Full Access." } },
+      },
+    ]);
+
+    const events = await fixture.journal.readEvents(fixture.session.id);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const report = await auditSessionHistory({ session, events });
+
+    expect(report.findings.map((finding) => finding.message)).not.toContain(
+      "Approval provenance claims an approval mode that was not in force when it ran.",
+    );
+    // No error-severity finding at all, so nothing here can block a resume.
+    expect(report.findings.filter((finding) => finding.severity === "error")).toEqual([]);
+  });
+
+  it("still refuses an approval claiming a mode nothing ever put in force", async () => {
+    // The guard the fix must not have removed: the journal said ask-first
+    // throughout, and this approval claims Full Access authority anyway.
+    const fixture = await approvalFixture(
+      { mode: "full-access", source: "automatic-read", reason: "Full Access." },
+      await askFirstProfile(),
+    );
+    const events = await fixture.journal.readEvents(fixture.session.id);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const report = await auditSessionHistory({ session, events });
+
+    expect(report.findings.map((finding) => finding.message)).toContain(
+      "Approval provenance claims an approval mode that was not in force when it ran.",
+    );
+  });
 });
 
 async function createFixture(tools: ToolDefinition[], profile?: SessionRecord["manifest"]["profile"]) {

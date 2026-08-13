@@ -44,7 +44,7 @@ ceilings are both blocking.
 | HTML-referenced entry JavaScript | 384 KiB | 118 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 189 KiB |
 | Deferred advanced capability bundle | 447 KiB | 133 KiB |
-| First-party and other non-vendor JS/workers | 2,318 KiB | 737 KiB |
+| First-party and other non-vendor JS/workers | 2,319 KiB | 737 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
 | Absolute installed JavaScript/worker backstop | 2,998 KiB | 926 KiB |
 | Service worker | 12 KiB | 4 KiB |

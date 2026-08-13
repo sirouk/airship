@@ -428,7 +428,22 @@ describe("presentSessionMessages", () => {
  * agreeing with a fixture instead of with the code.
  */
 describe("presentSessionMessages agrees with auditSessionHistory", () => {
-  it("presents the durable active-conversation pointer as a comprehensible session record", async () => {
+  /*
+   * Records the pointer, does not narrate it.
+   *
+   * This used to assert the opposite, and the opposite is what shipped:
+   * switching between two conversations wrote "Selected as this profile's
+   * active conversation." into the middle of whichever one you were reading —
+   * three in a row directly above the composer, in a thread whose own content
+   * was two messages. It is a fact about which thread is open, not about this
+   * one, and the person it is narrated to is the person who caused it by
+   * clicking.
+   *
+   * Nothing about the record changes: the head advances, the digest chain
+   * covers it, `session-audit.ts` names the type, and the Proof route lists
+   * it. Only the transcript declines to carry it.
+   */
+  it("records the active-conversation pointer durably without putting it in the transcript", async () => {
     const journal = memoryJournal();
     const created = await journal.createSession("General conversation", await auditProfileManifest());
     const profileId = created.manifest.profile!.profileId;
@@ -436,15 +451,36 @@ describe("presentSessionMessages agrees with auditSessionHistory", () => {
     const session = (await journal.getSession(created.id))!;
     const events = await journal.readEvents(created.id);
     const audit = await auditSessionHistory({ session, events });
-    expect(audit.status).toBe("verified");
 
+    // Journaled and auditable — the record is there and the chain verifies.
+    expect(audit.status).toBe("verified");
+    expect(events.some((event) => event.type === "profile.active-conversation.selected")).toBe(true);
+
+    // …and absent from what the reader sees.
     const view = presentSessionMessages({ session, audit, events });
-    expect(view.markers).toHaveLength(1);
-    expect(view.markers[0]).toMatchObject({
-      kind: "profile.active-conversation.selected",
-      presentable: true,
-      detail: "Selected as this profile’s active conversation.",
-    });
+    expect(view.markers).toHaveLength(0);
+  });
+
+  /*
+   * The other half: opening a conversation must not make it look freshly
+   * worked in. `updatedAt` is what "recently active" sorts by, so a selection
+   * that advanced it floated whichever thread you merely *read* above every
+   * thread you had actually used.
+   */
+  it("does not advance updatedAt when the only new record is bookkeeping", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("General conversation", await auditProfileManifest());
+    const profileId = created.manifest.profile!.profileId;
+    const before = (await journal.getSession(created.id))!;
+
+    await selectProfileActiveConversation(journal, profileId, created.id);
+    const after = (await journal.getSession(created.id))!;
+
+    expect(after.updatedAt).toBe(before.updatedAt);
+    // The head still moved: this is about what the timestamp means, never
+    // about whether the record was written.
+    expect(after.headSequence).toBeGreaterThan(before.headSequence);
+    expect(after.headDigest).not.toBe(before.headDigest);
   });
 
   it("presents a renamed session, the way Airship's own auto-title writes it", async () => {
