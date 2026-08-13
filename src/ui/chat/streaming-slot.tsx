@@ -28,6 +28,28 @@ export class TranscriptStreamStore {
     return value;
   }
 
+  /**
+   * Re-address a slot, keeping whatever it already holds.
+   *
+   * A turn's rows are created optimistically under a client-minted id, before
+   * the journal has issued the turn one. From `turn.requested` onward the
+   * journal's id is the row's real address — it is what `presentSessionMessages`
+   * rebuilds the row under when the conversation is re-opened — so the slot
+   * has to move with it or the stream is filed under a name nothing looks up
+   * again. Appends onto the destination rather than replacing it: the
+   * destination is normally empty, and silently dropping buffered text would
+   * be the same defect one layer down.
+   */
+  rename(from: string, to: string): void {
+    if (from === to) return;
+    const value = this.#values.get(from);
+    if (value === undefined) return;
+    this.#values.delete(from);
+    this.#values.set(to, this.read(to) + value);
+    for (const listener of this.#listeners.get(from) ?? []) listener();
+    for (const listener of this.#listeners.get(to) ?? []) listener();
+  }
+
   clear(messageId: string): void {
     if (!this.#values.delete(messageId)) return;
     for (const listener of this.#listeners.get(messageId) ?? []) listener();

@@ -969,6 +969,40 @@ type Draft = Readonly<{
   payload: JsonValue;
 }>;
 
+/*
+ * The contract `app.tsx` re-addresses a running turn's row to.
+ *
+ * A reader who steps into another conversation mid-turn and steps back gets
+ * this projection, not their live rows — the transcript array is replaced
+ * wholesale on open. So the running turn has to survive projection, and its
+ * assistant row has to land on the id the live stream slots are keyed by
+ * (`adoptJournalTurnAddress`). If a turn without a terminal were dropped
+ * here, or if the id were derived from anything but the turn id, the answer
+ * would go back to streaming into a row nobody can see.
+ */
+describe("a turn still in flight projects the row its live stream is addressed to", () => {
+  it("emits both rows for an unterminated turn, the assistant one keyed by turn id", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "First", "First answer"),
+      // No assistant.completed and no terminal: the turn is mid-flight.
+      draft("turn.requested", "turn-2", { content: "Still thinking" }),
+    ]);
+
+    const view = presentSessionMessages(input(events));
+    const assistant = view.rows.find((row) => row.role === "assistant" && row.turnId === "turn-2");
+    const user = view.rows.find((row) => row.role === "user" && row.turnId === "turn-2");
+
+    expect(user).toBeDefined();
+    expect(assistant).toBeDefined();
+    expect(assistant?.id).toBe("message:turn-2:assistant");
+    // Named as unfinished, so nothing downstream reads it as a settled answer.
+    expect(assistant?.turnStatus).toBe("incomplete");
+    // And the finished turn beside it is untouched by the running one.
+    expect(view.rows.find((row) => row.role === "assistant" && row.turnId === "turn-1")?.turnStatus).toBe("completed");
+  });
+});
+
 function draft(type: string, turnId: string | undefined, payload: JsonValue): Draft {
   return { type, ...(turnId ? { turnId } : {}), payload };
 }

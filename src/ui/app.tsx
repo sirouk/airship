@@ -2480,6 +2480,16 @@ export function App() {
   const pendingDeltaFrame = useRef<number>();
   const pendingReasoning = useRef<{ messageId: string; text: string }>();
   const pendingReasoningFrame = useRef<number>();
+  /**
+   * The running turn's row, addressed as the journal addresses it.
+   *
+   * Held outside `messages` because `messages` belongs to whichever
+   * conversation is on screen and is replaced wholesale when another one
+   * opens. This is what lets the reattach effect find the re-projected row
+   * and mark it live again after a switch away and back; it is set when the
+   * journal issues the turn its id and cleared when the turn settles.
+   */
+  const liveTurnRow = useRef<{ sessionId: string; messageId: string; status: string }>();
   const pendingToolOutput = useRef<{ messageId: string; updates: Map<string, PendingToolOutputUpdate> }>();
   const pendingToolOutputFrame = useRef<number>();
   const profileOperation = useRef(0);
@@ -7106,8 +7116,51 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       originatingAttachments: outgoingAttachments,
     };
     const userMessageId = userMessage.id;
-    const assistantId = randomUuid();
+    /*
+     * Client-minted only until the journal issues this turn an id, at which
+     * point `adoptJournalTurnAddress` below re-addresses the row and its
+     * streams to `message:<turnId>:assistant` — the id
+     * `presentSessionMessages` rebuilds this row under. Everything that reaches
+     * for the row afterwards reads this binding, so it is `let`, not `const`.
+     */
+    let assistantId = randomUuid();
     let turnRequestBoundary: Readonly<{ sequence: number; digest: string }> | undefined;
+
+    /**
+     * Re-address the in-flight row from the optimistic id to the journal's.
+     *
+     * The bug this closes: leaving the row under a client uuid meant that
+     * stepping into another conversation mid-turn and stepping back lost the
+     * answer entirely. Coming back re-projects the transcript from the
+     * journal, which *does* render the running turn — `presentSessionMessages`
+     * emits a row per turn group whether or not it has terminated — but under
+     * `message:<turnId>:assistant`, while the deltas still streamed into a slot
+     * keyed by a uuid that no longer addressed anything on screen. Every
+     * `setMessages` that reached for `assistantId` then matched no row, so the
+     * answer never landed and the thread sat there looking hung until a
+     * reload. Adopting the journal's address makes the live row and the
+     * re-projected row the same row, and the streams follow it.
+     *
+     * Fires once, on the first `turn.requested`, which lands before any
+     * inference — so in practice the slots are still empty and this is a
+     * rename of nothing. `TranscriptStreamStore.rename` carries content anyway
+     * rather than depend on that.
+     */
+    function adoptJournalTurnAddress(turnId: string): void {
+      const journalId = `message:${turnId}:assistant`;
+      if (journalId === assistantId) return;
+      const optimisticId = assistantId;
+      transcriptStreams.rename(optimisticId, journalId);
+      reasoningStreams.rename(optimisticId, journalId);
+      if (pendingDelta.current?.messageId === optimisticId) pendingDelta.current = { messageId: journalId, text: pendingDelta.current.text };
+      if (pendingReasoning.current?.messageId === optimisticId) pendingReasoning.current = { messageId: journalId, text: pendingReasoning.current.text };
+      if (pendingToolOutput.current?.messageId === optimisticId) pendingToolOutput.current = { messageId: journalId, updates: pendingToolOutput.current.updates };
+      assistantId = journalId;
+      liveTurnRow.current = { sessionId: turnSessionId, messageId: journalId, status: "Queued" };
+      setMessages((current) => current.map((message) => message.id === optimisticId
+        ? { ...message, id: journalId }
+        : message));
+    }
     setMessages((current) => [
       ...current,
       userMessage,
@@ -7145,7 +7198,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             // result to read it from, and this is the boundary Retry forks at.
             if (!turnRequestBoundary) {
               const requested = signal.events.find((event) => event.type === "turn.requested" && event.sessionId === turnSessionId);
-              if (requested) turnRequestBoundary = Object.freeze({ sequence: requested.sequence - 1, digest: requested.previousDigest });
+              if (requested) {
+                turnRequestBoundary = Object.freeze({ sequence: requested.sequence - 1, digest: requested.previousDigest });
+                /* `turnId` is optional on the durable-event shape; a
+                   `turn.requested` without one is not a turn this row can be
+                   re-addressed to, so the optimistic id simply stands. */
+                if (requested.turnId) adoptJournalTurnAddress(requested.turnId);
+              }
             }
             setSessionRevision((value) => value + signal.events.length);
             if (activeSessionIdentity.current === turnSessionId) {
@@ -7163,15 +7222,34 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
               }
             }
           }
-          if (signal.type === "status" && activeSessionIdentity.current === turnSessionId) {
-            setRuntimeStatus(signal.status);
-            setMessages((current) =>
-              current.map((message) =>
-                message.id === assistantId ? { ...message, status: humanStatus(signal.status) } : message,
-              ),
-            );
+          if (signal.type === "status") {
+            /* Recorded even while another conversation is on screen: it is
+               what the reattach effect restores onto the re-projected row, so
+               a thread you step back into is live again immediately rather
+               than at whatever moment the next status happens to fire. */
+            if (liveTurnRow.current?.sessionId === turnSessionId) {
+              liveTurnRow.current = { ...liveTurnRow.current, status: humanStatus(signal.status) };
+            }
+            if (activeSessionIdentity.current === turnSessionId) {
+              setRuntimeStatus(signal.status);
+              setMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantId ? { ...message, status: humanStatus(signal.status) } : message,
+                ),
+              );
+            }
           }
-          if (signal.type === "text-delta" && activeSessionIdentity.current === turnSessionId) {
+          /*
+           * Unfenced, like the reasoning signal below, and this is the half of
+           * the switch-away defect that was losing text rather than misfiling
+           * it. Fenced on the active session, every delta that arrived while
+           * the reader was in another thread was dropped on the floor — so
+           * even once the row was addressed correctly, coming back showed only
+           * whatever happened to stream *after* the return. This writes a slot
+           * store keyed by a message id this turn owns; it never touches the
+           * `messages` array the visible conversation is rendering from.
+           */
+          if (signal.type === "text-delta") {
             queueTextDelta(assistantId, signal.text);
           }
           /*
@@ -7312,6 +7390,11 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
          `turn.reasoning`. Both paths above have already committed their
          messages, so this cannot blank a row that has nothing to replace it. */
       clearPendingReasoning(assistantId);
+      /* Settled turns are the journal's to render. Cleared after the commits
+         above so the reattach effect cannot re-mark a finished row live, and
+         only if this turn is still the one it names — a newer turn in another
+         thread owns the slot by then. */
+      if (liveTurnRow.current?.messageId === assistantId) liveTurnRow.current = undefined;
       const releasesComposer = activeTurn.current === controller;
       if (releasesComposer) {
         activeTurn.current = undefined;
@@ -10959,6 +11042,42 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       (error) => pending.reject(error),
     );
   }, [busy]);
+
+  /**
+   * Step back into a thread whose turn is still running, and find it running.
+   *
+   * Re-opening a conversation replaces `messages` wholesale with the journal's
+   * projection. For a turn still in flight that projection is correct and
+   * complete — `presentSessionMessages` emits the row whether or not the turn
+   * has terminated — but it is projection, not live state: the row arrives
+   * with no `status`, so `StreamingMessageSlot` reads it as settled and mounts
+   * nothing, and the answer streaming into that row's slot stays invisible
+   * until the turn ends.
+   *
+   * This is the one place that can put the two back together, because it runs
+   * after whichever load replaced the array. It restores exactly one field —
+   * the status the turn last reported — which is the field that means "this
+   * row is still being written". Everything else the reader needs is already
+   * addressed correctly: `adoptJournalTurnAddress` moved the slots onto the
+   * journal's id, so the text and reasoning that arrived while they were gone
+   * are already sitting under the id this row now carries.
+   *
+   * Idempotent by construction: it returns the same array once the status is
+   * on the row, so it cannot loop against its own write, and it declines to
+   * act at all unless a turn is genuinely in flight (`busy`) for the
+   * conversation on screen.
+   */
+  useEffect(() => {
+    const live = liveTurnRow.current;
+    if (!busy || !live || live.sessionId !== sessionId) return;
+    setMessages((current) => {
+      const row = current.find((message) => message.id === live.messageId);
+      if (!row || row.status !== undefined) return current;
+      return current.map((message) => message.id === live.messageId
+        ? { ...message, status: live.status }
+        : message);
+    });
+  }, [messages, sessionId, busy]);
 
   async function activateForkedSession(result: SessionForkResult): Promise<void> {
     if (sessionNavigationChanging.current) {

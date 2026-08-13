@@ -20,6 +20,56 @@ async function streamingSlotSource(): Promise<string> {
   return readFile(new URL("./streaming-slot.tsx", import.meta.url), "utf8");
 }
 
+/*
+ * `rename` is what carries a turn's stream from the client id its row was
+ * created under to the journal's `message:<turnId>:assistant`, which is the id
+ * the row comes back as when the conversation is re-opened mid-turn. Get this
+ * wrong and the answer streams into a slot nothing on screen reads.
+ */
+describe("re-addressing a slot to the journal's id", () => {
+  it("carries the content and wakes both ends", () => {
+    const store = new TranscriptStreamStore();
+    const from = vi.fn();
+    const to = vi.fn();
+    store.append("optimistic", "half an answer");
+    store.subscribe("optimistic", from);
+    store.subscribe("message:turn-1:assistant", to);
+
+    store.rename("optimistic", "message:turn-1:assistant");
+
+    expect(store.read("message:turn-1:assistant")).toBe("half an answer");
+    expect(store.read("optimistic")).toBe("");
+    // The old slot has to hear about it too: its subscriber is still mounted
+    // for the commit that re-keys the row, and would otherwise keep painting
+    // text the store no longer holds.
+    expect(from).toHaveBeenCalledTimes(1);
+    expect(to).toHaveBeenCalledTimes(1);
+  });
+
+  it("appends onto the destination rather than dropping either side", () => {
+    const store = new TranscriptStreamStore();
+    store.append("optimistic", "second");
+    store.append("message:turn-1:assistant", "first ");
+    store.rename("optimistic", "message:turn-1:assistant");
+    expect(store.read("message:turn-1:assistant")).toBe("first second");
+  });
+
+  it("is inert when there is nothing to move, or nowhere to move it", () => {
+    const store = new TranscriptStreamStore();
+    const listener = vi.fn();
+    store.subscribe("message:turn-1:assistant", listener);
+    // No such source slot: the turn streamed nothing before its id landed,
+    // which is the ordinary case.
+    store.rename("optimistic", "message:turn-1:assistant");
+    expect(store.read("message:turn-1:assistant")).toBe("");
+    expect(listener).not.toHaveBeenCalled();
+    // Same id both ends is a no-op, not a self-append.
+    store.append("message:turn-1:assistant", "answer");
+    store.rename("message:turn-1:assistant", "message:turn-1:assistant");
+    expect(store.read("message:turn-1:assistant")).toBe("answer");
+  });
+});
+
 describe("isolated transcript stream slots", () => {
   it("notifies only the in-flight message subscriber", () => {
     const store = new TranscriptStreamStore();
