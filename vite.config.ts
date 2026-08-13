@@ -213,6 +213,14 @@ export default defineConfig({
            * only needs a name the classifier can attribute.
            */
           if (id.includes("/src/workspace/content-search")) return "content-search";
+          /*
+           * Prime's own non-crypto digest helper, shared by the runtime chunk
+           * and the subagent factory's manifest minting once children became
+           * real. Left unnamed it emits a bare `hash` chunk — a name the gate
+           * can attribute to nobody, and one that would be indistinguishable
+           * from `core/hash`. Named into the prime family it belongs to.
+           */
+          if (id.includes("/src/prime/ai/hash")) return "prime-ai-hash";
           return id.includes("/src/inference/bridge/")
             ? "inference-bridge-pack"
             : undefined;

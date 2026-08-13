@@ -29,6 +29,8 @@ import {
 import { PrimeAgentSession } from "./session";
 import { attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
+import { primeHeartbeatStore } from "./heartbeat-store";
+import { createPrimeSubagentRegistry } from "./subagent-registry";
 import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
 import type { ConversationReceipt } from "../../receipts/types";
 
@@ -397,11 +399,46 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
    * host is session-scoped, and a tool bound to any other host would journal
    * its bridge calls under an operation identity no approval matches.
    */
+  /*
+   * The subagent family, and the reason it can exist now.
+   *
+   * `PrimeAgentRegistry` needs a factory that builds a real child runtime, and
+   * the only implementation was a test double — so `rlm_spawn`, `subagent`,
+   * `agent_message` and `agent_observe` were omitted from every session with a
+   * named reason. `createPrimeAgentRuntimeFactory` is that implementation: each
+   * child is its own journaled conversation, with its own manifest digested
+   * from this same surface, its own kernel and its own approval path.
+   *
+   * The owner node is this turn's session. Its `sink` is required by the
+   * registry constructor — host-synthesized terminal notices are delivered
+   * there, so a registry without one could admit a child and have nowhere to
+   * report that it died. The parent's sink resolves against the session the
+   * turn is about to attach, which is why it is a late-bound closure rather
+   * than a value: the registry has to exist before the session that owns it.
+   */
+  const agentRegistry = options.workspace && options.transport
+    ? createPrimeSubagentRegistry({
+        journal: options.journal,
+        approvalPolicy: options.approvalPolicy,
+        workspace: options.workspace,
+        airshipTools: options.tools,
+        transport: options.transport,
+        providerId: manifest.providerId,
+        workspaceId: manifest.workspaceId,
+        sessionId: options.sessionId,
+        model,
+        ...(options.maxSteps !== undefined ? { maxSteps: options.maxSteps } : {}),
+        signal: options.signal,
+      })
+    : undefined;
+
   const surface = options.workspace
     ? createPrimeToolSurface({
         workspace: options.workspace,
         airship: options.tools,
         ...(primeHarnessStore() ? { harness: primeHarnessStore()! } : {}),
+        ...(agentRegistry ? { agent: agentRegistry.deps } : {}),
+        heartbeats: primeHeartbeatStore(),
       })
     : undefined;
 
@@ -455,6 +492,9 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
     });
 
     if (surface) attachPrimeKernelTool(surface.registry, session.kernelHost);
+    // The owner's sink is only answerable once the session exists; the
+    // registry was built before it because the tool surface needed it first.
+    agentRegistry?.bindOwnerSession(session);
 
     const result = await session.prompt(options.content, options.images);
     if (result.outcome !== "completed") {

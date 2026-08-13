@@ -44,9 +44,9 @@ ceilings are both blocking.
 | HTML-referenced entry JavaScript | 384 KiB | 118 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 195 KiB |
 | Deferred advanced capability bundle | 447 KiB | 133 KiB |
-| First-party and other non-vendor JS/workers | 2,377 KiB | 754 KiB |
+| First-party and other non-vendor JS/workers | 2,405 KiB | 763 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 3,057 KiB | 943 KiB |
+| Absolute installed JavaScript/worker backstop | 3,085 KiB | 951 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 49 KiB | 10 / 14 / 4 / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -60,7 +60,7 @@ ceilings are both blocking.
 | Optional Terminal | 423 KiB | 112 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
 | Optional inference/provider + Companion protocol packs | 165 KiB | 53 KiB |
-| Optional prime runtime pack | 161 KiB | 48 KiB |
+| Optional prime runtime pack | 189 KiB | 57 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
 | HTML-referenced entry CSS | 185 KiB | 32 KiB |

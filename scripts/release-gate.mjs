@@ -867,7 +867,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,376 KiB raw would have left 124 B and 753 KiB gzip would have left
   // 72 B, both under the aggregate's 768-byte floor, so each takes one
   // further whole step — raw to 2,377 (1,148 B) and gzip to 754 (1,096 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2377 * 1024, gzip: 754 * 1024 }),
+  //
+  // Re-measured after the subagent factory landed: 2,461,500 B raw / 779,800 B gzip. `rlm_spawn`,
+  // `subagent`, `agent_message`, `agent_observe` and `rlm_heartbeat` stopped
+  // being named absences — the production `PrimeAgentRuntimeFactory`, the
+  // registry that owns it, the synchronous heartbeat store and the refine
+  // completion client are all in the graph now, and a child agent is a real
+  // journaled session with its own manifest and kernel. Still behind the
+  // capability request; first paint is untouched. Figures are floors a little
+  // under the build, for the reason the backstop below spells out.
+  // 2,404 KiB raw would have left 196 B and 762 KiB gzip would have left
+  // 488 B, both under the 768-byte floor, so each takes one further whole
+  // step — raw to 2,405 (1,220 B) and gzip to 763 (1,512 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2405 * 1024, gzip: 763 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1193,7 +1205,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 3,056 KiB raw would have left 744 B and 942 KiB gzip would have left
   // 508 B, both under the aggregate's 768-byte floor, so each takes one
   // further whole step — raw to 3,057 (1,768 B) and gzip to 943 (1,532 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3057 * 1024, gzip: 943 * 1024 }),
+  //
+  // Re-measured after the subagent factory landed: 3,157,500 B raw / 973,000 B gzip. `rlm_spawn`,
+  // `subagent`, `agent_message`, `agent_observe` and `rlm_heartbeat` stopped
+  // being named absences — the production `PrimeAgentRuntimeFactory`, the
+  // registry that owns it, the synchronous heartbeat store and the refine
+  // completion client are all in the graph now, and a child agent is a real
+  // journaled session with its own manifest and kernel. Still behind the
+  // capability request; first paint is untouched. Figures are floors a little
+  // under the build, for the reason the backstop below spells out.
+  // 3,084 KiB raw would have left 516 B, under the 768-byte floor, so raw
+  // takes one further whole step to 3,085 (1,540 B); gzip takes its smallest
+  // clearing step to 951, which leaves 824 B and is already above it.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3085 * 1024, gzip: 951 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1812,8 +1836,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Exact conversation return now classifies every held provider route as the
   // pinned generation, a replacement, or unrelated; locks the pinned model;
   // and keeps abandon unavailable once verification reaches its commit point.
-  // The complete nine-pack aggregate now measures 167,954 B raw / 52,485 B
-  // gzip. The prime transport port split the OpenAI surface into its formal
+  // The complete nine-pack aggregate now measures 167,900 B raw / 52,400 B
+  // gzip, recorded as floors a little under the build: this pair drifts a few
+  // bytes between builds and between host and container, and a comment pinned
+  // to one reading fails on the next. The prime transport port split the OpenAI surface into its formal
   // runtime packs (completions + responses) and landed the formal Anthropic
   // pack beside them, and the claim states the floor across both build
   // modes — the origin-inlined Docker variant measures one raw byte and
@@ -1870,7 +1896,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 160 KiB raw would have left 640 B and 48 KiB gzip 843 B; raw is under the
   // 768-byte tripwire so it takes one further whole step to 161 (2,064 B), while
   // gzip takes its tightest clearing step to 48.
-  optionalPrimePack: Object.freeze({ raw: 161 * 1024, gzip: 48 * 1024 }),
+  //
+  // Re-measured after the subagent factory landed: 192,100 B raw / 57,400 B gzip. `rlm_spawn`,
+  // `subagent`, `agent_message`, `agent_observe` and `rlm_heartbeat` stopped
+  // being named absences — the production `PrimeAgentRuntimeFactory`, the
+  // registry that owns it, the synchronous heartbeat store and the refine
+  // completion client are all in the graph now, and a child agent is a real
+  // journaled session with its own manifest and kernel. Still behind the
+  // capability request; first paint is untouched. Figures are floors a little
+  // under the build, for the reason the backstop below spells out.
+  // 188 KiB raw would have left 412 B, under the aggregate's 768-byte floor,
+  // so raw takes one further whole step to 189 (1,436 B); gzip takes its
+  // smallest clearing step to 57, which leaves 968 B and is already above it.
+  optionalPrimePack: Object.freeze({ raw: 189 * 1024, gzip: 57 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),
@@ -2994,8 +3032,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalInferenceProviderPacks.map((file) => measure(file.payload)),
   );
   const optionalPrimePackPacks = javaScriptFiles.filter((file) => isOptionalPrimePackPath(file.path));
-  if (optionalPrimePackPacks.length !== 4) {
-    throw new Error(`Production must contain exactly four optional prime pack chunks; found ${optionalPrimePackPacks.length}.`);
+  // Five since the subagent factory landed: prime's digest helper is now
+  // shared by the runtime chunk and the child-manifest path, so it is its own
+  // named member of this family rather than a bare `hash` chunk the classifier
+  // could attribute to nobody.
+  if (optionalPrimePackPacks.length !== 5) {
+    throw new Error(`Production must contain exactly five optional prime pack chunks; found ${optionalPrimePackPacks.length}.`);
   }
   const optionalPrimePackMeasurement = sumMeasurements(optionalPrimePackPacks.map((file) => measure(file.payload)));
 

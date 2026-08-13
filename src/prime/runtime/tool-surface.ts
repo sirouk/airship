@@ -2,7 +2,8 @@ import { ToolRegistry } from "../../tools/registry";
 import type { ToolDefinition } from "../../core/contracts";
 import type { WorkspacePort } from "../../workspace/contracts";
 import type { HarnessStore } from "../harness/store";
-import { createPrimeToolRegistry, type PrimeToolRegistryResult } from "../tools/registry-factories";
+import { createPrimeToolRegistry, type PrimeToolAgentDeps, type PrimeToolRegistryResult } from "../tools/registry-factories";
+import type { PrimeHeartbeatStateStore } from "../tools/rlm-tools";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { createPrimeExecuteCodeTool } from "../tools/kernel-tool";
 
@@ -46,6 +47,10 @@ export type PrimeToolSurfaceInput = Readonly<{
   airship: ToolRegistry;
   /** Present once the device harness store is available; absence omits `prime_harness`. */
   harness?: HarnessStore;
+  /** Present once a runtime factory exists; absence omits the whole RLM family. */
+  agent?: PrimeToolAgentDeps;
+  /** Present once a synchronous-read heartbeat store exists; absence omits `rlm_heartbeat`. */
+  heartbeats?: PrimeHeartbeatStateStore;
 }>;
 
 /**
@@ -59,6 +64,8 @@ export function createPrimeToolSurface(input: PrimeToolSurfaceInput): PrimeToolS
   const prime: PrimeToolRegistryResult = createPrimeToolRegistry({
     workspace: input.workspace,
     ...(input.harness ? { harness: input.harness } : {}),
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.heartbeats ? { heartbeats: input.heartbeats } : {}),
   });
 
   const merged = new ToolRegistry();

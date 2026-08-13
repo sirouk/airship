@@ -95,6 +95,25 @@ describe("the prime tool surface", () => {
     expect(surface.registry.get("rlm_spawn")).toBeUndefined();
   });
 
+  it("registers the whole RLM family once an agent registry and heartbeat store exist", () => {
+    // The four names that were omitted from every session with "no agent
+    // registry is attached to this session", because the only implementation
+    // of `PrimeAgentRuntimeFactory` was a test double. A production factory
+    // exists now, so absence has to stop being the answer.
+    const surface = createPrimeToolSurface({
+      workspace: new FakeWorkspacePort({}),
+      airship: airshipRegistry([]),
+      agent: { self: { id: "root", name: "root", depth: 0 }, registry: {} as never },
+      heartbeats: { read: () => undefined, write: () => undefined },
+    });
+
+    const names = surface.registry.definitions().map((definition) => definition.name);
+    for (const tool of ["rlm_spawn", "subagent", "agent_message", "agent_observe", "rlm_heartbeat"]) {
+      expect(names, `${tool} must be registered`).toContain(tool);
+    }
+    expect(surface.omitted.map((entry) => entry.name)).not.toContain("rlm_spawn");
+  });
+
   it("pins execute_code in the manifest definitions without booting a kernel", async () => {
     // `toolManifestDigest` is taken before a session — and therefore before a
     // kernel host — exists, so the definition has to come from a probe host
