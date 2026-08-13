@@ -45,6 +45,16 @@ export type MessagePartsViewProps = Readonly<{
   parts: readonly MessagePart[];
   streamedContent?: string;
   streaming?: boolean;
+  /**
+   * Output streaming from the operation that is running right now.
+   *
+   * It used to render as a block pinned under the whole message, so a shell
+   * writing to stdout appeared at the bottom of the row while the step that
+   * produced it sat above with the other operations — the reader had to match
+   * them up by eye. It belongs to one operation, so it renders inside that
+   * operation's row and nowhere else.
+   */
+  liveOutput?: Readonly<{ operationId: string; stream: "stdout" | "stderr" | "combined"; text: string }>;
   /** True only while this row belongs to the currently running turn. */
   live?: boolean;
   /**
@@ -64,6 +74,7 @@ export function MessagePartsView({
   streamedContent,
   streaming = false,
   live = false,
+  liveOutput,
   onRetry,
 }: MessagePartsViewProps) {
   const tail = streamedMessageTail(parts, streamedContent ?? "", streaming);
@@ -73,7 +84,7 @@ export function MessagePartsView({
   return (
     <div class="message-parts" role="group" aria-label="Message contents">
       {nodes.map((node) => node.kind === "operations"
-        ? <OperationStrip key={node.id} node={node} mode={mode} />
+        ? <OperationStrip key={node.id} node={node} mode={mode} {...(liveOutput ? { liveOutput } : {})} />
         : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} live={live} onRetry={onRetry} />)}
       {/* No `aria-live` on the streaming tail: every delta mutating a polite
           region is a screen-reader backlog, one queued utterance per token.
@@ -493,7 +504,11 @@ function firstClause(summary: string): string {
   return clause.length > 72 ? `${clause.slice(0, 71)}…` : clause;
 }
 
-function OperationStrip({ node, mode }: { node: OperationsNode; mode: TranscriptOperationsMode }) {
+function OperationStrip({ node, mode, liveOutput }: {
+  node: OperationsNode;
+  mode: TranscriptOperationsMode;
+  liveOutput?: MessagePartsViewProps["liveOutput"];
+}) {
   const state = operationStripState(node.operations, mode);
   const strip = useRef<HTMLElement>(null);
   const anchor = useRef<Readonly<{ scroller: HTMLElement; element: HTMLElement; top: number }>>();
@@ -530,7 +545,13 @@ function OperationStrip({ node, mode }: { node: OperationsNode; mode: Transcript
         : {})}
     >
       {group.operations.map((operation) => (
-        <OperationRow key={operation.id} operation={operation} onCapture={capture} onSettle={settle} />
+        <OperationRow
+          key={operation.id}
+          operation={operation}
+          onCapture={capture}
+          onSettle={settle}
+          {...(liveOutput && liveOutput.operationId === operation.callId ? { liveOutput } : {})}
+        />
       ))}
     </div>
   ));
@@ -574,10 +595,11 @@ function OperationStrip({ node, mode }: { node: OperationsNode; mode: Transcript
   );
 }
 
-function OperationRow({ operation, onCapture, onSettle }: {
+function OperationRow({ operation, onCapture, onSettle, liveOutput }: {
   operation: PairedOperation;
   onCapture(): void;
   onSettle(details: HTMLDetailsElement): void;
+  liveOutput?: MessagePartsViewProps["liveOutput"];
 }) {
   const density = usePresentationDensity();
   const tier = operation.capabilityTier;
@@ -625,6 +647,18 @@ function OperationRow({ operation, onCapture, onSettle }: {
             Result{tier ? ` · ${capabilityTierLabel(tier)}` : ""}
           </span>
         </p>
+        {/* While this operation is the one running, its own output streams
+            here rather than in a block under the whole message — the result
+            slot below is still empty, and this is the same slot filling in. */}
+        {liveOutput ? (
+          <>
+            <p class="op__sheet-head">
+              <span class="op__label">Output · streaming</span>
+              <code>{liveOutput.stream}</code>
+            </p>
+            <pre class="op__live-output">{liveOutput.text}</pre>
+          </>
+        ) : null}
         <pre>{operation.hasResult ? operation.resultSummary || "No visible output" : "No result is recorded for this call yet."}</pre>
         {operation.metadataSummary ? <><p class="op__sheet-head"><span class="op__label">Metadata · bounded display</span></p><pre>{operation.metadataSummary}</pre></> : null}
       </div>

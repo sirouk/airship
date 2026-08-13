@@ -14784,7 +14784,12 @@ function MessageCard({
           so the same thought is never in two positions at once.
         */}
         {message.parts?.length ? (
-          <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
+          <DeferredMessageParts
+            parts={message.parts}
+            live={message.status !== undefined}
+            {...(message.liveToolOutput ? { liveOutput: message.liveToolOutput } : {})}
+            onRetry={onResend}
+          />
         ) : <p>{message.content || " "}</p>}
         <StreamingReasoningSlot
           store={reasoningStore}
@@ -14794,15 +14799,13 @@ function MessageCard({
           settled={Boolean(message.parts?.length)}
         />
         <StreamingMessageSlot store={streamStore} messageId={message.id} active={message.status !== undefined} />
-        {message.liveToolOutput ? (
-          // No live region here: the <pre> re-renders on every output chunk,
-          // and a polite region would re-announce the whole buffer per chunk.
-          // The turn lifecycle is already announced through the message status.
-          <section class="live-tool-output" aria-label="Live tool output">
-            <header><span class="pulse-dot" /><strong>Live tool output</strong><code>{message.liveToolOutput.stream}</code></header>
-            <pre>{message.liveToolOutput.text}</pre>
-          </section>
-        ) : null}
+        {/* The pinned "Live tool output" block is retired. It rendered under
+            the whole message while the step that produced it sat above with
+            the other operations, so a reader had to match a shell's stdout to
+            its own call by eye. `MessagePartsView` puts it inside that
+            operation's row, in the result slot it is about to become. Still no
+            live region: the <pre> re-renders per chunk and a polite region
+            would re-announce the whole buffer each time. */}
         {/* A disposition that explains a healthy turn is commentary and goes
             quiet with the density; one that says the turn ended badly or that
             the provider could not carry it forward is a warning, and warnings
