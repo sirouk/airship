@@ -11,6 +11,14 @@ import type { JsonValue } from "../../core/contracts";
 import type { EventDraft } from "../../core/journal";
 
 export const PRIME_EVENT_TYPES = Object.freeze({
+  /*
+   * The first prime turn's durable statement that this session runs prime.
+   * `runPrimeTurn` wrote this string inline while this vocabulary did not name
+   * it, so the one prime record every prime session is guaranteed to carry was
+   * the one record no shared list knew about — which is how it reached
+   * `session-audit.ts` as an unknown type.
+   */
+  sessionRuntimeSeal: "prime.session.runtime.seal",
   harnessRefined: "prime.harness.refined",
   kernelJobStarted: "prime.kernel.job.started",
   kernelJobCompleted: "prime.kernel.job.completed",

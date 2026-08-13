@@ -20,13 +20,24 @@ const sessionsView = await readFile(new URL("./sessions-view.tsx", import.meta.u
  */
 describe("quarantine and resume honesty", () => {
   it("only claims a verified history when the audit established one", () => {
-    // The flag has to be initialised false and raised *after* the audit check,
-    // otherwise it says nothing the catch did not already know.
+    // The flag has to be initialised false and, now, read straight off the
+    // audit rather than implied by having survived a throw-gate.
+    //
+    // The gate and the claim came apart when resume stopped requiring
+    // `verified`. Refusing a resume is an *integrity* question — only
+    // `invalid` answers it, because `incomplete` is what every unfinished turn
+    // looks like and it was quarantining people from live threads. But
+    // "History verified" is still a claim about verification, so it may not
+    // ride on admissibility. Deriving the flag from the status is stronger
+    // than the old ordering proof: it cannot say verified for an `incomplete`
+    // history no matter where it sits.
     expect(app).toContain("let historyVerified = false;");
-    const raise = app.indexOf("historyVerified = true;");
-    const auditCheck = app.indexOf('if (audit.status !== "verified")');
-    expect(auditCheck, "the audit gate must exist").toBeGreaterThan(-1);
-    expect(raise, "the flag must be raised after the audit gate").toBeGreaterThan(auditCheck);
+    const raise = app.indexOf('historyVerified = audit.status === "verified";');
+    const auditGate = app.indexOf("if (sessionAuditRefusesResume(audit))");
+    expect(auditGate, "the admissibility gate must exist").toBeGreaterThan(-1);
+    expect(raise, "the claim must be derived from the audit status").toBeGreaterThan(auditGate);
+    // And never re-raised unconditionally somewhere else in the file.
+    expect(app).not.toContain("historyVerified = true;");
 
     // And it must travel with the quarantine record rather than being
     // recomputed. `??=`, because adoption now walks the whole shelf of

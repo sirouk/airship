@@ -959,7 +959,7 @@ export function SessionsView({
         </aside>
 
         <main class="session-library-detail" aria-live="polite">
-          {loadingDetail ? <div class="session-library-loading" role="status" aria-live="polite">Auditing history…</div> : null}
+          {loadingDetail ? <div class="session-library-loading" role="status" aria-live="polite">Opening…</div> : null}
           {detailError ? <div class="session-library-alert error" role="alert"><Icon name="warning" /><span>{detailError}</span></div> : null}
           {!loadingDetail && !detail ? (
             <div class="session-library-empty detail">
@@ -1314,7 +1314,6 @@ function SessionDetail({
                 contradiction until the verdict names what produced it. The
                 observations themselves stay in their own list below. */}
             <small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}{detail.history.issues.length ? ` · ${detail.history.issues.length} structural observation${detail.history.issues.length === 1 ? "" : "s"} below` : ""}</small>
-            <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
           </div>
 
           <section class="session-library-continuity" aria-label="Conversation continuity">
@@ -1324,7 +1323,6 @@ function SessionDetail({
               <small>{detail.transcript.lifecycle.turnId ? `turn ${shortSessionId(detail.transcript.lifecycle.turnId)}` : "no turn has started"}</small>
             </div>
             <div><span>Model pin</span><strong title={`${detail.pins.providerId} · ${detail.pins.model}`}>{detail.pins.model}</strong></div>
-            <div><span>Receipt chain</span><strong>{detail.transcript.receipts.length} recovered</strong></div>
             <div><span>Journal head</span><strong>{sessionEventCount(detail.session.headSequence)}</strong></div>
           </section>
 

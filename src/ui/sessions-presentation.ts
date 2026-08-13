@@ -211,9 +211,29 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
   return Object.freeze({
     pills: Object.freeze([structure, resume, receipts]),
     state,
-    // Collapse may only ever hide agreement — and an empty conversation has
-    // nothing to disagree about, so it is not an exception to that rule.
-    autoExpanded: !unused && state !== "verified",
+    /*
+     * Open itself only for a verdict the reader has to act on.
+     *
+     * The rule was "anything not `verified`", and `attention` is where the
+     * two very different kinds of not-verified had been collapsed together.
+     * One kind is actionable: the transcript will not replay, the audit could
+     * only read part of the journal, the runtime refuses a plain resume. The
+     * other is ambient — no runtime is bound to this conversation right now,
+     * or the audit recorded an observation on a history it otherwise read end
+     * to end. Both unfolded the whole integrity panel on sight, so the
+     * commonest healthy conversation in the product opened its own audit
+     * report at the reader before they had asked anything.
+     *
+     * Collapse may only ever hide agreement, and that rule is kept: everything
+     * below still renders, one caret away, and the pills on the row already
+     * carry the verdict in words. What changes is which verdicts insist.
+     */
+    autoExpanded: !unused && (
+      state === "failed"
+      || input.transcriptReplayFailed === true
+      || input.history.checkedEvents < input.history.totalEvents
+      || (input.compatibility !== undefined && input.compatibility.action !== "resume")
+    ),
     label: `Session integrity. ${structure.label}. ${resume.label}. ${receipts.label}. Opens the inspected event counts, the runtime decision and its reasons, and the proof scope.`,
   });
 }

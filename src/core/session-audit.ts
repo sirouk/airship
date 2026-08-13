@@ -53,7 +53,7 @@ const EVENT_FIELDS = new Set([
   "operationId",
   "payload",
 ]);
-const KNOWN_EVENT_TYPES = new Set([
+export const KNOWN_EVENT_TYPES = new Set([
   "session.created",
   "session.renamed",
   "session.favorite.changed",
@@ -113,6 +113,41 @@ const KNOWN_EVENT_TYPES = new Set([
    * work *degrade* the completeness of the journal it was recorded in.
    */
   TERMINAL_ACTIVITY_EVENT_TYPE,
+  /*
+   * The prime engine's own evidence vocabulary, and the reason it has to be
+   * named here is written three comments above: an event type this set does
+   * not name raises EVENT_TYPE_UNKNOWN, which is a `completeness` finding,
+   * which makes the report `incomplete`. Prime became the default engine while
+   * this set still listed only the airship turn protocol, so *every* new
+   * conversation journaled a `prime.session.runtime.seal` the audit could not
+   * read and was quarantined from resume by its own first turn — the exact
+   * degrade-by-recording trap the terminal comment above was written to avoid.
+   *
+   * Listed literally rather than imported: `src/prime` imports core, and core
+   * importing prime back would close a cycle. `session-audit-prime-vocabulary.test.ts`
+   * holds the two in agreement, so a new prime record cannot be added without
+   * this set learning it.
+   *
+   * Named, not interpreted. These sit beside the canonical transcript and
+   * carry no turn-protocol obligations, so the audit reads them as records it
+   * knows exist rather than records it verifies the shape of.
+   */
+  "prime.session.runtime.seal",
+  "prime.harness.refined",
+  "prime.kernel.job.started",
+  "prime.kernel.job.completed",
+  "prime.kernel.job.failed",
+  "prime.kernel.job.cancelled",
+  "prime.kernel.job.crashed",
+  "prime.kernel.tool.requested",
+  "prime.kernel.tool.approved",
+  "prime.kernel.tool.denied",
+  "prime.kernel.tool.resulted",
+  "prime.kernel.tool.failed",
+  "prime.agent_message.sent",
+  "prime.goal.updated",
+  "prime.compacted",
+  "prime.notice",
 ]);
 const TERMINAL_RECORD_KINDS = new Set(["interactive-input", "process-start", "process-exit", "workspace-reconcile", "browser-git"]);
 const TERMINAL_RECORD_OUTCOMES = new Set(["submitted", "completed", "failed"]);

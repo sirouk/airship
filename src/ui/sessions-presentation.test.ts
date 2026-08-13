@@ -168,7 +168,29 @@ describe("sessionIntegrityRow", () => {
   it("does not claim a runtime decision when no runtime was supplied", () => {
     const row = sessionIntegrityRow(integrityInput({ compatibility: undefined }));
     expect(row.pills[1]).toMatchObject({ state: "none", label: "No active runtime" });
-    expect(row.autoExpanded).toBe(true);
+    // …and does not unfold the audit report over it. "No runtime is bound to
+    // this conversation right now" is ambient, not actionable: there is
+    // nothing here for the reader to do and nothing wrong with the history.
+    // It used to force the whole integrity panel open, which is how the
+    // commonest healthy conversation in the product greeted a click with its
+    // own audit report. The pill still says it, in words, on the row.
+    expect(row.autoExpanded).toBe(false);
+  });
+
+  it("still unfolds itself for the attention states a reader has to act on", () => {
+    // The distinction the old `state !== "verified"` rule could not draw.
+    const replay = sessionIntegrityRow(integrityInput({ transcriptReplayFailed: true }));
+    expect(replay.autoExpanded).toBe(true);
+
+    const partiallyRead = sessionIntegrityRow(integrityInput({
+      history: { status: "incomplete", label: "Journal is incomplete", checkedEvents: 2, totalEvents: 9, turnCount: 1 },
+    }));
+    expect(partiallyRead.autoExpanded).toBe(true);
+
+    const forkRequired = sessionIntegrityRow(integrityInput({
+      compatibility: { action: "fork-required", label: "Fork required" },
+    }));
+    expect(forkRequired.autoExpanded).toBe(true);
   });
 });
 

@@ -47,6 +47,7 @@ import { runTurn } from "../load-agent-runtime";
 import { inspectBrowserExecutionTier } from "../load-execution-runtime";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import type { SessionAuditReport } from "../core/session-audit";
+import { sessionAuditRefusesResume } from "../core/session-audit-admission";
 import { DemoInferenceTransport } from "../inference/demo";
 import { withoutCredential } from "../inference/credential-unavailable";
 import type {
@@ -6007,8 +6008,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             unresumableReason = compatibility
               ? `${compatibility.label}: ${compatibility.reasons.map((reason) => reason.message).join(" ")} ${fresh.history.issues.map((issue) => `${issue.code}: ${issue.message}`).join(" ")}`.trim()
               : "It no longer matches this profile's runtime.";
-          } else if (audited.report.status !== "verified") {
-            unresumableReason = "It did not pass the local journal audit.";
+          } else if (sessionAuditRefusesResume(audited.report)) {
+            unresumableReason = "Its journal failed the local integrity audit.";
           } else if (
             audited.session.headSequence !== fresh.session.headSequence
             || audited.session.headDigest !== fresh.session.headDigest
@@ -8279,12 +8280,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         const events = await journal.readEvents(candidateSession.id);
         const { auditSessionHistory, presentSessionMessages } = await loadDeferredCapabilities();
         const audit = await auditSessionHistory({ session: candidateSession, events });
-        if (audit.status !== "verified") {
+        if (sessionAuditRefusesResume(audit)) {
           throw new Error("The latest encrypted session failed its digest/protocol audit and was not resumed.");
         }
-        // Past this line the audit really did pass, so the quarantine panel may
-        // say so. Before it, nothing about the history has been established.
-        historyVerified = true;
+        // Past this line the history is admissible. `historyVerified` still
+        // means *verified* and not merely admissible, so an incomplete audit —
+        // an unfinished turn, a record from a newer build — reports itself
+        // honestly instead of borrowing a claim it did not earn.
+        historyVerified = audit.status === "verified";
         const presentation = presentSessionMessages({
           session: candidateSession,
           audit,
@@ -10910,8 +10913,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       candidateRuntime,
       signal,
     );
-    if (audited.report.status !== "verified") {
-      throw new Error("The requested conversation failed its complete local journal audit and was not resumed. No new conversation was created.");
+    if (sessionAuditRefusesResume(audited.report)) {
+      throw new Error("The requested conversation's journal failed its local integrity audit and was not resumed. No new conversation was created.");
     }
     if (
       audited.session.headSequence !== detail.session.headSequence
@@ -11036,9 +11039,23 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         throw new Error(fresh.compatibility?.label ?? "The session no longer matches the active runtime.");
       }
       const audited = await loadAuditedSessionSnapshot(fresh.session.id);
-      if (audited.report.status !== "verified") {
-        throw new Error("The session failed the full digest/protocol audit and remains quarantined from resume.");
+      if (sessionAuditRefusesResume(audited.report)) {
+        throw new Error("This conversation's journal failed its local integrity audit and cannot be reopened.");
       }
+      /*
+       * A quarantine is a reading, and a reading expires.
+       *
+       * `quarantinedSession` is written once, during vault adoption, and was
+       * cleared by exactly one thing: the Dismiss button on the chat card. So a
+       * conversation that failed to open at adoption — often for a reason that
+       * has since gone, an engine the audit had not learned, a runtime that had
+       * not finished binding — kept a disabled Resume button and a rail row
+       * reading "Needs review · could not be reopened" for the rest of the
+       * page's life, no matter how cleanly it audited afterwards. The audit
+       * that just passed on this exact session is better evidence than the one
+       * that failed earlier, so it retires the verdict it supersedes.
+       */
+      setQuarantinedSession((current) => current?.sessionId === fresh.session.id ? undefined : current);
       if (
         audited.session.headSequence !== fresh.session.headSequence ||
         audited.session.headDigest !== fresh.session.headDigest
@@ -11228,8 +11245,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       );
     }
     const audited = await loadAuditedSessionSnapshot(result.session.id);
-    if (audited.report.status !== "verified") {
-      throw new Error("The new fork did not pass its complete local journal audit.");
+    if (sessionAuditRefusesResume(audited.report)) {
+      throw new Error("The new fork's journal failed its local integrity audit.");
     }
     if (
       audited.session.headSequence !== fresh.session.headSequence
@@ -12207,7 +12224,23 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                 {!online ? <p class="connectivity-inline-reason" role="status">{OFFLINE_INLINE_REASON}</p> : null}
               </div>
             </section>
-              {lastReceipt && ProofInspector ? <aside class={claimRailOpen ? "inspector" : "inspector inspector--summary"}><ProofInspector
+              {/*
+                Density-gated, like every other evidence surface on this route.
+                The collapsed rail is a 44px band under the composer that read
+                "Asserted, not verified · This turn was recorded and asserted.
+                No named authority verified a claim. · 8 turn claims" on every
+                healthy turn of every conversation — including the local demo.
+                And `composeClaimStack` caps a receipt-carried claim at
+                `partial`, so that sentence is not a state a reader can improve
+                by doing anything: it is the permanent resting text of a working
+                product, phrased as a shortfall.
+                The per-message proof chips have been gated on `proof` since
+                they landed and are off at the default density; this was the one
+                evidence surface that ignored the setting. The claim stack is
+                unchanged and still one press away from the Proof route, where
+                someone looking for it will look.
+              */}
+              {lastReceipt && ProofInspector && densityAllows("proof", appDensity) ? <aside class={claimRailOpen ? "inspector" : "inspector inspector--summary"}><ProofInspector
               receipt={lastReceipt}
               endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
               now={attestationNow}
