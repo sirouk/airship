@@ -817,7 +817,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so each takes one further whole step — raw to
   // 2,315 (1,634 B) and gzip to 736 (1,436 B).
   //
-  // Re-measured at 2,373,600 B raw / 753,315 B gzip after the concurrency and
+  // Re-measured at 2,373,000 B raw / 753,315 B gzip after the concurrency and
   // reasoning wave, and every byte of it is a behaviour the product did not
   // have: turns keyed per conversation rather than per page (a set of running
   // sessions, a controller map, and a switchable approval delegate per thread,
@@ -832,9 +832,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // backstop below spells out: these readings drift a few bytes between
   // otherwise identical builds, and a comment pinned to one of them fails the
   // next.
-  // 2,318 KiB raw would have left 32 B and 736 KiB gzip would have left 349 B,
+  // 2,318 KiB raw would have left 632 B and 736 KiB gzip would have left 349 B,
   // both under the aggregate's 768-byte minifier-rename floor, so each takes
-  // one further whole step — raw to 2,319 (1,056 B) and gzip to 737 (1,373 B).
+  // one further whole step — raw to 2,319 (1,656 B) and gzip to 737 (1,373 B).
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2319 * 1024, gzip: 737 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -1124,7 +1124,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one further whole step to 2,994 (1,231 B); gzip takes its smallest
   // clearing step to 924, which leaves 819 B and is already above the floor.
   //
-  // Re-measured at 3,068,900 B raw / 946,500 B gzip, deliberately a little
+  // Re-measured at 3,068,700 B raw / 946,500 B gzip, deliberately a little
   // under the build rather than exactly on it.
   //
   // This reading wobbles. Three consecutive container builds of an unchanged
@@ -1141,9 +1141,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // first-party reading above and moves for the same reason and by the same
   // bytes — the concurrency and reasoning wave itemised there; no vendor pin
   // moved, so all of the growth is first-party and reviewed above. Raw takes
-  // 2,997 KiB raw would have left 28 B and 925 KiB gzip would have left 700 B,
+  // 2,997 KiB raw would have left 228 B and 925 KiB gzip would have left 700 B,
   // both under the aggregate's 768-byte minifier-rename floor, so each takes
-  // one further whole step — raw to 2,998 (1,052 B) and gzip stays at 926
+  // one further whole step — raw to 2,998 (1,252 B) and gzip stays at 926
   // (1,724 B).
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2998 * 1024, gzip: 926 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle

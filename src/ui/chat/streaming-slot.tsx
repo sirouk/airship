@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { Icon } from "../icons";
 import { IncrementalMarkdownView } from "./markdown";
-import { reasoningHeadline } from "./message-parts";
 import { useReasoningVisibility } from "./reasoning-visibility";
 
 type Listener = () => void;
@@ -144,7 +142,7 @@ function ReasoningText({ text, follow }: { text: string; follow: boolean }) {
     const element = node.current;
     if (element) element.scrollTop = element.scrollHeight;
   }, [text, follow]);
-  return <pre ref={node} class="reasoning-summary__text reasoning-live__text">{text}</pre>;
+  return <pre ref={node} class="reasoning-aside__body">{text}</pre>;
 }
 
 /**
@@ -191,20 +189,26 @@ export function StreamingReasoningSlot({ store, answerStore, messageId, active, 
   const streaming = active && !folded;
   return (
     <details
-      class={streaming ? "message-part reasoning-summary reasoning-full reasoning-live reasoning-live--streaming" : "message-part reasoning-summary reasoning-full reasoning-live"}
+      class={streaming ? "reasoning-aside reasoning-aside--streaming" : "reasoning-aside"}
       open={open}
       onToggle={(event) => setReaderOpen((event.currentTarget as HTMLDetailsElement).open)}
     >
-      {/* Not a live region: one utterance per reasoning delta is unusable, and
-          the turn's arrival is already narrated by `chat/turn-narration.ts`. */}
+      {/*
+        One line, and deliberately not the four-column grid the settled part's
+        summary used to be. That grid gave column 3 to both a `<small>` and the
+        `::after` marker, and `<small>` inside a summary is in the shell's
+        uppercase-eyebrow list — so a whole sentence of reasoning headline
+        rendered as a three-line block of uppercase mono sitting on top of the
+        word "Reasoning". A label and a short measure are all this row needs;
+        the reasoning itself is one line below it.
+        Not a live region: one utterance per delta is unusable, and the turn's
+        arrival is already narrated by `chat/turn-narration.ts`.
+      */}
       <summary>
-        <Icon name="context" size={14} />
-        <span>Reasoning</span>
-        <small>
-          {folded
-            ? `${reasoningHeadline(text)} · ${text.length.toLocaleString()} characters`
-            : active ? "Live, as the provider exposes it" : "Shown as the provider exposed it"}
-        </small>
+        <span class="reasoning-aside__label">Thought process</span>
+        <span class="reasoning-aside__meta">
+          {streaming ? "live" : `${text.length.toLocaleString()} characters`}
+        </span>
       </summary>
       <ReasoningText text={text} follow={streaming} />
     </details>

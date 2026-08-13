@@ -24,7 +24,17 @@ export const DEFAULT_OPERATION_RENDER_LIMIT = 12;
  * never leave the page.
  */
 const NARRATIVE_PART_DENSITY_TAG: Partial<Record<NarrativePart["kind"], DensityTag>> = Object.freeze({
-  "reasoning-summary": "commentary",
+  /*
+   * `reasoning-summary` was tagged `commentary` and is not, which is why
+   * reasoning *vanished* at the end of every turn instead of collapsing: the
+   * default density is `minimal`, `minimal` retires `commentary` outright, and
+   * retired means unmounted. So the live block streamed, the turn settled, and
+   * the durable record it handed off to was never rendered at all — the owner
+   * asked for reasoning that is never hidden and got reasoning that survived
+   * exactly as long as the request was in flight.
+   * It is a fold now, not a density tier: `reasoningVisibility` decides whether
+   * it opens, and nothing decides whether it exists.
+   */
   footer: "proof",
 } as const);
 
@@ -691,28 +701,29 @@ function MessagePartView({ part, answer, live, onRetry }: {
      * the provider exposed; the part says so rather than letting the block
      * read as the model's private mind.
      */
+    /*
+     * The same block the live slot renders, so a turn settling looks like the
+     * reasoning *collapsing* rather than being replaced by a different object.
+     * `open` follows the Profile's fold preference and nothing else.
+     */
     if (part.full) {
-      const provenance = "Shown as the provider exposed it";
-      if (reasoningVisibility === "expanded") {
-        return (
-          <article class="message-part reasoning-summary reasoning-full">
-            <header><Icon name="context" size={14} /><span>{part.label ?? "Reasoning"}</span><small>{provenance}</small></header>
-            <p class="reasoning-summary__headline">{part.summary}</p>
-            <pre class="reasoning-summary__text">{part.full}</pre>
-          </article>
-        );
-      }
       return (
-        <details class="message-part reasoning-summary reasoning-full">
-          <summary><Icon name="context" size={14} /><span>{part.label ?? "Reasoning"}</span><small>{`${provenance} · ${part.full.length.toLocaleString()} characters`}</small></summary>
-          <pre class="reasoning-summary__text">{part.full}</pre>
+        <details class="reasoning-aside" open={reasoningVisibility === "expanded"}>
+          <summary>
+            <span class="reasoning-aside__label">{part.label ?? "Thought process"}</span>
+            <span class="reasoning-aside__meta">{`${part.full.length.toLocaleString()} characters`}</span>
+          </summary>
+          <pre class="reasoning-aside__body">{part.full}</pre>
         </details>
       );
     }
     return (
-      <details class="message-part reasoning-summary">
-        <summary><Icon name="context" size={14} /><span>{part.label ?? "Reasoning summary"}</span><small>Public summary</small></summary>
-        <p>{part.summary}</p>
+      <details class="reasoning-aside" open={reasoningVisibility === "expanded"}>
+        <summary>
+          <span class="reasoning-aside__label">{part.label ?? "Thought process"}</span>
+          <span class="reasoning-aside__meta">summary only</span>
+        </summary>
+        <p class="reasoning-aside__body">{part.summary}</p>
       </details>
     );
   }

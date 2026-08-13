@@ -1358,30 +1358,81 @@ button.runtime-posture {
   overflow-wrap: anywhere;
 }
 
-/* Live reasoning is the same block as the settled one, marked as still
-   arriving: an accent edge while it streams, and a shorter window than the
-   settled 40vh so a long chain cannot push the answer off the screen it is
-   about to arrive on. `--accent` and not `--focus`: this is the product
-   speaking, not a keyboard position. */
-.message-part.reasoning-summary.reasoning-live {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+/*
+ * The reasoning aside — one shape for the live block and the settled record.
+ *
+ * Borrowed, with thanks, from prime-agent-vscode's `details.thinking`: a dashed
+ * edge that reads as an aside rather than as content, one italic line to open
+ * it, and a pre-wrapped muted body that scrolls inside its own box. The
+ * previous treatment was a four-column grid whose third column was claimed by
+ * both a `<small>` and the disclosure marker — and `summary small` is in the
+ * shell's uppercase-eyebrow list, so a sentence-long headline rendered as
+ * three lines of uppercase mono printed on top of the word "Reasoning".
+ *
+ * Dashed, not solid: every other bordered thing in the transcript is the work
+ * itself. This is the model talking to itself beside the work, and the border
+ * should say so before a single word is read.
+ */
+.reasoning-aside {
+  margin: 0;
+  padding: 5px 10px;
+  border: 1px dashed color-mix(in srgb, var(--line-strong) 82%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-soft) 55%, transparent);
 }
 
-.message-part.reasoning-summary.reasoning-live--streaming {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+.reasoning-aside--streaming {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
-.message-part.reasoning-summary.reasoning-live > pre.reasoning-live__text {
-  max-height: 22vh;
+.reasoning-aside > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--sp-2);
+  align-items: baseline;
+  min-height: 24px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  font-style: italic;
+  list-style: none;
+}
+
+.reasoning-aside > summary::-webkit-details-marker { display: none; }
+
+/* The mark the reference uses, in the one colour this product reserves for
+   "the product is speaking". */
+.reasoning-aside > summary::before {
+  color: var(--accent-bright);
+  content: "✦";
+  font-style: normal;
+}
+
+.reasoning-aside > summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.reasoning-aside__meta { color: var(--ink-disabled); }
+
+/* Sentence case, wrapped, and scrolling inside its own box rather than pushing
+   the answer off the screen it is about to arrive on. */
+.reasoning-aside__body {
+  margin: 6px 0 2px;
+  padding: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   scroll-behavior: smooth;
 }
 
-/* A reader who has scrolled back through the chain is not fighting the tail
-   pin every frame; the pin only ever runs while the block is streaming. */
 @media (prefers-reduced-motion: reduce) {
-  .message-part.reasoning-summary.reasoning-live > pre.reasoning-live__text {
-    scroll-behavior: auto;
-  }
+  .reasoning-aside__body { scroll-behavior: auto; }
 }
 
 

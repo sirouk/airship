@@ -70,6 +70,49 @@ describe("re-addressing a slot to the journal's id", () => {
   });
 });
 
+/*
+ * Two ways the reasoning block stopped being readable, both caught by reading
+ * across files — which is what this file exists to do.
+ */
+describe("the reasoning aside", () => {
+  it("is never retired by presentation density", async () => {
+    // `reasoning-summary` was tagged `commentary`; the default density is
+    // `minimal`; `minimal` retires `commentary` outright and retired means
+    // unmounted. So reasoning vanished at the end of every turn instead of
+    // collapsing — the live block streamed, the turn settled, and the durable
+    // record it handed off to was never rendered. The owner's rule is that
+    // reasoning is never hidden, only folded.
+    const view = await readFile(new URL("./message-parts-view.tsx", import.meta.url), "utf8");
+    const tags = view.slice(view.indexOf("NARRATIVE_PART_DENSITY_TAG"), view.indexOf("OPERATION_COLLAPSE_THRESHOLD"));
+    expect(tags).not.toContain('"reasoning-summary": "commentary"');
+    expect(tags).not.toMatch(/"reasoning-summary":\s*"/u);
+  });
+
+  it("renders the settled record in the same shape the live slot streams", async () => {
+    // A turn settling should look like the reasoning collapsing, not like one
+    // object being swapped for a differently-styled one.
+    const [slot, view, styles] = await Promise.all([
+      streamingSlotSource(),
+      readFile(new URL("./message-parts-view.tsx", import.meta.url), "utf8"),
+      chatStyles(),
+    ]);
+    for (const source of [slot, view]) {
+      expect(source).toContain('class="reasoning-aside');
+      expect(source).toContain('class="reasoning-aside__label"');
+      expect(source).toContain('class="reasoning-aside__body"');
+    }
+    // …and the sheet actually styles that shape, rather than the grid the
+    // markup used to be written against.
+    expect(styles).toContain(".reasoning-aside {");
+    expect(styles).toContain(".reasoning-aside > summary {");
+    expect(styles).toContain(".reasoning-aside__body {");
+    // `summary small` is in the shell's uppercase-eyebrow list, which is what
+    // printed a sentence-long headline as three lines of mono over the label.
+    expect(slot).not.toMatch(/<summary>[\s\S]{0,400}<small>/u);
+    expect(view.slice(view.indexOf('class="reasoning-aside'))).not.toMatch(/<summary>[\s\S]{0,400}<small>/u);
+  });
+});
+
 describe("isolated transcript stream slots", () => {
   it("notifies only the in-flight message subscriber", () => {
     const store = new TranscriptStreamStore();
