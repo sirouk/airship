@@ -201,7 +201,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one further whole-KiB step to 188 (963 B). Raw is unchanged and keeps
   // 213 KiB of its clearance.
   //
-  // Re-measured at 574,270 B raw / 192,176 B gzip after the campaign's closing
+  // Re-measured at 574,264 B raw / 192,170 B gzip after the campaign's closing
   // waves, gzip taken from the container build, which compresses this
   // aggregate 22 bytes tighter than the host artifact and is therefore the
   // number the claim has to state. 188 KiB gzip would have left 314 B, under the 768-byte floor, so
@@ -376,7 +376,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
   //
-  // Re-measured at 456,713 B raw / 134,487 B gzip after the surface sweep's
+  // Re-measured at 456,707 B raw / 134,481 B gzip after the surface sweep's
   // closing waves. The named cause is the deferred routes finally being audited
   // at eight device classes: Preferences keeping its header from slicing the
   // row beneath it, the conversation library seating its own rows at 320, the
@@ -806,7 +806,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 768-byte minifier-rename floor, so each takes one further whole step — raw
   // to 2,312 (1,713 B) and gzip to 735 (1,414 B).
   //
-  // Re-measured at 2,368,900 B raw / 752,175 B gzip — the floor across both
+  // Re-measured at 2,368,894 B raw / 752,169 B gzip — the floor across both
   // build modes, the container coming in 26 raw and 53 gzip bytes under the
   // host — after the campaign closed
   // its clusters: the scroller that contains what it clips, the second overlay
@@ -1098,7 +1098,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // (1,395 B); gzip takes its smallest clearing step to 923, which leaves
   // 841 B and is already above the floor.
   //
-  // Re-measured at 3,064,599 B raw / 945,303 B gzip, again the floor across
+  // Re-measured at 3,064,592 B raw / 945,303 B gzip, again the floor across
   // both modes. This backstop tracks the
   // first-party reading above and moves for the same reason. 2,993 KiB raw
   // would have left 207 B, under the aggregate's 768-byte floor, so raw takes
