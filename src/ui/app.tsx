@@ -7283,6 +7283,17 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             }
             const reachedAssistantBoundary = signal.events.some((event) => event.type === "assistant.completed");
             if (reachedAssistantBoundary) clearPendingDelta(assistantId);
+            /*
+             * The handoff. `turn.reasoning` is journaled once per step, and
+             * from that moment the durable `reasoning-summary` part carries
+             * that step's thinking in its right place in the sequence. Holding
+             * the live buffer too would render the same thought twice — once
+             * in position and once at the tail — and a multi-step turn would
+             * accumulate every earlier step's reasoning under the newest one.
+             */
+            if (signal.events.some((event) => event.type === "turn.reasoning")) {
+              clearPendingReasoning(assistantId);
+            }
             // Held from the live signal because a failed turn never returns a
             // result to read it from, and this is the boundary Retry forks at.
             if (!turnRequestBoundary) {
@@ -14757,9 +14768,24 @@ function MessageCard({
             </span>
           ) : null}
         </div>
-        {/* Above the answer, because it is what the answer came out of — and
-            mounted before the parts so a row that is still only reasoning has
-            something on it rather than an empty card. */}
+        {/*
+          Reading order, and nothing else decides it.
+          `message.parts` is the ordered spine: `turn.reasoning` is journaled
+          once per inference step, so the durable parts already interleave each
+          step's reasoning with the tool calls and text around it. What was
+          wrong was this overlay — the live reasoning block sat *above* the
+          whole row, so a second step's thinking appeared at the top, before
+          the tool call that provoked it, and every later thought piled into
+          the same box at the head of the message.
+          The two live slots belong where the turn actually is: after
+          everything already settled, reasoning first because it precedes the
+          answer it produced. When the step's `turn.reasoning` lands, the live
+          buffer clears and the durable part takes its place in the sequence,
+          so the same thought is never in two positions at once.
+        */}
+        {message.parts?.length ? (
+          <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
+        ) : <p>{message.content || " "}</p>}
         <StreamingReasoningSlot
           store={reasoningStore}
           answerStore={streamStore}
@@ -14767,9 +14793,6 @@ function MessageCard({
           active={message.status !== undefined}
           settled={Boolean(message.parts?.length)}
         />
-        {message.parts?.length ? (
-          <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
-        ) : <p>{message.content || " "}</p>}
         <StreamingMessageSlot store={streamStore} messageId={message.id} active={message.status !== undefined} />
         {message.liveToolOutput ? (
           // No live region here: the <pre> re-renders on every output chunk,
