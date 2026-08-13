@@ -504,6 +504,24 @@ function firstClause(summary: string): string {
   return clause.length > 72 ? `${clause.slice(0, 71)}…` : clause;
 }
 
+/**
+ * Which operation, if any, owns the output currently streaming in.
+ *
+ * A turn runs several steps and only one of them is producing output at a
+ * time. Deciding ownership by identity — the running call's id against each
+ * row's `callId` — is what keeps a shell's stdout in the row that ran the
+ * shell instead of in a block beneath the whole message, where a reader had
+ * to pair them by eye. Exported so the rule is tested directly rather than
+ * inferred from markup.
+ */
+export function liveOutputForOperation(
+  liveOutput: MessagePartsViewProps["liveOutput"],
+  callId: string | undefined,
+): MessagePartsViewProps["liveOutput"] {
+  if (!liveOutput || !callId) return undefined;
+  return liveOutput.operationId === callId ? liveOutput : undefined;
+}
+
 function OperationStrip({ node, mode, liveOutput }: {
   node: OperationsNode;
   mode: TranscriptOperationsMode;
@@ -550,7 +568,7 @@ function OperationStrip({ node, mode, liveOutput }: {
           operation={operation}
           onCapture={capture}
           onSettle={settle}
-          {...(liveOutput && liveOutput.operationId === operation.callId ? { liveOutput } : {})}
+          {...(liveOutputForOperation(liveOutput, operation.callId) ? { liveOutput: liveOutputForOperation(liveOutput, operation.callId)! } : {})}
         />
       ))}
     </div>

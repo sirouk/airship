@@ -1163,40 +1163,6 @@ button.runtime-posture {
   margin-top: 7px;
 }
 
-.live-tool-output {
-  overflow: hidden;
-  margin-top: 8px;
-  border: 1px solid color-mix(in srgb, var(--v-info) 30%, var(--line));
-  border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
-}
-
-.live-tool-output header {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  min-height: 32px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-muted);
-  font: var(--fs-micro)/1.3 var(--font-mono);
-}
-
-.live-tool-output header code {
-  margin-left: auto;
-  color: var(--ink-faint);
-}
-
-.live-tool-output pre {
-  max-height: 13rem;
-  margin: 0;
-  padding: 8px;
-  overflow: auto;
-  color: var(--ink);
-  font: var(--fs-micro)/1.5 var(--font-mono);
-  white-space: pre-wrap;
-}
-
 .message-parts .message-part {
   min-width: 0;
   margin: 0;

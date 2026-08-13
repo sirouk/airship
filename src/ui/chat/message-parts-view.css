@@ -118,8 +118,9 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
 
 /* The running step's own output, in the slot its result will occupy. */
 .op__live-output {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  padding-left: var(--sp-2);
-  max-height: 18rem;
+  max-height: 13rem;
   overflow: auto;
+  border-left: 2px solid color-mix(in srgb, var(--v-info) 55%, var(--line));
+  padding-left: 8px;
+  white-space: pre-wrap;
 }

@@ -16,6 +16,7 @@ import {
   errorHeading,
   operationAuthorityChip,
   operationHeadline,
+  liveOutputForOperation,
   operationStripState,
   pairOperations,
   resultDigest,
@@ -461,3 +462,27 @@ function operation(name: string, outcome: PairedOperation["outcome"], sequence: 
     hasResult: outcome === "ran",
   });
 }
+
+describe("output that is still streaming in", () => {
+  const streaming = Object.freeze({ operationId: "call-2", stream: "stdout", text: "building…" } as const);
+
+  it("belongs to the step that is producing it, not to every step in the turn", () => {
+    expect(liveOutputForOperation(streaming, "call-2")).toBe(streaming);
+    expect(liveOutputForOperation(streaming, "call-1")).toBeUndefined();
+    expect(liveOutputForOperation(streaming, "call-3")).toBeUndefined();
+  });
+
+  it("claims nothing when the turn has no output running or the row has no call to own it", () => {
+    expect(liveOutputForOperation(undefined, "call-2")).toBeUndefined();
+    expect(liveOutputForOperation(streaming, undefined)).toBeUndefined();
+  });
+
+  it("is no longer pinned beneath the whole message", async () => {
+    // The regression this guards is a layout one, so it is asserted where the
+    // layout lives: the shell must not grow a second home for the same bytes.
+    const shell = await readFile(new URL("../app.tsx", import.meta.url), "utf8");
+    expect(shell).not.toContain('class="live-tool-output"');
+    const chat = await readFile(new URL("../chat.css", import.meta.url), "utf8");
+    expect(chat, "the retired block must not keep paying for its rules").not.toContain(".live-tool-output");
+  });
+});
