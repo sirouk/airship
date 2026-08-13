@@ -4835,11 +4835,18 @@
   white-space: nowrap;
 }
 
+/* The page's first content, not a second band of chrome.
+   The rule under it drew a full-width edge a few pixels below the topbar's
+   own, which is what made every route look like it began twice — and it did
+   begin twice, because the topbar's centre band was empty and the name of the
+   page lived only down here. The topbar carries the destination now
+   (`.topbar-destination`), so this header keeps the route's title, sentence
+   and actions and stops drawing the line. */
 .route-header {
   display: grid;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-6);
-  border-bottom: 1px solid var(--line);
+  padding: 0 var(--sp-6) var(--sp-3);
+  border-bottom: 0;
 }
 
 /*

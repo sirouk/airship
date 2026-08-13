@@ -114,10 +114,32 @@
  */
 .topbar-center {
   display: flex;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   align-items: center;
   min-width: 0;
   padding: 0 var(--sp-4);
+}
+
+/* Where you are, in the band that was carrying nothing. It leads the strip and
+   the runtime readings follow it, so the row reads left to right as "this page,
+   under these conditions" — and it yields before they do, because a truncated
+   page name is recoverable from the rail while a trust chip pushed off the
+   strip is not. */
+.topbar-destination {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font: var(--fw-strong) var(--fs-body)/1.2 var(--font-display);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-runtime-state {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
 }
 
 .topbar-posture-chip {

@@ -817,7 +817,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate's 768-byte floor, so each takes one further whole step — raw to
   // 2,315 (1,634 B) and gzip to 736 (1,436 B).
   //
-  // Re-measured at 2,372,307 B raw / 753,340 B gzip after the concurrency and
+  // Re-measured at 2,372,444 B raw / 753,315 B gzip after the concurrency and
   // reasoning wave, and every byte of it is a behaviour the product did not
   // have: turns keyed per conversation rather than per page (a set of running
   // sessions, a controller map, and a switchable approval delegate per thread,
@@ -1120,7 +1120,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one further whole step to 2,994 (1,231 B); gzip takes its smallest
   // clearing step to 924, which leaves 819 B and is already above the floor.
   //
-  // Re-measured at 3,068,006 B raw / 946,469 B gzip. This backstop tracks the
+  // Re-measured at 3,068,143 B raw / 946,443 B gzip. This backstop tracks the
   // first-party reading above and moves for the same reason and by the same
   // bytes — the concurrency and reasoning wave itemised there; no vendor pin
   // moved, so all of the growth is first-party and reviewed above. Raw takes
@@ -1366,7 +1366,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the entry chunk does not move. Raw takes the tightest whole step above
   // the reading, 86 KiB, leaving 783 B; gzip stays at 28 KiB with 767 B left.
   //
-  // Re-measured at 88,281 B raw / 28,166 B gzip after the surface sweep — the
+  // Re-measured at 88,281 B raw / 28,159 B gzip after the surface sweep — the
   // floor across both modes, gzip taken from the container build, which
   // compresses two bytes tighter than this host artifact. The named cause is
   // the dock learning to close honestly at the two viewports it could not fit:

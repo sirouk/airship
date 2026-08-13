@@ -11479,13 +11479,31 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             the note used to be a fourth child of a three-column topbar grid,
             and every second-tab session paid for it as a wrapped full-width
             second row of the shell header. */}
-        <div class="topbar-center" role="group" aria-label="Runtime state">
+        <div class="topbar-center">
+          {/*
+            The band's own job, finally given to it.
+            This column is `minmax(280px, 1fr)` and held one chip, so on every
+            desktop width the widest strip in the shell was mostly ground —
+            while each route drew a second full-width band directly beneath it
+            to say which page you were on. Two headers, one of them empty. The
+            destination is a shell fact (the rail selects it, the hash carries
+            it, it is the same word on every route), so the shell's own header
+            is where it belongs, and `.route-header` below stops being chrome
+            and goes back to being the page's first content.
+            Not a heading: the route's own `<h1>` is still the document's
+            title and still on the page. This is the shell saying where you
+            are, which is what the rail's selected row says too — so it is
+            marked `aria-hidden` rather than read out a third time.
+          */}
+          <span class="topbar-destination" aria-hidden="true">{destinationLabel(view) ?? "Airship"}</span>
+          <div class="topbar-runtime-state" role="group" aria-label="Runtime state">
           <TabPresenceNote />
           {/* One chip, every width, every connection state. The four axis pills
               (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
               were two components rendering one fact at two sizes; the sheet they
               both open still renders all four axes verbatim. */}
           <TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />
+          </div>
         </div>
         <div class="topbar-actions">
           {/* The `e2ee` axis used to render its own action pill here on desktop
