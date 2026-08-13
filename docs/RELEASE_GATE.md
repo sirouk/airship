@@ -41,19 +41,19 @@ ceilings are both blocking.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 118 KiB |
+| HTML-referenced entry JavaScript | 384 KiB | 119 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 191 KiB |
 | Deferred advanced capability bundle | 447 KiB | 133 KiB |
-| First-party and other non-vendor JS/workers | 2,410 KiB | 765 KiB |
+| First-party and other non-vendor JS/workers | 2,437 KiB | 774 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 682 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 3,091 KiB | 953 KiB |
+| Absolute installed JavaScript/worker backstop | 3,118 KiB | 962 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 49 KiB | 10 / 14 / 4 / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
-| Optional Node/WebContainer pack | 32 KiB | 11 KiB |
+| Optional Node/WebContainer pack | 41 KiB | 15 KiB |
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
-| Optional agent runtime / tool bundle | 54 / 128 KiB | 16 / 39 KiB |
+| Optional agent runtime / tool bundle | 54 / 131 KiB | 16 / 42 KiB |
 | Optional Workspace / Source Control / browser Git | 87 / 48 / 276 KiB | 29 / 14 / 83 KiB |
 | Optional Sessions / Memory / Memory support / Proof | 65 / 64 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
 | Optional Skills route / skill editor | 8 / 4 KiB | 4 / 2 KiB |
@@ -89,9 +89,12 @@ gate above fails; a build must not silently learn a larger baseline.
 Ceilings move with measurements, not with need. Each one in
 `scripts/release-gate.mjs` carries the reading that sets it, the budgets named in
 `MEASUREMENT_JUSTIFIED_BUDGETS` are required to, and
-`assertDocumentedMeasurementsMatchBuild` compares those readings against the
-artifacts the same run measures — so a justification that quotes a build nobody
-produced fails the gate rather than surviving it.
+`assertDocumentedMeasurementsMatchBuild` compares each reading's whole-KiB
+budget bucket against the artifacts the same run measures. Build-time public
+configuration may change minified strings or gzip output by a few bytes; drift
+inside the same bucket cannot justify a larger ceiling and is accepted. A reading
+in a higher bucket can buy an extra KiB for bytes no build shipped, so it still
+fails the gate and requires review.
 
 The shell and shared browser capability bundle are measured separately at the
 dynamic-import boundary already enforced by the app. The baseline class pays for

@@ -18,6 +18,25 @@ const appSource = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
  * matching conversations". That is a correctness hazard, not a cosmetic one:
  * a fork writes a new session identity and manifest.
  */
+describe("conversation library navigation authority", () => {
+  it("uses the shell's target-aware inspector for both the pane and row opener", () => {
+    expect(source).toContain("inspectSession?: (sessionId: string, signal?: AbortSignal) => Promise<SessionLibraryDetail>;");
+    expect(source).toContain("inspectSession(selectedId, controller.signal)");
+    expect(source).toContain("await inspectSession(sessionId)");
+    expect(appSource).toContain("inspectSession={(targetSessionId, signal) => inspectSessionForNavigation(targetSessionId, signal)}");
+  });
+
+  it("returns the already-active row to Chat without auditing it as a resume", () => {
+    const opener = source.slice(source.indexOf("async function openSession"), source.indexOf("async function resumeSelected"));
+    expect(opener).toContain("sessionId === activeSessionId");
+    expect(opener).toContain("onOpenActive(sessionId)");
+    expect(opener.indexOf("onOpenActive(sessionId)")).toBeLessThan(opener.indexOf("inspectSession(sessionId)"));
+    expect(appSource).toContain('onOpenActive={(targetSessionId) => navigate("chat", chatHash(targetSessionId))}');
+    expect(source).toContain('aria-label={active ? `Return to ${item.title}` : `Open ${item.title}`}');
+    expect(source).toContain('>{active ? "Return" : "Open"}</button>');
+  });
+});
+
 describe("conversation library scope", () => {
   /*
    * A background write must not throw away what someone is typing.
@@ -260,7 +279,7 @@ describe("conversation library below the full-width toolbar", () => {
     expect(source).toContain('class="session-library-open"');
     expect(source).toContain("onClick={() => void openSession(item.id)}");
     expect(source).toContain("onDblClick={() => void openSession(item.id)}");
-    expect(source).toContain('if (event.key === "Enter" && item.id === selectedId && item.id !== activeSessionId) {');
+    expect(source).toContain('if (event.key === "Enter" && item.id === selectedId) {');
     // A refusal selects the row so the pane that explains it is what appears,
     // rather than failing silently at the button that was pressed.
     expect(source).toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
@@ -645,7 +664,7 @@ describe("conversation library space budget", () => {
    */
   it("prints the row's active word once, and keeps it in the accessible name", () => {
     expect(source).toContain('<em class="session-library-card-active">Active</em>');
-    expect(source).toContain('>{active ? "Active" : "Open"}</button>');
+    expect(source).toContain('>{active ? "Return" : "Open"}</button>');
 
     /*
      * Hidden by the route's one visually-hidden recipe, so the word survives
@@ -906,7 +925,7 @@ describe("the row's own gesture line", () => {
     expect(template).toContain("Open on this row");
     // And the control it names is really in the row, under that word — rename
     // the button and this sentence stops being true.
-    expect(source).toContain('>{active ? "Active" : "Open"}</button>');
+    expect(source).toContain('>{active ? "Return" : "Open"}</button>');
   });
 
   /*
@@ -918,8 +937,7 @@ describe("the row's own gesture line", () => {
     const coarse = styles.slice(styles.lastIndexOf("@media (pointer: coarse)"));
     expect(coarse).toContain(".session-library-open:not(:disabled)");
     // Scoped to the enabled control: the active conversation's row says
-    // "Active", and lighting that up as a verb would offer to reopen what is
-    // already open.
+    // "Return", because navigating back to Chat is a real verb.
     expect(coarse.slice(coarse.indexOf(".session-library-open:not(:disabled)"))).toContain("color: var(--accent-bright");
   });
 

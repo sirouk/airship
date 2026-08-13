@@ -46,6 +46,23 @@ export function isCustomSkillId(skillId: string): boolean {
 
 export type ContentDigest = `sha256:${string}`;
 export type SkillMode = "inherit" | "on" | "off";
+/** Which client route owns this Agent Profile's ordinary web requests. */
+export type ProfileWebEgress = "node-first" | "browser-only";
+/**
+ * What `fetch_url` is allowed to bring back.
+ *
+ * `any` is the default and the intent: an agent asked for an address, the
+ * origin answered, and deciding on the agent's behalf that a PDF or an image
+ * or a mislabelled JSON body is not worth having is the client overreaching.
+ * Text arrives as text, everything else arrives as a workspace file, and the
+ * agent decides what it is for.
+ *
+ * `text-only` is the opt-out for a profile that wants a narrower blast radius —
+ * no binary ever lands in its workspace from the network. It is a deliberate
+ * restriction, never a default, and it is the only setting that can make a
+ * successful response fail.
+ */
+export type ProfileWebBodies = "any" | "text-only";
 /** The memory corpus a profile is allowed to prioritize for new work. */
 export type ProfileMemoryScope = "session" | "profile" | "workspace";
 /**
@@ -166,6 +183,10 @@ export type ProfileRevisionDraft = Readonly<{
   memoryScope?: ProfileMemoryScope;
   /** Profile-owned default for effectful browser actions. */
   approvalMode?: ApprovalMode;
+  /** Node's reviewed client-side http/https relay is the default when absent. */
+  webEgress?: ProfileWebEgress;
+  /** Any format the origin answers with is the default when absent. */
+  webBodies?: ProfileWebBodies;
   theme: Readonly<{
     themeId: string;
     digest: ContentDigest;
@@ -364,6 +385,18 @@ export function resolveProfileSilo(profile: Pick<ProfileRevisionDraft,
     memoryScope: oneOf(profile.memoryScope ?? "profile", ["session", "profile", "workspace"] as const, "memory scope"),
     approvalMode: oneOf(profile.approvalMode ?? "ask-first", ["ask-first", "auto-approve", "full-access"] as const, "approval mode"),
   }) as ResolvedProfileSilo;
+}
+
+export function resolveProfileWebEgress(
+  profile: Pick<ProfileRevisionDraft, "webEgress">,
+): ProfileWebEgress {
+  return oneOf(profile.webEgress ?? "node-first", ["node-first", "browser-only"] as const, "web egress");
+}
+
+export function resolveProfileWebBodies(
+  profile: Pick<ProfileRevisionDraft, "webBodies">,
+): ProfileWebBodies {
+  return oneOf(profile.webBodies ?? "any", ["any", "text-only"] as const, "web bodies");
 }
 
 /**
@@ -662,15 +695,23 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
   if (version === 1) {
     if (
       draft.workspaceBinding !== undefined || draft.memoryScope !== undefined || draft.approvalMode !== undefined
-      || draft.presentation !== undefined
+      || draft.webEgress !== undefined || draft.webBodies !== undefined || draft.presentation !== undefined
     ) {
       throw new Error("Version 1 profiles cannot carry silo settings; create a new revision instead.");
     }
     return parentRevision ? { ...base, parentRevision } : base;
   }
   const silo = resolveProfileSilo(draft);
+  const webEgress = draft.webEgress === undefined ? undefined : resolveProfileWebEgress(draft);
+  const webBodies = draft.webBodies === undefined ? undefined : resolveProfileWebBodies(draft);
   const presentation = normalizeProfilePresentation(draft.presentation);
-  const v2 = presentation ? { ...base, ...silo, presentation } : { ...base, ...silo };
+  const v2 = {
+    ...base,
+    ...silo,
+    ...(webEgress === undefined ? {} : { webEgress }),
+    ...(webBodies === undefined ? {} : { webBodies }),
+    ...(presentation ? { presentation } : {}),
+  };
   return parentRevision ? { ...v2, parentRevision } : v2;
 }
 

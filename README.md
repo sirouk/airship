@@ -150,6 +150,12 @@ adapter are in
   the optional Node/WebContainer pack runs direct Node/npm project commands in
   an isolated browser filesystem when its StackBlitz provider boot succeeds,
   while Wasmer/WASIX remains explicitly unavailable in this release;
+- a first-class client-side egress ladder: every Agent Profile uses the shipped
+  Node/WebContainer core `http`/`https` relay first by default, with browser-direct
+  fallback and a Profile-level browser-only opt-out; exact response bytes
+  return through a digest-verified 8 MiB scratch channel used in full by default,
+  not an external proxy or Airship backend, and every result names the route that
+  actually answered;
 - a fail-closed compute-continuum foundation that chooses browser-first
   placement, blocks every remote promotion until a private evidence/channel/
   approval broker exists, and structurally validates bounded, binary-safe,
@@ -287,6 +293,7 @@ key may create one.
 - [Open WebUI clean-room chat study](docs/OPENWEBUI_CLEANROOM_CHAT.md)
 - [Browser-native Git](docs/BROWSER_GIT.md)
 - [Browser-native coding execution](docs/BROWSER_EXECUTION_PACKS.md)
+- [Client-side Node egress engine](docs/CLIENT_SIDE_EGRESS.md)
 - [Chutes model discovery](docs/MODEL_DISCOVERY.md)
 - [Authoritative storage conformance](docs/STORAGE_CONFORMANCE.md)
 - [Encrypted local-device Vault](docs/LOCAL_DEVICE_VAULT.md)

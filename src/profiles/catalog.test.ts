@@ -65,6 +65,23 @@ describe("built-in Airship profiles", () => {
     expect(uncovered, "A colour mode with no palette makes the theme library inert for anyone in it.").toEqual([]);
   });
 
+  it("keeps every built-in agent on fetch_url instead of ad-hoc Node egress", async () => {
+    const catalog = await createBuiltInProfileCatalog();
+    for (const profile of catalog.profiles) {
+      const theme = catalog.themes.find((candidate) => candidate.digest === profile.theme.digest)!;
+      const pin = await resolveProfileForSession({
+        profile,
+        theme,
+        skills: catalog.skills,
+        globalSkills: catalog.globalSkills,
+      });
+      expect(pin.systemPrompt).toMatch(/fetch_url (?:is|as) the sole web-request path/u);
+      expect(pin.systemPrompt).toContain("Never install a runtime or use execution tools merely to fetch a URL");
+      expect(pin.systemPrompt).toContain("never claim manual Node has a different egress path");
+      expect(pin.systemPrompt).toContain("canonical REST endpoint");
+    }
+  });
+
   it("requires only tool names implemented by the composed edge registry", async () => {
     const catalog = await createBuiltInProfileCatalog();
     const required = catalog.skills.flatMap((skill) => skill.requiredTools);

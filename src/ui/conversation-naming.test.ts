@@ -49,6 +49,12 @@ describe("model-proposed conversation titles", () => {
     expect(source).toContain("type: CONVERSATION_NAMED_EVENT_TYPE");
     expect(source).toContain('source: "conversation-naming"');
     expect(source).toContain("answer: named.answer,");
+    // Same-thread model changes leave the Profile default on `runtime.model`;
+    // naming must use the conversation's current journal-derived route or its
+    // receipt makes this otherwise valid history suspect on the next open.
+    expect(source).toContain("const turnModel = effectiveSessionModel(activeSessionRecord);");
+    expect(source).toContain("{ transport: turnRuntime.transport, model: turnModel }");
+    expect(source).toContain("model: turnModel,");
     // The record is written before the "am I still here" check, because
     // leaving the thread cannot be what decides whether a charge is recorded.
     const start = source.indexOf(".then(async (named) => {");

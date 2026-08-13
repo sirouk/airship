@@ -104,6 +104,8 @@ import {
   createSkillRevision,
   enforcedMemoryScope,
   resolveProfileSilo,
+  resolveProfileWebBodies,
+  resolveProfileWebEgress,
   resolveProfileForSession,
   resolveSkillDecisions,
   themeCssVariables,
@@ -719,6 +721,8 @@ type ProfileEditorDraft = {
   workspaceId: string;
   memoryScope: "session" | "profile" | "workspace";
   approvalMode: "ask-first" | "auto-approve" | "full-access";
+  webEgress: "node-first" | "browser-only";
+  webBodies: "any" | "text-only";
   minimumPosture: SecurityPosture;
   reasoningVisibility: "collapsed" | "expanded";
   density: "minimal" | "balanced" | "instrumented";
@@ -2450,6 +2454,8 @@ export function App() {
     workspaceId: string;
     git: BrowserGitClient;
     tools: Runtime["tools"];
+    webEgress: "node-first" | "browser-only";
+  webBodies: "any" | "text-only";
     contextMode: Runtime["contextMode"];
   }>>());
   const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
@@ -3302,7 +3308,7 @@ export function App() {
     }
     const requestedSessionId = chatRouteRequest;
     chatRouteOpening.current = requestedSessionId;
-    void sessionLibrary.inspect(requestedSessionId, sessionRuntime)
+    void inspectSessionForNavigation(requestedSessionId)
       .then((detail) => resumeLibrarySession(detail))
       .then(() => {
         setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
@@ -4912,10 +4918,40 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     navigate(next);
   }
 
+  async function inspectSessionForNavigation(
+    targetSessionId: string,
+    signal?: AbortSignal,
+    sourceRuntime: Runtime | undefined = runtime.current,
+    authoritySessionId: string | undefined = activeSessionIdentity.current,
+  ): Promise<SessionLibraryDetail> {
+    if (!sourceRuntime) throw new Error("The local runtime is not ready.");
+    signal?.throwIfAborted();
+    const target = await sourceRuntime.journal.getSession(targetSessionId, signal);
+    if (!target) throw new UnknownSessionError(targetSessionId);
+    const authority = authoritySessionId
+      ? await sourceRuntime.journal.getSession(authoritySessionId, signal)
+      : undefined;
+    signal?.throwIfAborted();
+    return new SessionLibrary(sourceRuntime.journal).inspect(
+      targetSessionId,
+      activeSessionRuntime(sourceRuntime, authority ?? target, target),
+      signal,
+    );
+  }
+
   async function openPaletteSession(targetSessionId: string): Promise<void> {
     const ownerRuntime = runtime.current;
     const ownerProfile = activeProfileRef.current;
     const ownerSessionId = activeSessionIdentity.current;
+    // A route click for the conversation that is already active is only
+    // navigation. Browser Back already takes this identity fast path in the
+    // hash resolver; recents and the palette must not turn the same destination
+    // into an audit/reconnect operation merely because it was reached by a
+    // button instead of browser history.
+    if (ownerSessionId && targetSessionId === ownerSessionId) {
+      navigate("chat", chatHash(targetSessionId));
+      return;
+    }
     if (!ownerRuntime || !ownerProfile || !ownerSessionId) {
       // The bail itself is architectural — an open is performed against the
       // active conversation's runtime authority — but it was silent, and
@@ -4939,7 +4975,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       requireProfileOwnedSession(authoritySession, ownerProfile.profileId, "open");
       const detail = await new SessionLibrary(ownerRuntime.journal).inspect(
         target.id,
-        activeSessionRuntime(ownerRuntime, authoritySession),
+        activeSessionRuntime(ownerRuntime, authoritySession, target),
       );
       if (
         runtime.current !== ownerRuntime
@@ -5328,6 +5364,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         workspace,
         journal,
         git: nextGitClient,
+        webEgress: resolveProfileWebEgress(profile),
+        webBodies: resolveProfileWebBodies(profile),
         liveEnvironment: liveEnvironmentSource,
         additionalTools: [availabilityTool],
       });
@@ -5356,7 +5394,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         ),
       };
       runtime.current = nextRuntime;
-      rememberProfileAuthority(nextRuntime, nextGitClient);
+      rememberProfileAuthority(nextRuntime, nextGitClient, resolveProfileWebEgress(profile), resolveProfileWebBodies(profile));
       setSlashRegistry(commands);
       const nextSession = await createProfileSession(nextRuntime, profile, nextCatalog);
       if (disposed) return;
@@ -5852,13 +5890,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
    * tools captured the old port, so reusing the registry would let the new
    * Profile's agent read and write the previous Profile's files.
    */
-  function rememberProfileAuthority(built: Runtime, git: BrowserGitClient): void {
+  function rememberProfileAuthority(
+    built: Runtime,
+    git: BrowserGitClient,
+    webEgress: "node-first" | "browser-only",
+    webBodies: "any" | "text-only",
+  ): void {
     profileAuthorities.current.set(built.profileId, Object.freeze({
       storage: built.storage,
       workspace: built.workspace,
       workspaceId: built.workspaceId,
       git,
       tools: built.tools,
+      webEgress,
+      webBodies,
       contextMode: built.contextMode,
     }));
   }
@@ -5868,7 +5913,12 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     profile: ProfileRevision,
   ): Promise<Readonly<{ runtime: Runtime; git: BrowserGitClient }>> {
     const cached = profileAuthorities.current.get(profile.profileId);
-    if (cached && cached.storage === active.storage) {
+    const webEgress = resolveProfileWebEgress(profile);
+    const webBodies = resolveProfileWebBodies(profile);
+    if (cached
+      && cached.storage === active.storage
+      && cached.webEgress === webEgress
+      && cached.webBodies === webBodies) {
       return Object.freeze({
         runtime: {
           ...active,
@@ -5881,15 +5931,21 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         git: cached.git,
       });
     }
-    const authority = await openProfileWorkspaceAuthority({
-      storage: active.storage,
-      storageId: active.storageId,
-      profile,
-    });
+    // A policy-only revision rebuilds the registry over the same Profile port;
+    // workspace identity (including unsaved drafts and terminal ownership) must
+    // not be discarded merely because web routing changed.
+    const authority = cached && cached.storage === active.storage
+      ? { workspace: cached.workspace, workspaceId: cached.workspaceId, git: cached.git }
+      : await openProfileWorkspaceAuthority({
+          storage: active.storage,
+          storageId: active.storageId,
+          profile,
+        });
     const registryOptions = {
       workspace: authority.workspace,
       journal: active.journal,
       git: authority.git,
+      webEgress,
       liveEnvironment: liveEnvironmentSource,
       additionalTools: [requireProviderAvailabilityTool()],
     };
@@ -5912,7 +5968,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       ...(scopedFabric ? { contextFabric: scopedFabric } : {}),
       ...(vaultAware ? { contextMode: vaultAware.contextMode } : {}),
     };
-    rememberProfileAuthority(built, authority.git);
+    rememberProfileAuthority(built, authority.git, webEgress, webBodies);
     return Object.freeze({ runtime: built, git: authority.git });
   }
 
@@ -6923,6 +6979,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
     const turnSessionId = admissionSessionId;
     const turnRuntime = admissionRuntime;
+    // `runtime.model` is the connection/Profile default. A same-thread model
+    // change deliberately leaves that default alone, so every auxiliary
+    // request for this turn must carry the conversation's durable route.
+    const turnModel = effectiveSessionModel(activeSessionRecord);
     const turnTransport = turnRuntime.transport;
     const turnProfileId = admissionProfile.profileId;
     const turnProfileRevision = admissionProfile.revision;
@@ -7065,7 +7125,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       const namingTurnId = `naming-${randomUuid()}`;
       const namingOperationId = `naming-request-${randomUuid()}`;
       void conversationTitleFromModel(
-        turnRuntime,
+        { transport: turnRuntime.transport, model: turnModel },
         content,
         { sessionId: turnSessionId, turnId: namingTurnId, operationId: namingOperationId },
         controller.signal,
@@ -7098,7 +7158,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                   // rather than inventing one or vanishing.
                   ...(named.title ? { title: named.title } : {}),
                   answer: named.answer,
-                  model: turnRuntime.model,
+                  model: turnModel,
                   ...(named.receipt ? { receipt: named.receipt as unknown as JsonValue } : {}),
                 },
               },
@@ -8235,6 +8295,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       workspaceId: adoptedAuthority.workspaceId,
       journal,
       git: nextGitClient,
+      webEgress: resolveProfileWebEgress(selectedProfile),
+      webBodies: resolveProfileWebBodies(selectedProfile),
       liveEnvironment: liveEnvironmentSource,
       contextFabric: adoptedFabric,
       additionalTools: [requireProviderAvailabilityTool()],
@@ -8371,7 +8433,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // the previous one and must not be reused.
     profileAuthorities.current.clear();
     runtime.current = nextRuntime;
-    rememberProfileAuthority(nextRuntime, nextGitClient);
+    rememberProfileAuthority(nextRuntime, nextGitClient, resolveProfileWebEgress(profile), resolveProfileWebBodies(profile));
     activeDurableAuthority.current = authority;
     setGitClient(nextGitClient);
     const commandModule = await import("../commands");
@@ -8603,6 +8665,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       workspace,
       journal,
       git: nextGitClient,
+      webEgress: resolveProfileWebEgress(activeProfile),
+      webBodies: resolveProfileWebBodies(activeProfile),
       liveEnvironment: liveEnvironmentSource,
       additionalTools: [requireProviderAvailabilityTool()],
     });
@@ -8629,7 +8693,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     workspaceRefreshCoordinator.invalidate();
     profileAuthorities.current.clear();
     runtime.current = nextRuntime;
-    rememberProfileAuthority(nextRuntime, nextGitClient);
+    rememberProfileAuthority(nextRuntime, nextGitClient, resolveProfileWebEgress(profile), resolveProfileWebBodies(profile));
     activeDurableAuthority.current = undefined;
     setGitClient(nextGitClient);
     const commandModule = await import("../commands");
@@ -10588,6 +10652,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           : { kind: "active-workspace" },
         memoryScope: draft.memoryScope,
         approvalMode: draft.approvalMode,
+        webEgress: draft.webEgress,
+        webBodies: draft.webBodies,
         theme: { themeId: theme.themeId, digest: theme.digest },
         skillModes: current.skillModes,
         presentation: (() => {
@@ -10680,6 +10746,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         workspaceBinding: latest.workspaceBinding,
         memoryScope: latest.memoryScope,
         approvalMode: latest.approvalMode,
+        webEgress: resolveProfileWebEgress(latest),
+        webBodies: resolveProfileWebBodies(latest),
         theme: latest.theme,
         skillModes: latest.skillModes,
         createdAt: new Date().toISOString(),
@@ -11067,7 +11135,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (preservedTurnSessionId) sessionResumeDuringTurn.current = preservedTurnSessionId;
     sessionNavigationChanging.current = true;
     try {
-      const fresh = await sessionLibrary.inspect(detail.session.id, sessionRuntime);
+      const fresh = await inspectSessionForNavigation(detail.session.id);
       if (fresh.compatibility?.action !== "resume") {
         throw new Error(fresh.compatibility?.label ?? "The session no longer matches the active runtime.");
       }
@@ -12304,7 +12372,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             scopeProfileName={activeProfile.name}
             forkManifest={activeSessionRecord?.manifest}
             revision={sessionRevision}
+            inspectSession={(targetSessionId, signal) => inspectSessionForNavigation(targetSessionId, signal)}
             onResume={resumeLibrarySession}
+            onOpenActive={(targetSessionId) => navigate("chat", chatHash(targetSessionId))}
             onForked={activateForkedSession}
             onRenamed={adoptLibraryRename}
             onDeleted={adoptLibraryDelete}
@@ -13506,16 +13576,34 @@ function inferenceDirectoryFromAvailability(
   });
 }
 
-function activeSessionRuntime(runtime: Runtime, session: SessionRecord): ActiveSessionRuntime {
-  return sessionManifestRuntime(runtime, session.manifest);
+export function activeSessionRuntime(
+  runtime: Runtime,
+  authoritySession: SessionRecord,
+  routeSession: SessionRecord = authoritySession,
+): ActiveSessionRuntime {
+  /*
+   * Navigation restores the route carried by the thread being opened; it does
+   * not compare that thread with whichever model happened to be on screen.
+   * The current authority still supplies the live Profile boundaries, provider
+   * account and credential generation. Only the model address is thread-local,
+   * and `session.model-changed` is its durable source of truth.
+   */
+  return sessionManifestRuntime(runtime, authoritySession.manifest, effectiveSessionModel(routeSession));
 }
 
-function sessionManifestRuntime(runtime: Runtime, manifest: SessionManifest): ActiveSessionRuntime {
+function sessionManifestRuntime(
+  runtime: Runtime,
+  manifest: SessionManifest,
+  model: string = runtime.model,
+): ActiveSessionRuntime {
   const profile = manifest.profile;
+  const inferenceBinding = runtime.inferenceBinding
+    ? Object.freeze({ ...runtime.inferenceBinding, modelId: model })
+    : undefined;
   return Object.freeze({
     providerId: runtime.transport.id,
-    model: runtime.model,
-    ...(runtime.inferenceBinding ? { inferenceBinding: runtime.inferenceBinding } : {}),
+    model,
+    ...(inferenceBinding ? { inferenceBinding } : {}),
     posture: runtime.transport.posture,
     toolManifestDigest: manifest.toolManifestDigest,
     workspaceId: runtime.workspaceId,
@@ -15219,6 +15307,20 @@ function ProfileManagerView({
                   { value: "auto-approve", label: "Auto Approve" },
                   { value: "full-access", label: "Full Access" },
                 ]} onChange={(approvalMode) => setDraft({ ...draft, approvalMode: approvalMode as ProfileEditorDraft["approvalMode"] })} /></label>
+                <label><span>Web requests</span><MenuSelect ariaLabel="Profile web egress" value={draft.webEgress} options={[
+                  { value: "node-first", label: "Client Node first", description: "Use the shipped Node http/https relay, then browser-direct as fallback" },
+                  { value: "browser-only", label: "Browser only", description: "Opt out of Node egress; cross-origin reads remain subject to CORS" },
+                ]} onChange={(webEgress) => setDraft({ ...draft, webEgress: webEgress as ProfileEditorDraft["webEgress"] })} /></label>
+                {/*
+                  What a fetch is allowed to bring back. Wide open is the
+                  default and the point: the agent asked for the address, so
+                  the agent judges the answer. The narrow setting is here for a
+                  profile that wants nothing but text crossing the boundary.
+                */}
+                <label><span>Web responses</span><MenuSelect ariaLabel="Profile web bodies" value={draft.webBodies} options={[
+                  { value: "any", label: "Any format", description: "Text arrives as text; anything else is saved to the workspace for the agent to handle" },
+                  { value: "text-only", label: "Text only", description: "Refuse a response whose bytes are not text, and never save a download" },
+                ]} onChange={(webBodies) => setDraft({ ...draft, webBodies: webBodies as ProfileEditorDraft["webBodies"] })} /></label>
                 {/*
                   The Profile's presentation density: how much chatter the app
                   renders around the work. Minimal keeps the work, the tools,
@@ -15396,6 +15498,8 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
     // control no longer offers — and saving migrates the stored revision.
     memoryScope: enforcedMemoryScope(silo.memoryScope),
     approvalMode: silo.approvalMode,
+    webEgress: resolveProfileWebEgress(profile),
+    webBodies: resolveProfileWebBodies(profile),
     minimumPosture: profile.minimumPosture,
     reasoningVisibility: parseReasoningVisibility(profile.presentation?.reasoningVisibility),
     density: parsePresentationDensity(profile.presentation?.density),

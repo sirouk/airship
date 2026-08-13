@@ -11,6 +11,7 @@ import type {
   VaultContextFabricResolution,
 } from "../vault/context-fabric-port";
 import type { LiveEnvironmentSupplementSource } from "./live-environment";
+import type { ProfileWebBodies, ProfileWebEgress } from "../profiles/domain";
 
 export type { LiveEnvironmentSupplement, LiveEnvironmentSupplementSource } from "./live-environment";
 
@@ -22,6 +23,10 @@ export type AirshipToolRegistryOptions = Readonly<{
   journal: EventJournal;
   git?: BrowserGitClient;
   fetch?: typeof globalThis.fetch;
+  /** Agent Profile policy. Node's reviewed http/https relay is the default. */
+  webEgress?: ProfileWebEgress;
+  /** Agent Profile policy. Any format the origin answers with is the default. */
+  webBodies?: ProfileWebBodies;
   /** Optional lazy, on-device provider. The hash tier remains the default. */
   embeddings?: EmbeddingProvider;
   /** Optional encrypted/ranged workspace retrieval adapter behind the same turn seam. */

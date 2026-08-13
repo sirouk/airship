@@ -892,7 +892,18 @@ export function extractSessionPins(
     providerId: boundedText(session.manifest.providerId, 256) ?? "[invalid provider]",
     model: boundedText(session.modelOverride ?? session.manifest.model, 512) ?? "[invalid model]",
     ...(session.manifest.inferenceBinding
-      ? { inferenceBinding: { ...session.manifest.inferenceBinding } }
+      ? {
+          // A same-thread `session.model-changed` event moves only the model
+          // address; the provider account, credential generation and trust
+          // boundary stay pinned. Project that durable address onto the
+          // binding too, or the pin contradicts its own `model` field and a
+          // normal navigation round trip becomes an inference-connection
+          // mismatch.
+          inferenceBinding: {
+            ...session.manifest.inferenceBinding,
+            modelId: session.modelOverride ?? session.manifest.model,
+          },
+        }
       : {}),
     workspaceId: boundedText(session.manifest.workspaceId, 2_048) ?? "[invalid workspace]",
     capabilityTier: session.manifest.capabilityTier,

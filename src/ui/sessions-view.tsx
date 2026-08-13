@@ -50,7 +50,11 @@ export type SessionsViewProps = Readonly<{
   /** Optional host-created manifest used when a fork should move to the active runtime. */
   forkManifest?: SessionManifest;
   revision?: number;
+  /** Target-aware inspection supplied by the shell's live route authority. */
+  inspectSession?: (sessionId: string, signal?: AbortSignal) => Promise<SessionLibraryDetail>;
   onResume: (detail: SessionLibraryDetail) => void | Promise<void>;
+  /** Returning to the already-active thread is navigation, not resume. */
+  onOpenActive?: (sessionId: string) => void;
   onForked?: (result: SessionForkResult, source: SessionLibraryDetail) => void | Promise<void>;
   /**
    * A durable rename landed in the journal.
@@ -156,7 +160,9 @@ export function SessionsView({
   scopeProfileName,
   forkManifest,
   revision = 0,
+  inspectSession,
   onResume,
+  onOpenActive,
   onForked,
   onRenamed,
   onDeleted,
@@ -349,7 +355,9 @@ export function SessionsView({
       setForkOpen(false);
       setRenaming(false);
     }
-    void library.inspect(selectedId, runtime, controller.signal).then(
+    void (inspectSession
+      ? inspectSession(selectedId, controller.signal)
+      : library.inspect(selectedId, runtime, controller.signal)).then(
       setDetail,
       (caught: unknown) => {
         if (!controller.signal.aborted) {
@@ -377,11 +385,18 @@ export function SessionsView({
    * silently, so the pane that explains why is what appears.
    */
   async function openSession(sessionId: string) {
-    if (busy || sessionId === activeSessionId) { setSelectedId(sessionId); return; }
+    if (busy) return;
+    if (sessionId === activeSessionId) {
+      if (onOpenActive) onOpenActive(sessionId);
+      else setSelectedId(sessionId);
+      return;
+    }
     setBusy(true);
     setDetailError(undefined);
     try {
-      const fresh = await library.inspect(sessionId, runtime);
+      const fresh = inspectSession
+        ? await inspectSession(sessionId)
+        : await library.inspect(sessionId, runtime);
       if (fresh.compatibility?.action !== "resume") {
         setSelectedId(sessionId);
         setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");
@@ -827,7 +842,7 @@ export function SessionsView({
                     onDblClick={() => void openSession(item.id)}
                     aria-keyshortcuts={favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && item.id === selectedId && item.id !== activeSessionId) {
+                      if (event.key === "Enter" && item.id === selectedId) {
                         event.preventDefault();
                         void openSession(item.id);
                         return;
@@ -856,9 +871,9 @@ export function SessionsView({
                       {/* `ACTIVE` was a 42px uppercase pill, then an 11px word
                           on this line. It is now the accessible half of a pair:
                           the visible carrier for the green mark is the row's
-                          own opener, which is disabled and reads `Active` under
-                          exactly this condition, so P2 is satisfied without the
-                          row printing one word twice — see the rule beside
+                          own opener, which reads `Return` under exactly this
+                          condition, so P2 is satisfied without the row printing
+                          one word twice — see the rule beside
                           `.session-library-visually-hidden`, which is what
                           hides this copy and why. */}
                       {active ? <em class="session-library-card-active">Active</em> : null}
@@ -875,16 +890,16 @@ export function SessionsView({
                   </button>
                   {/* The one-press opener, on the row rather than 791px down
                       the page. It is the row's own verb, so it carries the
-                      row's name; the active conversation's row says so
-                      instead of offering to reopen what is open. */}
+                      row's name; the active conversation returns directly to
+                      Chat instead of pretending it needs to resume. */}
                   <button
                     class="session-library-open"
                     type="button"
-                    disabled={busy || active}
-                    aria-label={active ? `${item.title} is the active conversation` : `Open ${item.title}`}
-                    title={active ? "Active conversation" : `Open ${item.title}`}
+                    disabled={busy}
+                    aria-label={active ? `Return to ${item.title}` : `Open ${item.title}`}
+                    title={active ? `Return to ${item.title}` : `Open ${item.title}`}
                     onClick={() => void openSession(item.id)}
-                  >{active ? "Active" : "Open"}</button>
+                  >{active ? "Return" : "Open"}</button>
                   {lineage?.navigable ? (
                     <button
                       class="session-library-lineage-jump"

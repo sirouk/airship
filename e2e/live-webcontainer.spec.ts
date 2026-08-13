@@ -37,6 +37,52 @@ test("opt-in live WebContainer executes Node entirely in the browser tab", async
   expect(result.execution.stdout).toContain('"answer":42');
 });
 
+test("default fetch_url retrieves live etymology through the shipped Node relay", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative live browser process");
+  test.skip(process.env.AIRSHIP_LIVE_WEBCONTAINER !== "1", "Set AIRSHIP_LIVE_WEBCONTAINER=1 for the provider-backed live browser probe.");
+  test.setTimeout(120_000);
+  await page.goto("/#chat");
+  const result = await page.evaluate(async () => {
+    const [{ ToolRegistry }, { registerNetworkTools }, { MemoryWorkspace }] = await Promise.all([
+      import("/src/tools/registry.ts"),
+      import("/src/tools/network-tools.ts"),
+      import("/src/workspace/memory.ts"),
+    ]);
+    const registry = new ToolRegistry();
+    registerNetworkTools(registry, new MemoryWorkspace());
+    const context = {
+      sessionId: "live-client-egress",
+      turnId: "fetch-mandate-etymology",
+      operationId: "force-node-egress",
+      signal: new AbortController().signal,
+    };
+    const args = {
+      url: "https://en.wiktionary.org/w/rest.php/v1/page/mandate",
+    } as const;
+    try {
+      const decision = await registry.review("fetch_url", args, context, {
+        async review() { return "allow" as const; },
+      });
+      if (decision !== "allow") throw new Error("fetch_url was not approved in the live fixture.");
+      const output = await registry.executeApproved("fetch_url", args, context);
+      return { isolated: globalThis.crossOriginIsolated, output: JSON.parse(output.content) };
+    } finally {
+      const pack = await import("/src/execution/node-webcontainer-pack.ts");
+      await pack.deactivateNodeWebContainer();
+    }
+  });
+  expect(result.isolated).toBe(true);
+  expect(result.output).toMatchObject({
+    status: 200,
+    contentType: "application/json",
+    truncated: false,
+    via: "node-webcontainer",
+  });
+  expect(result.output.transportAttempts).toBeGreaterThanOrEqual(1);
+  expect(result.output.text).toContain("mandātum");
+  expect(result.output.text).toContain("literally to put into one's hands");
+});
+
 test("a baseline conversation activates Node, installs Vite, and builds without a fork", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative live browser process");
   test.skip(process.env.AIRSHIP_LIVE_WEBCONTAINER !== "1", "Set AIRSHIP_LIVE_WEBCONTAINER=1 for the provider-backed live browser probe.");

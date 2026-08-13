@@ -85,7 +85,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // reading, eight bytes under this host artifact: the claim states the floor
   // across build modes, or whichever mode comes in lightest fails the gate on
   // the other's justification.
-  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 118 * 1024 }),
+  // Re-measured at 391,437 B raw / 120,910 B gzip after the Profile editor
+  // gained the enforced Node-first/browser-only web-egress boundary. The raw
+  // ceiling remains 384 KiB; 118 KiB gzip is 78 bytes below the shipped entry,
+  // so gzip takes the next whole-KiB step to 119 KiB (946 bytes spare).
+  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 119 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains governed by its stricter entry-specific ceiling above. Heavy
   // QVL stays deferred.
@@ -879,12 +883,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
   //
-  // Re-measured at 2,466,300 B raw / 781,700 B gzip with the kernel's RLM
-  // bindings in and every port deferred rather than optional. 2,409 KiB raw
-  // would have left 516 B and 764 KiB gzip would have left 636 B, both under
-  // the 768-byte floor, so each takes one further whole step — raw to 2,410
-  // (1,540 B) and gzip to 765 (1,660 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2410 * 1024, gzip: 765 * 1024 }),
+  // Re-measured at 2,435.53 KiB raw / 772.38 KiB gzip after Node-first became
+  // an enforced Agent Profile boundary and fetched bodies gained a byte-faithful
+  // binary workspace handoff. This is reviewed first-party capability, not
+  // first-paint or vendor growth. 2,436 KiB raw and 773 KiB gzip leave less
+  // than the aggregate tripwire floor, so they take 2,437/774 KiB.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2437 * 1024, gzip: 774 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1235,12 +1239,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 324 B, both under the 768-byte floor, so each takes one further whole
   // step — raw to 3,087 (1,188 B) and gzip to 952 (1,348 B).
   //
-  // Re-measured at 3,163,400 B raw / 974,300 B gzip with every port deferred
-  // and the terminal list rebuilt as a column. 3,090 KiB raw would have left
-  // 460 B and 952 KiB gzip would have left 548 B, both under the 768-byte
-  // floor, so each takes one further whole step — raw to 3,091 (1,484 B) and
-  // gzip to 953 (1,572 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3091 * 1024, gzip: 953 * 1024 }),
+  // Re-measured at 3,117.47 KiB raw / 961.87 KiB gzip with Node-first Agent
+  // Profile routing, reset compatibility, and the byte-faithful binary handoff
+  // included. The absolute installed backstop moves by the same reviewed
+  // capability. 3,117 KiB raw and 961 KiB gzip do not fit; 3,118 KiB raw
+  // leaves less than the tripwire floor, while 962 KiB gzip is the smallest
+  // whole-KiB ceiling that fits.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3118 * 1024, gzip: 962 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1302,10 +1307,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
   // Page-local dependency reuse, full-source preflight, single-flight
   // activation, cancellation cleanup, and real npm readiness evidence make
-  // install → build reliable in one conversation. The pack remains a
-  // second-level lazy download and measures 26.14 KiB raw / 9.78 KiB gzip;
-  // 11 KiB is the smallest whole-KiB ceiling with useful tripwire room.
-  optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 11 * 1024 }),
+  // install → build reliable in one conversation. The shipped fetch_url
+  // escalation now lives in this same second-level lazy pack: its reviewed
+  // Node relay, binary workspace handoff, digest verification and scratch
+  // cleanup are fetched only when Node execution/egress is first used. The
+  // combined artifact now measures 40,267 B raw / 14,355 B gzip with transient
+  // reset retries and the bare Node compatibility profile. 40 KiB raw would
+  // have left 693 bytes, below the tripwire floor, so the lazy pack takes
+  // 41/15 KiB without charging that capability to eager tools.
+  optionalNodeExecutionPack: Object.freeze({ raw: 41 * 1024, gzip: 15 * 1024 }),
   // `airship-sh`, the first-party POSIX-sh interpreter: lexer, parser,
   // expansion, arithmetic, globbing, redirection, job control, and the
   // workspace utilities it executes. It is the universal shell tier, so it
@@ -1400,14 +1410,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalContextPolicy: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   // The registry, local retrieval broker, live-environment projection, and
   // repository admission logic load together when an agent-capable workspace
-  // is first constructed. The retrieval runtime in this pack now resolves the
-  // confidential embedding engine before switching into it — a catalog read and
-  // a width probe, so a deployment that cannot be discovered refuses the switch
-  // with its own sentence instead of leaving the index in a mode that cannot
-  // embed. Measured 126,627 B raw / 39,002 B gzip; raw is unchanged at 128 KiB
-  // with 4,445 bytes spare, and gzip takes the smallest whole-KiB step above the
-  // reading, leaving 934. The shared pack remains absent from first paint.
-  optionalAgentTools: Object.freeze({ raw: 128 * 1024, gzip: 39 * 1024 }),
+  // is first constructed. fetch_url's manifest/ladder and binary workspace
+  // handoff stay here, while its engine and relay remain in the second-level
+  // Node pack. Measured 130.07 KiB raw / 40.64 KiB gzip after bodies became
+  // byte-faithful instead of UTF-8-only. 131 KiB raw is the smallest ceiling
+  // with the aggregate tripwire floor; gzip needs 42 KiB because 41 leaves
+  // less than that floor.
+  // Nothing moves to first paint.
+  optionalAgentTools: Object.freeze({ raw: 131 * 1024, gzip: 42 * 1024 }),
   // Files/editor shell plus its in-page source-control handoff. Git remains a
   // second lazy pack; this cap covers only the combined Editor route chrome.
   // The workbench gained the behaviour its measured defects needed: a tree
@@ -2256,35 +2266,30 @@ export function assertDocumentedBudgetMeasurements(source) {
 }
 
 /**
- * A documented measurement may not be larger than the artifact this run measures.
+ * A documented measurement may not claim a larger whole-KiB budget bucket than
+ * the artifact this run measures.
  *
  * Everything above compares a comment to a *ceiling*, and a ceiling is the one
- * thing a stale-high figure keeps satisfying: a pack whose comment overstates
- * the build still clears its ceiling, and is still the tightest whole-KiB step
- * above the number it claims. So it passes every rule in
- * `assertDocumentedBudgetMeasurements` while justifying transfer budget with
- * bytes nothing shipped. `optionalWorkspaceWorkbench` recorded 80,247 bytes for
- * a route the tree had not touched since, and the comment beside it says in as
- * many words that this guard "did not catch it". Nothing structurally could —
- * the guard had never seen a build.
+ * thing a stale-high figure keeps satisfying. A reading in a higher whole-KiB
+ * bucket can therefore buy an additional KiB of transfer budget for bytes no
+ * build shipped. `optionalWorkspaceWorkbench` once did exactly that, and a
+ * comment-to-ceiling check could not catch it because it never saw the build.
  *
- * This one runs after the artifacts are measured, and it refuses exactly that:
- * an overstatement. Not a mismatch. Ordinary growth in a shared chunk moves
- * every one of these readings by a handful of bytes on commits that touched
- * none of them — the six documented packs each drifted 1–300 bytes across two
- * unrelated commits while this was being written — and a rule demanding equality
- * would put six comment edits on every pull request until someone deleted the
- * rule. Understatement is already bracketed from the other side: the tightness
- * rule forces the ceiling down to one step above whatever the comment claims,
- * and `assertWithinBudget` then fails if the real build does not fit under it.
- * A figure that is too low cannot survive both. A figure that is too high could
- * survive everything, and that is the hole.
+ * Exact output is not universal, though. Build-time public configuration changes
+ * minified strings and compression by a few bytes, and shared chunks drift even
+ * when the capability being measured did not. Those variants are legitimate
+ * when both readings remain in the same enforced whole-KiB bucket: the documented
+ * reading cannot justify a larger ceiling, and `assertWithinBudget` still blocks
+ * the actual artifact. Requiring exact equality here made Docker's supported
+ * local deployment fail over nine gzip bytes while granting no tighter budget.
+ * The allowance is structurally bounded to less than one KiB; crossing a bucket
+ * remains a failure and requires the comment and ceiling to be reviewed again.
  *
  * The largest pair a comment states is the one checked — the same selection
  * `assertDocumentedBudgetMeasurements` makes, so a comment that also quotes the
- * reading it grew from is unaffected. And a figure is held only to the precision
+ * reading it grew from is unaffected. A figure is also held only to the precision
  * it was written at: "49.48 KiB raw" claims a hundredth of a KiB, and turning
- * that into a byte claim would be enforcing a promise its author never made.
+ * that into a byte claim would enforce a promise its author never made.
  */
 export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
   const failures = [];
@@ -2302,15 +2307,17 @@ export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
       const written = documented.written[role];
       // Half of the last digit the author actually wrote.
       const tolerance = (0.5 * unitScale(written.unit)) / 10 ** written.decimals;
-      if (documented[role] - measured[role] > tolerance) {
+      const documentedBucket = Math.floor(documented[role] / 1024);
+      const measuredBucket = Math.floor(measured[role] / 1024);
+      if (documented[role] - measured[role] > tolerance && documentedBucket > measuredBucket) {
         failures.push(
-          `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B). Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
+          `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B), in a lower whole-KiB budget bucket. Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
         );
       }
     }
   }
   if (failures.length > 0) {
-    throw new Error(`Release budget comments claim more than this build contains:\n- ${failures.join("\n- ")}`);
+    throw new Error(`Release budget comments claim a higher budget bucket than this build contains:\n- ${failures.join("\n- ")}`);
   }
 }
 

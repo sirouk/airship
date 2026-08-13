@@ -553,6 +553,49 @@ describe("browser-native session domain", () => {
       .toBe("The most recent turn has no durable terminal event; fork before continuing.");
   });
 
+  it("treats a durable same-thread model change as the thread's current route", async () => {
+    const binding = {
+      version: 1 as const,
+      connectionId: "chutes-primary",
+      connectionGeneration: 3,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "oauth-pkce" as const,
+      transportBoundary: "e2ee-attestable" as const,
+      modelId: "model-a",
+      boundAt: "2026-07-18T00:00:00.000Z",
+    };
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Changed in place", await manifest({
+      model: "model-a",
+      inferenceBinding: binding,
+      securityPosture: "encrypted-attested",
+    }));
+    const changed = await fixture.journal.setSessionModel(created.id, "model-b");
+    const events = await fixture.journal.readEvents(changed.id);
+    const pins = extractSessionPins(changed, events);
+
+    expect(pins.model).toBe("model-b");
+    expect(pins.inferenceBinding).toMatchObject({
+      connectionId: "chutes-primary",
+      connectionGeneration: 3,
+      modelId: "model-b",
+    });
+    const decision = decideSessionResume(
+      pins,
+      assessSessionHistory(changed, events),
+      {
+        ...activeRuntime(changed.manifest),
+        model: "model-b",
+        inferenceBinding: { ...binding, modelId: "model-b" },
+      },
+    );
+    expect(decision.action).toBe("resume");
+    expect(decision.reasons.map((reason) => reason.code)).not.toContain("MODEL_MISMATCH");
+    expect(decision.reasons.map((reason) => reason.code)).not.toContain("INFERENCE_CONNECTION_MISMATCH");
+  });
+
   it("never resumes a session through a replacement inference credential generation", async () => {
     const binding = {
       version: 1 as const,
@@ -633,7 +676,7 @@ describe("SessionLibrary", () => {
   it("routes only absence through the deep-link reset, leaving every other fault holding its URL", () => {
     const source = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
     const resolver = source.match(
-      /void sessionLibrary\.inspect\(requestedSessionId, sessionRuntime\)[\s\S]*?\n      \.finally\(/u,
+      /void inspectSessionForNavigation\(requestedSessionId\)[\s\S]*?\n      \.finally\(/u,
     )?.[0] ?? "";
     expect(resolver).toContain("error instanceof UnknownSessionError");
     // Clearing the request is what lets the canonicalisation effect rewrite the

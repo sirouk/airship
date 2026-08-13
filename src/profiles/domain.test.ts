@@ -6,6 +6,7 @@ import {
   createProfileRevision,
   enforcedMemoryScope,
   resolveProfileSilo,
+  resolveProfileWebEgress,
   createSkillRevision,
   createThemeManifest,
   resolveProfileForSession,
@@ -97,6 +98,18 @@ describe("profile domain", () => {
     expect(pin.approvalMode).toBe("auto-approve");
     expect(pin.minimumPosture).toBe("encrypted-attested");
     expect(pin.resolutionDigest).toMatch(/^sha256:/u);
+  });
+
+  it("defaults web requests to Node-first and content-addresses the profile opt-out", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const inheritedDefault = await createProfileRevision(profileDraft(theme, {}));
+    const optedOut = await createProfileRevision({
+      ...profileDraft(theme, {}),
+      webEgress: "browser-only",
+    });
+    expect(resolveProfileWebEgress(inheritedDefault)).toBe("node-first");
+    expect(resolveProfileWebEgress(optedOut)).toBe("browser-only");
+    expect(optedOut.revision).not.toBe(inheritedDefault.revision);
   });
 
   it("pins a stored workspace memory scope as the profile scope every reader enforces", async () => {

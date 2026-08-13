@@ -60,6 +60,28 @@ test("every conversation has a stable addressed URL and new conversations do not
   await expect(page).toHaveURL(firstUrl);
 });
 
+test("All conversations returns to the active thread as navigation, not recovery", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop active-conversation navigation contract");
+  await page.goto("/#chat");
+  await waitForShellSettled(page);
+  // Past the service-worker control reload; capture the durable address, not
+  // the first document's page-memory session.
+  await waitForShellSettled(page);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const threadUrl = page.url();
+
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await openRailRecents(navigation);
+  await navigation.getByRole("button", { name: "All conversations", exact: true }).click();
+  await expect(page).toHaveURL(/#sessions$/);
+
+  await page.getByRole("button", { name: /Return to .+/u }).click();
+
+  await expect(page).toHaveURL(threadUrl);
+  await expect(page.locator(".session-library-compatibility.blocked")).toHaveCount(0);
+  await expect(page.getByText(/resume blocked|model mismatch|fork required/iu)).toHaveCount(0);
+});
+
 test("desktop chat title supports durable inline rename", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop inline rename contract");
   await page.goto("/#chat");

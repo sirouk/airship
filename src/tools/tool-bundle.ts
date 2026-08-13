@@ -37,7 +37,7 @@ export function createLoadedAirshipToolRegistry(options: AirshipToolRegistryOpti
   registerBrowserCapabilityTool(registry);
   for (const tool of options.additionalTools ?? []) registry.register(tool);
   registerLazyExecutionTools(registry, workspace);
-  registerNetworkTools(registry, workspace, options.git, options.fetch);
+  registerNetworkTools(registry, workspace, options.git, options.fetch, undefined, options.webEgress, options.webBodies);
   if (options.git) registerGitTools(registry, options.git);
   void contextRuntime.scheduleRefresh().catch(() => undefined);
   return registry;

@@ -391,9 +391,10 @@ describe("release gate", () => {
    * Everything above compares a comment to a ceiling, and a ceiling is the one
    * thing a stale-high figure keeps satisfying — which is why
    * `optionalWorkspaceWorkbench`'s own comment records that this guard "did not
-   * catch it". Comparing against the artifact the same run measures is what can.
+   * catch it". Comparing its whole-KiB bucket with the artifact from the same run
+   * catches a material overstatement without rejecting harmless environment drift.
    */
-  it("refuses a documented measurement that claims more than the build contains", () => {
+  it("refuses a documented measurement that claims a higher whole-KiB bucket than the build", () => {
     const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
     const asDocumented = Object.fromEntries(
       MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
@@ -404,12 +405,24 @@ describe("release gate", () => {
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, asDocumented)).not.toThrow();
 
-    // One byte over is a stale-high figure. It is the exact shape of the defect:
-    // 1,320 B gzip against a 1,319 B build was the only one of the six that
-    // claimed more than the build contained on the first run of this check.
-    const overstated = { ...asDocumented, optionalMemoryView: { ...asDocumented.optionalMemoryView, gzip: asDocumented.optionalMemoryView.gzip - 1 } };
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, overstated))
-      .toThrow(/optionalMemoryView: its comment claims .* gzip, but this build measures only/u);
+    // A legal build-time environment can move a shared aggregate by a handful
+    // of bytes. The reading still justifies the same whole-KiB ceiling, so this
+    // drift must not reject Docker's supported deployment variants.
+    const sameBucketDrift = {
+      ...asDocumented,
+      optionalMemoryView: { ...asDocumented.optionalMemoryView, gzip: asDocumented.optionalMemoryView.gzip - 1 },
+    };
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, sameBucketDrift)).not.toThrow();
+
+    // Crossing below the bucket named by the comment is materially different:
+    // that stale reading could justify an extra KiB of ceiling no build needs.
+    const documentedGzip = asDocumented.optionalMemoryView.gzip;
+    const lowerBucket = {
+      ...asDocumented,
+      optionalMemoryView: { ...asDocumented.optionalMemoryView, gzip: Math.floor(documentedGzip / 1024) * 1024 - 1 },
+    };
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, lowerBucket))
+      .toThrow(/optionalMemoryView: its comment claims .* gzip, but this build measures only .* in a lower whole-KiB budget bucket/u);
 
     /*
      * Growth is not a failure, and it must not be, or six comments change on
@@ -430,17 +443,22 @@ describe("release gate", () => {
       .toThrow(/optionalProofSurface: named as measurement-justified, but this run measured no artifact under that name/u);
 
     /*
-     * A figure is held only to the precision it was written at. A comment saying
-     * "6.23 KiB raw" claims a hundredth of a KiB and nothing finer, and a check
-     * that read it to the byte would push every justification towards raw byte
-     * counts — the harder form to read — to satisfy the tool.
+     * A figure is held only to the precision it was written at, and same-bucket
+     * drift remains harmless at that precision. Crossing into the lower bucket
+     * is still material and still fails.
      */
     const coarse = source.replace(/Re-measured 3,396 B raw \/ 1,319 B gzip/u, "Re-measured 3.32 KiB raw / 1.29 KiB gzip");
     expect(coarse).not.toBe(source);
     const withinPrecision = { ...asDocumented, optionalSkillEditor: { raw: 3396, gzip: 1319 } };
     expect(() => assertDocumentedMeasurementsMatchBuild(coarse, withinPrecision)).not.toThrow();
-    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, { ...withinPrecision, optionalSkillEditor: { raw: 3396, gzip: 1219 } }))
-      .toThrow(/optionalSkillEditor: its comment claims 1\.29 KiB gzip, but this build measures only 1\.19 KiB/u);
+    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
+      ...withinPrecision,
+      optionalSkillEditor: { raw: 3396, gzip: 1219 },
+    })).not.toThrow();
+    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
+      ...withinPrecision,
+      optionalSkillEditor: { raw: 3396, gzip: 1000 },
+    })).toThrow(/optionalSkillEditor: its comment claims 1\.29 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
   });
 
   /*

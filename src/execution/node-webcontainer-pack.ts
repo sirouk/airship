@@ -1,4 +1,5 @@
 import { WebContainer } from "@webcontainer/api";
+import { createClientNodeEgress, type ClientNodeEgressPort } from "../tools/egress/client-node-egress";
 import { createNodeWebContainerAdapter, waitForNodeProcess } from "./node-webcontainer-adapter";
 import type { ExecutionAdapter } from "./runtime-registry";
 
@@ -27,6 +28,17 @@ export type NodeWebContainerActivationEvidence = Readonly<{
 
 export function getNodeWebContainerActivationEvidence(): NodeWebContainerActivationEvidence | undefined {
   return activationEvidence ? Object.freeze({ ...activationEvidence }) : undefined;
+}
+
+/**
+ * The first-class fetch_url escalation shares this pack and its one page host;
+ * no second runtime, proxy service, or eager tool-bundle payload is introduced.
+ */
+export function createNodeWebContainerEgress(): ClientNodeEgressPort {
+  return createClientNodeEgress({
+    activate: activateNodeWebContainer,
+    requireBrowserHost: true,
+  });
 }
 
 /**
