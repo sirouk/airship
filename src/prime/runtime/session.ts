@@ -102,6 +102,8 @@ export const PRIME_MAX_TOOL_CALLS_PER_STEP = 64;
 export const PRIME_MAX_ASSISTANT_BYTES = 4 * 1_024 * 1_024;
 /** Mirrors core/agent.ts MAX_INFERENCE_EVENTS_PER_STEP; counted per streamed provider event. */
 export const PRIME_MAX_STEP_EVENTS = 100_000;
+/** Mirrors core/agent.ts MAX_TURN_REASONING_CHARS; one step's journaled reasoning. */
+export const PRIME_MAX_TURN_REASONING_CHARS = 200_000;
 /** Default turn step ceiling; airship's UI passes 32 to runTurn, so it is the prime default too. */
 export const PRIME_DEFAULT_MAX_STEPS = 32;
 /** Grace between cooperative kernel-job cancel and hard worker terminate on abort/dispose. */
@@ -225,6 +227,16 @@ type ActiveTurn = {
    */
   bytesPerToken?: number;
   remainingToolOutputBytes?: number;
+  /**
+   * Provider-exposed reasoning for the step in flight, accumulated and capped
+   * exactly as `core/agent.ts` accumulates it, and drained to one
+   * `turn.reasoning` record per step. Per-step and not per-turn because that
+   * is the record core writes: a turn that reasons, calls a tool, then
+   * reasons again journals two, and the transcript renders one block per
+   * step beside the step it belongs to.
+   */
+  reasoningText: string;
+  reasoningTruncated: boolean;
   repeatCounts: Map<string, number>;
   guardrailStop?: string;
   reviewDeniedIds: Set<string>;
@@ -576,6 +588,8 @@ export class PrimeAgentSession {
       step: 0,
       stepEventCount: 0,
       canonical: [],
+      reasoningText: "",
+      reasoningTruncated: false,
       repeatCounts: new Map(),
       reviewDeniedIds: new Set(),
       reviewFailedIds: new Set(),
@@ -1206,6 +1220,34 @@ export class PrimeAgentSession {
           this.notifySignal({ type: "text-delta", turnId: turn.turnId, text: sub.delta });
         } else if (sub.type === "thinking_start" || sub.type === "thinking_delta") {
           this.notifySignal({ type: "status", turnId: turn.turnId, status: "reasoning" });
+          /*
+           * The status said a reasoning phase was happening; it never carried
+           * what the provider actually exposed, so the prime lane had a live
+           * reasoning indicator and no live reasoning. Both halves of core's
+           * contract are kept here: the delta goes out as a signal for the
+           * transcript to stream, and the same text accumulates for the
+           * durable `turn.reasoning` record drained at step end — so reasoning
+           * survives the turn on this engine the way it does on the other one.
+           */
+          if (sub.type === "thinking_delta" && sub.delta) {
+            this.notifySignal({
+              type: "reasoning-delta",
+              turnId: turn.turnId,
+              text: sub.delta.slice(0, PRIME_MAX_TURN_REASONING_CHARS),
+            });
+            if (turn.reasoningText.length < PRIME_MAX_TURN_REASONING_CHARS) {
+              // The delta that crosses the cap is the one that loses text, so
+              // it is the one that sets the flag — core's rule, and for its
+              // reason: reading the flag off a later delta lets the common
+              // shape (one long chain, final delta overflows, then done)
+              // record the cap and claim it was the whole chain.
+              const next = turn.reasoningText + sub.delta;
+              if (next.length > PRIME_MAX_TURN_REASONING_CHARS) turn.reasoningTruncated = true;
+              turn.reasoningText = next.slice(0, PRIME_MAX_TURN_REASONING_CHARS);
+            } else {
+              turn.reasoningTruncated = true;
+            }
+          }
         }
         return;
       }
@@ -1248,6 +1290,12 @@ export class PrimeAgentSession {
       }
       await this.journalStepUsage(turn, assistant);
     }
+    /*
+     * After usage, before the tool batch or the terminal — the position core
+     * writes it in, so a journal replayed from either engine presents the
+     * step's records in the same order.
+     */
+    await this.journalStepReasoning(turn);
 
     if (assistant.stopReason === "toolUse") {
       await this.journalToolBatch(turn, assistant, text);
@@ -1271,6 +1319,29 @@ export class PrimeAgentSession {
 
     // stopReason "error": recorded, journaled at agent_end.
     turn.terminalError = assistant.errorMessage ?? "The turn failed.";
+  }
+
+  /**
+   * One `turn.reasoning` record per step that exposed any, drained so the
+   * next step starts empty. Byte-compatible with `core/agent.ts`'s payload —
+   * `text`, and `truncated: true` only when the cap actually bit — because
+   * `messagePartsFromDurableEvents` projects both engines' records through
+   * the same `reasoning-summary` part.
+   */
+  private async journalStepReasoning(turn: ActiveTurn): Promise<void> {
+    if (!turn.reasoningText) return;
+    const text = turn.reasoningText;
+    const truncated = turn.reasoningTruncated;
+    turn.reasoningText = "";
+    turn.reasoningTruncated = false;
+    await this.appendTurnDrafts(turn, [
+      {
+        type: "turn.reasoning",
+        turnId: turn.turnId,
+        operationId: turn.requestId,
+        payload: { text, ...(truncated ? { truncated: true } : {}) },
+      },
+    ]);
   }
 
   private async journalStepUsage(turn: ActiveTurn, assistant: AssistantMessage): Promise<void> {

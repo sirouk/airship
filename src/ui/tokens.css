@@ -578,9 +578,26 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 a:focus-visible,
-[tabindex]:focus-visible {
+[tabindex]:not([tabindex^="-"]):focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
+}
+
+/* A negative `tabindex` is not a keyboard stop: no amount of Tab reaches one,
+   so the only thing that ever puts focus there is a script — the dialog that
+   just opened, the rail row that was clicked, the popover panel, the listbox
+   option under a roving/activedescendant pattern. Drawing the ring on those
+   states a keyboard position the keyboard cannot occupy, and it reads as the
+   product outlining the thing you just clicked with a mouse.
+   Suppressed *after* the block above and by attribute (0,2,0 beats the
+   `button` element selector) so it also covers the `role="option"` buttons in
+   the palette and the model picker, which mark their own active row with
+   `data-active` and never needed the ring.
+   This removes no keyboard affordance: every element a keyboard can actually
+   land on has `tabindex` 0 or none at all, and keeps its ring above. */
+[tabindex^="-"]:focus,
+[tabindex^="-"]:focus-visible {
+  outline: none;
 }
 
 /* The promise made 270 lines above this, kept. `opacity` multiplies against

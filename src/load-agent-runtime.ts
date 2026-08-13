@@ -33,43 +33,38 @@ export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRu
 /**
  * The gate. `runtime` is an explicit caller override and is allowed only
  * against compatible journal evidence (fork semantics); omitted lets the
- * ordering work: airship-core for a fresh session that carries a transport
- * (which is every one the app starts, `transport` being required), prime for
- * a fresh session without one, evidence-preserving for anything with history.
+ * journal decide: prime for a fresh session, evidence-preserving for anything
+ * with history.
+ *
+ * PRIME IS THE DEFAULT ENGINE. Every unpinned journal — which is every
+ * conversation the app has not yet run a turn in — opens on prime, and the
+ * first prime turn seals that decision into the journal so the choice is
+ * durable evidence rather than a runtime mood. airship-core keeps every
+ * session whose journal already carries airship turn protocol; those only
+ * change engines by forking, because an engine flip mid-history forks the
+ * evidence chain the same way a clock fork does.
+ *
+ * What made this reachable: `runPrimeTurn` now forwards the caller's
+ * transport (see the credential-bridge note there), so the prime lane runs a
+ * vendor provider over the caller's own wire instead of asking the ported
+ * registry for a key it was never given. That was the single reason this
+ * branch used to send every transport-carrying session to airship-core, and
+ * with it gone the transport is no longer part of the selection at all — it
+ * had never been a fact about which engine *should* run, only about which one
+ * *could*.
+ *
+ * The demo transport goes with it, deliberately. Its carve-out existed for
+ * exactly the same missing bridge ("a prime-session lane asking for an
+ * airship-demo API key"), and `airship-demo` is an `InferenceTransport` like
+ * any other: the adapter bridges it, and its Profile pins `providerId:
+ * "airship-demo"`, so the session's provider check matches the way a vendor
+ * session's does. A first-run visitor gets the engine the product is built
+ * on, not a second one kept alive for the unconnected case.
  */
 export async function runTurn(options: RunTurnOptions & { runtime?: AgentRuntimeKind }): Promise<TurnResult> {
-  /*
-   * The demo transport is the airship-core lane by construction: it exists
-   * exactly while nothing is connected, pinned to `airship-demo` in every
-   * built-in Profile, and nothing about prime provider resolution can take
-   * it — a prime-session lane asking for an airship-demo API key is the
-   * default-on wave's crash of the demo default. Inference for the demo
-   * runs where it always did; only the lane ownership is decided here, not
-   * the engine's evidence, and real inference ignores this branch entirely.
-   */
-  if (options.transport?.id === "airship-demo") {
-    agentRuntime ??= import("./core/agent");
-    return (await agentRuntime).runTurn(options);
-  }
-  /*
-   * Every vendor transport the product carries (Chutes, anthropic, openai,
-   * ollama, lm-studio) reaches this gate with its own credential plumbing
-   * already bound. The prime lane asks the provider itself to resolve a key
-   * from a vault = it has never been told about, so a fresh conversation's
-   * first real-provider turn currently dies inside runPrimeTurn with "No API
-   * key for provider: <id>". Until runPrimeTurn is taught to forward both
-   * the vendor stream and its key getter, fresh unpinned sessions take the
-   * lane the merge built them on: airship-core runs every vendor transport
-   * directly, the way it always did. Prime remains the lane of every
-   * prime-pinned journal and every explicit runtime request; the engine is
-   * central, and this is the move that protects it from being blamed for a
-   * missing credential bridge.
-   */
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
-  const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned"
-    ? options.transport !== undefined ? "airship-core" : "prime"
-    : history);
+  const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned" ? "prime" : history);
 
   if (options.runtime !== undefined) {
     if (options.runtime === "airship-core" && history === "prime") {

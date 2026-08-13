@@ -15,15 +15,16 @@ silently changes engines.
    turn/inference evidence without any prime.\* pins it **airship-core**;
    an empty (just-created) journal is **unpinned**.
 2. Selection: an explicit `runtime` option wins; otherwise the journal pin
-   wins; otherwise an unpinned session starts **prime** only when no
-   inference transport was supplied. `RunTurnOptions.transport` is a
-   required field (`src/core/agent.ts`), so every type-checked caller
-   reaches the gate with a transport and every real fresh session runs
-   **airship-core** — prime's unpinned arm is unreachable in production
-   until `runPrimeTurn` is taught to forward the caller's key getter
-   alongside the vendor stream, which is the reason the branch is written
-   the way it is (`src/load-agent-runtime.ts`). Prime remains the lane of
-   every prime-pinned journal and every explicit `runtime: "prime"`.
+   wins; otherwise an unpinned session starts **prime**. The transport is
+   not consulted: `runPrimeTurn` forwards it to the session authority, which
+   bridges it through `transport-adapter.ts`, so the ported provider
+   registry is never asked to resolve a credential the caller already holds.
+   That is the credential bridge this rule waited on, and it applies to
+   `airship-demo` exactly as it does to a vendor transport — the demo
+   carve-out is gone, and a first-run visitor gets prime like everyone else.
+   Retry parity comes with it: the forwarded transport is wrapped in
+   `withInferenceRetry(options.transport, options.retry)`, matching what
+   `core/agent.ts` does before its own loop sees it.
 3. An explicit selection that contradicts journal evidence is refused with
    the fork-the-session sentence, exactly the language class of the existing
    provider/tool-digest pins ("fork lineage invalid", "fork the session").
@@ -47,27 +48,28 @@ silently changes engines.
   tag (`src/ui/agent-runtime-status.ts`) renders "engine: prime (default)",
   "engine: prime (pinned by journal evidence — fork the session to
   switch)" or the airship-core sentence; a loading journal renders nothing
-  rather than a wrong-engine claim. The unpinned wording is the one place
-  the status authority still over-claims: `defaultEngine` is frozen to
-  `"prime"` in `src/prime/runtime/agent-runtimes.ts` while selection rule 2
-  above sends every transport-carrying fresh session to airship-core, so a
-  freshly connected session reads "prime (default)" and then flips to the
-  airship-core pin after its first turn. Correcting that literal belongs
-  with the credential bridge that makes the default true.
+  rather than a wrong-engine claim. The `defaultEngine: "prime"` literal in
+  `src/prime/runtime/agent-runtimes.ts` is now simply true: an unpinned
+  session reads "prime (default)" and its first turn pins it prime, so the
+  tag no longer flips engines under the reader after one turn.
 - Availability posture stays airship-canonical: `prime` is offered where
   the session's transport/model resolve and is not silently synthesized
   under degraded conditions.
 
 ## Acceptance status — W2–W6 green, full-tree verified (2026-08-06); W1 deferred
 
-- [ ] W1 — default-on gate: **deferred**, pending the credential bridge.
-  Journal pins and fork-the-session refusals on mismatch are in and behave
-  as specified (`src/load-agent-runtime.ts`), but the default-on half is
-  not: an unpinned session takes prime only with no transport, which no
-  type-checked caller can produce, so prime is not the default any fresh
-  session actually gets. The 4 tests in `src/load-agent-runtime.test.ts`
-  cover `sessionRuntimeKind` classification only; nothing there exercises
-  gate selection, which is why the branch could narrow without a red test.
+- [x] W1 — default-on gate: **landed**. The credential bridge is in
+  (`runPrimeTurn` forwards the caller's transport, retry-wrapped), the
+  unpinned branch selects prime for every transport including
+  `airship-demo`, and journal pins plus fork-the-session refusals behave as
+  specified (`src/load-agent-runtime.ts`). The test gap that let this branch
+  narrow unnoticed is closed too: `src/load-agent-runtime.test.ts` now
+  covers gate *selection* — default-on, the dead demo carve-out, engine
+  invariance across four vendor transports, both pin directions, both
+  refusal sentences, and an override an unpinned journal does not
+  contradict — alongside the original `sessionRuntimeKind` classification
+  tests. 12 tests, and `runTurn` routing is asserted at the module boundary
+  the gate actually crosses.
 - [x] W2 — boundary semantics in the session authority:
   `turn.context.selected` (v2-required manifests), pinned
   `planContextCompression` with bytes/token calibration and the transport

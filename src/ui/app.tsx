@@ -329,7 +329,7 @@ import {
   refreshCompletedTurnWorkspace,
   releaseComposerAndReloadSession,
 } from "./chat/turn-housekeeping";
-import { StreamingMessageSlot, TranscriptStreamStore } from "./chat/streaming-slot";
+import { StreamingMessageSlot, StreamingReasoningSlot, TranscriptStreamStore } from "./chat/streaming-slot";
 import { focusTranscriptTurn, isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
 import { DemoModelChip, pinnedSkillsDetail, pinnedSkillsLabel, SessionBar } from "./chat/session-bar";
 import { sessionStatusShort, type SessionStatusFact } from "./chat/session-status-chip";
@@ -1892,6 +1892,10 @@ export function App() {
     mode: ApprovalMode;
   }>>();
   const transcriptStreams = useMemo(() => new TranscriptStreamStore(), []);
+  /* Reasoning gets its own slot store rather than sharing the transcript's:
+     the two stream concurrently within a step, and one store keyed by message
+     id cannot hold both without interleaving them into the same string. */
+  const reasoningStreams = useMemo(() => new TranscriptStreamStore(), []);
   /** A conversation pin wins over global preferences; historical sessions stay semantically intact. */
   const pinnedApprovalMode = activeSessionRecord?.approvalModeOverride
     ?? (activeSessionRecord?.manifest.profile?.version === 2
@@ -2474,6 +2478,8 @@ export function App() {
   const primaryNav = useRef<HTMLElement>(null);
   const pendingDelta = useRef<{ messageId: string; text: string }>();
   const pendingDeltaFrame = useRef<number>();
+  const pendingReasoning = useRef<{ messageId: string; text: string }>();
+  const pendingReasoningFrame = useRef<number>();
   const pendingToolOutput = useRef<{ messageId: string; updates: Map<string, PendingToolOutputUpdate> }>();
   const pendingToolOutputFrame = useRef<number>();
   const profileOperation = useRef(0);
@@ -5067,6 +5073,23 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     transcriptStreams.clear(messageId);
   }
 
+  /**
+   * The live reasoning buffer's own teardown, deliberately *not* folded into
+   * `clearPendingDelta`. That one fires at the assistant boundary of every
+   * step, and a multi-step turn reasons again after each tool result — folding
+   * them together would blank the reasoning block between steps. Live
+   * reasoning is cleared once, when the turn is over and the durable
+   * `reasoning-summary` part takes the row.
+   */
+  function clearPendingReasoning(messageId: string) {
+    if (pendingReasoning.current?.messageId === messageId) pendingReasoning.current = undefined;
+    if (pendingReasoningFrame.current !== undefined) {
+      cancelAnimationFrame(pendingReasoningFrame.current);
+      pendingReasoningFrame.current = undefined;
+    }
+    reasoningStreams.clear(messageId);
+  }
+
   function queueTextDelta(messageId: string, text: string) {
     const current = pendingDelta.current;
     pendingDelta.current = current?.messageId === messageId
@@ -5079,6 +5102,28 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       pendingDeltaFrame.current = undefined;
       if (!buffered) return;
       transcriptStreams.append(buffered.messageId, buffered.text);
+    });
+  }
+
+  /**
+   * Reasoning deltas arrive at the same per-token cadence as text, so they get
+   * the same frame budget: one buffered append per animation frame into the
+   * per-message slot store, which notifies that row's reasoning block and
+   * nothing else. An immediate `setMessages` per delta — the shape this
+   * started as — rebuilt the transcript array on every token the model thought.
+   */
+  function queueReasoningDelta(messageId: string, text: string) {
+    const current = pendingReasoning.current;
+    pendingReasoning.current = current?.messageId === messageId
+      ? { messageId, text: current.text + text }
+      : { messageId, text };
+    if (pendingReasoningFrame.current !== undefined) return;
+    pendingReasoningFrame.current = requestAnimationFrame(() => {
+      const buffered = pendingReasoning.current;
+      pendingReasoning.current = undefined;
+      pendingReasoningFrame.current = undefined;
+      if (!buffered) return;
+      reasoningStreams.append(buffered.messageId, buffered.text);
     });
   }
 
@@ -7129,6 +7174,17 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           if (signal.type === "text-delta" && activeSessionIdentity.current === turnSessionId) {
             queueTextDelta(assistantId, signal.text);
           }
+          /*
+           * Unfenced, unlike the text and tool-output signals above. Those
+           * write `messages`, which belongs to whichever conversation is on
+           * screen; this writes a slot store keyed by a message id that only
+           * this turn owns, so a reader who steps into another thread mid-turn
+           * comes back to the reasoning that arrived while they were gone
+           * instead of to a gap. Cleared with the turn in the `finally`.
+           */
+          if (signal.type === "reasoning-delta") {
+            queueReasoningDelta(assistantId, signal.text);
+          }
           if (signal.type === "tool-output" && activeSessionIdentity.current === turnSessionId) {
             queueToolOutput(assistantId, signal);
           }
@@ -7251,6 +7307,11 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         setInput((current) => current.trim() ? current : content);
       }
     } finally {
+      /* The turn is over however it ended, so the live reasoning block hands
+         the row back to the durable `reasoning-summary` part projected from
+         `turn.reasoning`. Both paths above have already committed their
+         messages, so this cannot blank a row that has nothing to replace it. */
+      clearPendingReasoning(assistantId);
       const releasesComposer = activeTurn.current === controller;
       if (releasesComposer) {
         activeTurn.current = undefined;
@@ -11554,6 +11615,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                       onBranch={() => void forkFromMessage(entry.item, "fork")}
                       branchDisabled={!sessionLibrary || !activeSessionRecord || busy || !entry.item.sourcePoint}
                       streamStore={transcriptStreams}
+                      reasoningStore={reasoningStreams}
                     />}
                   </div>
                 ))}
@@ -14305,6 +14367,7 @@ function MessageCard({
   onBranch,
   branchDisabled,
   streamStore,
+  reasoningStore,
 }: {
   message: UiMessage;
   capabilityTier?: SessionManifest["capabilityTier"];
@@ -14319,6 +14382,7 @@ function MessageCard({
   onBranch: () => void;
   branchDisabled: boolean;
   streamStore: TranscriptStreamStore;
+  reasoningStore: TranscriptStreamStore;
 }) {
   const [copied, setCopied] = useState(false);
   const [copyFailure, setCopyFailure] = useState<string>();
@@ -14387,6 +14451,16 @@ function MessageCard({
             </span>
           ) : null}
         </div>
+        {/* Above the answer, because it is what the answer came out of — and
+            mounted before the parts so a row that is still only reasoning has
+            something on it rather than an empty card. */}
+        <StreamingReasoningSlot
+          store={reasoningStore}
+          answerStore={streamStore}
+          messageId={message.id}
+          active={message.status !== undefined}
+          settled={Boolean(message.parts?.length)}
+        />
         {message.parts?.length ? (
           <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
         ) : <p>{message.content || " "}</p>}

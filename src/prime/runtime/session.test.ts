@@ -515,6 +515,60 @@ describe("PrimeAgentSession", () => {
     );
   });
 
+  /*
+   * Prime is the default engine, so "the provider exposed reasoning" has to
+   * reach a reader on this lane the way it does on core's. It used to reach
+   * only a status string: `thinking_delta` raised "reasoning" and dropped the
+   * text, so a prime turn showed a reasoning indicator with no reasoning
+   * under it and left nothing in the journal for the settled summary to
+   * project. Both halves are asserted here — the live signal and the durable
+   * record — because either one alone still looks like it works.
+   */
+  it("t5f: provider reasoning streams as signals and settles as one turn.reasoning record", async () => {
+    const fixture = await makeFixture({});
+    const streamed: string[] = [];
+    const session = makeSession(fixture, {
+      onSignal: (signal) => {
+        if (signal.type === "reasoning-delta") streamed.push(signal.text);
+      },
+      streamFn: (_model, _context, _options) => {
+        const out = createAssistantMessageEventStream();
+        const partial: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          api: fixture.model.api,
+          provider: fixture.model.provider,
+          model: fixture.model.id,
+          usage: zeroUsage(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+        const final: AssistantMessage = { ...partial, content: [{ type: "text", text: "The answer." }] };
+        queueMicrotask(() => {
+          out.push({ type: "start", partial });
+          out.push({ type: "thinking_start", contentIndex: 0, partial });
+          out.push({ type: "thinking_delta", contentIndex: 0, delta: "First the plan. ", partial });
+          out.push({ type: "thinking_delta", contentIndex: 0, delta: "Then the answer.", partial });
+          out.push({ type: "text_delta", contentIndex: 1, delta: "The answer.", partial });
+          out.push({ type: "done", reason: "stop", message: final });
+          out.end(final);
+        });
+        return out;
+      },
+    });
+
+    const result = await session.prompt("think out loud");
+    expect(result.outcome).toBe("completed");
+    // Live: every delta the provider exposed, in order, unjoined.
+    expect(streamed).toEqual(["First the plan. ", "Then the answer."]);
+    // Durable: one record for the one step, carrying the joined chain, and no
+    // `truncated` flag because the cap never bit.
+    const records = eventsOfType(result.events, "turn.reasoning");
+    expect(records).toHaveLength(1);
+    expect(payloadRecord(records[0]!).text).toBe("First the plan. Then the answer.");
+    expect(payloadRecord(records[0]!).truncated).toBeUndefined();
+  });
+
   it("t5e: assistant text over 4 MiB journals turn.failed naming the byte limit", async () => {
     const fixture = await makeFixture({});
     const flood = "x".repeat(4 * 1_024 * 1_024 + 64);

@@ -18,6 +18,7 @@ import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";
 import type { AgentSignal } from "../../core/agent";
 import { randomUuid } from "../../core/id";
+import { withInferenceRetry } from "../../core/inference-retry";
 import { sessionRuntimeKind } from "../../load-agent-runtime";
 import {
   PRIME_DEFAULT_SESSION_TITLE,
@@ -397,16 +398,32 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
       sessionId: options.sessionId,
       manifest,
       model,
-      /* Whatever the caller was going to carry: a vault-backed resolver, or a
-         connection-pinned API key. The prime lane's provider streams resolve
-         their credential at call time from this, not from ambient page state. */
       /*
-       * NOTE(2026-08-07): vendor transports reach vendor keys or not vendor keys
-       * — runPrimeTurn must forward the vendor stream AND the key getter before
-       * vault-backed providers can take fresh prime turns. Until that day the
-       * gate at load-agent-runtime.ts routes fresh vendor sessions on the
-       * airship-core lane. Leave this slot empty until then.
+       * The credential bridge (W1), and the reason no `getApiKey` accompanies
+       * it.
+       *
+       * Every vendor transport this product carries — Chutes E2EE, anthropic,
+       * openai, ollama, lm-studio — arrives at this gate with its credential
+       * plumbing already bound to it: a vault-backed key, a connection-pinned
+       * generation, an extension OAuth bridge. Forwarding the transport means
+       * the prime lane's provider calls go back out over the caller's own
+       * wire, through `createTransportForPrimeModel`, so the ported provider
+       * registry is never asked to resolve a key it was never told about —
+       * which is exactly the "No API key for provider: <id>" this slot was
+       * left empty to avoid. `getApiKey` belongs to the other lane, the one a
+       * session with no transport takes, and `RunTurnOptions.transport` is
+       * required, so that lane is unreachable from the app.
+       *
+       * Retry parity with core: `core/agent.ts` wraps the caller's transport
+       * in `withInferenceRetry` before its loop ever sees it, and the bridge
+       * in `transport-adapter.ts` folds prime's structural stream failures
+       * back into the shape that wrapper reads. So the wrap belongs here —
+       * outside the adapter, around the airship wire — and a prime turn
+       * redelivers a transient provider refusal exactly as an airship-core
+       * turn does. `options.retry` is honoured for the same reason it is
+       * there: a caller passing `maxAttempts: 1` opts both engines out alike.
        */
+      transport: withInferenceRetry(options.transport, options.retry),
       onSignal: options.onSignal,
       maxSteps: options.maxSteps,
       signal: options.signal,

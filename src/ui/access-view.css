@@ -8,18 +8,30 @@
  * one route whose title moved on arrival. `--connect-measure` now starts below
  * the route bar.
  */
+/*
+ * One measure for the whole route, held by the route's own box.
+ *
+ * The cap used to live on the two content blocks below, which left the route
+ * bar — the `Connection` title and its count chip — as the one child of this
+ * grid that did not have it. So the heading started at the shell gutter while
+ * every card below it started 118px further in (measured at desktop-1280:
+ * header x=274..1270, cards x=392..1152), and the page read as though the
+ * title belonged to something else. A page has one left edge; hoisting the
+ * measure here is what makes the header and the cards share it, and it keeps
+ * the centring the cards already had.
+ */
 .access-connection-view {
   display: grid;
   gap: var(--sp-4);
   width: 100%;
+  max-width: var(--connect-measure);
+  margin-inline: auto;
   color: var(--ink);
 }
 
 .access-connection-layout,
 .access-additional-providers {
   width: 100%;
-  max-width: var(--connect-measure);
-  margin-inline: auto;
 }
 
 .access-additional-providers {

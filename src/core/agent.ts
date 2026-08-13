@@ -59,6 +59,7 @@ export type AgentSignal =
   | { type: "durable"; events: DurableEvent[] }
   | { type: "text-delta"; turnId: string; text: string }
   | { type: "tool-output"; turnId: string; operationId: string; stream: "stdout" | "stderr" | "combined"; text: string }
+  | { type: "reasoning-delta"; turnId: string; text: string }
   | { type: "status"; turnId: string; status: string };
 
 export type RunTurnOptions = {
@@ -466,6 +467,11 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           }
         },
         (reasoningDelta) => {
+          notifySignal(options.onSignal, {
+            type: "reasoning-delta",
+            turnId,
+            text: reasoningDelta.slice(0, MAX_TURN_REASONING_CHARS),
+          });
           if (reasoningText.length < MAX_TURN_REASONING_CHARS) {
             // The delta that crosses the cap is the one that loses text, so it
             // is the one that has to set the flag. Reading the flag off a

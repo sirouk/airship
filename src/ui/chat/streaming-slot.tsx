@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { Icon } from "../icons";
 import { IncrementalMarkdownView } from "./markdown";
+import { reasoningHeadline } from "./message-parts";
+import { useReasoningVisibility } from "./reasoning-visibility";
 
 type Listener = () => void;
 
@@ -41,22 +44,43 @@ export class TranscriptStreamStore {
   }
 }
 
+/** One message's slot value, re-read on every append to that message alone. */
+export function useTranscriptStream(store: TranscriptStreamStore, messageId: string): string {
+  const [content, setContent] = useState(() => store.read(messageId));
+  useEffect(() => {
+    setContent(store.read(messageId));
+    return store.subscribe(messageId, () => setContent(store.read(messageId)));
+  }, [messageId, store]);
+  return content;
+}
+
+/**
+ * Whether a slot has taken its first byte — the question the reasoning fold
+ * asks of the *answer* stream. Deliberately not `useTranscriptStream`: this
+ * flips once and then holds, so a subscriber asking only this re-renders on
+ * the delta that starts the answer rather than on every delta after it.
+ */
+function useStreamStarted(store: TranscriptStreamStore, messageId: string): boolean {
+  const [started, setStarted] = useState(() => store.read(messageId).length > 0);
+  useEffect(() => {
+    const sync = () => setStarted(store.read(messageId).length > 0);
+    sync();
+    return store.subscribe(messageId, sync);
+  }, [messageId, store]);
+  return started;
+}
+
 export function StreamingMessageSlot({ store, messageId, active }: {
   store: TranscriptStreamStore;
   messageId: string;
   active: boolean;
 }) {
-  const [content, setContent] = useState(() => store.read(messageId));
+  const content = useTranscriptStream(store, messageId);
   // Monotone, and mutated in render on purpose: it decides whether this slot is
   // in the DOM before the settle commit, one commit earlier than an effect
   // could.
   const streamedThisMount = useRef(false);
   if (active) streamedThisMount.current = true;
-
-  useEffect(() => {
-    setContent(store.read(messageId));
-    return store.subscribe(messageId, () => setContent(store.read(messageId)));
-  }, [messageId, store]);
 
   if (!streamedThisMount.current) return null;
 
@@ -87,5 +111,80 @@ export function StreamingMessageSlot({ store, messageId, active }: {
         </div>
       ) : null}
     </>
+  );
+}
+
+/** Pinned to the tail while it streams, free to be scrolled once it is not. */
+function ReasoningText({ text, follow }: { text: string; follow: boolean }) {
+  const node = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (!follow) return;
+    const element = node.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [text, follow]);
+  return <pre ref={node} class="reasoning-summary__text reasoning-live__text">{text}</pre>;
+}
+
+/**
+ * The live reasoning slot: what the provider is exposing *while it thinks*.
+ *
+ * Reasoning that appears only once the turn settles is reasoning nobody was
+ * waiting on — the wait is exactly when it is worth reading. So this slot is
+ * open while reasoning is the only thing arriving, and folds to its headline
+ * the moment the answer or a tool call starts, which is the moment reasoning
+ * stops being the thing you are waiting for. It never folds to *nothing*: the
+ * row keeps a summary line that opens on demand, and an explicit toggle by the
+ * reader outranks the automatic fold for the rest of that row's turn.
+ *
+ * The Profile's `reasoningVisibility` is read as the *fold* preference and
+ * never as a hide — "expanded" keeps the whole text open once the answer
+ * lands, "collapsed" folds it to the headline. Neither setting can take the
+ * block off the row, and neither is consulted while it is still streaming.
+ *
+ * The settled counterpart is the `reasoning-summary` part in
+ * `message-parts-view.tsx`, projected from the durable `turn.reasoning`
+ * record. This slot clears when the turn does, so exactly one of the two is
+ * ever on the row.
+ */
+export function StreamingReasoningSlot({ store, answerStore, messageId, active, settled }: {
+  store: TranscriptStreamStore;
+  /** The answer stream, asked only whether it has begun. */
+  answerStore: TranscriptStreamStore;
+  messageId: string;
+  active: boolean;
+  /** Durable parts have begun landing on this row — a tool call, or the answer. */
+  settled: boolean;
+}) {
+  const text = useTranscriptStream(store, messageId);
+  const answerStarted = useStreamStarted(answerStore, messageId);
+  const visibility = useReasoningVisibility();
+  const [readerOpen, setReaderOpen] = useState<boolean>();
+  // A new row is a new turn's reasoning: the previous turn's manual fold is
+  // not allowed to decide this one's.
+  useEffect(() => { setReaderOpen(undefined); }, [messageId]);
+
+  if (!text) return null;
+  const folded = (answerStarted || settled) && visibility !== "expanded";
+  const open = readerOpen ?? !folded;
+  const streaming = active && !folded;
+  return (
+    <details
+      class={streaming ? "message-part reasoning-summary reasoning-full reasoning-live reasoning-live--streaming" : "message-part reasoning-summary reasoning-full reasoning-live"}
+      open={open}
+      onToggle={(event) => setReaderOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      {/* Not a live region: one utterance per reasoning delta is unusable, and
+          the turn's arrival is already narrated by `chat/turn-narration.ts`. */}
+      <summary>
+        <Icon name="context" size={14} />
+        <span>Reasoning</span>
+        <small>
+          {folded
+            ? `${reasoningHeadline(text)} · ${text.length.toLocaleString()} characters`
+            : active ? "Live, as the provider exposes it" : "Shown as the provider exposed it"}
+        </small>
+      </summary>
+      <ReasoningText text={text} follow={streaming} />
+    </details>
   );
 }

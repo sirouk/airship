@@ -108,10 +108,22 @@ describe("focus is drawn one way", () => {
     // A keyboard-reachable scroll region is a focus stop, and it is drawn from
     // here rather than by each pane that remembered — which is what the
     // override ratchet below is counting down.
-    expect(selector).toContain("[tabindex]:focus-visible");
+    //
+    // Keyboard-*reachable* is the whole qualification, and it is the half this
+    // assertion used to leave unsaid. `[tabindex]` matched negative values
+    // too, so every script-focus target in the product — the dialog that just
+    // opened, the rail row that was clicked, the popover panel, the listbox
+    // option under a roving pattern — drew the ring when a script sent focus
+    // there after a pointer press. No Tab can land on any of them.
+    expect(selector).toContain('[tabindex]:not([tabindex^="-"]):focus-visible');
     // The alias that used to draw it. `--focus` is two lines from the top of
     // the file and was not what painted the ring.
     expect(baseline).not.toContain("--brass-bright");
+  });
+
+  it("draws no ring on a script-focus target, which no Tab can reach", () => {
+    const [silenced = ""] = tokens.match(/\[tabindex\^="-"\]:focus-visible\s*\{([^}]+)\}/u)?.slice(1) ?? [];
+    expect(silenced).toContain("outline: none");
   });
 
   it("re-declares no ring in the sheets that own one", () => {

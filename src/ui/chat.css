@@ -173,9 +173,14 @@
    hidden by a rule — a second control for the verb that acts on the element
    under the reader's finger was the header slot easiest to give back. */
 
+/* The field is as wide as a conversation name, not as wide as the bar.
+   `1fr` handed it the whole identity column — the full width of the chat
+   stage minus the instrument cluster — so renaming a thread called "hey"
+   opened a 1200px input holding three characters. A title that outgrows the
+   cap scrolls inside the field, which is what a text input is for. */
 .session-bar__rename {
   display: grid;
-  grid-template-columns: auto minmax(8rem, 1fr);
+  grid-template-columns: auto minmax(8rem, 26rem);
   gap: var(--sp-1);
   align-items: center;
   min-width: 0;
@@ -428,13 +433,50 @@
  * row, and the two-column header that used to hold it is what starved the model
  * name to 169px in the first place.
  */
+/*
+ * One box, and one width.
+ *
+ * Two boxes: `.session-runtime` takes the shared chip recipe above — border,
+ * radius, tinted ground — and `ModelControl` renders its own
+ * `.model-picker-trigger` inside it with a second border and a second ground,
+ * so the connected bar drew a control inside a control. The trigger is the
+ * thing a finger presses and the thing that carries the open state, so the
+ * trigger keeps the box and the wrapper goes back to being a layout cell.
+ *
+ * One width: `12ch`–`32ch` let this control resize by up to twenty characters
+ * between one model name and the next, and everything to its right moved with
+ * it — the whole instrument cluster reflowed on a model switch. A fixed
+ * measure holds the strip still and long names ellipsise, which
+ * `.model-picker-value` was already set up to do.
+ */
 .session-bar .session-runtime {
-  width: auto;
-  min-width: 12ch;
-  max-width: 32ch;
+  width: 24ch;
+  min-width: 24ch;
+  max-width: 24ch;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* The trigger inherits the strip's geometry rather than the picker's own
+   44px card, which is the height this bar refused it. */
+.session-bar .model-picker-trigger {
+  min-height: 28px;
   padding: 0 var(--sp-2);
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  font: var(--fw-body) var(--fs-caption)/1 var(--font-body);
+}
+
+/* A fixed measure is only honest while there is room for it. */
+@media (max-width: 720px) {
+  .session-bar .session-runtime {
+    width: auto;
+    min-width: 0;
+    max-width: 18ch;
+  }
 }
 
 .session-bar .session-runtime-icon {
@@ -1316,6 +1358,32 @@ button.runtime-posture {
   overflow-wrap: anywhere;
 }
 
+/* Live reasoning is the same block as the settled one, marked as still
+   arriving: an accent edge while it streams, and a shorter window than the
+   settled 40vh so a long chain cannot push the answer off the screen it is
+   about to arrive on. `--accent` and not `--focus`: this is the product
+   speaking, not a keyboard position. */
+.message-part.reasoning-summary.reasoning-live {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.message-part.reasoning-summary.reasoning-live--streaming {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.message-part.reasoning-summary.reasoning-live > pre.reasoning-live__text {
+  max-height: 22vh;
+  scroll-behavior: smooth;
+}
+
+/* A reader who has scrolled back through the chain is not fighting the tail
+   pin every frame; the pin only ever runs while the block is streaming. */
+@media (prefers-reduced-motion: reduce) {
+  .message-part.reasoning-summary.reasoning-live > pre.reasoning-live__text {
+    scroll-behavior: auto;
+  }
+}
+
 
 .message-part.reference {
   display: grid;
@@ -1548,7 +1616,11 @@ button.runtime-posture {
 
 .composer-wrap {
   padding: 9px max(22px, calc((100% - 790px) / 2)) 13px;
-  border-top: 1px solid var(--line);
+  /* No rule above the input. The composer is a raised card with its own
+     border, shadow and backdrop blur — it already reads as the place you
+     type. A full-bleed line above it drew a second edge the card had no need
+     for and turned the input into a separate panel of the page rather than
+     the end of the transcript it belongs to. */
   /* Token-derived for the same reason as `.mobile-nav`: this literal was the
      dark `--ground`, which put a full-width black band under a warm paper
      interface on desktop chat. */
@@ -2253,10 +2325,27 @@ button.runtime-posture {
  * track rather than a column, which is why `no-inspector` (one column) is the
  * grid it lives in.
  */
+/*
+ * …and at rest it is a footnote to the composer, in the composer's own column.
+ *
+ * Full-bleed under a rule, this row read as a third section of the page — a
+ * box about the turn, sitting outside the block it describes, its count
+ * stranded at the far right of however wide the window happened to be while
+ * the input above it stopped at 780px. Two edges and two measures for one
+ * conversation. It takes the composer's measure and the composer's quiet
+ * here; expanded (`.inspector`) it is still the 310px column it always was.
+ */
 .inspector--summary {
   overflow: visible;
-  border-top: 1px solid var(--line);
+  padding: 0 max(22px, calc((100% - 790px) / 2)) 10px;
+  border-top: 0;
   background: none;
+}
+
+.inspector--summary .claim-rail-summary {
+  max-width: 780px;
+  margin-inline: auto;
+  border-radius: var(--radius-control);
 }
 
 .claim-rail-summary {

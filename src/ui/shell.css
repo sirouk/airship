@@ -780,7 +780,10 @@
   width: 100%;
   margin-top: var(--sp-1);
   padding: 0 0 var(--sp-1) var(--sp-2);
-  border-left: 1px solid var(--line);
+  /* Transparent for the same reason the nested rows' rule is: this hairline
+     was the top of that same vertical series, and leaving it while the rows
+     below it went quiet is what would make the column look half-finished. */
+  border-left: 1px solid transparent;
   background: transparent;
 }
 
@@ -853,13 +856,31 @@
   padding: var(--sp-2) var(--sp-2) var(--sp-1);
 }
 
+/*
+ * The mark used to hold an 18px gutter down the left of every row, vertically
+ * centred, which cost the title and the preview that width on the narrowest
+ * surface in the product — the two lines that actually say which conversation
+ * this is. It sits on the trailing edge now, pinned to the top of the row, so
+ * it reads directly above the timestamp: both are facts *about* the row, and
+ * they belong on the same side of it. The copy column starts at the padding
+ * edge and keeps the 18px.
+ *
+ * Placement is explicit rather than DOM-ordered: the mark is a real sibling
+ * `<button>` (it toggles favorite, and a button inside the row button would be
+ * invalid), so it stays first in the DOM — first in the arrow walk, where it
+ * has always been — and is placed into the trailing column here.
+ */
 .recent-conversation-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 18px auto;
   gap: 2px;
   align-items: center;
   min-width: 0;
 }
+
+.recent-conversation-row > .recent-conversation { grid-column: 1; grid-row: 1; }
+.recent-conversation-row > .recent-conversation__mark { grid-column: 2; grid-row: 1; }
+.recent-conversation-row > .recent-conversation__order { grid-column: 3; grid-row: 1; }
 
 .recent-conversation-row[draggable="true"] { cursor: grab; }
 .recent-conversation-row[data-dragging="true"] { opacity: 0.5; }
@@ -916,7 +937,12 @@
 .recent-conversation__mark {
   display: grid;
   place-items: center;
-  align-self: stretch;
+  /* Top of the row, not the middle of it: the middle of a three-line thread
+     row is beside the preview, and the mark is meant to sit over the time.
+     The padding matches `.recent-conversation--thread`'s `padding-block` so
+     the glyph rides the title's line rather than the row's top edge. */
+  align-self: start;
+  padding-top: 5px;
   width: 18px;
   padding: 0;
   border: 0;
@@ -1083,18 +1109,32 @@
   color: var(--ink);
 }
 
-/* Nesting is carried by the indent, the 1px rule and `aria-level`. The forty
-   brass `↳` glyphs are gone: a tree marker encodes nothing a 12px indent does
-   not already say, and brass means "you are here" or "act here". */
+/* Nesting is carried by the indent and `aria-level`. The forty brass `↳`
+   glyphs are gone: a tree marker encodes nothing a 12px indent does not
+   already say, and brass means "you are here" or "act here".
+   The 1px rule went the same way, for the same reason. Drawn on every nested
+   row at rest it read as a table of rules rather than a list of destinations,
+   and it competed with the one left-edge mark that carries meaning here —
+   `.nav-item.active::before`, the brass bar that says which page you are on.
+   The border stays in the box at `transparent` so nothing reflows when it
+   appears; hover is the only state that spends it, as the hint that this row
+   is one of a nested group. */
 .nav-item--nested {
   --rail-item-height: 36px;
   margin-left: var(--sp-3);
   width: calc(100% - var(--sp-3));
   padding-left: var(--sp-3);
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   border-radius: 0 var(--radius-control) var(--radius-control) 0;
   color: var(--ink-faint);
   font-size: var(--fs-caption);
+}
+
+/* Not `.nav-item--nested.active`: the active row's own `border-color` is
+   declared later in this sheet and already covers it, and re-stating it here
+   would put the hairline back on the one row that never wanted it. */
+.nav-item--nested:hover {
+  border-left-color: var(--line);
 }
 
 /*
