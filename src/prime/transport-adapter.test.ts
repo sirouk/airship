@@ -581,7 +581,7 @@ describe("createInferenceTransportForPrimeStream", () => {
     };
   }
 
-  it("maps the golden sequence back, dropping thinking text and block boundaries", async () => {
+  it("maps the golden sequence back, carrying reasoning text and dropping block boundaries", async () => {
     const partial = assistantMessage();
     const toolCall = { type: "toolCall" as const, id: "call-9", name: "list_files", arguments: { path: "/" } };
     const final = assistantMessage({
@@ -601,8 +601,8 @@ describe("createInferenceTransportForPrimeStream", () => {
         { type: "text_delta", contentIndex: 0, delta: "A", partial },
         { type: "text_end", contentIndex: 0, content: "A", partial },
         { type: "thinking_start", contentIndex: 1, partial },
-        { type: "thinking_delta", contentIndex: 1, delta: "secret reasoning", partial },
-        { type: "thinking_end", contentIndex: 1, content: "secret reasoning", partial },
+        { type: "thinking_delta", contentIndex: 1, delta: "exposed reasoning", partial },
+        { type: "thinking_end", contentIndex: 1, content: "exposed reasoning", partial },
         { type: "text_start", contentIndex: 2, partial },
         { type: "text_delta", contentIndex: 2, delta: "B", partial },
         { type: "text_end", contentIndex: 2, content: "B", partial },
@@ -619,6 +619,12 @@ describe("createInferenceTransportForPrimeStream", () => {
     expect(events).toEqual([
       { type: "text-delta", text: "A" },
       { type: "progress", phase: "reasoning" },
+      // The words cross with the phase now. Block boundaries still do not:
+      // canonical events are a flat sequence and have no place to put them.
+      // The compaction summarizer, this direction's only consumer, reads
+      // `text-delta` alone and ignores this — so nothing reasoning says can
+      // reach the summary it writes back into the provider context.
+      { type: "reasoning-delta", text: "exposed reasoning" },
       { type: "text-delta", text: "B" },
       { type: "tool-call", call: { id: "call-9", name: "list_files", arguments: { path: "/" } } },
       { type: "usage", inputTokens: 1_200, outputTokens: 34 },

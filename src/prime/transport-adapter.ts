@@ -426,22 +426,28 @@ async function* iteratePrimeStreamAsInference(
       if (event.type === "text_delta") {
         yield { type: "text-delta", text: event.delta };
       } else if (event.type === "thinking_start") {
-        /*
-         * Only the phase marker crosses in this direction, deliberately, even
-         * though `reasoning-delta` now gives the text a canonical home.
-         *
-         * The two directions are not symmetric because their consumers are
-         * not. The forward bridge feeds the transcript, where provider-exposed
-         * reasoning is the whole point. This one is read by
-         * `session.ts`'s compaction summarizer, which asked for an airship
-         * transport view of a prime stream and never asked for a reasoning
-         * channel. A prime session's own reasoning already reaches the reader
-         * without passing through here — the session authority raises it from
-         * `thinking_delta` directly — so widening this seam would add a
-         * carrier for nobody and put thinking text somewhere its consumer has
-         * no rule for.
-         */
+        // The phase marker; the words follow it below, now that
+        // `reasoning-delta` gives them a canonical home to cross into.
         yield { type: "progress", phase: "reasoning" };
+      } else if (event.type === "thinking_delta") {
+        /*
+         * Symmetric with the forward bridge, and safe in the one place this
+         * direction is consumed.
+         *
+         * `session.ts`'s compaction summarizer is the only reader: it asks for
+         * an airship transport view of a prime stream. It accumulates
+         * `text-delta` alone, refuses a `tool-call`, and ignores every other
+         * event kind — so reasoning cannot reach the summary text it feeds
+         * back into the provider context, which was the one hazard worth
+         * checking before widening a seam nobody had asked to widen.
+         *
+         * What it buys: anything reading a prime-registry provider through an
+         * airship transport now sees the same reasoning a vendor transport
+         * would have carried. A bridge that translates one direction and
+         * silently drops the other is the shape of the defect this whole
+         * change exists to fix.
+         */
+        yield { type: "reasoning-delta", text: event.delta };
       } else if (event.type === "toolcall_end") {
         // Canonical tool calls are whole-proposition events: the deltas are
         // assembled by the producing stream, and this boundary is where the
