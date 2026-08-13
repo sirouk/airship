@@ -297,7 +297,7 @@ describe("release gate", () => {
     // all four; leaving any one of them would let the largest pair keep
     // justifying the ceiling.
     expect(() => assertDocumentedBudgetMeasurements(source
-      .replace("Re-measured at 88,281 B raw / 28,100 B gzip", "Re-weighed at 88,281 B and 28,100 B")
+      .replace("Re-measured at 88,100 B raw / 28,100 B gzip", "Re-weighed at 88,100 B and 28,100 B")
       .replace("Re-measured on this build: 87,281 B raw / 27,902 B gzip", "Re-weighed at 87,281 B and 27,902 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))

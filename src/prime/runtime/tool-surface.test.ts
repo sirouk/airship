@@ -130,3 +130,51 @@ describe("the prime tool surface", () => {
     expect(names).toContain("git_inspect");
   });
 });
+
+/*
+ * The regression this pair exists to stop repeating.
+ *
+ * `toolManifestDigest` is immutable and the session refuses any registry that
+ * does not match it. Composing a richer surface at turn time without pinning
+ * it at session creation is exactly that refusal — and it failed *every* turn
+ * on *every* conversation with "The tool manifest changed. Fork the session
+ * before using a different tool set." A turn that reaches for a capability the
+ * manifest never pinned must degrade to what was pinned, never fail.
+ */
+describe("the surface and the manifest have to agree", () => {
+  it("digests identically to what a manifest pinned from the same inputs", async () => {
+    const { sha256, stableStringify } = await import("../../core/hash");
+    const workspace = new FakeWorkspacePort({});
+    const airship = airshipRegistry(["git_inspect"]);
+
+    // What `app.tsx` pins at session creation…
+    const pinned = primeToolDefinitions({ workspace, airship });
+    // …and what `runPrimeTurn` composes on every later turn. `execute_code` is
+    // attached from the live kernel there, so the turn's registry only matches
+    // once that attachment has happened — which is why the turn attaches it
+    // before comparing.
+    const surface = createPrimeToolSurface({ workspace, airship });
+    surface.registry.register(
+      (await import("../tools/kernel-tool")).createPrimeExecuteCodeTool(
+        new (await import("../kernel/kernel-host")).PrimeKernelHost({
+          ports: { bridge: { call: () => Promise.reject(new Error("probe")) } },
+        }),
+      ),
+    );
+
+    const pinnedDigest = await sha256(stableStringify(pinned as never));
+    const turnDigest = await sha256(stableStringify(surface.registry.definitions() as never));
+    expect(turnDigest).toBe(pinnedDigest);
+  });
+
+  it("composes a surface whose omissions do not change its digest identity", () => {
+    // Two turns of the same conversation must digest the same even though the
+    // agent registry is rebuilt per turn: the *names* are what the manifest
+    // binds, and they are stable for a given set of ports.
+    const workspace = new FakeWorkspacePort({});
+    const airship = airshipRegistry(["git_inspect"]);
+    const first = createPrimeToolSurface({ workspace, airship }).registry.definitions();
+    const second = createPrimeToolSurface({ workspace, airship }).registry.definitions();
+    expect(second.map((d) => d.name)).toEqual(first.map((d) => d.name));
+  });
+});

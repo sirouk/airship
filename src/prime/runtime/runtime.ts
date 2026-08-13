@@ -7,7 +7,7 @@
  * session's slow abort cannot reorder another's teardown.
  */
 
-import type { ApprovalPolicy, CanonicalImageInput, SecurityPosture, SessionContextPolicy, SessionManifest, ToolDefinition } from "../../core/contracts";
+import type { ApprovalPolicy, CanonicalImageInput, JsonValue, SecurityPosture, SessionContextPolicy, SessionManifest, ToolDefinition } from "../../core/contracts";
 import type { RunTurnOptions, TurnResult } from "../../core/agent";
 import { createSessionManifest } from "../../core/session-manifest";
 import type { EventJournal, SessionRecord } from "../../core/journal";
@@ -18,6 +18,7 @@ import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";
 import type { AgentSignal } from "../../core/agent";
 import { randomUuid } from "../../core/id";
+import { sha256, stableStringify } from "../../core/hash";
 import { withInferenceRetry } from "../../core/inference-retry";
 import { sessionRuntimeKind } from "../../load-agent-runtime";
 import {
@@ -432,7 +433,23 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
       })
     : undefined;
 
-  const surface = options.workspace
+  /*
+   * The surface is only usable if this conversation's manifest pins it.
+   *
+   * `toolManifestDigest` is immutable, and the session refuses a registry that
+   * does not match it — correctly, because a different tool set mid-history is
+   * a different agent. Swapping the registry in at turn time without pinning
+   * it at creation is exactly that refusal, and it failed *every* turn with
+   * "The tool manifest changed. Fork the session before using a different tool
+   * set." until this check existed.
+   *
+   * So the prime surface is composed, digested, and used only where the
+   * manifest already agrees. Conversations created before prime's vocabulary
+   * was pinned keep running on the registry they were built with — the
+   * engine-only shape, which is what they have always run — instead of being
+   * marched into a fork they did not ask for.
+   */
+  const candidate = options.workspace
     ? createPrimeToolSurface({
         workspace: options.workspace,
         airship: options.tools,
@@ -440,6 +457,12 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
         ...(agentRegistry ? { agent: agentRegistry.deps } : {}),
         heartbeats: primeHeartbeatStore(),
       })
+    : undefined;
+
+  const surface = candidate
+    && (await sha256(stableStringify(candidate.registry.definitions() as unknown as JsonValue)))
+      === manifest.toolManifestDigest
+    ? candidate
     : undefined;
 
   const runtime = new PrimeRuntime({

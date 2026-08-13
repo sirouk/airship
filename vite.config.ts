@@ -202,6 +202,14 @@ export default defineConfig({
           if (
             id.includes("/src/tools/registry")
             || id.includes("/src/tools/schema")
+            // Joined by the modules the tool surface shares with the eager
+            // path once its definitions began pinning new manifests: workspace
+            // addressing, the core contracts and the schema validator. All
+            // three were already on first paint; naming them keeps them one
+            // attributable chunk instead of three the classifier cannot own.
+            || id.includes("/src/workspace/addressing")
+            || id.includes("/src/core/contracts")
+            || id.includes("/src/tools/validation")
           ) return "tool-registry-pack";
           /*
            * Named, but on its own: the registry and its schema compiler are
@@ -221,6 +229,23 @@ export default defineConfig({
            * from `core/hash`. Named into the prime family it belongs to.
            */
           if (id.includes("/src/prime/ai/hash")) return "prime-ai-hash";
+          /*
+           * The tool surface has two importers now — the prime runtime chunk,
+           * and the session-creation path that pins its definitions into a new
+           * manifest — so Rollup splits it out under a bare `tool-surface`
+           * name the classifier can attribute to nobody. It is prime's, and it
+           * is named into prime's family.
+           */
+          if (id.includes("/src/prime/runtime/tool-surface")) return "prime-tool-surface";
+          /*
+           * Git's path validation shares the content search with prime's
+           * `search_text`, so moving that search into its own deferred chunk
+           * left this one hoisted under a bare `validation` name — a name the
+           * inference providers also emit. It is on the eager path, so it is
+           * named into the same preloaded pack the registry and contracts use
+           * rather than becoming a chunk of its own.
+           */
+          if (id.includes("/src/git/validation")) return "tool-registry-pack";
           return id.includes("/src/inference/bridge/")
             ? "inference-bridge-pack"
             : undefined;

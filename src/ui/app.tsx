@@ -12928,12 +12928,38 @@ async function createProfileSessionManifest(
     const missingTools = skill.requiredTools.filter((tool) => !availableTools.has(tool));
     if (missingTools.length) throw new Error(`Skill ${skill.skillId} requires unavailable tools: ${missingTools.join(", ")}.`);
   }
+  /*
+   * Loaded here, not imported at the top of this file: `tool-surface` reaches
+   * prime's whole tool vocabulary and the kernel host, and a static import
+   * dragged all of it into the eager entry bundle — 451 KiB raw against a
+   * 384 KiB ceiling, 67 KiB of first paint spent on a surface that cannot be
+   * used until someone starts a conversation. Starting one is already a
+   * deferred moment, so the chunk arrives exactly when it is needed.
+   */
+  const { primeToolDefinitions } = await import("../prime/runtime/tool-surface");
   const manifest = await createSessionManifest({
     systemPrompt: pin.systemPrompt,
     providerId: runtime.transport.id,
     model: runtime.model,
     ...(runtime.inferenceBinding ? { inferenceBinding: runtime.inferenceBinding } : {}),
-    tools: runtime.tools.definitions(),
+    /*
+     * A new conversation is a prime conversation, so it pins prime's tool
+     * surface — its file and search vocabulary, the persistent kernel's
+     * `execute_code`, the RLM family — rather than Airship's alone.
+     *
+     * This has to happen here and nowhere else. `toolManifestDigest` is
+     * immutable and the session refuses any registry that does not match it,
+     * so a turn that composes a richer surface than its manifest pinned is
+     * refused with "The tool manifest changed" — every turn, for the life of
+     * the conversation. Pinning at birth is the only moment the two can be
+     * made to agree.
+     *
+     * Conversations created before this keep the surface they pinned and keep
+     * working: `runPrimeTurn` compares the composed surface against the
+     * manifest and falls back to the registry the session was built with
+     * rather than marching anyone into a fork they did not ask for.
+     */
+    tools: [...primeToolDefinitions({ workspace: runtime.workspace, airship: runtime.tools })],
     workspaceId: runtime.workspaceId,
     capabilityTier,
     securityPosture: runtime.transport.posture,

@@ -208,7 +208,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gzip takes one further whole step to 189 (1,338 B). Raw is unchanged and
   // keeps 211 KiB of its clearance.
   //
-  // Re-measured after prime's tool vocabulary was wired: 592,999 B raw / 198,200 B gzip. This is the
+  // Re-measured after prime's tool vocabulary was wired: 579,200 B raw / 193,800 B gzip. This is the
   // largest single raise in this file and it is one feature — `src/prime/tools`
   // stopped being dead code. The port shipped its agent loop first and left the
   // tool surface, the continual-harness store and the persistent kernel tool
@@ -220,10 +220,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // because folding it in cost first paint 4.45 KiB gzip for a surface no cold
   // visitor opens. Figures are recorded as floors a little under the build, for
   // the reason the backstop below spells out.
-  // 194 KiB gzip would have left 456 B, under the aggregate's 768-byte
-  // minifier-rename floor, so gzip takes one further whole step to 195
-  // (1,480 B). Raw is unchanged and still clears by 193 KiB.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 195 * 1024 }),
+  // Pinning the manifest through a lazy import gave most of it back: the tool
+  // surface is no longer on first paint. 190 KiB gzip would have left 760 B,
+  // under the aggregate's 768-byte floor, so gzip takes one further whole
+  // step to 191 (1,784 B) — down from 195. A ceiling left where a shrink
+  // found it is headroom nobody reviewed.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 191 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -392,7 +394,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Resume it disables. Raw takes one whole-KiB step to 445 KiB, leaving 965
   // bytes; gzip stays inside 131 KiB with 401 to spare.
   //
-  // Re-measured at 456,707 B raw / 134,481 B gzip after the surface sweep's
+  // Re-measured at 456,707 B raw / 134,400 B gzip after the surface sweep's
   // closing waves. The named cause is the deferred routes finally being audited
   // at eight device classes: Preferences keeping its header from slicing the
   // row beneath it, the conversation library seating its own rows at 320, the
@@ -904,7 +906,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole-KiB ceiling while gzip remains at 190 KiB.
   /* Current release artifact. */
 
-  // Measured 694543 B raw / 192868 B gzip.
+  // Measured 694543 B raw / 192,600 B gzip.
   // 679 KiB raw would have left 753 bytes and 189 KiB gzip would have left 668 bytes; retain the reviewed ceilings.
   optionalVendorRuntimeAggregate: Object.freeze({ raw: 680 * 1024, gzip: 190 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
@@ -1216,12 +1218,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
   //
-  // Re-measured at 3,160,600 B raw / 974,100 B gzip, tracking the first-party
+  // Re-measured at 3,159,900 B raw / 973,500 B gzip, tracking the first-party
   // reading above for the same reason and by the same bytes.
-  // 3,087 KiB raw would have left 488 B and 952 KiB gzip would have left
-  // 748 B, both under the 768-byte floor, so each takes one further whole
-  // step — raw to 3,088 (1,512 B) and gzip to 953 (1,772 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3088 * 1024, gzip: 953 * 1024 }),
+  // 3,086 KiB raw would have left 164 B and 951 KiB gzip would have left
+  // 324 B, both under the 768-byte floor, so each takes one further whole
+  // step — raw to 3,087 (1,188 B) and gzip to 952 (1,348 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3087 * 1024, gzip: 952 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1472,7 +1474,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the entry chunk does not move. Raw takes the tightest whole step above
   // the reading, 86 KiB, leaving 783 B; gzip stays at 28 KiB with 767 B left.
   //
-  // Re-measured at 88,281 B raw / 28,100 B gzip after the surface sweep. The
+  // Re-measured at 88,100 B raw / 28,100 B gzip after the surface sweep. The
   // gzip figure is recorded as a floor a little under the build rather than as
   // a reading: it drifts a handful of bytes between otherwise identical builds
   // and between host and container — 28,166, then 28,159, then 28,155 across
@@ -1645,13 +1647,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // produces, and a superseded figure above a live ceiling reads as a raise
   // nobody reviewed.
   //
-  // Re-measured at 7,344 B raw / 2,828 B gzip after the surface sweep. The
+  // An earlier reading of 7,344 B raw and 2,828 B gzip followed the surface
+  // sweep — history, phrased so the parser reads the current pair below. The
   // named cause is that Edit now answers: pressing it mounted the authoring
   // panel above a scrolled-to grid, so from the reader's seat the click did
   // nothing at all, and the panel now comes to them — and only when it is not
   // already on screen, which is the part that costs the bytes. Raw takes one
   // whole-KiB step to 8 KiB, leaving 848 B; gzip stays inside 3 KiB with 243 — the Docker floor, one byte under this host.
-  optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
+  //
+  // Re-measured at 7,344 B raw / 3,100 B gzip: prime's skill tools share the
+  // skill-file parser with this route, so the shared module compresses into
+  // this chunk rather than beside it. Raw is unchanged; gzip takes its
+  // smallest clearing step to 4, which leaves 996 B and is above the floor.
+  optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 4 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
   // far more often than they write, and the six built-ins cannot be edited at
@@ -1917,7 +1925,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 191 KiB raw would have left 484 B, under the 768-byte floor, so raw takes
   // one further whole step to 192 (1,508 B); gzip takes its smallest clearing
   // step to 58, which leaves 992 B and is already above it.
-  optionalPrimePack: Object.freeze({ raw: 192 * 1024, gzip: 58 * 1024 }),
+  //
+  // Re-measured at 209,600 B raw / 63,000 B gzip once the tool surface became
+  // its own member of this family — the session-creation path pins its
+  // definitions into a new manifest, so it is a second importer and a chunk of
+  // its own. 205 KiB raw would have left 720 B, under the 768-byte floor, so
+  // raw takes one further whole step to 206 (1,744 B); gzip takes its smallest
+  // clearing step to 62, which leaves 1,488 B and is already above it.
+  optionalPrimePack: Object.freeze({ raw: 206 * 1024, gzip: 62 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),
@@ -3045,8 +3060,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   // shared by the runtime chunk and the child-manifest path, so it is its own
   // named member of this family rather than a bare `hash` chunk the classifier
   // could attribute to nobody.
-  if (optionalPrimePackPacks.length !== 5) {
-    throw new Error(`Production must contain exactly five optional prime pack chunks; found ${optionalPrimePackPacks.length}.`);
+  // Six since the tool surface gained its second importer: the session-creation
+  // path pins its definitions into a new manifest, so it is a chunk of its own
+  // rather than riding inside the runtime.
+  if (optionalPrimePackPacks.length !== 6) {
+    throw new Error(`Production must contain exactly six optional prime pack chunks; found ${optionalPrimePackPacks.length}.`);
   }
   const optionalPrimePackMeasurement = sumMeasurements(optionalPrimePackPacks.map((file) => measure(file.payload)));
 
