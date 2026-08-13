@@ -34,6 +34,10 @@ import { createPrimeExecuteCodeTool } from "../tools/kernel-tool";
  */
 export type PrimeToolSurface = Readonly<{
   registry: ToolRegistry;
+  /** Filled in by `attachPrimeKernelTool` once the session's host exists. */
+  kernel: { bind(host: PrimeKernelHost): void };
+  /** Filled in by `attachPrimeAgentRegistry` once a transport-backed one exists. */
+  agents: { bind(registry: unknown, self: unknown): void };
   /** Prime tool names that displaced an Airship tool of the same name. */
   displaced: readonly string[];
   /** Prime tools withheld because their port is not wired, with the reason. */
@@ -54,18 +58,45 @@ export type PrimeToolSurfaceInput = Readonly<{
 }>;
 
 /**
- * Compose the surface. Deliberately does not take the kernel: the kernel host
- * belongs to a session that does not exist yet when the manifest has to be
- * digested, so `execute_code` is registered against the live host afterwards
- * by `attachPrimeKernelTool`. The *definition* is stable either way, which is
- * what `toolManifestDigest` binds.
+ * Compose the surface.
+ *
+ * `execute_code` is always registered, and always with the same definition,
+ * because `toolManifestDigest` binds definitions and a surface that sometimes
+ * carries the tool and sometimes does not can never match a manifest twice.
+ * The *executable* is what varies: the kernel host is session-scoped and does
+ * not exist while the manifest is being digested, so the tool is built over a
+ * holder that `attachPrimeKernelTool` fills in once the session is real.
+ *
+ * This replaced a probe-host-then-re-register arrangement that could not work.
+ * The digest was taken from a surface without `execute_code` and compared to a
+ * manifest that pinned it, so it mismatched every time, fell back to Airship's
+ * registry, and then failed that comparison too — every turn of every
+ * conversation, before a single inference event.
  */
 export function createPrimeToolSurface(input: PrimeToolSurfaceInput): PrimeToolSurface {
+  /*
+   * Every port is always supplied, and the ones the caller did not bring are
+   * deferred rather than absent.
+   *
+   * `createPrimeToolRegistry` omits a tool whose port is missing, which is the
+   * right rule for a capability inventory and the wrong one for a manifest:
+   * `toolManifestDigest` binds *names*, and a surface whose names depend on
+   * which ports happened to be constructible cannot match the same
+   * conversation twice. The manifest was pinned without an agent registry —
+   * there is no transport at session creation — while the turn composed one,
+   * so the digests differed by four names and every turn was refused.
+   *
+   * Deferred is not phantom. An unbound port refuses by name when called, so
+   * the failure is "the agent registry is not attached to this session yet"
+   * rather than a tool that silently pretends to work.
+   */
+  const kernel = new DeferredKernelHost();
+  const agents = new DeferredAgentRegistry();
   const prime: PrimeToolRegistryResult = createPrimeToolRegistry({
     workspace: input.workspace,
-    ...(input.harness ? { harness: input.harness } : {}),
-    ...(input.agent ? { agent: input.agent } : {}),
-    ...(input.heartbeats ? { heartbeats: input.heartbeats } : {}),
+    harness: input.harness ?? deferredHarness(),
+    agent: input.agent ?? { self: DEFERRED_SELF, registry: agents as never },
+    heartbeats: input.heartbeats ?? DEFERRED_HEARTBEATS,
   });
 
   const merged = new ToolRegistry();
@@ -76,6 +107,7 @@ export function createPrimeToolSurface(input: PrimeToolSurfaceInput): PrimeToolS
     const tool = prime.registry.get(definition.name);
     if (tool) merged.register(tool);
   }
+  merged.register(createPrimeExecuteCodeTool(kernel as unknown as PrimeKernelHost));
   for (const definition of input.airship.definitions()) {
     const tool = input.airship.get(definition.name);
     if (!tool) continue;
@@ -90,45 +122,62 @@ export function createPrimeToolSurface(input: PrimeToolSurfaceInput): PrimeToolS
 
   return Object.freeze({
     registry: merged,
+    kernel,
+    agents,
     displaced: Object.freeze(displaced),
-    omitted: prime.omitted,
+    // Nothing is omitted any more: every name is registered, and the ones
+    // without a live port say so when called.
+    omitted: Object.freeze([] as readonly Readonly<{ name: string; reason: string }>[]),
   });
 }
 
 /**
- * Bind `execute_code` to the session's own kernel host.
+ * Point the surface's `execute_code` at the session's own kernel host.
  *
- * Separate from composition because of an ordering the manifest forces: the
- * digest is taken from tool *definitions* before a session exists, while the
- * kernel host is session-scoped and boots lazily on first use. So the
- * definition is pinned up front by `primeToolDefinitions`, and the executable
- * is attached here once the session — and therefore the host its bridge is
- * wired to — is real. Registering against any other host would break the
- * `prime-kernel:<jobId>:<seq>` operation identity the approval bridge journals
- * under.
+ * Binding rather than registering, because registering a second tool of the
+ * same name throws and re-registering would change nothing the manifest can
+ * see. The identity matters: a job dispatched to any other host would journal
+ * its bridge calls under a `prime-kernel:<jobId>:<seq>` operation identity no
+ * approval on this session matches.
  */
-export function attachPrimeKernelTool(registry: ToolRegistry, kernelHost: PrimeKernelHost): void {
-  const tool = createPrimeExecuteCodeTool(kernelHost);
-  if (registry.get(tool.definition.name)) return;
-  registry.register(tool);
+export function attachPrimeKernelTool(surface: PrimeToolSurface, host: PrimeKernelHost): void {
+  surface.kernel.bind(host);
 }
 
-/**
- * The definitions a prime session's manifest pins, including `execute_code`.
- *
- * Built from a kernel host that is constructed and never started — the pattern
- * `session.test.ts` uses — because a definition is a shape, not a capability,
- * and the shape may not wait for a worker to boot. Nothing here can start a
- * kernel: `PrimeKernelHost` boots only inside `exec()`.
- */
+/** The definitions a prime session's manifest pins. */
 export function primeToolDefinitions(input: PrimeToolSurfaceInput): readonly ToolDefinition[] {
-  const surface = createPrimeToolSurface(input);
-  const probe = new PrimeKernelHost({
-    ports: { bridge: { call: () => Promise.reject(new Error("definition probe host is never executed")) } },
-  });
-  const executeCode = createPrimeExecuteCodeTool(probe);
-  if (!surface.registry.get(executeCode.definition.name)) surface.registry.register(executeCode);
-  return surface.registry.definitions();
+  return createPrimeToolSurface(input).registry.definitions();
+}
+
+/**
+ * Stands in for the kernel host until the session that owns one exists.
+ *
+ * Only the two methods `createPrimeExecuteCodeTool` calls are forwarded. An
+ * unbound call is a descriptive refusal rather than a crash: it means a turn
+ * reached `execute_code` before its session was attached, which is a wiring
+ * fault worth naming rather than a `TypeError` about undefined.
+ */
+class DeferredKernelHost {
+  #host: PrimeKernelHost | undefined;
+
+  bind(host: PrimeKernelHost): void {
+    this.#host = host;
+  }
+
+  exec(...args: Parameters<PrimeKernelHost["exec"]>): ReturnType<PrimeKernelHost["exec"]> {
+    return this.#require().exec(...args);
+  }
+
+  cancel(...args: Parameters<PrimeKernelHost["cancel"]>): ReturnType<PrimeKernelHost["cancel"]> {
+    return this.#require().cancel(...args);
+  }
+
+  #require(): PrimeKernelHost {
+    if (!this.#host) {
+      throw new Error("The prime kernel is not attached to this session yet, so execute_code cannot run.");
+    }
+    return this.#host;
+  }
 }
 
 /** Providers are registry state, not tools; the merge has to carry them. */
@@ -141,4 +190,66 @@ function carryProviders(from: ToolRegistry, to: ToolRegistry): void {
   if (liveEnvironment) to.attachLiveEnvironmentProvider(liveEnvironment);
   const taskPlan = from.getTaskPlanProvider();
   if (taskPlan) to.attachTaskPlanProvider(taskPlan);
+}
+
+/** The identity a deferred family reports until a real one is bound. */
+const DEFERRED_SELF = Object.freeze({ id: "unbound", name: "unbound", depth: 0 });
+
+/** No heartbeat state until a store is bound; reads are empty, writes refuse. */
+const DEFERRED_HEARTBEATS = Object.freeze({
+  read: () => undefined,
+  write: () => {
+    throw new Error("No heartbeat store is attached to this session, so rlm_heartbeat cannot record state.");
+  },
+});
+
+function deferredHarness(): never {
+  // Typed as the store the factory wants; every method refuses by name.
+  const refuse = () => {
+    throw new Error("No harness store is attached to this session, so prime_harness cannot be used.");
+  };
+  return new Proxy({}, { get: () => refuse }) as never;
+}
+
+/**
+ * Stands in for the subagent registry until a transport-backed one exists.
+ *
+ * The RLM tools reach it through a handful of methods; forwarding them all
+ * through one holder keeps the tool *definitions* — and therefore the manifest
+ * digest — identical whether or not a registry is bound yet.
+ */
+class DeferredAgentRegistry {
+  #registry: unknown;
+  #self: unknown;
+
+  bind(registry: unknown, self: unknown): void {
+    this.#registry = registry;
+    this.#self = self;
+  }
+
+  get self(): unknown {
+    return this.#self ?? DEFERRED_SELF;
+  }
+
+  #require(): Record<string, (...args: unknown[]) => unknown> {
+    if (!this.#registry) {
+      throw new Error("No agent registry is attached to this session, so subagents cannot be started or messaged.");
+    }
+    return this.#registry as Record<string, (...args: unknown[]) => unknown>;
+  }
+
+  spawn(...args: unknown[]): unknown { return this.#require().spawn(...args); }
+  stop(...args: unknown[]): unknown { return this.#require().stop(...args); }
+  list(...args: unknown[]): unknown { return this.#require().list(...args); }
+  get route(): unknown { return (this.#require() as { route: unknown }).route; }
+  setRlmMaxDepth(...args: unknown[]): unknown { return this.#require().setRlmMaxDepth(...args); }
+  attachNode(...args: unknown[]): unknown { return this.#require().attachNode(...args); }
+  reachableAgents(...args: unknown[]): unknown { return this.#require().reachableAgents(...args); }
+  recentMessages(...args: unknown[]): unknown { return this.#require().recentMessages(...args); }
+  sendMessage(...args: unknown[]): unknown { return this.#require().sendMessage(...args); }
+}
+
+/** Point the surface's RLM family at a transport-backed registry. */
+export function attachPrimeAgentRegistry(surface: PrimeToolSurface, registry: unknown, self: unknown): void {
+  surface.agents.bind(registry, self);
 }

@@ -150,7 +150,7 @@ export function createPrimeAgentRuntimeFactory(deps: PrimeAgentFactoryDeps): Pri
         ...(deps.maxSteps !== undefined ? { maxSteps: deps.maxSteps } : {}),
         ...(deps.signal ? { signal: deps.signal } : {}),
       });
-      attachPrimeKernelTool(surface.registry, session.kernelHost);
+      attachPrimeKernelTool(surface, session.kernelHost);
 
       const handle: PrimeSubagentHandle = Object.freeze({
         id: input.childId,

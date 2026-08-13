@@ -28,7 +28,7 @@ import {
   primeConversationTitleFromPrompt,
 } from "./naming";
 import { PrimeAgentSession } from "./session";
-import { attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
+import { attachPrimeAgentRegistry, attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
 import { primeHeartbeatStore } from "./heartbeat-store";
 import { createPrimeSubagentRegistry } from "./subagent-registry";
@@ -434,36 +434,33 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
     : undefined;
 
   /*
-   * The surface is only usable if this conversation's manifest pins it.
+   * One surface, no hedge.
    *
-   * `toolManifestDigest` is immutable, and the session refuses a registry that
-   * does not match it — correctly, because a different tool set mid-history is
-   * a different agent. Swapping the registry in at turn time without pinning
-   * it at creation is exactly that refusal, and it failed *every* turn with
-   * "The tool manifest changed. Fork the session before using a different tool
-   * set." until this check existed.
+   * Every port is deferred rather than optional, so this composition is
+   * deterministic: the same workspace and the same Airship registry always
+   * produce the same tool names, which is what `toolManifestDigest` binds. A
+   * session created on this build pins exactly what every later turn composes.
    *
-   * So the prime surface is composed, digested, and used only where the
-   * manifest already agrees. Conversations created before prime's vocabulary
-   * was pinned keep running on the registry they were built with — the
-   * engine-only shape, which is what they have always run — instead of being
-   * marched into a fork they did not ask for.
+   * There is deliberately no fallback to the incoming registry when a manifest
+   * disagrees. A conversation pinned to a different tool set is a conversation
+   * that was a different agent, and the session already answers that with
+   * "fork the session before using a different tool set" — the product's
+   * existing contract for exactly this. Quietly running such a turn on a
+   * narrower surface would mean two conversations claiming the same engine
+   * while reaching different tools, which is worse than a refusal that names
+   * the remedy.
    */
-  const candidate = options.workspace
+  const surface = options.workspace
     ? createPrimeToolSurface({
         workspace: options.workspace,
         airship: options.tools,
         ...(primeHarnessStore() ? { harness: primeHarnessStore()! } : {}),
-        ...(agentRegistry ? { agent: agentRegistry.deps } : {}),
         heartbeats: primeHeartbeatStore(),
       })
     : undefined;
-
-  const surface = candidate
-    && (await sha256(stableStringify(candidate.registry.definitions() as unknown as JsonValue)))
-      === manifest.toolManifestDigest
-    ? candidate
-    : undefined;
+  // Bound after composition, so the tool names — and therefore the digest —
+  // never depend on which ports happened to be constructible this turn.
+  if (surface && agentRegistry) attachPrimeAgentRegistry(surface, agentRegistry.registry, agentRegistry.deps.self);
 
   const runtime = new PrimeRuntime({
     journal: options.journal,
@@ -514,7 +511,7 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
 
     });
 
-    if (surface) attachPrimeKernelTool(surface.registry, session.kernelHost);
+    if (surface) attachPrimeKernelTool(surface, session.kernelHost);
     // The owner's sink is only answerable once the session exists; the
     // registry was built before it because the tool surface needed it first.
     agentRegistry?.bindOwnerSession(session);

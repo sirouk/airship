@@ -78,21 +78,22 @@ describe("the prime tool surface", () => {
     expect(surface.registry.getLiveEnvironmentProvider()).toBe(liveEnvironment);
   });
 
-  it("names what it withheld rather than shipping a phantom capability", () => {
-    // No harness store, no agent registry, no heartbeat store on this input —
-    // so those tools are absent and say why. The rule the live-environment
-    // layer keeps: an advertised name a session cannot execute is worse than
-    // a named absence.
+  it("registers every name whether or not its port is bound yet", () => {
+    // The rule changed on purpose. Omitting a tool whose port is missing is
+    // right for a capability inventory and wrong for a manifest: the digest
+    // binds names, and a surface whose names depend on which ports happened to
+    // be constructible cannot match the same conversation twice. Deferred is
+    // not phantom — an unbound port refuses by name when called.
     const surface = createPrimeToolSurface({
       workspace: new FakeWorkspacePort({}),
       airship: airshipRegistry([]),
     });
 
-    const omitted = surface.omitted.map((entry) => entry.name);
-    expect(omitted).toContain("rlm_spawn");
-    expect(omitted).toContain("prime_harness");
-    for (const entry of surface.omitted) expect(entry.reason).not.toBe("");
-    expect(surface.registry.get("rlm_spawn")).toBeUndefined();
+    const names = surface.registry.definitions().map((definition) => definition.name);
+    for (const tool of ["rlm_spawn", "subagent", "agent_message", "prime_harness", "execute_code"]) {
+      expect(names, `${tool} must be registered`).toContain(tool);
+    }
+    expect(surface.omitted).toEqual([]);
   });
 
   it("registers the whole RLM family once an agent registry and heartbeat store exist", () => {
@@ -149,18 +150,10 @@ describe("the surface and the manifest have to agree", () => {
 
     // What `app.tsx` pins at session creation…
     const pinned = primeToolDefinitions({ workspace, airship });
-    // …and what `runPrimeTurn` composes on every later turn. `execute_code` is
-    // attached from the live kernel there, so the turn's registry only matches
-    // once that attachment has happened — which is why the turn attaches it
-    // before comparing.
+    // …and what `runPrimeTurn` composes on every later turn. They must agree
+    // whatever ports were constructible, which is why every port is deferred
+    // rather than omitted: the manifest binds names.
     const surface = createPrimeToolSurface({ workspace, airship });
-    surface.registry.register(
-      (await import("../tools/kernel-tool")).createPrimeExecuteCodeTool(
-        new (await import("../kernel/kernel-host")).PrimeKernelHost({
-          ports: { bridge: { call: () => Promise.reject(new Error("probe")) } },
-        }),
-      ),
-    );
 
     const pinnedDigest = await sha256(stableStringify(pinned as never));
     const turnDigest = await sha256(stableStringify(surface.registry.definitions() as never));

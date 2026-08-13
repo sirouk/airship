@@ -879,10 +879,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
   //
-  // Re-measured at 2,464,900 B raw / 779,800 B gzip with the kernel's RLM
-  // bindings in. Raw takes its smallest clearing step to 2,408, which leaves
-  // 892 B and is already above the floor; gzip is unchanged at 763.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2408 * 1024, gzip: 763 * 1024 }),
+  // Re-measured at 2,466,300 B raw / 781,700 B gzip with the kernel's RLM
+  // bindings in and every port deferred rather than optional. 2,409 KiB raw
+  // would have left 516 B and 764 KiB gzip would have left 636 B, both under
+  // the 768-byte floor, so each takes one further whole step — raw to 2,410
+  // (1,540 B) and gzip to 765 (1,660 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2410 * 1024, gzip: 765 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1223,7 +1225,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 3,086 KiB raw would have left 164 B and 951 KiB gzip would have left
   // 324 B, both under the 768-byte floor, so each takes one further whole
   // step — raw to 3,087 (1,188 B) and gzip to 952 (1,348 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3087 * 1024, gzip: 952 * 1024 }),
+  //
+  // Re-measured at 3,161,300 B raw / 974,300 B gzip with every port deferred.
+  // 3,088 KiB raw would have left 212 B and 952 KiB gzip would have left 548 B,
+  // both under the 768-byte floor, so each takes one further whole step — raw
+  // to 3,089 (1,236 B) and gzip to 953 (1,572 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3089 * 1024, gzip: 953 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1926,13 +1933,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one further whole step to 192 (1,508 B); gzip takes its smallest clearing
   // step to 58, which leaves 992 B and is already above it.
   //
-  // Re-measured at 209,600 B raw / 63,000 B gzip once the tool surface became
+  // Re-measured at 209,600 B raw / 63,700 B gzip once the tool surface became
   // its own member of this family — the session-creation path pins its
   // definitions into a new manifest, so it is a second importer and a chunk of
   // its own. 205 KiB raw would have left 720 B, under the 768-byte floor, so
   // raw takes one further whole step to 206 (1,744 B); gzip takes its smallest
-  // clearing step to 62, which leaves 1,488 B and is already above it.
-  optionalPrimePack: Object.freeze({ raw: 206 * 1024, gzip: 62 * 1024 }),
+  // clearing step to 63, which leaves 812 B and is already above it. The gzip
+  // step moved once more when every port became deferred rather than optional:
+  // the surface always registers the whole vocabulary now, because the digest
+  // binds names and names may not depend on which ports were constructible.
+  optionalPrimePack: Object.freeze({ raw: 206 * 1024, gzip: 63 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),
