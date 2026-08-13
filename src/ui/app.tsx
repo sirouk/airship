@@ -1634,7 +1634,7 @@ export function App() {
   /*
    * Stop has to mean stop. `busy` alone cannot say why a turn ended: the
    * teardown that follows a completed turn and the teardown that follows an
-   * abort both land on `setBusy(false)`, so the auto-dispatch effect below
+   * abort both clear this conversation's busy entry, so the effect below
    * read a user's Stop as "the model is free, send the next one" and fired the
    * queue's head immediately. The latch is session-scoped: switching away and
    * back must not reinterpret Stop as permission to send, and two conversations
@@ -1662,7 +1662,34 @@ export function App() {
   const selectedFile = selectedFileSelection?.profileId === profileId
     ? selectedFileSelection.file
     : undefined;
-  const [busy, setBusy] = useState(false);
+  /*
+   * Turns run per conversation, not per page.
+   *
+   * `busy` was one boolean and `activeTurn` one controller, so the product
+   * could hold exactly one turn at a time no matter how many threads were
+   * open: sending in a second conversation was refused outright, and the
+   * shared approval delegate meant two turns could not have been reviewed
+   * under their own conversations' modes even if they had been allowed to run.
+   *
+   * The set is the whole change. `busy` below is still *this* conversation's
+   * answer to "is a turn running here", so every reference that asks about the
+   * composer, the queue, Stop, or a destructive action keeps meaning exactly
+   * what it meant. `anyTurnRunning` is for the few places that mean "anywhere"
+   * — the page's own unload guard, and the transitions that invalidate every
+   * running turn at once.
+   */
+  const [busySessions, setBusySessions] = useState<ReadonlySet<string>>(() => new Set<string>());
+  function setSessionBusy(id: string, running: boolean): void {
+    setBusySessions((current) => {
+      if (running === current.has(id)) return current;
+      const next = new Set(current);
+      if (running) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+  const busy = sessionId !== undefined && busySessions.has(sessionId);
+  const anyTurnRunning = busySessions.size > 0;
   const [runtimeStatus, setRuntimeLine] = useState("Starting local kernel");
   const [bootFailure, setBootFailure] = useState<string>();
   /**
@@ -1885,7 +1912,6 @@ export function App() {
    * currently on screen: replacing the shared delegate on navigation would
    * make the old turn's next tool call run under the new conversation's mode.
   */
-  const activeTurnSessionId = useRef<string>();
   const sessionResumeDuringTurn = useRef<string>();
   const [liveApprovalMode, setLiveApprovalMode] = useState<Readonly<{
     sessionId: string;
@@ -1958,17 +1984,41 @@ export function App() {
     });
   }, [approvalBroker]);
   const approvalModePolicy = approvalModePolicies[activeApprovalMode];
-  const approvalPolicyController = useMemo(() => new SwitchableApprovalPolicy(approvalModePolicy), []);
   /*
-   * A live turn keeps its delegate while another conversation is being
-   * inspected. Once the turn is the visible session again (or has settled),
-   * the current conversation policy is the one the shared controller adopts.
+   * One switchable delegate per conversation, and this is the half of
+   * concurrency that could not have been faked.
+   *
+   * There used to be a single controller for the page, which meant the mode a
+   * tool was reviewed under was whichever conversation happened to be on
+   * screen. With one turn at a time that was survivable — the guard above
+   * froze the delegate whenever the running turn was not the visible one. With
+   * two turns running it is not survivable at all: a thread pinned to
+   * ask-first and a thread pinned to full-access would have shared one
+   * adjudicator, and the answer to "who approved this, under what mode" would
+   * have depended on which tab of the rail was open. Approval provenance is
+   * per conversation because the pin is.
+   *
+   * Created on demand and kept for the life of the page: a conversation's
+   * controller has to be the same object across its turns, because a turn in
+   * flight is holding a reference to it.
    */
-  if (
-    !activeTurnSessionId.current
-    || activeTurnSessionId.current === sessionId
-  ) approvalPolicyController.replace(approvalModePolicy);
-  const approvalPolicy = approvalPolicyController;
+  const approvalPolicyControllers = useRef(new Map<string, SwitchableApprovalPolicy>());
+  function sessionApprovalPolicy(id: string): SwitchableApprovalPolicy {
+    const existing = approvalPolicyControllers.current.get(id);
+    if (existing) return existing;
+    const created = new SwitchableApprovalPolicy(approvalModePolicy);
+    approvalPolicyControllers.current.set(id, created);
+    return created;
+  }
+  /*
+   * Only the visible conversation's delegate follows `activeApprovalMode` —
+   * that value *is* the visible conversation's pinned-or-global mode, so
+   * pushing it into a background thread's controller would re-mode a turn
+   * nobody was looking at. A background turn keeps the delegate it was
+   * admitted with until its own conversation is on screen again.
+   */
+  if (sessionId) sessionApprovalPolicy(sessionId).replace(approvalModePolicy);
+  const approvalPolicy = sessionId ? sessionApprovalPolicy(sessionId) : undefined;
   /*
    * The policy a local slash command is reviewed under. Same `SwitchableApprovalPolicy`
    * indirection, because a local command is a long-running turn of its own and
@@ -1985,12 +2035,17 @@ export function App() {
     () => createHumanIntentPolicy({ mode: activeApprovalMode, broker: approvalBroker }),
     [approvalBroker, activeApprovalMode],
   );
-  const humanIntentPolicyController = useMemo(() => new SwitchableApprovalPolicy(humanIntentModePolicy), []);
-  if (
-    !activeTurnSessionId.current
-    || activeTurnSessionId.current === sessionId
-  ) humanIntentPolicyController.replace(humanIntentModePolicy);
-  const localCommandPolicy = humanIntentPolicyController;
+  /* Per conversation for the same reason, and by the same rule. */
+  const localCommandPolicyControllers = useRef(new Map<string, SwitchableApprovalPolicy>());
+  function sessionLocalCommandPolicy(id: string): SwitchableApprovalPolicy {
+    const existing = localCommandPolicyControllers.current.get(id);
+    if (existing) return existing;
+    const created = new SwitchableApprovalPolicy(humanIntentModePolicy);
+    localCommandPolicyControllers.current.set(id, created);
+    return created;
+  }
+  if (sessionId) sessionLocalCommandPolicy(sessionId).replace(humanIntentModePolicy);
+  const localCommandPolicy = sessionId ? sessionLocalCommandPolicy(sessionId) : undefined;
   const previousApprovalMode = useRef(activeApprovalMode);
   const vault = useMemo(() => new VaultCoordinator(), []);
   const [vaultSnapshot, setVaultSnapshot] = useState<VaultSnapshot>(() => vault.snapshot);
@@ -2344,9 +2399,31 @@ export function App() {
   const evidenceAcquisitionQueueLoad = useRef<EvidenceAcquisitionQueueLoad>();
   const evidenceAcquisitionQueueOperation = useRef(0);
   const evidenceAcquisitionUnsubscribe = useRef<() => void>();
-  const activeTurn = useRef<AbortController>();
+  /**
+   * Every running turn, by the conversation that owns it. A conversation holds
+   * at most one — the immutable session head admits one writer — but the page
+   * holds as many as there are conversations with work in flight.
+   */
+  const activeTurns = useRef(new Map<string, AbortController>());
+  /** The prompt each running turn was admitted with, for Stop's restore. */
+  const activePrompts = useRef(new Map<string, string>());
+
+  /**
+   * Abort every running turn. For the transitions that invalidate all of them
+   * at once — the inference route, the model, the credential, the workspace's
+   * durability — where the old single-controller call was already reaching for
+   * "the turn" and now has to mean all of them.
+   */
+  function abortAllTurns(reason?: DOMException): void {
+    for (const controller of [...activeTurns.current.values()]) controller.abort(reason);
+  }
+
+  /** Abort one conversation's turn, if it has one. */
+  function abortSessionTurn(id: string | undefined, reason?: DOMException): void {
+    if (id) activeTurns.current.get(id)?.abort(reason);
+  }
+
   const localCommandAdmission = useRef(false);
-  const activePrompt = useRef<string>();
   const activeSessionIdentity = useRef<string>();
   const activeSessionByProfile = useRef(new Map<string, string>());
   const pendingSessionResume = useRef<Readonly<{
@@ -3793,7 +3870,10 @@ export function App() {
   // one of its three terms, and adoption is what decides whether closing the tab
   // costs anything at all.
   const releaseUnloadGuard = useBeforeUnloadGuard(unloadWouldLoseWork({
-    busy,
+    /* Every conversation, not the visible one: closing the tab takes down
+       each turn still running behind it, and the reader is owed the warning
+       for work they are not currently looking at most of all. */
+    busy: anyTurnRunning,
     eventCount,
     vaultAdopted: vaultRuntimeAdopted,
   }));
@@ -5300,7 +5380,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     return () => {
       disposed = true;
       unsubscribeProviderFabric?.();
-      activeTurn.current?.abort();
+      abortAllTurns();
       if (pendingDeltaFrame.current !== undefined) cancelAnimationFrame(pendingDeltaFrame.current);
       if (pendingToolOutputFrame.current !== undefined) cancelAnimationFrame(pendingToolOutputFrame.current);
     };
@@ -5876,7 +5956,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     /** The runtime this call published, if it got that far. See the catch. */
     let committed: Runtime | undefined;
     try {
-      activeTurn.current?.abort();
+      abortAllTurns();
       setRuntimeStatus("Switching profile cockpit");
       let profile: ProfileRevision | undefined;
       let nextSession: SessionRecord | undefined;
@@ -6285,8 +6365,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const operationId = `tool-${randomUuid()}`;
     const assistantId = randomUuid();
     const controller = new AbortController();
-    activeTurn.current = controller;
-    setBusy(true);
+    activeTurns.current.set(commandSessionId, controller);
+    setSessionBusy(commandSessionId, true);
     setRuntimeStatus(`Reviewing local /${plan.command.name}`);
     setMessages((current) => [
       ...current,
@@ -6341,8 +6421,11 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
        * no human fallback on that branch. The registry seam is untouched: this
        * call still mints the ticket that `executeApproved` below consumes.
        */
-      const decision = await commandRuntime.tools.review(plan.toolName, plan.arguments, context, localCommandPolicy);
-      const provenance = approvalProvenance(localCommandPolicy, context);
+      /* This command's own conversation adjudicates it, whichever one is on
+         screen by the time the dock is answered. */
+      const commandPolicy = sessionLocalCommandPolicy(commandSessionId);
+      const decision = await commandRuntime.tools.review(plan.toolName, plan.arguments, context, commandPolicy);
+      const provenance = approvalProvenance(commandPolicy, context);
       if (decision !== "allow") {
         // One sentence for all three modes now, because it is true in all
         // three: no local command's parameters reach a model before it runs.
@@ -6406,10 +6489,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         setRuntimeStatus(cancelled ? "Local command stopped" : "Local command failed safely");
       }
     } finally {
-      const releasesComposer = activeTurn.current === controller;
+      const releasesComposer = activeTurns.current.get(commandSessionId) === controller;
       if (releasesComposer) {
-        activeTurn.current = undefined;
-        setBusy(false);
+        activeTurns.current.delete(commandSessionId);
+        setSessionBusy(commandSessionId, false);
       }
       const updated = await commandRuntime.journal.getSession(commandSessionId);
       if (updated && activeSessionIdentity.current === commandSessionId) setActiveSessionRecord(updated);
@@ -6741,7 +6824,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       || !runtime.current
       || !sessionId
       || busy
-      || activeTurn.current
+      || activeTurns.current.has(sessionId)
       || localCommandAdmission.current
       || inferenceRouteChanging.current
       || vaultProviderSwitchingRef.current
@@ -6888,10 +6971,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // key/click events can run in the same render and otherwise append two
     // concurrent turns to one immutable session head.
     const controller = new AbortController();
-    activeTurn.current = controller;
-    activeTurnSessionId.current = turnSessionId;
-    activePrompt.current = content;
-    setBusy(true);
+    activeTurns.current.set(turnSessionId, controller);
+    activePrompts.current.set(turnSessionId, content);
+    setSessionBusy(turnSessionId, true);
     // The channel is claimed here, at the moment the turn is admitted and the
     // composer swaps Send for Stop turn. Claiming it later left the shell's
     // ambient line ("Preparing turn", then "Persisting turn intent") landing in
@@ -6900,11 +6982,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     narrateTurn(workingAnnouncement(true));
     setRuntimeStatus("Preparing turn");
     const releasePreflight = () => {
-      if (activeTurn.current !== controller) return;
-      activeTurn.current = undefined;
-      if (activeTurnSessionId.current === turnSessionId) activeTurnSessionId.current = undefined;
-      if (activePrompt.current === content) activePrompt.current = undefined;
-      setBusy(false);
+      if (activeTurns.current.get(turnSessionId) !== controller) return;
+      activeTurns.current.delete(turnSessionId);
+      if (activePrompts.current.get(turnSessionId) === content) activePrompts.current.delete(turnSessionId);
+      setSessionBusy(turnSessionId, false);
     };
     let images: CanonicalMessage["images"] | undefined = undefined;
     try {
@@ -7105,7 +7186,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       setAttachments([]);
     }
     setComposerNotice(undefined);
-    setBusy(true);
+    setSessionBusy(turnSessionId, true);
     setRuntimeStatus("Persisting turn intent");
     const userMessage: UiMessage = {
       id: randomUuid(),
@@ -7181,7 +7262,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         transport: turnTransport,
         tools: turnRuntime.tools,
         journal: turnRuntime.journal,
-        approvalPolicy,
+        /* The turn's own conversation's delegate — not the visible one's.
+           This is the binding that lets two threads run under two different
+           approval modes without either deciding for the other. */
+        approvalPolicy: sessionApprovalPolicy(turnSessionId),
         signal: controller.signal,
         maxSteps: 32,
         onSignal(signal) {
@@ -7395,14 +7479,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
          only if this turn is still the one it names — a newer turn in another
          thread owns the slot by then. */
       if (liveTurnRow.current?.messageId === assistantId) liveTurnRow.current = undefined;
-      const releasesComposer = activeTurn.current === controller;
+      const releasesComposer = activeTurns.current.get(turnSessionId) === controller;
       if (releasesComposer) {
-        activeTurn.current = undefined;
-        if (activeTurnSessionId.current === turnSessionId) activeTurnSessionId.current = undefined;
-        if (activePrompt.current === content) activePrompt.current = undefined;
+        activeTurns.current.delete(turnSessionId);
+        if (activePrompts.current.get(turnSessionId) === content) activePrompts.current.delete(turnSessionId);
       }
       releaseComposerAndReloadSession({
-        release: () => { if (releasesComposer) setBusy(false); },
+        release: () => { if (releasesComposer) setSessionBusy(turnSessionId, false); },
         load: () => turnRuntime.journal.getSession(turnSessionId),
         accept: () => activeSessionIdentity.current === turnSessionId,
         apply: (updatedSession) => {
@@ -7426,14 +7509,15 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // pressed from a different thread mid-flight, and the abort's own prompt
     // parked onto that thread's draft was never anyone's intent; the stopped
     // turn's transcript keeps the prompt as its durable record instead.
-    if (activePrompt.current && activeTurnSessionId.current === activeSessionIdentity.current) {
-      setInput((current) => current.trim() ? current : activePrompt.current ?? current);
+    const stoppingSessionId = activeSessionIdentity.current ?? sessionId;
+    const stoppingPrompt = stoppingSessionId ? activePrompts.current.get(stoppingSessionId) : undefined;
+    if (stoppingPrompt) {
+      setInput((current) => current.trim() ? current : stoppingPrompt);
     }
     // Latch before the abort: the abort's teardown is what frees `busy`, and
     // the queue effect runs on that same commit.
-    const stoppedSessionId = activeTurnSessionId.current ?? activeSessionIdentity.current ?? sessionId;
-    if (stoppedSessionId) setQueuePausedForSession(stoppedSessionId, true);
-    activeTurn.current?.abort(new DOMException("Stopped by user", "AbortError"));
+    if (stoppingSessionId) setQueuePausedForSession(stoppingSessionId, true);
+    abortSessionTurn(stoppingSessionId, new DOMException("Stopped by user", "AbortError"));
   }
 
   async function activateLocalDeviceWorkspace(
@@ -7564,12 +7648,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const handle = localDeviceHandle.current;
     let handleClosed = false;
     try {
-      const turn = activeTurn.current;
-      turn?.abort(new DOMException("Local Device Vault restore started.", "AbortError"));
+      const quiescing = [...activeTurns.current.values()];
+      abortAllTurns(new DOMException("Local Device Vault restore started.", "AbortError"));
       const publication = vaultContextPublication.current;
       publication?.abort(new DOMException("Local Device Vault restore started.", "AbortError"));
       await waitForOperationRelease(
-        () => (turn === undefined || activeTurn.current !== turn)
+        // Every turn that was running when the restore started, not just one:
+        // the restore replaces the workspace under all of them.
+        () => quiescing.every((turn) => ![...activeTurns.current.values()].includes(turn))
           && (publication === undefined || vaultContextPublication.current !== publication),
         "Airship is still stopping active workspace work. Retry the restore after it settles.",
       );
@@ -8001,7 +8087,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (!prior || !priorCheckpoint || !activeProfile || !gitClient) {
       throw new Error("The active browser runtime is not ready for vault adoption.");
     }
-    activeTurn.current?.abort(new DOMException("Workspace durability is changing.", "AbortError"));
+    abortAllTurns(new DOMException("Workspace durability is changing.", "AbortError"));
     setRuntimeStatus(authority.kind === "local-device"
       ? "Opening encrypted device state"
       : "Migrating workspace and sessions into encrypted cloud objects");
@@ -8318,7 +8404,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
 
   async function publishEncryptedContextIndex(): Promise<void> {
     if (vaultContextPublication.current || vaultContextPublishing) return;
-    if (busy || activeTurn.current) {
+    if (anyTurnRunning || activeTurns.current.size > 0) {
       setVaultContextPublicationMessage("Finish or stop the active turn before publishing a context generation.");
       return;
     }
@@ -8441,7 +8527,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       vault.disconnect();
       return activeProfile.profileId;
     }
-    activeTurn.current?.abort(new DOMException("Workspace durability is changing.", "AbortError"));
+    abortAllTurns(new DOMException("Workspace durability is changing.", "AbortError"));
     setRuntimeStatus("Moving the active encrypted state into page memory");
     const [{ migrateJournalState, migrateWorkspaceState }, { quiesceBrowserTerminalWorkspace }] = await Promise.all([
       loadDeferredCapabilities(),
@@ -9715,7 +9801,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const priorChutesTransport = chutesTransport.current;
     const expectedChutesAuthorityRevision = chutesAuthorityRevision.current;
     return runInferenceRouteTransition(async (reconnectSignal) => {
-      activeTurn.current?.abort(new DOMException("Inference route is changing.", "AbortError"));
+      abortAllTurns(new DOMException("Inference route is changing.", "AbortError"));
       setRuntimeStatus("Pinning encrypted Chutes session");
       const nextGeneration = chutesConnectionGeneration.current + 1;
       const nextConnectionId = `chutes-${randomUuid()}`;
@@ -9877,7 +9963,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const releasesActiveRoute = active?.inferenceBinding?.providerId === "chutes"
       && active.transport.id === "chutes-e2ee-v1";
     if (releasesActiveRoute && active) {
-      activeTurn.current?.abort(new DOMException("Remote inference credential was released.", "AbortError"));
+      abortAllTurns(new DOMException("Remote inference credential was released.", "AbortError"));
       // Preserve the provider/model/posture pin used to interpret this immutable
       // conversation, while ensuring a direct API key cannot remain captured by
       // the old transport. Reconnection performs the next semantic rebind.
@@ -9990,7 +10076,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       setRuntimeStatus(reconnectIntent
         ? "Verifying the requested Chutes conversation"
         : "Forking a model-pinned session");
-      activeTurn.current?.abort(new DOMException("Inference model is changing.", "AbortError"));
+      abortAllTurns(new DOMException("Inference model is changing.", "AbortError"));
       await transport.verifyModelAccess(model.id, reconnectSignal);
       if (runtime.current !== priorRuntime) {
         throw new Error("The browser runtime changed while Chutes model access was being checked.");
@@ -10227,7 +10313,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       if (!fabric || fabric.preflight(route.pin).transport !== route.transport) {
         throw new Error("The selected inference route changed before its session could be pinned.");
       }
-      activeTurn.current?.abort(new DOMException("Inference route is changing.", "AbortError"));
+      abortAllTurns(new DOMException("Inference route is changing.", "AbortError"));
       setRuntimeStatus(reconnectIntent
         ? `Verifying the requested ${route.pin.provider.label} conversation`
         : `Creating a ${route.pin.provider.label} session`);
@@ -10366,7 +10452,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const activeRoute = activeExternalRouteRef.current;
     const disconnectsActive = activeRoute?.pin.connection.id === connectionId;
     if (disconnectsActive) {
-      activeTurn.current?.abort(new DOMException("Inference connection was disconnected.", "AbortError"));
+      abortAllTurns(new DOMException("Inference connection was disconnected.", "AbortError"));
     }
     if (!fabric.disconnect(connectionId)) {
       throw new Error("This inference connection is already disconnected.");
@@ -10521,10 +10607,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     sessionNavigationChanging.current = true;
     try {
       const updated = await conversationRuntime.journal.setSessionApprovalMode(visibleSessionId, nextMode);
-      if (activeTurnSessionId.current === visibleSessionId) {
+      if (activeTurns.current.has(visibleSessionId)) {
         // A running turn already owns a stable SwitchableApprovalPolicy; the
         // next inner check cannot wait for a journal round trip.
-        approvalPolicyController.replace(approvalModePolicies[nextMode]);
+        sessionApprovalPolicy(visibleSessionId).replace(approvalModePolicies[nextMode]);
         setLiveApprovalMode(Object.freeze({ sessionId: visibleSessionId, mode: nextMode }));
       }
       if (activeSessionRecord?.id === updated.id) setActiveSessionRecord(updated);
@@ -10940,7 +11026,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
     if (!sessionLibrary || !sessionRuntime || !catalog) throw new Error("The session runtime is not ready.");
     const preservedTurnSessionId = busy && detail.compatibility?.action !== "blocked"
-      ? activeTurnSessionId.current
+      ? activeSessionIdentity.current
       : undefined;
     if (preservedTurnSessionId) sessionResumeDuringTurn.current = preservedTurnSessionId;
     sessionNavigationChanging.current = true;
@@ -12047,7 +12133,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                             silence on that point is how a person "stopped
                             something" without knowing what.
                           */}
-                          <button class="send-button stop" type="button" onClick={stopTurn} aria-label={activeTurnSessionId.current && activeSessionIdentity.current && activeTurnSessionId.current !== activeSessionIdentity.current ? "Stop the other conversation's turn" : "Stop turn"}><Icon name="stop" /></button>
+                          <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
                         </div>
                       ) : (
                         <button

@@ -290,9 +290,13 @@ describe("local slash commands", () => {
     // Source-shape, because the local-command runner is a 200-line closure over
     // the app's session authority and cannot be lifted out of app.tsx.
     expect(source).toContain("createHumanIntentPolicy({ mode: activeApprovalMode, broker: approvalBroker })");
-    expect(source).toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, localCommandPolicy)");
-    expect(source).toContain("approvalProvenance(localCommandPolicy, context)");
+    // Resolved from the command's own conversation, so a command adjudicates
+    // under the thread it was typed in even if the reader has since moved on.
+    expect(source).toContain("const commandPolicy = sessionLocalCommandPolicy(commandSessionId)");
+    expect(source).toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, commandPolicy)");
+    expect(source).toContain("approvalProvenance(commandPolicy, context)");
     expect(source).not.toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, approvalPolicy)");
+    expect(source).not.toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, sessionApprovalPolicy");
     // The two lines that described a provider request that no longer happens.
     expect(source).not.toContain("the safety review model received this action's parameters");
     expect(source).not.toContain("Local command complete after a separate safety review");

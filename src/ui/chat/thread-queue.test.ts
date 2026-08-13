@@ -107,13 +107,17 @@ describe("thread queue surface contract", () => {
   });
 
   it("restores an aborted prompt only into an empty composer", () => {
-    expect(app).toContain("setInput((current) => current.trim() ? current : activePrompt.current ?? current)");
+    // Read from the stopped conversation's own entry: with turns running in
+    // parallel there is no single "the aborted prompt", and restoring another
+    // thread's into this composer would be worse than restoring nothing.
+    expect(app).toContain("const stoppingPrompt = stoppingSessionId ? activePrompts.current.get(stoppingSessionId) : undefined");
+    expect(app).toContain("setInput((current) => current.trim() ? current : stoppingPrompt)");
   });
 
   it("keeps a stopped queue paused across conversation switches and reconnects", () => {
     expect(app).toContain("const [pausedQueueSessionIds, setPausedQueueSessionIds]");
     expect(app).toContain("pausedQueueSessionIds.has(sessionId)");
-    expect(app).toContain("setQueuePausedForSession(stoppedSessionId, true)");
+    expect(app).toContain("setQueuePausedForSession(stoppingSessionId, true)");
     expect(app).toContain("setQueuePausedForSession(admissionSessionId, false)");
     const activation = app.slice(
       app.indexOf("async function activateSession("),

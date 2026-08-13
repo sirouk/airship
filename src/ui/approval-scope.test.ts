@@ -38,8 +38,11 @@ describe("approval policy scope is stated where it is changed", () => {
     expect(changeApprovalMode).toContain("setActiveSessionRecord(updated)");
     // The very next call is governed by it: a running turn hot-swaps the live
     // controller, which is the point of the hot-swap branch continuing.
-    expect(changeApprovalMode).toContain("activeTurnSessionId.current === visibleSessionId");
-    expect(changeApprovalMode).toContain("approvalPolicyController.replace(approvalModePolicies[nextMode])");
+    expect(changeApprovalMode).toContain("activeTurns.current.has(visibleSessionId)");
+    // This conversation's own delegate. Turns run concurrently, so there is no
+    // page-wide controller left to hot-swap — swapping one would re-mode
+    // whichever other threads happened to be mid-turn.
+    expect(changeApprovalMode).toContain("sessionApprovalPolicy(visibleSessionId).replace(approvalModePolicies[nextMode])");
     expect(changeApprovalMode).toContain("setLiveApprovalMode(Object.freeze({ sessionId: visibleSessionId, mode: nextMode }))");
     // The old way minted a pinned clone and announced it; both are gone.
     expect(changeApprovalMode).not.toContain("createProfileSession");

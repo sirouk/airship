@@ -72,8 +72,8 @@ describe("tool-output batching source contract", () => {
 
   it("cancels a pending frame on unmount", () => {
     const cleanup = appSource.slice(
-      appSource.indexOf("activeTurn.current?.abort();"),
-      appSource.indexOf("activeTurn.current?.abort();") + 400,
+      appSource.indexOf("abortAllTurns();"),
+      appSource.indexOf("abortAllTurns();") + 400,
     );
     expect(cleanup).toContain("cancelAnimationFrame(pendingToolOutputFrame.current)");
   });
