@@ -1122,15 +1122,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one further whole step to 2,994 (1,231 B); gzip takes its smallest
   // clearing step to 924, which leaves 819 B and is already above the floor.
   //
-  // Re-measured at 3,068,117 B raw / 946,443 B gzip, again the floor across
+  // Re-measured at 3,068,977 B raw / 946,653 B gzip, again the floor across
   // both modes. This backstop tracks the
   // first-party reading above and moves for the same reason and by the same
   // bytes — the concurrency and reasoning wave itemised there; no vendor pin
   // moved, so all of the growth is first-party and reviewed above. Raw takes
-  // its smallest clearing step to 2,997, which leaves 811 B and is already
-  // above the floor; 925 KiB gzip would have left 757 B, under the aggregate's
-  // 768-byte floor, so gzip takes one further whole step to 926 (1,781 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2997 * 1024, gzip: 926 * 1024 }),
+  // its smallest clearing step to 2,998, which leaves 975 B and is already
+  // above the floor; gzip is unchanged at 926, which still clears it by
+  // 1,564 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2998 * 1024, gzip: 926 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1874,7 +1874,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // floor, so raw takes one further whole step to 184 (1,483 B). Gzip does not
   // move and keeps 1,300 B inside the 32 KiB it already had — the new rules
   // compress against text this sheet was already carrying.
-  entryCss: Object.freeze({ raw: 184 * 1024, gzip: 32 * 1024 }),
+  //
+  // Re-measured at 188,437 B raw / 31,697 B gzip. Stylesheet again, and named:
+  // the live reasoning block's own tier, the focus ring withdrawn from
+  // script-focus targets and redrawn on the composer's own edge, the rail row
+  // rebuilt around a trailing mark, the topbar's destination strip, and the
+  // claim rail folded into the composer's column. Raw takes its smallest
+  // clearing step to 185, which leaves 1,003 B and is already above the floor.
+  // Gzip still does not move: 1,071 B of room left inside 32 KiB, because
+  // these are more rules over the same vocabulary of tokens.
+  entryCss: Object.freeze({ raw: 185 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });

@@ -1427,7 +1427,45 @@ function SessionDetail({
       <details class="session-library-technical">
         <summary><span>Runtime record</span><strong>Manifest pins and transcript · {detail.transcript.messages.length} message{detail.transcript.messages.length === 1 ? "" : "s"}{detail.transcript.truncated ? ` of ${detail.transcript.messages.length + detail.transcript.omittedMessages}` : ""}</strong></summary>
         <div class="session-library-detail-grid">
-        <section class="session-library-panel" aria-labelledby="session-pins-title">
+        <section class="session-library-panel transcript" aria-labelledby="session-transcript-title">
+          <div class="session-library-panel-heading"><span>Bounded local materialization</span><strong id="session-transcript-title">Transcript</strong></div>
+          {detail.transcript.truncated ? <p class="session-library-truncation"><Icon name="warning" size={15} />Showing a bounded tail. {detail.transcript.omittedMessages} message{detail.transcript.omittedMessages === 1 ? "" : "s"} omitted.</p> : null}
+          {detail.transcript.messages.length ? (
+            <ol class="session-library-transcript">
+              {detail.transcript.messages.map((message) => (
+                <li class={message.role} key={`${message.id}:${message.sequence}`}>
+                  <div><strong>{message.role === "user" ? "You" : "Agent"}</strong><span>{message.phase === "tool-call" ? "tool phase · " : ""}event {message.sequence}</span></div>
+                  <p>{message.content}</p>
+                  {/* Only when it is news. "completed turn · Provider context
+                      included · Receipt 4f2a…" under every single message is a
+                      caption longer than most of the messages it captions, and
+                      it says the same thing every time. The chat transcript
+                      already suppresses the healthy case (`app.tsx`); this is
+                      the same rule, so what survives here is a turn that did
+                      not complete or context the provider never saw. */}
+                  {message.turnStatus !== "completed" || message.providerContext !== "included" ? (
+                    <div class="session-library-message-disposition">
+                      {message.turnStatus !== "completed" ? <span class={message.turnStatus}>{message.turnStatus} turn</span> : null}
+                      {message.providerContext !== "included" ? <span class={message.providerContext}>Excluded from provider context</span> : null}
+                    </div>
+                  ) : null}
+                  {message.truncated ? <small>Message bounded for display</small> : null}
+                </li>
+              ))}
+            </ol>
+          ) : <div class="session-library-empty compact"><Icon name="chat" size={20} /><strong>No user or assistant messages</strong><p>Tool payloads and internal events are intentionally not rendered here.</p></div>}
+        </section>
+        {/* Below the transcript, and closed. Six sha256 digests with Copy
+            buttons are the answer to "prove this conversation is what it
+            says"; they are never the answer to "what did we talk about". At
+            equal weight beside the transcript they took half the width and
+            all of the attention, and the messages — the only thing anyone
+            opens a past conversation to read — were left in a 200px column
+            scrolling four words to a line. Nothing is removed: this opens in
+            one press, and Proof still holds the full chain. */}
+        <details class="session-library-pins-disclosure">
+          <summary><span>Runtime pins</span><strong>Provider, model, workspace and manifest digests</strong></summary>
+          <section class="session-library-panel" aria-labelledby="session-pins-title">
           <div class="session-library-panel-heading"><span>Immutable manifest</span><strong id="session-pins-title">Runtime pins</strong></div>
           <dl class="session-library-pins">
             <div><dt>Provider</dt><dd>{detail.pins.providerId}</dd></div>
@@ -1450,26 +1488,7 @@ function SessionDetail({
           {lineage ? <div class="session-library-lineage"><Icon name="branch" size={16} /><span><strong>Forked from {shortSessionId(lineage.sourceSessionId)}</strong><small>source head {lineage.sourceHeadSequence} · {shortDigest(lineage.sourceHeadDigest)}</small></span></div> : null}
         </section>
 
-        <section class="session-library-panel transcript" aria-labelledby="session-transcript-title">
-          <div class="session-library-panel-heading"><span>Bounded local materialization</span><strong id="session-transcript-title">Transcript</strong></div>
-          {detail.transcript.truncated ? <p class="session-library-truncation"><Icon name="warning" size={15} />Showing a bounded tail. {detail.transcript.omittedMessages} message{detail.transcript.omittedMessages === 1 ? "" : "s"} omitted.</p> : null}
-          {detail.transcript.messages.length ? (
-            <ol class="session-library-transcript">
-              {detail.transcript.messages.map((message) => (
-                <li class={message.role} key={`${message.id}:${message.sequence}`}>
-                  <div><strong>{message.role === "user" ? "You" : "Agent"}</strong><span>{message.phase === "tool-call" ? "tool phase · " : ""}event {message.sequence}</span></div>
-                  <p>{message.content}</p>
-                  <div class="session-library-message-disposition">
-                    <span class={message.turnStatus}>{message.turnStatus} turn</span>
-                    <span class={message.providerContext}>{message.providerContext === "included" ? "Provider context included" : "Excluded from provider context"}</span>
-                  </div>
-                  {message.receipt ? <small class="session-library-message-receipt"><Icon name="proof" size={12} />Receipt {shortSessionId(message.receipt.receiptId)}</small> : null}
-                  {message.truncated ? <small>Message bounded for display</small> : null}
-                </li>
-              ))}
-            </ol>
-          ) : <div class="session-library-empty compact"><Icon name="chat" size={20} /><strong>No user or assistant messages</strong><p>Tool payloads and internal events are intentionally not rendered here.</p></div>}
-        </section>
+        </details>
         </div>
       </details>
 

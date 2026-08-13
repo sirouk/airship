@@ -10,22 +10,23 @@
  */
 
 /*
- * Centre under the wide measure.
+ * One measure, the shell's.
  *
- * `data-route-measure="wide"` gives the attestation ledger the desktop width,
- * but it also put the header's first glyph 26px from the window edge while
- * everything else in the shell sits on a centered measure — the "crashed into
- * the left edge" look. The route keeps the width for its dense panels and
- * centres its own column, so the header, tab strip and panels share one left
- * line with the rest of the product.
+ * This block used to centre a 1400px column of its own under
+ * `data-route-measure="wide"`, which fixed the header-against-the-window-edge
+ * look but left the page with three left edges: this column's, the receipt
+ * panel's re-cap at 1160 inside it, and the ledger's at the full 1400. The
+ * heading then sat 120px left of the panel it named. `.route-layout > *` in
+ * `routes.css` already caps and centres every route that has not opted out, so
+ * the honest fix is to stop opting out and let one rule own the page's left
+ * line.
  */
 .proof-view {
   display: grid;
   gap: var(--sp-3);
   align-content: start;
   min-width: 0;
-  width: min(1400px, 100%);
-  margin-inline: auto;
+  width: 100%;
 }
 
 .proof-surface-switch {

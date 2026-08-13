@@ -1730,10 +1730,25 @@ button.runtime-posture {
  * the control a person sees, and `:has` keeps it to keyboard focus — a pointer
  * user still gets only the border warm-up above.
  */
+/*
+ * …drawn on the control's own edge, not as a ring around it.
+ *
+ * `:focus-visible` cannot answer the question this rule was asking. A text
+ * field matches it whenever it holds focus, however focus arrived — that is
+ * the spec, because typing *is* keyboard interaction — so the `:has` guard
+ * above never separated keyboard focus from a mouse click. Clicking into the
+ * composer to type drew the full detached 2px ring, on the one control a
+ * person uses continuously, every time they used it.
+ *
+ * The affordance the comment above argues for is kept and is stronger than
+ * the 39/255 it measured: the border goes to full `--focus`, and an inset
+ * hairline doubles the edge. Both hug the composer's own rounded rectangle,
+ * so the focused state is unmistakable without a box floating outside the
+ * control. `outline` is left to the elements a keyboard actually traverses.
+ */
 .composer:has(textarea:focus-visible) {
   border-color: var(--focus);
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--focus) 55%, transparent);
 }
 
 .composer.busy {

@@ -79,11 +79,26 @@ describe("route layout contract", () => {
     expect(styles.indexOf('.route-layout > [data-route-measure="wide"]'))
       .toBeGreaterThan(styles.indexOf(".route-layout > *"));
 
-    // On the opening tag of each route root, not on something inside it.
+    // On the opening tag of the route root, not on something inside it.
     expect(terminalSource).toMatch(/<section\s+class=\{`terminal-route[^>]*?data-route-measure="wide"/su);
-    expect(proofSource).toMatch(/<section\s+class="work-view proof-view"[^>]*?data-route-measure="wide"/su);
-    // …and each of those roots is what `app.tsx` renders straight into `<main>`.
+    // …and each root is what `app.tsx` renders straight into `<main>`.
     expect(app).toMatch(/<main\b[\s\S]*<ProofScreen\b/u);
+
+    /*
+     * Proof gave the width back, and this is the assertion that keeps it given.
+     *
+     * It used to be the second example here. Opting out bought the ledger its
+     * pixels and cost the page three left edges — the header at the route's own
+     * edge, the receipt panel re-capped and centred inside it, the ledger out at
+     * the full width — so the heading floated visibly left of the content it
+     * named. The Editor and the Terminal are work surfaces and earn the full
+     * frame; a proof page is a document, and a document that begins in three
+     * places reads worse than a digest table that wraps.
+     */
+    expect(proofSource, "Proof is a document route and takes the shell's measure")
+      .not.toContain('data-route-measure="wide"');
+    expect(cssRule(proofStyles, ".proof-view"), "and does not centre a second column of its own")
+      .not.toContain("1400px");
 
     // The attestation ledger is the grid that wanted the width; the receipt
     // panel is prose and re-enters the same measure one level down.
@@ -95,11 +110,10 @@ describe("route layout contract", () => {
      * against the route's left edge with 476px of empty ground beside it. A cap
      * without an alignment is left-aligning with extra steps.
      */
-    expect(cssRule(proofStyles, ".proof-surface-panel--prose"), "a re-entered measure is centred, not parked at the route's start edge")
+    expect(cssRule(proofStyles, ".proof-surface-panel--prose"), "a bounded measure is centred, not parked at the route's start edge")
       .toContain("margin-inline: auto");
     expect(proofSource).toContain('class="proof-surface-panel proof-surface-panel--prose"');
-    expect(proofSource, "the evidence ledger keeps the width the route opted into")
-      .toContain('id="proof-panel-attestations" class="proof-surface-panel"');
+    expect(proofSource).toContain('id="proof-panel-attestations" class="proof-surface-panel"');
   });
 
   it("holds the hub's own tab strip against the scroll that used to take it away", () => {

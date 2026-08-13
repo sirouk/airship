@@ -7353,6 +7353,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           }
         },
       });
+      /*
+       * Retire the live row here, where the turn stopped being live — not in
+       * the `finally`, which runs after the settle commit below.
+       *
+       * The reattach effect restores a running turn's status onto a row that
+       * came back from the journal without one. At settle the order was:
+       * commit `status: undefined`, effect runs on that very commit with
+       * `busy` still true and this ref still set, sees a row with no status,
+       * and helpfully puts the status back. Nothing cleared it a second time,
+       * so every finished answer kept its three streaming dots and its last
+       * status line — "Sealing receipt" — spinning under it for the rest of
+       * the session.
+       */
+      if (liveTurnRow.current?.messageId === assistantId) liveTurnRow.current = undefined;
       clearPendingDelta(assistantId);
       // Flush before the terminal stamp: it settles `liveToolOutput` away, and
       // a surviving buffered frame would otherwise re-add it after settlement.
@@ -7410,6 +7424,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           : "Local kernel ready");
       }
     } catch (error) {
+      // Same retirement as the settle path, and for the same reason: the
+      // failure commit below clears the row's status, and the reattach effect
+      // would otherwise restore it onto a turn that has already ended badly.
+      if (liveTurnRow.current?.messageId === assistantId) liveTurnRow.current = undefined;
       const pending = `${transcriptStreams.read(assistantId)}${pendingDelta.current?.messageId === assistantId ? pendingDelta.current.text : ""}`;
       clearPendingDelta(assistantId);
       flushPendingToolOutput();

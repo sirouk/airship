@@ -162,6 +162,78 @@ function primeContext(overrides: Partial<Context> = {}): Context {
   return { messages: [{ role: "user", content: "hi", timestamp: 1 }], ...overrides };
 }
 
+/*
+ * The seam the provider's reasoning died at.
+ *
+ * This bridge was written when `InferenceEvent` really did carry only a
+ * reasoning *phase*, so it mapped `progress` to an empty thinking block and
+ * said in as many words that "thinking_delta text never does" cross. Then
+ * `reasoning-delta` joined the canonical vocabulary and every vendor transport
+ * started emitting it — `chutes/openai.ts` from `delta.reasoning_content`,
+ * `browser-cloud.ts` from `delta.thinking` — while this adapter still had no
+ * branch for it. Prime became the default engine, prime reaches its provider
+ * through here, and the live reasoning block had nothing to render: the phase
+ * marker crossed, the words were dropped one layer above the wire.
+ */
+describe("reasoning text crosses the bridge in both directions", () => {
+  it("turns canonical reasoning deltas into a filled prime thinking block", async () => {
+    const transport = scriptedTransport([
+      { type: "progress", phase: "reasoning" },
+      { type: "reasoning-delta", text: "First the plan. " },
+      { type: "reasoning-delta", text: "Then the answer." },
+      { type: "text-delta", text: "The answer." },
+      { type: "completed", finishReason: "stop" },
+    ]);
+
+    const events = await collectPrime(createTransportForPrimeModel(MODEL, transport)(MODEL, primeContext()));
+
+    expect(eventTypes(events)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    const thinking = events.filter((event) => event.type === "thinking_delta");
+    expect(thinking.map((event) => event.type === "thinking_delta" && event.delta))
+      .toEqual(["First the plan. ", "Then the answer."]);
+    // The block closes carrying the whole chain, so a consumer reading only
+    // boundaries sees the same text as one reading deltas.
+    expect(events.find((event) => event.type === "thinking_end"))
+      .toMatchObject({ content: "First the plan. Then the answer." });
+  });
+
+  it("opens the block for a provider that streams reasoning without announcing a phase", async () => {
+    const transport = scriptedTransport([
+      { type: "reasoning-delta", text: "Straight into it." },
+      { type: "completed", finishReason: "stop" },
+    ]);
+
+    const events = await collectPrime(createTransportForPrimeModel(MODEL, transport)(MODEL, primeContext()));
+
+    expect(eventTypes(events)).toEqual(["start", "thinking_start", "thinking_delta", "thinking_end", "done"]);
+  });
+
+  it("still refuses to invent a delta for a phase that streamed nothing", async () => {
+    // The honesty the original comment was protecting, kept: an announced
+    // reasoning phase with no text is an empty block, not a fabricated one.
+    const transport = scriptedTransport([
+      { type: "progress", phase: "reasoning" },
+      { type: "text-delta", text: "Answer." },
+      { type: "completed", finishReason: "stop" },
+    ]);
+
+    const events = await collectPrime(createTransportForPrimeModel(MODEL, transport)(MODEL, primeContext()));
+
+    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+    expect(events.find((event) => event.type === "thinking_end")).toMatchObject({ content: "" });
+  });
+});
+
 describe("createTransportForPrimeModel", () => {
   it("maps text, a tool call, usage, and completion through the golden event sequence", async () => {
     const args = { path: "/workspace/a.md" };

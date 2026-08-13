@@ -263,12 +263,16 @@ export function ProofView({
       // (`routes.css`), and this route's evidence surface is not prose: the
       // attestation ledger is a list-plus-inspector grid printing 64-hex
       // measurements, so the cap left the inspector ~830px and wrapped every
-      // digest while the desktop had the width to spare. The route declares its
-      // kind here rather than growing another `:has()` one-off; the receipt
-      // panel below opts *back* into the measure in this route's own sheet,
-      // because the half of this page that is a verdict and a paragraph does
-      // get harder to read the wider it is.
-      data-route-measure="wide"
+      // digest while the desktop had the width to spare.
+      //
+      // The width is given back. Buying it cost this page three different left
+      // edges — the header at the route's own edge, the receipt panel re-capped
+      // to 1160 and centred inside it, and the ledger out at 1400 — so the
+      // heading floated visibly left of the content it named, which is the
+      // defect `.route-header` was hoisted out of the page for elsewhere. Only
+      // the Editor and the Terminal are work surfaces that earn the full frame;
+      // a proof page is a document, and a document that begins in three places
+      // is worse to read than a digest table that wraps.
     >
       {/* `document` density, deliberately, on the one route where §3.7's move
           into the ⓘ cannot be taken. Two reasons, both measured: this route's

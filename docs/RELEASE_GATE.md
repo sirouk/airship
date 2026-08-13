@@ -46,7 +46,7 @@ ceilings are both blocking.
 | Deferred advanced capability bundle | 447 KiB | 133 KiB |
 | First-party and other non-vendor JS/workers | 2,318 KiB | 737 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 680 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 2,997 KiB | 926 KiB |
+| Absolute installed JavaScript/worker backstop | 2,998 KiB | 926 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support / tools | 32 / 56 / 10 / 58 KiB | 10 / 14 / 4 / 17 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -63,7 +63,7 @@ ceilings are both blocking.
 | Optional prime runtime pack | 101 KiB | 31 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
-| HTML-referenced entry CSS | 184 KiB | 32 KiB |
+| HTML-referenced entry CSS | 185 KiB | 32 KiB |
 | General WASM excluding separately capped DCAP | 1,024 KiB each and aggregate | 350 KiB each and aggregate |
 
 These values mirror the executable ceilings exported by

@@ -267,10 +267,10 @@ async function pumpTransportIntoPrimeStream(
         out.push({ type: "text_delta", contentIndex: block.contentIndex, delta: event.text, partial: output });
       } else if (event.type === "progress") {
         /*
-         * The canonical vocabulary marks a reasoning *phase* but carries no
-         * reasoning text, so the honest prime counterpart is thinking block
-         * boundaries with empty content — never a fabricated thinking_delta,
-         * which would put words in the model's mouth.
+         * The phase marker opens the block; `reasoning-delta` below fills it.
+         * A provider that announces a reasoning phase and streams nothing
+         * still gets an honest empty thinking block — never a fabricated
+         * delta, which would put words in the model's mouth.
          */
         if (event.phase === "reasoning" && block?.kind !== "thinking") {
           closeBlock();
@@ -279,6 +279,32 @@ async function pumpTransportIntoPrimeStream(
           out.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
           block = { kind: "thinking", contentIndex: output.content.length - 1, content: entry };
         }
+      } else if (event.type === "reasoning-delta") {
+        /*
+         * The premise the comment above used to carry — "the canonical
+         * vocabulary carries no reasoning text" — stopped being true when
+         * `reasoning-delta` joined `InferenceEvent`. Every vendor transport
+         * emits it: `chutes/openai.ts` from `delta.reasoning_content`,
+         * `browser-cloud.ts` from `delta.thinking`, the demo lane from
+         * `/reason`. This branch simply did not exist, so on the prime lane —
+         * which is now the default engine, and which reaches its provider
+         * through this adapter — the text was read off the wire and dropped
+         * one layer above it. The phase marker crossed, the words did not, and
+         * the live reasoning block had nothing to show.
+         *
+         * Opening the block here as well as on `progress`: a provider may
+         * stream reasoning without ever announcing the phase, and the block
+         * boundaries have to be well formed either way.
+         */
+        if (block?.kind !== "thinking") {
+          closeBlock();
+          const entry = { type: "thinking" as const, thinking: "" };
+          output.content.push(entry);
+          out.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+          block = { kind: "thinking", contentIndex: output.content.length - 1, content: entry };
+        }
+        block.content.thinking += event.text;
+        out.push({ type: "thinking_delta", contentIndex: block.contentIndex, delta: event.text, partial: output });
       } else if (event.type === "tool-call") {
         closeBlock();
         const toolCall: PrimeToolCall = {
@@ -400,8 +426,21 @@ async function* iteratePrimeStreamAsInference(
       if (event.type === "text_delta") {
         yield { type: "text-delta", text: event.delta };
       } else if (event.type === "thinking_start") {
-        // Real reasoning happened; its *content* has no canonical home, so
-        // only the phase marker crosses. thinking_delta text never does.
+        /*
+         * Only the phase marker crosses in this direction, deliberately, even
+         * though `reasoning-delta` now gives the text a canonical home.
+         *
+         * The two directions are not symmetric because their consumers are
+         * not. The forward bridge feeds the transcript, where provider-exposed
+         * reasoning is the whole point. This one is read by
+         * `session.ts`'s compaction summarizer, which asked for an airship
+         * transport view of a prime stream and never asked for a reasoning
+         * channel. A prime session's own reasoning already reaches the reader
+         * without passing through here — the session authority raises it from
+         * `thinking_delta` directly — so widening this seam would add a
+         * carrier for nobody and put thinking text somewhere its consumer has
+         * no rule for.
+         */
         yield { type: "progress", phase: "reasoning" };
       } else if (event.type === "toolcall_end") {
         // Canonical tool calls are whole-proposition events: the deltas are
