@@ -622,6 +622,125 @@
    `.workbench-dialog-scrim`, `position:fixed` with no transform, filter or
    containment between it and the viewport, which a scroll container does not
    clip. */
+/*
+ * The terminal list as a column, not a strip.
+ *
+ * A horizontal row of tabs is a document metaphor: it assumes tabs are short,
+ * few, and interchangeable. Terminals are none of those — they are named after
+ * what they are doing, there can be many, and which one you are in matters — so
+ * they get the shape every shell that takes them seriously uses: a resizable
+ * column on the left, one row per session, the panel beside it.
+ */
+.terminal-tab-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+}
+
+.terminal-tab-rail__splitter {
+  flex: 0 0 auto;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.terminal-tab-rail__splitter:hover,
+.terminal-tab-rail__splitter:focus-visible {
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.terminal-route .terminal-tabs {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-1);
+}
+
+.terminal-route .terminal-tab {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-control);
+}
+
+.terminal-route .terminal-tab > [role="tab"] {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  text-align: left;
+}
+
+.terminal-route .terminal-tab__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Quiet until wanted, and reachable without a pointer. */
+.terminal-tab__close,
+.terminal-route .terminal-tab__rename {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.terminal-tab:hover .terminal-tab__close,
+.terminal-tab:focus-within .terminal-tab__close,
+.terminal-tab[data-active="true"] .terminal-tab__close,
+.terminal-tab:hover .terminal-tab__rename,
+.terminal-tab:focus-within .terminal-tab__rename,
+.terminal-tab[data-active="true"] .terminal-tab__rename { opacity: 1; }
+
+@media (hover: none) {
+  /* No hover to reveal with, so nothing hides. */
+  .terminal-tab__close,
+  .terminal-route .terminal-tab__rename { opacity: 1; }
+}
+
+.terminal-tab-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.terminal-tab-menu > button {
+  min-height: 32px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  text-align: left;
+}
+
+.terminal-tab-menu > button:hover:not(:disabled) { background: var(--surface-soft); }
+.terminal-tab-menu > button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
+
+/* Covers the viewport so the next press dismisses wherever it lands. */
+.terminal-tab-menu__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+}
+
 @media(max-height:500px){
   .terminal-route:not(.terminal-route--dock){grid-template-rows:auto auto auto minmax(16rem,1fr) auto;gap:4px;height:100%;min-height:0;overflow:auto}
   .terminal-route:not(.terminal-route--dock)>.terminal-route__header{margin-bottom:0}

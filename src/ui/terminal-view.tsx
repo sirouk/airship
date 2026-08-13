@@ -334,6 +334,14 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   const [syncing, setSyncing] = useState(false);
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
+  /** Which tab's context menu is open, and where it was opened. */
+  const [menuFor, setMenuFor] = useState<Readonly<{ id: string; x: number; y: number }>>();
+  /*
+   * The strip's width in pixels, like VS Code's terminal list. Persisted per
+   * mount rather than durably: a pane width is a preference about this screen,
+   * not a fact about the workspace, and the dock variant has its own geometry.
+   */
+  const [railWidth, setRailWidth] = useState(180);
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const [persistenceFailure, setPersistenceFailure] = useState<string>();
   const [reconcilable, setReconcilable] = useState(false);
@@ -517,6 +525,44 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
     }
     return true;
   };
+  /**
+   * Close one tab from the strip.
+   *
+   * `TerminalPanel` already had a close, but it belonged to the *active*
+   * session — there was no way to shut a terminal you were not looking at
+   * without switching to it first, which is the whole reason middle-click and
+   * a context menu exist in every tabbed shell.
+   *
+   * Selection moves to a neighbour rather than to nothing: closing the tab you
+   * are standing on and landing on an empty room is how a person loses their
+   * place. The manager owns the process teardown and its refusals name a
+   * remedy, so a failure leaves the tab open and says why.
+   */
+  const closeTab = (session: TerminalSessionSnapshot) => {
+    const order = sessions.map(({ id }) => id);
+    const index = order.indexOf(session.id);
+    const neighbour = order[index + 1] ?? order[index - 1];
+    setMenuFor(undefined);
+    void manager.close(session.id)
+      .then(() => {
+        if (activeId === session.id) setActiveId(neighbour);
+        setNotice(`Closed ${session.name}. Its process ended.`);
+      })
+      .catch((error) => setNotice(
+        error instanceof Error ? `${session.name} remains open: ${error.message}` : `${session.name} remains open.`,
+      ));
+  };
+
+  const closeOthers = (session: TerminalSessionSnapshot) => {
+    setMenuFor(undefined);
+    setActiveId(session.id);
+    for (const other of sessions) {
+      if (other.id === session.id) continue;
+      void manager.close(other.id).catch(() => undefined);
+    }
+    setNotice(`Closed every terminal except ${session.name}.`);
+  };
+
   const beginRename = (session: TerminalSessionSnapshot) => {
     cancelRename.current = false;
     setActiveId(session.id);
@@ -637,12 +683,34 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
           copy of it — this strip cannot adopt `Tabs` itself because a tab
           being renamed is replaced by a text input, which `TabItem` has no
           shape for. */}
+      {/* Rail, splitter and panel share one row; the route grid stacks its
+          other children above and below it. */}
+      <div class="terminal-workbench">
+      <div class="terminal-tab-rail" style={{ width: `${railWidth}px` }}>
       <div ref={strip} class="terminal-tabs" role="tablist" aria-label="Terminal tabs" onKeyDown={(event) => {
         // The rename input lives inside the strip and owns its own arrows.
         if (event.target instanceof HTMLInputElement) return;
         if (moveTab(event.key)) event.preventDefault();
       }}>
-        {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-tab-id={session.id} data-active={session.id === activeId ? "true" : "false"}>
+        {sessions.map((session) => <div
+          key={session.id}
+          class="terminal-tab"
+          role="presentation"
+          data-tab-id={session.id}
+          data-active={session.id === activeId ? "true" : "false"}
+          /* Middle-click closes, the way every tabbed surface has since tabs
+             existed. `auxclick` and not `mousedown`, so a middle-press that
+             drags away does not close the thing it moved off. */
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+            closeTab(session);
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenuFor({ id: session.id, x: event.clientX, y: event.clientY });
+          }}
+        >
           {renamingId === session.id ? <input
             class="terminal-tab__name-input"
             aria-label={`Rename ${session.name}`}
@@ -672,8 +740,63 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
             <span class="terminal-tab__label"><strong>{session.name}</strong></span>
           </button>}
           <button class="terminal-tab__rename" type="button" aria-label={`Rename ${session.name}`} title="Rename terminal" onClick={() => beginRename(session)}>✎</button>
+          {/* Visible on hover and focus-within, so the strip stays quiet while
+              the verb is still reachable without a pointer. */}
+          <button
+            class="terminal-tab__close"
+            type="button"
+            aria-label={`Close ${session.name}`}
+            title="Close terminal"
+            onClick={() => closeTab(session)}
+          >×</button>
         </div>)}
       </div>
+      {menuFor ? (() => {
+        const target = sessions.find(({ id }) => id === menuFor.id);
+        if (!target) return null;
+        return (
+          <>
+            {/* A press anywhere else dismisses, which is the only thing that
+                makes a context menu feel like one. */}
+            <div class="terminal-tab-menu__scrim" role="presentation" onPointerDown={() => setMenuFor(undefined)} />
+            <div
+              class="terminal-tab-menu"
+              role="menu"
+              aria-label={`${target.name} actions`}
+              style={{ left: `${menuFor.x}px`, top: `${menuFor.y}px` }}
+              onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(undefined); }}
+            >
+              <button type="button" role="menuitem" onClick={() => { setMenuFor(undefined); beginRename(target); }}>Rename</button>
+              <button type="button" role="menuitem" onClick={() => closeTab(target)}>Close</button>
+              <button type="button" role="menuitem" disabled={sessions.length < 2} onClick={() => closeOthers(target)}>Close others</button>
+            </div>
+          </>
+        );
+      })() : null}
+      </div>
+      <div
+        class="terminal-tab-rail__splitter"
+        role="separator"
+        aria-label="Terminal list width"
+        aria-orientation="vertical"
+        aria-valuenow={Math.round(railWidth)}
+        aria-valuemin={120}
+        aria-valuemax={420}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          const step = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+          if (step === 0) return;
+          event.preventDefault();
+          setRailWidth((width) => Math.min(420, Math.max(120, width + step)));
+        }}
+        onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); }}
+        onPointerMove={(event) => {
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          const left = event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+          setRailWidth(Math.min(420, Math.max(120, event.clientX - left)));
+        }}
+        onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); }}
+      />
 
       {active ? <TerminalPanel
         key={active.id}
@@ -700,6 +823,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
+      </div>
 
       <footer class="terminal-route__footer" role="status">
         {persistenceFailure

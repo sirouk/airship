@@ -11646,20 +11646,22 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           <>
             <section class="chat-stage" aria-label="Agent session" data-scrolled={stageScrolled ? "true" : undefined}>
               {/*
-                * Which engine owns this session, one deferred line beside the
-                * bar that carries the conversation's title. Renders nothing
-                * until its chunk and one journal read have both landed — see
-                * `agent-runtime-status.ts` for why a loading tag is an honest
-                * absence rather than "prime (default)" said early.
+                * The engine line is retired from the transcript.
+                *
+                * It read "ENGINE: PRIME (PINNED BY JOURNAL EVIDENCE — FORK THE
+                * SESSION TO SWITCH)" in uppercase mono above every
+                * conversation, permanently, on a product that now has exactly
+                * one engine for every new thread. A banner that says the same
+                * true thing on every screen forever is not information; it is
+                * furniture, and it was sitting in the two centimetres directly
+                * above the conversation's own title.
+                *
+                * Nothing is hidden. `getAgentRuntimeStatus` is still the
+                * single authority, the seal is still journaled, and the Proof
+                * route still reads both — so a person asking which engine ran
+                * a turn gets an answer from the evidence rather than from a
+                * caption. The component and its tests stay for that surface.
                 */}
-              {sessionId && runtime.current?.journal ? (
-                <DeferredAgentRuntimeStatus
-                  journal={runtime.current.journal}
-                  sessionId={sessionId}
-                  manifest={activeSessionRecord?.manifest}
-                  revision={eventCount}
-                />
-              ) : null}
               <SessionBar
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}

@@ -908,9 +908,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole-KiB ceiling while gzip remains at 190 KiB.
   /* Current release artifact. */
 
-  // Measured 694543 B raw / 192,600 B gzip.
-  // 679 KiB raw would have left 753 bytes and 189 KiB gzip would have left 668 bytes; retain the reviewed ceilings.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 680 * 1024, gzip: 190 * 1024 }),
+  // An earlier reading of 694543 B raw and 192,600 B gzip set the ceilings
+  // below — history, phrased so the parser reads the current pair.
+  //
+  // Re-measured at 696,800 B raw / 192,600 B gzip. The vendor pins are
+  // unchanged; this pair moves with the Terminal pack it shares a chunk
+  // boundary with, and that growth is itemised there. 681 KiB raw would have
+  // left 244 B, under the 768-byte floor, so raw takes one further whole step
+  // to 682 (1,268 B); 189 KiB gzip would have left 936 B, above the floor, so
+  // gzip could tighten to 189 — it stays at 190 only because the pair below
+  // it in this file measures the same artifacts and a lone step here would
+  // read as a shrink nobody made. 189 KiB gzip would have left 936 B.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 682 * 1024, gzip: 190 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
@@ -1226,11 +1235,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 324 B, both under the 768-byte floor, so each takes one further whole
   // step — raw to 3,087 (1,188 B) and gzip to 952 (1,348 B).
   //
-  // Re-measured at 3,161,300 B raw / 974,300 B gzip with every port deferred.
-  // 3,088 KiB raw would have left 212 B and 952 KiB gzip would have left 548 B,
-  // both under the 768-byte floor, so each takes one further whole step — raw
-  // to 3,089 (1,236 B) and gzip to 953 (1,572 B).
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3089 * 1024, gzip: 953 * 1024 }),
+  // Re-measured at 3,163,400 B raw / 974,300 B gzip with every port deferred
+  // and the terminal list rebuilt as a column. 3,090 KiB raw would have left
+  // 460 B and 952 KiB gzip would have left 548 B, both under the 768-byte
+  // floor, so each takes one further whole step — raw to 3,091 (1,484 B) and
+  // gzip to 953 (1,572 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3091 * 1024, gzip: 953 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1819,9 +1829,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // only when Terminal opens.
   /* Current release artifact. */
 
-  // Measured 431218 B raw / 113144 B gzip.
-  // 422 KiB raw would have left 910 bytes and 111 KiB gzip would have left 519 bytes; retain the reviewed ceilings.
-  optionalTerminal: Object.freeze({ raw: 423 * 1024, gzip: 112 * 1024 }),
+  // An earlier reading of 431218 B raw and 113144 B gzip set the ceilings
+  // below — history, phrased so the parser reads the current pair.
+  //
+  // Re-measured at 433,600 B raw / 113,700 B gzip after the terminal list
+  // became a resizable column: one row per session with rename, close, a
+  // middle-click close and a context menu, which is the shape a shell that
+  // takes terminals seriously uses and the shape a horizontal strip of tabs
+  // cannot hold. 424 KiB raw would have left 576 B and 112 KiB gzip 788 B, so
+  // raw takes one further whole step to 425 (1,600 B) while gzip takes its
+  // smallest clearing step to 112. Still fetched only when Terminal opens.
+  optionalTerminal: Object.freeze({ raw: 425 * 1024, gzip: 112 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
