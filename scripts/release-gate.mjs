@@ -816,7 +816,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,314 KiB raw would have left 610 B and 735 KiB gzip 412 B, both under the
   // aggregate's 768-byte floor, so each takes one further whole step — raw to
   // 2,315 (1,634 B) and gzip to 736 (1,436 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2315 * 1024, gzip: 736 * 1024 }),
+  //
+  // Re-measured at 2,372,307 B raw / 753,340 B gzip after the concurrency and
+  // reasoning wave, and every byte of it is a behaviour the product did not
+  // have: turns keyed per conversation rather than per page (a set of running
+  // sessions, a controller map, and a switchable approval delegate per thread,
+  // because two threads under two approval modes cannot share one
+  // adjudicator), the live reasoning block and the journal-addressed
+  // re-attachment that lets a thread you stepped away from still be streaming
+  // when you step back, and the prime engine's own reasoning path — the
+  // reasoning-delta signal and the turn.reasoning record it never wrote, which
+  // is what made reasoning visible at all on the engine that is now the
+  // default. All first-party, none of it eager.
+  // 2,317 KiB raw would have left 301 B and 736 KiB gzip would have left 324 B,
+  // both under the aggregate's 768-byte minifier-rename floor, so each takes
+  // one further whole step — raw to 2,318 (1,325 B) and gzip to 737 (1,348 B).
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2318 * 1024, gzip: 737 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1104,7 +1119,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // would have left 207 B, under the aggregate's 768-byte floor, so raw takes
   // one further whole step to 2,994 (1,231 B); gzip takes its smallest
   // clearing step to 924, which leaves 819 B and is already above the floor.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2994 * 1024, gzip: 924 * 1024 }),
+  //
+  // Re-measured at 3,068,006 B raw / 946,469 B gzip. This backstop tracks the
+  // first-party reading above and moves for the same reason and by the same
+  // bytes — the concurrency and reasoning wave itemised there; no vendor pin
+  // moved, so all of the growth is first-party and reviewed above. Raw takes
+  // its smallest clearing step to 2,997, which leaves 922 B and is already
+  // above the floor; 925 KiB gzip would have left 731 B, under the aggregate's
+  // 768-byte floor, so gzip takes one further whole step to 926 (1,755 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2997 * 1024, gzip: 926 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
