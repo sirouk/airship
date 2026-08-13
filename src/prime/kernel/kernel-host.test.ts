@@ -280,6 +280,69 @@ describe("kernelWorkerSource (real source in a fresh realm)", () => {
     throw new Error("the worker never posted the expected message");
   }
 
+  /*
+   * The reason the port exists, asserted against the real generated worker.
+   *
+   * prime-agent's model does not emit a tool-call envelope to delegate — it
+   * writes `await rlm("do this subtask", { name: "reviewer" })` inside the
+   * persistent kernel. Registering the RLM tools on the host made delegation
+   * reachable only as `pat.call("rlm_spawn", …)`: correct, and not the
+   * language the ported system prompt teaches. These bindings are the
+   * spelling, and the spelling is the feature.
+   */
+  it("calls rlm(...) as a function and routes it through the reviewed bridge", async () => {
+    const worker = bootWorkerSource();
+    expect(worker.posted[0]).toMatchObject({ type: "ready", engine: "javascript" });
+
+    worker.send({
+      type: "exec",
+      job: {
+        jobId: "job-rlm",
+        code: "return await rlm('review the diff', { name: 'reviewer' });",
+      },
+    });
+
+    const request = await waitFor(() => worker.posted.find((m) => m.type === "bridge-request")) as {
+      call: { seq: number; tool: string; arguments: Record<string, unknown> };
+    };
+    // Same egress as every other tool: nothing here is a second channel.
+    expect(request.call.tool).toBe("rlm_spawn");
+    expect(request.call.arguments).toEqual({ prompt: "review the diff", name: "reviewer" });
+  });
+
+  it("gives agent_message.send the three targets the router admits", async () => {
+    const worker = bootWorkerSource();
+    worker.send({
+      type: "exec",
+      job: {
+        jobId: "job-msg",
+        code: "return await agent_message.send({ name: 'reviewer' }, 'status?');",
+      },
+    });
+
+    const request = await waitFor(() => worker.posted.find((m) => m.type === "bridge-request")) as {
+      call: { tool: string; arguments: Record<string, unknown> };
+    };
+    expect(request.call.tool).toBe("agent_message");
+    expect(request.call.arguments).toEqual({ action: "send", message: "status?", receiver_name: "reviewer" });
+  });
+
+  it("binds the rest of the family without shadowing a user namespace key", async () => {
+    const worker = bootWorkerSource();
+    worker.send({
+      type: "exec",
+      job: {
+        jobId: "job-family",
+        code: "return [typeof subagent, typeof agent_observe, typeof harness, typeof heartbeat].join(',');",
+      },
+    });
+    const done = await waitFor(() => worker.posted.find((m) => m.type === "finished")) as {
+      result: { outcome: string; valueJson?: string };
+    };
+    expect(done.result.outcome).toBe("completed");
+    expect(done.result.valueJson).toContain("function,function,function,function");
+  });
+
   it("binds the tool bridge to `pat`, so the documented call reaches the host", async () => {
     const worker = bootWorkerSource();
     expect(worker.posted[0]).toMatchObject({ type: "ready", engine: "javascript" });

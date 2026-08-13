@@ -876,10 +876,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // journaled session with its own manifest and kernel. Still behind the
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
-  // 2,404 KiB raw would have left 196 B and 762 KiB gzip would have left
-  // 488 B, both under the 768-byte floor, so each takes one further whole
-  // step — raw to 2,405 (1,220 B) and gzip to 763 (1,512 B).
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2405 * 1024, gzip: 763 * 1024 }),
+  //
+  // Re-measured at 2,464,900 B raw / 779,800 B gzip with the kernel's RLM
+  // bindings in. Raw takes its smallest clearing step to 2,408, which leaves
+  // 892 B and is already above the floor; gzip is unchanged at 763.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2408 * 1024, gzip: 763 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1214,10 +1215,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // journaled session with its own manifest and kernel. Still behind the
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
-  // 3,084 KiB raw would have left 516 B, under the 768-byte floor, so raw
-  // takes one further whole step to 3,085 (1,540 B); gzip takes its smallest
-  // clearing step to 951, which leaves 824 B and is already above it.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3085 * 1024, gzip: 951 * 1024 }),
+  //
+  // Re-measured at 3,160,600 B raw / 974,100 B gzip, tracking the first-party
+  // reading above for the same reason and by the same bytes.
+  // 3,087 KiB raw would have left 488 B and 952 KiB gzip would have left
+  // 748 B, both under the 768-byte floor, so each takes one further whole
+  // step — raw to 3,088 (1,512 B) and gzip to 953 (1,772 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3088 * 1024, gzip: 953 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1905,10 +1909,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // journaled session with its own manifest and kernel. Still behind the
   // capability request; first paint is untouched. Figures are floors a little
   // under the build, for the reason the backstop below spells out.
-  // 188 KiB raw would have left 412 B, under the aggregate's 768-byte floor,
-  // so raw takes one further whole step to 189 (1,436 B); gzip takes its
-  // smallest clearing step to 57, which leaves 968 B and is already above it.
-  optionalPrimePack: Object.freeze({ raw: 189 * 1024, gzip: 57 * 1024 }),
+  //
+  // Re-measured at 195,100 B raw / 58,400 B gzip once the kernel learned the
+  // RLM call surface — rlm(), subagent(), agent_message.send(), observe,
+  // harness and heartbeat bound into the worker namespace beside pat, which
+  // is the spelling prime-agent's model actually writes.
+  // 191 KiB raw would have left 484 B, under the 768-byte floor, so raw takes
+  // one further whole step to 192 (1,508 B); gzip takes its smallest clearing
+  // step to 58, which leaves 992 B and is already above it.
+  optionalPrimePack: Object.freeze({ raw: 192 * 1024, gzip: 58 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),

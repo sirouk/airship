@@ -132,6 +132,43 @@ async function __runJob(job) {
     signal: abort.signal,
   };
 
+  /*
+   * The RLM call surface: subagents as function calls, not as JSON tool calls.
+   *
+   * This is the difference the port exists for. prime-agent's model does not
+   * emit a tool-call envelope to delegate — it writes
+   * 'await rlm("do this subtask", { name: "reviewer" })' inside the persistent
+   * kernel and gets a handle back immediately, then reads replies later. The
+   * tools were registered on the host first, which made delegation reachable
+   * only as 'pat.call("rlm_spawn", …)' — correct, and not the language the
+   * ported system prompt teaches or the shape the model was trained into.
+   *
+   * Every one of these is a thin wrapper over 'pat.call', so nothing here is a
+   * second egress: the same reviewed bridge, the same
+   * 'prime-kernel:<jobId>:<seq>' operation identity, the same approval. Only
+   * the spelling changes, and the spelling is the feature.
+   */
+  const __rlm = (prompt, options) => toolkit.call("rlm_spawn", Object.assign({ prompt: String(prompt) }, options || {}));
+  const __subagent = (action, options) => toolkit.call("subagent", Object.assign({ action: String(action) }, options || {}));
+  const __agentObserve = (action, options) => toolkit.call("agent_observe", Object.assign({ action: String(action) }, options || {}));
+  const __agentMessage = {
+    // send(target, message) where target is "parent", or an object carrying
+    // id or name for a sibling or child — the three the router admits.
+    send: (target, message) => {
+      const envelope = { action: "send", message: String(message) };
+      if (typeof target === "string") envelope.receiver_role = target;
+      else if (target && typeof target === "object") {
+        if (target.role) envelope.receiver_role = String(target.role);
+        if (target.id) envelope.receiver_id = String(target.id);
+        if (target.name) envelope.receiver_name = String(target.name);
+      }
+      return toolkit.call("agent_message", envelope);
+    },
+    list_agents: () => toolkit.call("agent_message", { action: "list_agents" }),
+  };
+  const __harness = (action, options) => toolkit.call("prime_harness", Object.assign({ action: String(action) }, options || {}));
+  const __heartbeat = (action, options) => toolkit.call("rlm_heartbeat", Object.assign({ action: String(action) }, options || {}));
+
   let valueJson;
   let error;
   let outcome = "completed";
@@ -144,10 +181,22 @@ async function __runJob(job) {
     // believes its own prompt. Namespace keys are filtered against both
     // injected names because a duplicate parameter in a strict-mode
     // AsyncFunction is a SyntaxError, not a shadowing.
-    const keys = Object.keys(ns).filter((k) => k !== "pat" && k !== "__job").sort();
+    // The RLM names are injected beside 'pat' for the same reason 'pat' is:
+    // they are the vocabulary the prompt teaches, and a namespace key of the
+    // same name would be a duplicate parameter — a SyntaxError in a
+    // strict-mode AsyncFunction, not a shadowing. A user who assigns
+    // 'ns.rlm = …' keeps their value; the injected binding simply is not
+    // offered twice.
+    const __injected = ["pat", "__job", "rlm", "subagent", "agent_message", "agent_observe", "harness", "heartbeat"];
+    const keys = Object.keys(ns).filter((k) => __injected.indexOf(k) === -1).sort();
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    const argNames = keys.concat(["__job", "pat"]);
-    const argValues = keys.map((k) => ns[k]).concat([{ jobId: job.jobId, label: job.label }, toolkit]);
+    const argNames = keys.concat([
+      "__job", "pat", "rlm", "subagent", "agent_message", "agent_observe", "harness", "heartbeat",
+    ]);
+    const argValues = keys.map((k) => ns[k]).concat([
+      { jobId: job.jobId, label: job.label }, toolkit,
+      __rlm, __subagent, __agentMessage, __agentObserve, __harness, __heartbeat,
+    ]);
     // Single quotes on purpose: this line is generated source, so a
     // double-quoted literal here needs an escape that the template renders
     // away, and the emitted worker read an empty string followed by a bare
