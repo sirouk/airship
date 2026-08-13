@@ -9,7 +9,7 @@ export function registerContextTools(registry: ToolRegistry, runtime: ClientCont
   const searchContext: Tool = {
     definition: {
       name: "search_context",
-      description: "Search the shared on-device workspace index and return hybrid retrieval hits with full generation lineage, including whether the embeddings are the deterministic bootstrap or the local semantic model.",
+      description: "Find workspace content by meaning when you do not know the exact words: hybrid retrieval over the on-device index, dense embeddings blended with BM25, so it answers \"where is the retry logic\" where search_text needs the literal string. Reach for this first on a concept, a paraphrase, or an unfamiliar codebase, and for search_text when you already know the identifier. Hits carry generation lineage, including whether embeddings are the deterministic bootstrap or the local semantic model.",
       effect: "read",
       inputSchema: {
         type: "object",

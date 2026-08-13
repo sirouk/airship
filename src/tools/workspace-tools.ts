@@ -263,7 +263,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
   const searchText: Tool = {
     definition: {
       name: "search_text",
-      description: "Search bounded UTF-8 workspace content for a literal string and return line-oriented matches. The reply's summary states every bound that fired, and an incomplete scan names either the cursor to resume from or the file its result cap filled inside.",
+      description: "Search bounded UTF-8 workspace content for a literal string and return line-oriented matches. Use it when you know the exact text — an identifier, an error message, a config key; when you only know the idea, search_context finds it by meaning. The reply's summary states every bound that fired, and an incomplete scan names either the cursor to resume from or the file its result cap filled inside.",
       effect: "read",
       inputSchema: {
         type: "object",

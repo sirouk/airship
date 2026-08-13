@@ -30,6 +30,7 @@ import {
 import { PrimeAgentSession } from "./session";
 import { attachPrimeAgentRegistry, attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
+import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt";
 import { primeHeartbeatStore } from "./heartbeat-store";
 import { createPrimeSubagentRegistry } from "./subagent-registry";
 import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
@@ -475,9 +476,44 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
    * so the fire-and-forget prime.* writes cannot throw across the teardown.
    */
   try {
+    /*
+     * The briefing, which the root conversation did not have.
+     *
+     * `composePrimeSystemPrompt` was wired only into the child factory, so a
+     * subagent spawned by `rlm()` knew its working directory, the date, its
+     * security posture, its real tool inventory, the harness notes and the
+     * live environment — and the conversation that spawned it knew none of
+     * that. It got the Agent Profile prompt alone and re-derived its own
+     * situation from scratch every turn, which reads exactly like an agent
+     * that is unsure what it can do.
+     *
+     * The Profile's prompt is not replaced; it becomes the identity at the
+     * head of the base layer, and prime's layers brief around it. It is
+     * delivered through `getSystemPrompt` rather than by rewriting the
+     * manifest, because `systemPromptDigest` pins what the person authored
+     * and runtime facts are not something a conversation can pin — the date
+     * changes, the environment changes, the harness grows. Same reason
+     * airship-core injects its live environment per turn instead of into the
+     * manifest.
+     */
+    const briefing = await buildPrimeSystemPrompt({
+      sessionId: options.sessionId,
+      operatorPrompt: manifest.systemPrompt,
+      workingDirectory: "/workspace",
+      conversationLogPath: `journal:${options.sessionId}`,
+      currentDate: new Date().toISOString().slice(0, 10),
+      toolInventory: primeToolInventoryFrom(
+        (surface?.registry ?? options.tools).definitions(),
+      ),
+      ...(manifest.securityPosture !== undefined ? { securityPosture: manifest.securityPosture } : {}),
+      ...(primeHarnessStore() ? { harnessStore: primeHarnessStore()! } : {}),
+      signal: options.signal,
+    });
+
     const session = await runtime.attachSession({
       sessionId: options.sessionId,
       manifest,
+      getSystemPrompt: () => briefing.prompt,
       model,
       /*
        * The credential bridge (W1), and the reason no `getApiKey` accompanies

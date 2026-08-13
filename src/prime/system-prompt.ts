@@ -128,6 +128,45 @@ export const PRIME_DEFAULT_TOOL_INVENTORY: readonly PrimeToolInventoryEntry[] = 
 ]);
 
 /**
+ * The inventory a session actually pinned, rather than a constant that drifts.
+ *
+ * `PRIME_DEFAULT_TOOL_INVENTORY` lists six tools. A composed Airship session
+ * pins thirty-four. A model reading the short list was being told, in the one
+ * place that claims to be authoritative about its capabilities, that most of
+ * them do not exist — and a model that has to infer its own tool surface
+ * reasons its way there from scratch on every turn instead of acting.
+ *
+ * Descriptions are the tool's own first sentence, bounded: the full schema
+ * already travels with the request, so this layer is an index, not a
+ * duplicate of it.
+ */
+export function primeToolInventoryFrom(
+  definitions: readonly Readonly<{ name: string; description: string }>[],
+): readonly PrimeToolInventoryEntry[] {
+  const seen = new Set<string>();
+  const entries: PrimeToolInventoryEntry[] = [];
+  for (const definition of definitions) {
+    if (seen.has(definition.name)) continue;
+    seen.add(definition.name);
+    entries.push(Object.freeze({ name: definition.name, description: firstSentence(definition.description) }));
+  }
+  return Object.freeze(entries);
+}
+
+const MAX_INVENTORY_DESCRIPTION_CHARS = 220;
+
+function firstSentence(description: string): string {
+  const collapsed = description.replace(/\s+/gu, " ").trim();
+  if (collapsed.length === 0) return "No description.";
+  // A sentence end, not any period: `http/https.` and `v1.1` must not split.
+  const end = collapsed.search(/\.(?=\s+[A-Z(])/u);
+  const sentence = end > 0 ? collapsed.slice(0, end + 1) : collapsed;
+  return sentence.length > MAX_INVENTORY_DESCRIPTION_CHARS
+    ? `${sentence.slice(0, MAX_INVENTORY_DESCRIPTION_CHARS - 1).trimEnd()}…`
+    : sentence;
+}
+
+/**
  * Model-facing one-liner per SessionManifest.securityPosture. Manifests
  * from protocol v1 may omit the posture entirely; the line then disappears
  * rather than inventing a posture the host never pinned.
@@ -190,6 +229,17 @@ export interface PrimeLiveEnvironmentProvider {
  */
 export type PrimeSystemPromptFacts = Readonly<{
   sessionId: string;
+  /**
+   * The Agent Profile's authored prompt — the operator's identity and policy
+   * for this conversation.
+   *
+   * It renders at the very top of the base layer, which is the one layer the
+   * budget never drops, because an agent that loses its identity to a full
+   * harness store is a different agent. When it is present it also replaces
+   * prime's generic "you are a general purpose agent" opening: two competing
+   * role statements in one prompt is worse than either alone.
+   */
+  operatorPrompt?: string;
   /** Display working directory (airship: "/workspace"). */
   workingDirectory: string;
   /** Display conversation-log path, or "not persisted". */
@@ -242,6 +292,8 @@ export type PrimeSystemPromptComposition = Readonly<{
 /** Collector input: the store + provider seams next to every static fact. */
 export type CollectPrimeSystemPromptFactsInput = Readonly<{
   sessionId: string;
+  /** The Agent Profile's authored prompt; see PrimeSystemPromptFacts. */
+  operatorPrompt?: string;
   workingDirectory: string;
   conversationLogPath: string;
   currentDate: string;
@@ -257,6 +309,7 @@ export type CollectPrimeSystemPromptFactsInput = Readonly<{
 
 type ResolvedFacts = Readonly<{
   sessionId: string;
+  operatorPrompt?: string;
   workingDirectory: string;
   conversationLogPath: string;
   currentDate: string;
@@ -312,6 +365,9 @@ function resolvePrimeSystemPromptFacts(facts: PrimeSystemPromptFacts): ResolvedF
   }
   return Object.freeze({
     sessionId: facts.sessionId,
+    ...(facts.operatorPrompt !== undefined && facts.operatorPrompt.trim().length > 0
+      ? { operatorPrompt: facts.operatorPrompt }
+      : {}),
     workingDirectory: facts.workingDirectory,
     conversationLogPath: facts.conversationLogPath,
     currentDate: facts.currentDate,
@@ -347,11 +403,18 @@ function compactHarnessText(text: string, maxLength: number): string {
 // ---------------------------------------------------------------------------
 
 function renderBaseRuntimeFacts(facts: ResolvedFacts): string {
+  const operator = facts.operatorPrompt?.trim() ?? "";
   const lines = [
-    // Role: verbatim upstream buildRlmPrompt opening.
-    "You are a general purpose agent that uses code to solve tasks.",
-    "You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
-    "When you are done, stop calling tools and state your final answer.",
+    // The operator's prompt wins the role, because it is the one a person
+    // wrote for this conversation. Without one, the opening is verbatim
+    // upstream buildRlmPrompt.
+    ...(operator
+      ? [operator, "", "You solve tasks by breaking work into steps, using your tools to establish facts rather than assuming them, and iterating one step at a time.", "When you are done, stop calling tools and state your final answer."]
+      : [
+        "You are a general purpose agent that uses code to solve tasks.",
+        "You solve tasks by breaking down problems into sub-tasks, writing and executing code, observing results, and iterating one step at a time.",
+        "When you are done, stop calling tools and state your final answer.",
+      ]),
     "",
     "Runtime: prime-runtime — the prime-agent core ported into the Airship page runtime.",
     "Engine: prime kernel worker (persistent; the namespace survives across calls until a crash resets it, and a reset is always reported).",
@@ -665,6 +728,7 @@ export async function collectPrimeSystemPromptFacts(input: CollectPrimeSystemPro
       : undefined;
   return Object.freeze({
     sessionId: input.sessionId,
+    ...(input.operatorPrompt !== undefined ? { operatorPrompt: input.operatorPrompt } : {}),
     workingDirectory: input.workingDirectory,
     conversationLogPath: input.conversationLogPath,
     currentDate: input.currentDate,

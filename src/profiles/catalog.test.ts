@@ -65,6 +65,18 @@ describe("built-in Airship profiles", () => {
     expect(uncovered, "A colour mode with no palette makes the theme library inert for anyone in it.").toEqual([]);
   });
 
+  it("keeps each built-in role focused on the operator's task", async () => {
+    const catalog = await createBuiltInProfileCatalog();
+    const prompts = Object.fromEntries(catalog.profiles.map((profile) => [profile.profileId, profile.systemPrompt]));
+    expect(prompts.general).toContain("Complete the operator's task clearly and directly");
+    expect(prompts.research).toContain("Research the operator's question directly");
+    expect(prompts["builder-systems"]).toContain("Build what the operator asked for");
+    for (const prompt of Object.values(prompts)) {
+      expect(prompt).not.toMatch(/illegal|fringe|controversial|moral/iu);
+      expect(prompt.length).toBeLessThan(700);
+    }
+  });
+
   it("keeps every built-in agent on fetch_url instead of ad-hoc Node egress", async () => {
     const catalog = await createBuiltInProfileCatalog();
     for (const profile of catalog.profiles) {

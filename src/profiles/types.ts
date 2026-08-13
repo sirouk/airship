@@ -37,7 +37,7 @@ export function defaultProfile(tools: ToolDefinition[]): AgentProfile {
     name: "Airship",
     description: "Private general-purpose workspace agent",
     systemPrompt:
-      "You are Airship, a private client-side agent. Use available tools carefully, preserve user data, and report uncertainty.",
+      "Complete the operator's task directly. Use the installed tools, preserve the workspace, verify consequential work, and report uncertainty without inventing restrictions.",
     providerId: "airship-demo",
     model: "deterministic-demo-v1",
     minimumPosture: "local",

@@ -888,7 +888,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // binary workspace handoff. This is reviewed first-party capability, not
   // first-paint or vendor growth. 2,436 KiB raw and 773 KiB gzip leave less
   // than the aggregate tripwire floor, so they take 2,437/774 KiB.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2437 * 1024, gzip: 774 * 1024 }),
+  //
+  // Re-measured at 2,438.30 KiB raw / 773.22 KiB gzip once root turns started
+  // composing the layered prime system prompt instead of sending the Agent
+  // Profile prompt alone: the composer, the harness merge and the
+  // registry-derived tool inventory are first-party capability every
+  // conversation now reaches. 2,439 KiB raw would have left 716 B, under this
+  // aggregate's 768-byte floor, so raw takes one further whole step to 2,440
+  // (1,740 B); 774 KiB gzip is the smallest clearing step and already leaves
+  // 798 B, above the floor.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2440 * 1024, gzip: 774 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -1239,13 +1248,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 324 B, both under the 768-byte floor, so each takes one further whole
   // step — raw to 3,087 (1,188 B) and gzip to 952 (1,348 B).
   //
-  // Re-measured at 3,117.47 KiB raw / 961.87 KiB gzip with Node-first Agent
-  // Profile routing, reset compatibility, and the byte-faithful binary handoff
-  // included. The absolute installed backstop moves by the same reviewed
-  // capability. 3,117 KiB raw and 961 KiB gzip do not fit; 3,118 KiB raw
-  // leaves less than the tripwire floor, while 962 KiB gzip is the smallest
-  // whole-KiB ceiling that fits.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 3118 * 1024, gzip: 962 * 1024 }),
+  // The absolute installed backstop moves with the same reviewed capability.
+  // Re-measured at 3,120.25 KiB raw / 962.71 KiB gzip after the concise v9
+  // agent charter and the layered root-turn system prompt. 3,121 KiB raw is
+  // the smallest clearing step and leaves exactly the aggregate's 768-byte
+  // floor; 963 KiB gzip would have left 296 B, under it, so gzip takes one
+  // further whole step to 964 (1,320 B).
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 3121 * 1024, gzip: 964 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1417,7 +1426,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // with the aggregate tripwire floor; gzip needs 42 KiB because 41 leaves
   // less than that floor.
   // Nothing moves to first paint.
-  optionalAgentTools: Object.freeze({ raw: 131 * 1024, gzip: 42 * 1024 }),
+  optionalAgentTools: Object.freeze({ raw: 132 * 1024, gzip: 42 * 1024 }),
   // Files/editor shell plus its in-page source-control handoff. Git remains a
   // second lazy pack; this cap covers only the combined Editor route chrome.
   // The workbench gained the behaviour its measured defects needed: a tree
@@ -1970,7 +1979,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // step moved once more when every port became deferred rather than optional:
   // the surface always registers the whole vocabulary now, because the digest
   // binds names and names may not depend on which ports were constructible.
-  optionalPrimePack: Object.freeze({ raw: 206 * 1024, gzip: 63 * 1024 }),
+  //
+  // Re-measured at 208.23 KiB raw / 62.80 KiB gzip once this pack began
+  // composing the layered system prompt for root turns and not only for
+  // children: the composer, its harness merge and the registry-derived tool
+  // inventory now load with the runtime rather than with the subagent factory
+  // alone. 209 KiB raw is the smallest clearing step and leaves 788 B, above
+  // the floor; 63 KiB gzip would have left 204 B, under it, so gzip takes one
+  // further whole step to 64 (1,228 B).
+  optionalPrimePack: Object.freeze({ raw: 209 * 1024, gzip: 64 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),

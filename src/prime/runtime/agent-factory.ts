@@ -16,7 +16,7 @@ import { PrimeAgentSession } from "./session";
 import { createSessionManifest } from "../../core/session-manifest";
 import { createPrimeToolSurface, attachPrimeKernelTool } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
-import { composePrimeSystemPrompt } from "../system-prompt";
+import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt";
 
 /**
  * The production runtime factory: `rlm(...)` and `subagent(...)` become real
@@ -120,13 +120,18 @@ export function createPrimeAgentRuntimeFactory(deps: PrimeAgentFactoryDeps): Pri
        * `[task from parent]`." — and a child that did not carry it would not
        * know it was one.
        */
-      const composed = await composePrimeSystemPrompt({
+      const composed = await buildPrimeSystemPrompt({
         sessionId: input.childId,
         workingDirectory: "/workspace",
         conversationLogPath: "not persisted",
         currentDate: new Date().toISOString().slice(0, 10),
         recursionDepth: input.depth,
         parentAgentName: input.fromName,
+        // The surface this child actually got, not the six-tool constant. A
+        // child told it has six tools when it holds thirty-four spends its
+        // budget rediscovering the rest.
+        toolInventory: primeToolInventoryFrom(surface.registry.definitions()),
+        ...(primeHarnessStore() ? { harnessStore: primeHarnessStore()! } : {}),
       });
       const systemPrompt = composed.prompt;
 

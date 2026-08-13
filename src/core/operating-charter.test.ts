@@ -8,11 +8,24 @@ import {
 
 describe("Airship core operating charter", () => {
   it("is versioned, deterministic, and byte-stable", async () => {
-    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(8);
+    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(9);
     expect(AIRSHIP_CORE_CHARTER).not.toMatch(/\{\{|\$\{|20\d\d-/u);
     expect(await sha256(AIRSHIP_CORE_CHARTER)).toBe(
-      "sha256:SFCfMgOIeiiprrSYJ-bOX5ododEmD-SxbnY4PP0lkT4",
+      "sha256:Vet6d6nhdrxjWY2_U3xbV3neec8UD2UAwtHcGzfs1HM",
     );
+  });
+
+  it("follows the operator broadly under one simple human-first priority order", () => {
+    const first = AIRSHIP_CORE_CHARTER.indexOf("do not cause or materially enable harm to people");
+    const second = AIRSHIP_CORE_CHARTER.indexOf("follow the operator's request");
+    const third = AIRSHIP_CORE_CHARTER.indexOf("preserve Airship, its workspace, and its ability to continue");
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    expect(third).toBeGreaterThan(second);
+    expect(AIRSHIP_CORE_CHARTER).toContain("Outside those boundaries, help fully");
+    expect(AIRSHIP_CORE_CHARTER).toContain("fringe, or unfamiliar subject matter is not by itself a reason to refuse");
+    expect(AIRSHIP_CORE_CHARTER).toContain("Do not moralize, invent restrictions, or substitute a different task");
+    expect(AIRSHIP_CORE_CHARTER).toContain("state it precisely and continue with the safe, lawful parts");
   });
 
   it("defines the edge environment and its honest capability boundaries", () => {
