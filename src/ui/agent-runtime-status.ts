@@ -41,13 +41,10 @@ const EVIDENCE_DETAIL: Readonly<Record<AgentRuntimeStatusEvidence, string>> = Ob
   "prime-events": "Prime journal records pin this session to the prime engine.",
   "airship-history": "Airship turn records pin this session to the airship-core engine.",
   /*
-   * The sentence used to say "fresh sessions run prime by default", which the
-   * gate stopped doing: an unpinned journal takes the airship-core lane
-   * whenever a transport is attached, and `transport` is required, so that is
-   * every unpinned session the app can start. Naming an engine here would only
-   * put the claim back where it can rot — the authority already computes
-   * `defaultEngine`, so the tag says what is true of the journal and leaves the
-   * engine name to the value beside it.
+   * Names no engine, deliberately, and that is what kept this sentence true
+   * across two reversals of which engine the gate actually defaults to. The
+   * authority computes `defaultEngine`; this line says only what is true of
+   * the journal and leaves the engine name to the value rendered beside it.
    */
   empty: "No engine evidence in this journal yet; the engine below is the one this session would start on.",
 });

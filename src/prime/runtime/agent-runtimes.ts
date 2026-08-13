@@ -88,7 +88,7 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
   if (kind === "unpinned") {
     return Object.freeze({
       pinnedEngine: null,
-      defaultEngine: "airship-core",
+      defaultEngine: "prime",
       evidenceType: "empty",
       canForkSwitch: false,
     });
@@ -98,7 +98,7 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
   const other: PinnedAgentEngine = kind === "prime" ? "airship-core" : "prime";
   return Object.freeze({
     pinnedEngine: kind,
-    defaultEngine: "airship-core",
+    defaultEngine: "prime",
     evidenceType: sealed ? "seal" : kind === "prime" ? "prime-events" : "airship-history",
     canForkSwitch: true,
     // Verbatim remedy vocabulary of the gate's refusals, so the status and

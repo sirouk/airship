@@ -21,13 +21,13 @@ const PINNED_PRIME_LINE = "engine: prime (pinned by journal evidence — fork th
  * caller. The tag beside a title must not promise an engine no fresh session
  * reaches.
  */
-const DEFAULT_LINE = "engine: airship-core (default)";
+const DEFAULT_LINE = "engine: prime (default)";
 
 describe("getAgentRuntimeStatus", () => {
   it("leaves an empty journal unpinned, running the gate's unpinned default, with no fork question to answer", () => {
     const status = getAgentRuntimeStatus({ sessionId: "s-empty", events: [] });
     expect(status.pinnedEngine).toBeNull();
-    expect(status.defaultEngine).toBe("airship-core");
+    expect(status.defaultEngine).toBe("prime");
     expect(status.evidenceType).toBe("empty");
     expect(status.canForkSwitch).toBe(false);
     expect(status.forkRemedy).toBeUndefined();

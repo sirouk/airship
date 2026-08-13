@@ -48,10 +48,19 @@ silently changes engines.
   tag (`src/ui/agent-runtime-status.ts`) renders "engine: prime (default)",
   "engine: prime (pinned by journal evidence — fork the session to
   switch)" or the airship-core sentence; a loading journal renders nothing
-  rather than a wrong-engine claim. The `defaultEngine: "prime"` literal in
-  `src/prime/runtime/agent-runtimes.ts` is now simply true: an unpinned
-  session reads "prime (default)" and its first turn pins it prime, so the
-  tag no longer flips engines under the reader after one turn.
+  rather than a wrong-engine claim.
+
+  Correction, recorded because the earlier revision of this paragraph
+  asserted it without checking: `defaultEngine` in
+  `src/prime/runtime/agent-runtimes.ts` was still the literal
+  `"airship-core"` for some time after the gate began defaulting to prime.
+  The status authority and the gate therefore disagreed — an unpinned
+  session read "engine: airship-core (default)", ran prime, and flipped to
+  "prime (pinned by journal evidence)" after its first turn, which is
+  exactly the flips-under-the-reader defect this section claimed had been
+  closed. The literal is `"prime"` now and its colocated test pins the
+  rendered line, which is what should have carried the claim in the first
+  place.
 - Availability posture stays airship-canonical: `prime` is offered where
   the session's transport/model resolve and is not silently synthesized
   under degraded conditions.
