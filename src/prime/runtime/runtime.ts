@@ -27,6 +27,8 @@ import {
   primeConversationTitleFromPrompt,
 } from "./naming";
 import { PrimeAgentSession } from "./session";
+import { attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
+import { primeHarnessStore } from "./harness-store";
 import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
 import type { ConversationReceipt } from "../../receipts/types";
 
@@ -381,9 +383,31 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
   }
 
   const model = primeModelFromManifest(manifest);
+  /*
+   * The surface this turn runs on.
+   *
+   * With a workspace port in hand the prime lane composes its own vocabulary
+   * over Airship's — prime's file and search tools winning the six names both
+   * engines claim, everything Airship has that prime-agent does not carried
+   * across untouched. Without one it runs on the registry it was handed, which
+   * is the engine-only shape the port shipped in first and is still the shape
+   * every direct caller and test gets.
+   *
+   * `execute_code` is attached after the session exists, not here: the kernel
+   * host is session-scoped, and a tool bound to any other host would journal
+   * its bridge calls under an operation identity no approval matches.
+   */
+  const surface = options.workspace
+    ? createPrimeToolSurface({
+        workspace: options.workspace,
+        airship: options.tools,
+        ...(primeHarnessStore() ? { harness: primeHarnessStore()! } : {}),
+      })
+    : undefined;
+
   const runtime = new PrimeRuntime({
     journal: options.journal,
-    registry: options.tools,
+    registry: surface?.registry ?? options.tools,
     approvalPolicy: options.approvalPolicy,
   });
   /*
@@ -429,6 +453,8 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
       signal: options.signal,
 
     });
+
+    if (surface) attachPrimeKernelTool(surface.registry, session.kernelHost);
 
     const result = await session.prompt(options.content, options.images);
     if (result.outcome !== "completed") {

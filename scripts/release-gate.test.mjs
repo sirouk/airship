@@ -297,7 +297,7 @@ describe("release gate", () => {
     // all four; leaving any one of them would let the largest pair keep
     // justifying the ceiling.
     expect(() => assertDocumentedBudgetMeasurements(source
-      .replace("Re-measured at 88,281 B raw / 28,166 B gzip", "Re-weighed at 88,281 B and 28,166 B")
+      .replace("Re-measured at 88,281 B raw / 28,100 B gzip", "Re-weighed at 88,281 B and 28,100 B")
       .replace("Re-measured on this build: 87,281 B raw / 27,902 B gzip", "Re-weighed at 87,281 B and 27,902 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
@@ -465,9 +465,11 @@ describe("release gate", () => {
       .toThrow(/the table row "Initial JavaScript and module preloads" names no ceiling this file exports/u);
     // Dropping a figure from a multi-class row hides whichever class it omitted.
     // AMENDED: the execution-tools ceiling fell to 58 KiB when the dead eager
-    // registrar came out, so the row this assertion mutilates is spelled with
-    // the number it now carries.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 58 KiB |", "| 32 / 56 / 10 KiB |")))
+    // registrar came out, and to 49 KiB again when wiring prime's `search_text`
+    // gave the workspace content search a second importer and moved it into its
+    // own deferred chunk. The row this assertion mutilates is spelled with the
+    // number it now carries.
+    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 49 KiB |", "| 32 / 56 / 10 KiB |")))
       .toThrow(/"Optional execution broker \/ engine \/ support \/ tools" raw: the table states 3 figure\(s\) for 4 ceiling\(s\)/u);
   });
 

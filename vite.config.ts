@@ -178,6 +178,41 @@ export default defineConfig({
            * stays one deferred chunk fetched by whichever surface asks first.
            */
           if (id.includes("/src/ui/chat/highlight")) return "code-highlight";
+          /*
+           * Named first, and load-bearing: the content codec's only remaining
+           * importer is the content search, so folding the search into the
+           * pack below took the codec in with it and the gate lost the
+           * `content-codec` artifact it requires exactly one of. Naming the
+           * codec keeps it the separate chunk its own budget is written
+           * against.
+           */
+          if (id.includes("/src/workspace/content-codec")) return "content-codec";
+          /*
+           * Wiring prime's tool vocabulary gave the tool registry, its schema
+           * compiler and the workspace content search a second importer: the
+           * lazy prime runtime chunk, alongside the eager path they already
+           * served. Rollup answered by hoisting each into its own chunk named
+           * `registry`, `schema` and `content-search` — three generic names,
+           * reachable only from a lazy pack, that the release gate's classifier
+           * could attribute to no owner at all and therefore refused. Naming
+           * them as one pack restores what they were before prime split them:
+           * a single chunk the entry preloads, owned by
+           * `core-entry-and-preloads` like every other shared eager module.
+           */
+          if (
+            id.includes("/src/tools/registry")
+            || id.includes("/src/tools/schema")
+          ) return "tool-registry-pack";
+          /*
+           * Named, but on its own: the registry and its schema compiler are
+           * already on the eager path, so folding them into one preloaded pack
+           * costs first paint nothing. The content search is not — it serves
+           * the workspace surfaces and now prime's `search_text`, both lazy —
+           * and pulling it into that pack put 4.45 KiB gzip onto first paint
+           * and broke the baseline budget. It keeps its own deferred chunk and
+           * only needs a name the classifier can attribute.
+           */
+          if (id.includes("/src/workspace/content-search")) return "content-search";
           return id.includes("/src/inference/bridge/")
             ? "inference-bridge-pack"
             : undefined;

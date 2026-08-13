@@ -7263,6 +7263,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         transport: turnTransport,
         tools: turnRuntime.tools,
         journal: turnRuntime.journal,
+        /* The Profile-scoped port, and the only one tools may see. The prime
+           lane composes its own vocabulary over it; airship-core ignores it,
+           because its registry already closed over the same workspace. */
+        workspace: turnRuntime.workspace,
         /* The turn's own conversation's delegate — not the visible one's.
            This is the binding that lets two threads run under two different
            approval modes without either deciding for the other. */

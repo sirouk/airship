@@ -1,0 +1,113 @@
+import { describe, expect, it } from "vitest";
+import { ToolRegistry } from "../../tools/registry";
+import type { Tool } from "../../core/contracts";
+import { FakeWorkspacePort } from "../tools/test-utils";
+import { createPrimeToolSurface, primeToolDefinitions } from "./tool-surface";
+
+/**
+ * "Full prime" means prime's agent surface plus Airship's, and the collision
+ * is the whole difficulty: both vocabularies name `read_file`, `list_files`,
+ * `search_text`, `write_file`, `edit_file` and `execute_code`, and
+ * `ToolRegistry.register` throws on a duplicate. Somebody has to lose, and on
+ * a prime session it has to be Airship — the ported system prompt teaches
+ * prime's call shapes by name, so a model calling `read_file` with prime's
+ * arguments against Airship's schema fails every time.
+ */
+function airshipRegistry(names: readonly string[]): ToolRegistry {
+  const registry = new ToolRegistry();
+  for (const name of names) registry.register(stubTool(name));
+  return registry;
+}
+
+function stubTool(name: string): Tool {
+  return {
+    definition: {
+      name,
+      description: `airship ${name}`,
+      effect: "read",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    async execute() {
+      return { content: `airship ${name}` };
+    },
+  };
+}
+
+describe("the prime tool surface", () => {
+  it("lets prime's vocabulary win the names both engines claim", () => {
+    const surface = createPrimeToolSurface({
+      workspace: new FakeWorkspacePort({}),
+      airship: airshipRegistry(["read_file", "list_files", "search_text", "git_inspect"]),
+    });
+
+    expect([...surface.displaced].sort()).toEqual(["list_files", "read_file", "search_text"]);
+    // The winning tools are prime's, not Airship's stubs.
+    for (const name of ["read_file", "list_files", "search_text"]) {
+      expect(surface.registry.get(name)?.definition.description).not.toContain("airship");
+    }
+  });
+
+  it("keeps every Airship tool prime has no answer for", () => {
+    // Prime-agent has no git, memory, task or session tools; "full prime" is
+    // additive, and a port that silently removed them would be a downgrade
+    // wearing an upgrade's name.
+    const surface = createPrimeToolSurface({
+      workspace: new FakeWorkspacePort({}),
+      airship: airshipRegistry(["read_file", "git_inspect", "recall_memory", "list_tasks", "search_sessions"]),
+    });
+
+    const names = surface.registry.definitions().map((definition) => definition.name);
+    for (const kept of ["git_inspect", "recall_memory", "list_tasks", "search_sessions"]) {
+      expect(names, `${kept} must survive the merge`).toContain(kept);
+    }
+    expect(surface.displaced).toEqual(["read_file"]);
+  });
+
+  it("carries the providers across, which are registry state and not tools", () => {
+    // Drop these and the turn-context contract and the live-environment
+    // snapshot go with them — neither has a prime equivalent to replace it.
+    const airship = airshipRegistry([]);
+    const turnContext = { async provide() { return undefined; } } as never;
+    const liveEnvironment = { async snapshot() { return undefined; } } as never;
+    airship.attachTurnContextProvider(turnContext);
+    airship.attachLiveEnvironmentProvider(liveEnvironment);
+
+    const surface = createPrimeToolSurface({ workspace: new FakeWorkspacePort({}), airship });
+
+    expect(surface.registry.getTurnContextProvider()).toBe(turnContext);
+    expect(surface.registry.getLiveEnvironmentProvider()).toBe(liveEnvironment);
+  });
+
+  it("names what it withheld rather than shipping a phantom capability", () => {
+    // No harness store, no agent registry, no heartbeat store on this input —
+    // so those tools are absent and say why. The rule the live-environment
+    // layer keeps: an advertised name a session cannot execute is worse than
+    // a named absence.
+    const surface = createPrimeToolSurface({
+      workspace: new FakeWorkspacePort({}),
+      airship: airshipRegistry([]),
+    });
+
+    const omitted = surface.omitted.map((entry) => entry.name);
+    expect(omitted).toContain("rlm_spawn");
+    expect(omitted).toContain("prime_harness");
+    for (const entry of surface.omitted) expect(entry.reason).not.toBe("");
+    expect(surface.registry.get("rlm_spawn")).toBeUndefined();
+  });
+
+  it("pins execute_code in the manifest definitions without booting a kernel", async () => {
+    // `toolManifestDigest` is taken before a session — and therefore before a
+    // kernel host — exists, so the definition has to come from a probe host
+    // that is constructed and never started. If this ever boots a worker, it
+    // will boot one per session creation.
+    const definitions = primeToolDefinitions({
+      workspace: new FakeWorkspacePort({}),
+      airship: airshipRegistry(["git_inspect"]),
+    });
+
+    const names = definitions.map((definition) => definition.name);
+    expect(names).toContain("execute_code");
+    expect(names).toContain("read_file");
+    expect(names).toContain("git_inspect");
+  });
+});

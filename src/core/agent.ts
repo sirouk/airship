@@ -1,6 +1,7 @@
 import type { ConversationReceipt } from "../receipts/types";
 import { createLocalReceipt, finalizeProviderReceipt } from "../receipts/types";
 import type { ToolRegistry } from "../tools/registry";
+import type { WorkspacePort } from "../workspace/contracts";
 import type {
   ApprovalPolicy,
   CanonicalMessage,
@@ -84,6 +85,17 @@ export type RunTurnOptions = {
    * caller out entirely.
    */
   retry?: InferenceRetryPolicy;
+  /**
+   * The Profile-scoped workspace port, for the prime lane only.
+   *
+   * `tools` is a registry that has already closed over a workspace, so
+   * airship-core never needs this and ignores it. Prime does: its tool
+   * vocabulary is built over `WorkspacePort` directly, and the surface can
+   * only be composed where the port is in scope. Absent, a prime turn runs on
+   * whatever registry it was handed — which is the engine-only shape the port
+   * shipped in first.
+   */
+  workspace?: WorkspacePort;
   onSignal?: (signal: AgentSignal) => void;
 };
 
