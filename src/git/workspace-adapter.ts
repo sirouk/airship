@@ -1,6 +1,5 @@
 import { deepFreeze } from "../core/freeze";
 import * as git from "isomorphic-git";
-import http from "isomorphic-git/http/web";
 import { Buffer as BrowserBuffer } from "buffer";
 import { sha256, stableStringify } from "../core/hash";
 import { AIRSHIP_WORKSPACE_ROOT, TERMINAL_SHELL_ROOT } from "../workspace/addressing";
@@ -79,6 +78,7 @@ import {
   validateTagName,
 } from "./validation";
 import { WorkspaceGitFileSystem } from "./workspace-fs";
+import { createReviewedGitHttp } from "./reviewed-http";
 
 /**
  * Content for the disposable repository created with the browser Git runtime.
@@ -117,9 +117,8 @@ const MAX_LOG_MESSAGE_CHARS = 4_096;
 const AIRSHIP_IDENTITY: GitAuthor = Object.freeze({ name: "Airship", email: "airship@local.invalid" });
 /**
  * Hosts an operator is most likely to type into a remote URL. They are named in
- * the capability text only while the shipped policy actually refuses them, so a
- * deployment that adds one to `connect-src` cannot leave a stale "refused"
- * claim behind. This list is a phrasing aid, never a decision input:
+ * capability text only while the Git egress policy refuses them. This list is
+ * a phrasing aid, never a decision input:
  * `assertRemoteOriginPermitted` refuses every origin outside the allowlist
  * whether or not it appears here.
  */
@@ -223,6 +222,12 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   private registryRevision?: string;
   private repositories: RepositoryRecord[] = [];
   private readonly issuedVersions = new Map<string, IssuedVersion>();
+  /**
+   * A failed registry write followed by a failed .git/config rollback leaves
+   * neither authority trustworthy. Block that repository until an external
+   * repair makes the affected remote agree with the current registry again.
+   */
+  private readonly quarantinedRemotes = new Map<string, string>();
 
   private constructor(
     private readonly workspace: WorkspacePort,
@@ -594,10 +599,21 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const remoteUrl = validateRemoteUrl(request.remoteUrl);
     assertRemoteOriginPermitted(remoteUrl, "clone");
     const remoteName = validateGitIdentifier(request.remoteName ?? "origin", "Remote name");
+    const reviewedHttp = createReviewedGitHttp({
+      remoteUrl,
+      // isomorphic-git writes this prospective registry authority to config
+      // before its first clone request. Re-read it at the actual HTTP boundary.
+      reviewAuthority: () => this.reviewRemoteAuthority(
+        { fs: this.fs.client, dir: root, gitdir: `${root}/.git` },
+        remoteName,
+        remoteUrl,
+        "clone",
+      ),
+    });
     try {
       await git.clone({
         fs: this.fs.client,
-        http,
+        http: reviewedHttp,
         dir: root,
         url: remoteUrl,
         remote: remoteName,
@@ -629,9 +645,9 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     await this.expectRepositoryVersion(repository, request.expectedRepositoryVersion, context.signal);
     const remote = repository.remotes.find((candidate) => candidate.name === request.remote);
     if (!remote) throw new GitNotFoundError(`Remote ${request.remote}`);
-    assertRemoteOriginPermitted(remote.url, "fetch");
+    const reviewedHttp = await this.reviewedRemoteHttp(repository, remote.name, remote.url, "fetch");
     try {
-      await git.fetch({ fs: this.fs.client, http, dir: repository.root, remote: remote.name, prune: request.prune === true, singleBranch: false });
+      await git.fetch({ fs: this.fs.client, http: reviewedHttp, dir: repository.root, remote: remote.name, prune: request.prune === true, singleBranch: false });
     } catch (error) {
       throw directHttpError("fetch", remote.url, error);
     }
@@ -648,14 +664,14 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const branch = validateBranchName(request.branch);
     const remote = repository.remotes.find((candidate) => candidate.name === remoteName);
     if (!remote) throw new GitNotFoundError(`Remote ${remoteName}`);
-    assertRemoteOriginPermitted(remote.url, "push");
     await git.resolveRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: `refs/heads/${branch}` });
+    const reviewedHttp = await this.reviewedRemoteHttp(repository, remote.name, remote.url, "push");
 
     let pushResult: Awaited<ReturnType<typeof git.push>>;
     try {
       pushResult = await git.push({
         fs: target.fs,
-        http,
+        http: reviewedHttp,
         dir: target.dir,
         gitdir: target.gitdir,
         remote: remoteName,
@@ -982,7 +998,12 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     } catch (error) {
       // .git/config is not the published truth; the registry is. Put the config
       // back so the two cannot disagree about which remotes exist.
-      await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true }).catch(() => undefined);
+      try {
+        await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true });
+      } catch (rollbackError) {
+        this.quarantinedRemotes.set(repository.id, name);
+        throw remoteConfigRollbackFailure(repository.id, name, error, rollbackError);
+      }
       throw error;
     }
     return this.result(updated, [], context.signal);
@@ -1012,11 +1033,76 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     try {
       await this.replaceRepositoryRecord(updated, reviewedRegistryRevision);
     } catch (error) {
-      if (existing) await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true }).catch(() => undefined);
-      else await git.deleteRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name }).catch(() => undefined);
+      try {
+        if (existing) {
+          await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true });
+        } else {
+          await git.deleteRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name });
+        }
+      } catch (rollbackError) {
+        this.quarantinedRemotes.set(repository.id, name);
+        throw remoteConfigRollbackFailure(repository.id, name, error, rollbackError);
+      }
       throw error;
     }
     return this.result(updated, [], context.signal);
+  }
+
+  private async reviewedRemoteHttp(
+    repository: RepositoryRecord,
+    remoteName: string,
+    registryUrl: string,
+    operation: "fetch" | "push",
+  ): Promise<git.HttpClient> {
+    const canonicalRegistryUrl = validateRemoteUrl(registryUrl);
+    assertRemoteOriginPermitted(canonicalRegistryUrl, operation);
+    const target = { fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository) };
+    // Fail before handing control to isomorphic-git. The transport repeats the
+    // same review at every actual fetch boundary to close config/read races.
+    await this.reviewRemoteAuthority(target, remoteName, canonicalRegistryUrl, operation, repository.id);
+    return createReviewedGitHttp({
+      remoteUrl: canonicalRegistryUrl,
+      reviewAuthority: () => this.reviewRemoteAuthority(
+        target,
+        remoteName,
+        canonicalRegistryUrl,
+        operation,
+        repository.id,
+      ),
+    });
+  }
+
+  private async reviewRemoteAuthority(
+    target: Readonly<{ fs: git.PromiseFsClient; dir: string; gitdir: string }>,
+    remoteName: string,
+    registryUrl: string,
+    operation: "clone" | "fetch" | "push",
+    repositoryId?: string,
+  ): Promise<void> {
+    const configured = await git.getConfig({
+      fs: target.fs,
+      dir: target.dir,
+      gitdir: target.gitdir,
+      path: `remote.${remoteName}.url`,
+    });
+    if (typeof configured !== "string") {
+      if (repositoryId) this.quarantinedRemotes.set(repositoryId, remoteName);
+      throw remoteAuthorityDiverged(remoteName, "its .git/config URL is missing or is not a single string");
+    }
+    let actualUrl: string;
+    try { actualUrl = validateRemoteUrl(configured); }
+    catch (error) {
+      if (repositoryId) this.quarantinedRemotes.set(repositoryId, remoteName);
+      throw error;
+    }
+    const diverged = actualUrl !== registryUrl;
+    if (diverged && repositoryId) this.quarantinedRemotes.set(repositoryId, remoteName);
+    // The policy is intentionally rerun against the authority read from the
+    // conventional config, rather than trusting the registry's earlier check.
+    assertRemoteOriginPermitted(actualUrl, operation);
+    if (diverged) {
+      throw remoteAuthorityDiverged(remoteName, "its canonical .git/config URL differs from the repository registry");
+    }
   }
 
   private async isIgnoredPath(target: WorktreeTarget, path: string): Promise<boolean> {
@@ -1219,7 +1305,51 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const id = validateGitIdentifier(repositoryId, "Repository ID");
     const repository = this.repositories.find((candidate) => candidate.id === id);
     if (!repository) throw new GitNotFoundError(`Repository ${id}`);
+    await this.assertRepositoryReconciled(repository);
     return repository;
+  }
+
+  private async assertRepositoryReconciled(repository: RepositoryRecord): Promise<void> {
+    const quarantinedRemote = this.quarantinedRemotes.get(repository.id);
+    if (!quarantinedRemote) return;
+    const divergence = await this.remoteConfigDivergence(repository);
+    if (!divergence) {
+      this.quarantinedRemotes.delete(repository.id);
+      return;
+    }
+    throw new GitDomainError(
+      "repository-quarantined",
+      `Repository ${repository.id} is blocked because remote ${quarantinedRemote} could not be reconciled after an authority failure. Reconcile .git/config with the repository registry before using it again.`,
+    );
+  }
+
+  private async remoteConfigDivergence(repository: RepositoryRecord): Promise<string | undefined> {
+    let configured: Array<{ remote: string; url: string }>;
+    try {
+      configured = await git.listRemotes({
+        fs: this.fs.client,
+        dir: repository.root,
+        gitdir: commonGitdir(repository),
+      });
+    } catch {
+      return "configuration";
+    }
+    const registry = new Map(repository.remotes.map((remote) => [remote.name, remote.url]));
+    const seen = new Set<string>();
+    for (const candidate of configured) {
+      let name: string;
+      let url: string;
+      try {
+        name = validateGitIdentifier(candidate.remote, "Remote name");
+        url = validateRemoteUrl(candidate.url);
+      } catch {
+        return "configuration";
+      }
+      if (seen.has(name) || registry.get(name) !== url) return name;
+      seen.add(name);
+    }
+    for (const name of registry.keys()) if (!seen.has(name)) return name;
+    return undefined;
   }
 
   private async expectExactVersion(repository: RepositoryRecord, worktreeId: string, expected: string, signal: AbortSignal): Promise<void> {
@@ -1432,6 +1562,8 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       ]);
       if (!head || !index) throw new GitValidationError(`Repository ${repository.id} is missing its real .git HEAD or index.`);
       await git.resolveRef({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), ref: "HEAD" });
+      const divergentRemote = await this.remoteConfigDivergence(repository);
+      if (divergentRemote) this.quarantinedRemotes.set(repository.id, divergentRemote);
       for (const linked of repository.linkedWorktrees) {
         const target = this.target(repository, linked);
         const [dotgit, linkedHead, linkedIndex, commondir, backPointer] = await Promise.all([
@@ -1653,30 +1785,27 @@ function lines(value: string): string[] { return value ? value.replace(/\n$/u, "
 function containsNul(value?: Uint8Array): boolean { return Boolean(value?.includes(0)); }
 
 /**
- * The remote verbs are implemented against real Smart HTTP, but the page's own
- * Content-Security-Policy decides which origins the fetch may reach at all. A
- * flat `available: true` would claim a capability every call must fail on a
- * build whose connect-src names no Git host, so the boolean tracks the runtime
- * policy and the reason names the exact origins the claim covers.
+ * Remote verbs use real Smart HTTP. The dedicated Git egress policy decides
+ * which origins they may contact; capability text names that exact scope.
  */
 function remoteFeature(capability: "clone" | "fetch" | "push", permittedOrigins: readonly string[]): GitCapabilityState {
   if (!permittedOrigins.length) {
     return {
       available: false,
-      reason: `this host has no document origin, so this build's connect-src permits Git Smart HTTP to no origin at all and every ${capability} fails before a request is sent`,
+      reason: `this host has no document origin and the Git allowlist permits no origin at all, so every ${capability} fails before a request is sent`,
     };
   }
   const refused = refusedCommonOrigins(permittedOrigins);
   return {
     available: true,
-    reason: `${capability} can reach only ${permittedOrigins.join(", ")} — the origins this build's Content-Security-Policy connect-src permits Git Smart HTTP to. Every other remote${refused.length ? `, ${hostList(refused)} included,` : ""} is refused before a request is sent; a deployment widens this only by naming its own Git host in connect-src in index.html and public/_headers.`,
+    reason: `${capability} can reach only ${permittedOrigins.join(", ")} — the origins this build's Git egress policy permits for Smart HTTP. Every other remote${refused.length ? `, ${hostList(refused)} included,` : ""} is refused before a request is sent.`,
   };
 }
 
 /**
  * The commonly attempted hosts this build's own allowlist does *not* cover. The
  * capability text names them from this, never from a literal, so adding a host
- * to connect-src cannot leave the adapter asserting it is still refused.
+ * to the Git allowlist cannot leave the adapter asserting it is still refused.
  */
 function refusedCommonOrigins(permittedOrigins: readonly string[]): readonly string[] {
   return COMMONLY_ATTEMPTED_GIT_ORIGINS.filter((origin) => !permittedOrigins.includes(origin));
@@ -1716,7 +1845,7 @@ function capabilities(durable: boolean, memoryAuth: boolean): GitAdapterCapabili
       requiresCors: true,
       credentialPersistence: memoryAuth ? "memory-only" : "none",
       permittedOrigins,
-      detail: `isomorphic-git speaks Smart HTTP directly and Airship never inserts a proxy, but this build's own Content-Security-Policy decides which origins the page may reach at all: ${permittedOrigins.length ? permittedOrigins.join(", ") : "none — this host has no document origin, so every remote is blocked"}.${refusedDetail(permittedOrigins)} A permitted remote must still grant this browser origin CORS unless it shares the origin. ${memoryAuth ? "A caller-supplied credential broker is held in page memory only." : "No credential broker is installed, so authenticated remotes reject while anonymous-capable remotes can proceed."}`,
+      detail: `isomorphic-git speaks Smart HTTP directly and Airship never inserts a proxy. The separate Git egress policy permits: ${permittedOrigins.length ? permittedOrigins.join(", ") : "none — this host has no document origin and the Git allowlist is empty"}.${refusedDetail(permittedOrigins)} A permitted remote must still grant this browser origin CORS unless it shares the origin. ${memoryAuth ? "A caller-supplied credential broker is held in page memory only." : "No credential broker is installed, so authenticated remotes reject while anonymous-capable remotes can proceed."}`,
     },
     features: {
       status: { available: true }, diff: { available: true }, stage: { available: true }, commit: { available: true }, branch: { available: true },
@@ -1806,18 +1935,38 @@ function gitIdentity(author: GitAuthor, isoTime: string) {
   return { ...author, timestamp: Math.floor(date.getTime() / 1_000), timezoneOffset: date.getTimezoneOffset() };
 }
 
+function remoteAuthorityDiverged(remoteName: string, detail: string): GitDomainError {
+  return new GitDomainError(
+    "remote-config-diverged",
+    `Remote ${remoteName} is blocked because ${detail}. Reconcile .git/config with the reviewed repository registry before retrying.`,
+  );
+}
+
+function remoteConfigRollbackFailure(
+  repositoryId: string,
+  remoteName: string,
+  registryError: unknown,
+  rollbackError: unknown,
+): AggregateError & { readonly code: "repository-quarantined" } {
+  const aggregate = new AggregateError(
+    [registryError, rollbackError],
+    `Remote ${remoteName} in repository ${repositoryId} could not commit its registry change or roll .git/config back. The repository is quarantined until both authorities are reconciled.`,
+  ) as AggregateError & { readonly code: "repository-quarantined" };
+  Object.defineProperty(aggregate, "code", { value: "repository-quarantined", enumerable: true });
+  aggregate.cause = registryError;
+  return aggregate;
+}
+
 /**
- * Reached only after assertRemoteOriginPermitted has proved the page's own
- * Content-Security-Policy allows this origin, so the failure is genuinely
- * remote-side or transport-side. Same-origin remotes need no CORS grant at all,
- * and saying otherwise would misdirect the user exactly as a CSP block does.
+ * Reached only after the Git egress policy allows this origin, so the failure
+ * is remote-side or transport-side. Same-origin remotes need no CORS grant.
  */
 function directHttpError(operation: "clone" | "fetch" | "push", url: string, error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   const origin = new URL(url).origin;
   const cause = origin === pageOrigin()
     ? "That is this page's own origin, so no CORS grant was required; the remote or the network refused the request."
-    : "This build's Content-Security-Policy permits that origin, so the remote must also grant this Airship browser origin CORS for Git Smart HTTP.";
+    : "The Git egress policy permits that origin, so the remote must also grant this Airship browser origin CORS for Git Smart HTTP.";
   return new GitDomainError(
     "direct-git-http-failed",
     `Direct Git ${operation} failed for ${origin}. ${cause} No Airship proxy was used; no proxy or backend handled this request. It may also require a memory-only credential this adapter does not have. ${message}`.slice(0, 1_200),

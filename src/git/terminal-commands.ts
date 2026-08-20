@@ -591,7 +591,7 @@ async function remote(
   else await client.setRemoteUrl(request, signal);
   const reachable = client.capabilities.remote.permittedOrigins.includes(new URL(args[2]!).origin);
   return result(
-    `${verb === "add" ? "Added" : "Repointed"} remote ${name} -> ${args[2]}.${reachable ? "" : " This build's Content-Security-Policy cannot reach that origin, so fetch and push against it will fail before any request is sent."}`,
+    `${verb === "add" ? "Added" : "Repointed"} remote ${name} -> ${args[2]}.${reachable ? "" : " This build's Git remote policy does not permit that origin, so fetch and push will fail before any request is sent."}`,
     true,
   );
 }
@@ -836,7 +836,7 @@ function help(): string {
     "  git clone <https-url> [workspace-destination]",
     "  git rev-parse HEAD|--show-toplevel|--is-inside-work-tree",
     "Not implemented here: rebase, cherry-pick, revert, blame, bisect, submodules, notes.",
-    "Remote traffic is direct Smart HTTP with no proxy or Airship backend. This build's own Content-Security-Policy also decides which origins the page may reach; `git_inspect capabilities` lists them.",
+    "Remote traffic is direct Smart HTTP with no proxy or Airship backend. A separate Git remote policy decides which origins may be contacted; `git_inspect capabilities` lists them.",
   ].join("\n");
 }
 

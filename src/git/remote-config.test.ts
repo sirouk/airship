@@ -1,7 +1,10 @@
+import * as git from "isomorphic-git";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryWorkspace } from "../workspace/memory";
+import type { WorkspacePort } from "../workspace/contracts";
 import { BrowserGitClient } from "./client";
 import { WorkspaceGitAdapter } from "./workspace-adapter";
+import { WorkspaceGitFileSystem } from "./workspace-fs";
 
 const signal = new AbortController().signal;
 const repositoryId = "airship-workspace";
@@ -129,6 +132,107 @@ describe("browser Git remote management", () => {
     }
   });
 
+  it("blocks fetch when canonical .git/config authority diverges from the registry", async () => {
+    vi.stubGlobal("location", { origin: "https://git.example.test" });
+    const fetch = vi.spyOn(git, "fetch");
+    try {
+      const { client, workspace } = await seeded();
+      const initial = (await client.listRepositories(signal))[0]!;
+      await client.addRemote({
+        repositoryId,
+        name: "origin",
+        url: "https://git.example.test/first.git",
+        expectedRepositoryVersion: initial.version,
+      }, signal);
+      const fs = new WorkspaceGitFileSystem(workspace).client;
+      await git.addRemote({
+        fs,
+        dir: "/workspace",
+        remote: "origin",
+        url: "https://git.example.test/unreviewed.git",
+        force: true,
+      });
+      const repository = (await client.getRepository(repositoryId, signal))!;
+
+      await expect(client.fetch({
+        repositoryId,
+        remote: "origin",
+        expectedRepositoryVersion: repository.version,
+      }, signal)).rejects.toMatchObject({ code: "remote-config-diverged" });
+      expect(fetch).not.toHaveBeenCalled();
+      await expect(client.status({ repositoryId, worktreeId: "main" }, signal))
+        .rejects.toMatchObject({ code: "repository-quarantined" });
+
+      await git.addRemote({
+        fs,
+        dir: "/workspace",
+        remote: "origin",
+        url: "https://git.example.test/first.git",
+        force: true,
+      });
+      await expect(client.status({ repositoryId, worktreeId: "main" }, signal)).resolves.toBeDefined();
+    } finally {
+      fetch.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("surfaces registry and rollback failures together and quarantines until external reconciliation", async () => {
+    const inner = new MemoryWorkspace();
+    const workspace = registryConflictOnce(inner);
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: repositoryId,
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "README.md": "seeded\n" },
+      remoteUrl: "https://git.example.test/first.git",
+    }]));
+    const repository = (await client.listRepositories(signal))[0]!;
+    const originalAddRemote = git.addRemote;
+    let addCalls = 0;
+    const addRemote = vi.spyOn(git, "addRemote").mockImplementation(async (options) => {
+      addCalls += 1;
+      if (addCalls === 2) throw new Error("rollback config write failed");
+      return originalAddRemote(options);
+    });
+
+    let failure: unknown;
+    try {
+      await client.setRemoteUrl({
+        repositoryId,
+        name: "origin",
+        url: "https://git.example.test/second.git",
+        expectedRepositoryVersion: repository.version,
+      }, signal);
+    } catch (error) {
+      failure = error;
+    } finally {
+      addRemote.mockRestore();
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({ code: "repository-quarantined" });
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    await expect(client.status({ repositoryId, worktreeId: "main" }, signal))
+      .rejects.toMatchObject({ code: "repository-quarantined" });
+
+    // Quarantine is derived from the two durable authorities, so reopening the
+    // adapter cannot bypass it.
+    const reopened = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
+    await expect(reopened.status({ repositoryId, worktreeId: "main" }, signal))
+      .rejects.toMatchObject({ code: "repository-quarantined" });
+
+    const fs = new WorkspaceGitFileSystem(workspace).client;
+    await git.addRemote({
+      fs,
+      dir: "/workspace",
+      remote: "origin",
+      url: "https://git.example.test/first.git",
+      force: true,
+    });
+    await expect(reopened.status({ repositoryId, worktreeId: "main" }, signal)).resolves.toBeDefined();
+  });
+
   it("names the refused public hosts from the allowlist rather than from a literal", async () => {
     // A deployment that serves Airship from a Git host has that host permitted.
     // A hard-coded "github.com is refused" sentence would then be a false claim
@@ -151,3 +255,25 @@ describe("browser Git remote management", () => {
     }
   });
 });
+
+function registryConflictOnce(inner: MemoryWorkspace): WorkspacePort {
+  let pending = true;
+  return {
+    read: (path) => inner.read(path),
+    readBounded: (path, maxBytes) => inner.readBounded(path, maxBytes),
+    list: (path) => inner.list(path),
+    async write(path, content, options) {
+      if (
+        pending
+        && path.endsWith("/.airship/browser-git-repositories.v1.json")
+        && typeof options?.expectedRevision === "string"
+      ) {
+        pending = false;
+        const current = await inner.read(path);
+        if (current) await inner.write(path, current.content, { expectedRevision: current.revision });
+      }
+      return inner.write(path, content, options);
+    },
+    remove: (path, options) => inner.remove(path, options),
+  };
+}

@@ -414,7 +414,7 @@ describe("WorkspaceGitAdapter", () => {
     expect(committed.worktree!.status).toEqual([]);
   }, 120_000);
 
-  it("blames its own Content-Security-Policy for an unreachable Git host instead of the remote, and never sends the request", async () => {
+  it("enforces its own Git remote policy for an unapproved host instead of the remote, and never sends the request", async () => {
     const workspace = new MemoryWorkspace();
     // A page origin is what makes clone reachable at all, so the refusal under
     // test is the policy's verdict on the *target* host, not the absence of a
@@ -424,7 +424,7 @@ describe("WorkspaceGitAdapter", () => {
     try {
       const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
       expect(client.capabilities.remote.permittedOrigins).not.toContain("https://github.com");
-      expect(client.capabilities.remote.detail).toContain("Content-Security-Policy");
+      expect(client.capabilities.remote.detail).toContain("Git egress policy");
       expect(client.capabilities.features.clone.available).toBe(true);
       await expect(client.clone({
         repositoryId: "blocked",
@@ -443,7 +443,7 @@ describe("WorkspaceGitAdapter", () => {
     const workspace = new MemoryWorkspace();
     const clone = vi.spyOn(git, "clone");
     try {
-      // No document origin: connect-src can reach nothing, so the three remote
+      // No document origin and an empty Git allowlist permit nothing, so the three remote
       // verbs must not claim availability the runtime never grants.
       const blocked = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
       expect(blocked.capabilities.remote.permittedOrigins).toEqual([]);
@@ -465,7 +465,7 @@ describe("WorkspaceGitAdapter", () => {
         expect(reachable.capabilities.features[feature]).toMatchObject({ available: true });
         // The claim is scoped, and the record says exactly how far it reaches.
         expect(reachable.capabilities.features[feature].reason).toContain("https://airship.example.test");
-        expect(reachable.capabilities.features[feature].reason).toContain("connect-src");
+        expect(reachable.capabilities.features[feature].reason).toContain("Git egress policy");
       }
     } finally {
       clone.mockRestore();
