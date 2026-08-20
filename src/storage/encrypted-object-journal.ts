@@ -66,6 +66,10 @@ type SessionDeletionMarker = {
   sessionId: string;
   headSequence: number;
   headDigest: string;
+  /** Unique authority for one deleted incarnation of a reusable session ID. */
+  deletionId: string;
+  /** True only after every segment received a confirmed reclamation receipt. */
+  cleanupComplete: boolean;
   segmentKeys: string[];
 };
 
@@ -116,8 +120,34 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     }
     const cloudKey = await this.headCloudKey(session.id);
     const bytes = await this.sealHead({ version: 1, session: structuredClone(session), segments: [] });
-    const result = await this.store.putIfAbsent(cloudKey, bytes);
-    if (!result.created) throw new Error(`Session already exists: ${session.id}`);
+    const initial = await this.store.putIfAbsent(cloudKey, bytes);
+    if (initial.created) return;
+
+    /*
+     * Migration and restore preserve exact durable IDs. A completed deletion
+     * therefore acts as a reusable, authenticated empty slot rather than making
+     * the ID unavailable forever. Pending cleanup is finished first so replacing
+     * its only retry record cannot strand old ciphertext. Both the retirement
+     * and this restoration are CAS operations on the marker ETag: a delayed
+     * cleanup from the prior incarnation can never act on the replacement head.
+     */
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const record = await this.store.get(cloudKey);
+      if (!record) {
+        const retried = await this.store.putIfAbsent(cloudKey, bytes);
+        if (retried.created) return;
+        continue;
+      }
+      const opened = await this.openHeadRecord(record, session.id);
+      if (opened.status === "active") throw new Error(`Session already exists: ${session.id}`);
+      if (!opened.marker.cleanupComplete) {
+        await this.finishDeletion(record, opened.marker);
+        continue;
+      }
+      const restored = await this.store.compareAndSwap(cloudKey, record.etag, bytes);
+      if (restored.updated) return;
+    }
+    throw new JournalConflictError(`Session ${session.id} changed while its deleted ID was being restored.`);
   }
 
   async getSession(sessionId: string, signal?: AbortSignal): Promise<SessionRecord | undefined> {
@@ -299,12 +329,14 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
    * newer head after the read and the stale trash then destroys that committed
    * append. The tombstone CAS is the deletion's linearization point. If append
    * won, it conflicts. If deletion won, every writer holding the old ETag
-   * conflicts and new readers treat the marker as absent. Only then is an
-   * unconditional provider `trash` safe.
+   * conflicts and new readers treat the marker as absent.
    *
    * The marker keeps the segment keys so a retry can finish cleanup if the page
-   * closes after the CAS. A store with no reclamation capability is refused
-   * before the marker is written.
+   * closes after the CAS. After the segment sweep it is CAS-retired to a compact
+   * authenticated empty-slot authority. The reusable head key is never passed
+   * to unconditional provider `trash`, because a delayed call could otherwise
+   * remove a restored session with the same ID. A store with no reclamation
+   * capability is refused before the marker is written.
    */
   async deleteSession(
     sessionId: string,
@@ -317,7 +349,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       throw new Error("This Vault cannot delete objects, so the conversation was not removed.");
     }
     if (loaded.status === "deleted") {
-      await this.finishDeletion(loaded.record.key, loaded.marker.segmentKeys);
+      await this.finishDeletion(loaded.record, loaded.marker);
       return;
     }
 
@@ -330,6 +362,8 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       sessionId,
       headSequence: session.headSequence,
       headDigest: session.headDigest,
+      deletionId: randomUuid(),
+      cleanupComplete: false,
       segmentKeys: segments.map((segment) => segment.cloudKey),
     };
     const markerBytes = await this.sealDeletionMarker(marker);
@@ -340,10 +374,11 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     if (!swapped.updated) {
       throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
     }
-    await this.finishDeletion(loaded.record.key, marker.segmentKeys);
+    await this.finishDeletion({ ...loaded.record, etag: swapped.etag, bytes: markerBytes }, marker);
   }
 
-  private async finishDeletion(headKey: string, segmentKeys: readonly string[]): Promise<void> {
+  private async finishDeletion(record: ObjectRecord, marker: SessionDeletionMarker): Promise<void> {
+    if (marker.cleanupComplete) return;
     if (!isReclaimableObjectStore(this.store)) {
       throw new EncryptedJournalCleanupNeededError(
         "The conversation deletion committed, but this Vault cannot finish its cleanup.",
@@ -356,8 +391,8 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
      * have removed an arbitrary prefix, so a retry deliberately submits the
      * whole authenticated key list again; reclamation is idempotent.
      */
-    for (let offset = 0; offset < segmentKeys.length; offset += MAX_SEGMENT_TRASH_BATCH) {
-      const batch = segmentKeys.slice(offset, offset + MAX_SEGMENT_TRASH_BATCH);
+    for (let offset = 0; offset < marker.segmentKeys.length; offset += MAX_SEGMENT_TRASH_BATCH) {
+      const batch = marker.segmentKeys.slice(offset, offset + MAX_SEGMENT_TRASH_BATCH);
       let receipt: ObjectReclamationReceipt;
       try {
         receipt = await this.store.trash(batch);
@@ -374,23 +409,40 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       }
     }
 
-    // Only a completely verified segment sweep makes it safe to remove the
-    // sole durable retry record. Concurrent retries may remove it repeatedly;
-    // reclaimable stores must treat an already-absent object as reclaimed.
-    let headReceipt: ObjectReclamationReceipt;
+    /*
+     * Retire the retry record last, but never issue an unconditional trash for
+     * the reusable head key. The compact completed marker is durable authority
+     * for the empty slot. Its CAS is bound to this deletion's marker ETag and
+     * deletionId. If an exact-ID restore (or a later incarnation) already won,
+     * the stale cleanup simply loses this CAS and cannot damage the new head.
+     */
+    const completed: SessionDeletionMarker = {
+      ...marker,
+      cleanupComplete: true,
+      segmentKeys: [],
+    };
+    const completedBytes = await this.sealDeletionMarker(completed);
+    let retired = false;
     try {
-      headReceipt = await this.store.trash([headKey]);
+      retired = (await this.store.compareAndSwap(record.key, record.etag, completedBytes)).updated;
     } catch (error) {
       throw new EncryptedJournalCleanupNeededError(
         "The conversation ciphertext was reclaimed, but its deletion marker still needs cleanup; retry deletion.",
         { cause: error },
       );
     }
-    if (!hasConfirmedReclamation(headReceipt, [headKey])) {
-      throw new EncryptedJournalCleanupNeededError(
-        "The conversation ciphertext was reclaimed, but the Vault retained its deletion marker; retry deletion.",
-      );
-    }
+    if (retired) return;
+
+    // A concurrent retry can retire the same marker, and an exact-ID restore can
+    // replace it immediately afterwards. Authenticate whatever won before
+    // classifying this stale retirement attempt as harmless.
+    const current = await this.store.get(record.key);
+    if (!current) return;
+    const opened = await this.openHeadRecord(current, marker.sessionId);
+    if (opened.status === "active") return;
+    if (opened.marker.deletionId === marker.deletionId && opened.marker.cleanupComplete) return;
+    // A different marker belongs to a later incarnation. Its own delete owns
+    // its segment list; this stale cleanup has no authority over it.
   }
 
   private async reclaimUncommittedSegment(
@@ -444,7 +496,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       key: this.key,
       namespace: ROOT_NAMESPACE,
       logicalId: headLogicalId(marker.sessionId),
-      revision: `deleted:${marker.headSequence}:${marker.headDigest}`,
+      revision: deletionMarkerRevision(marker),
       contentType: DELETION_CONTENT_TYPE,
       plaintext: encodeJson(marker),
     });
@@ -476,7 +528,10 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     const marker = parseDeletionMarker(plaintext, this.prefix);
     if (expectedSessionId && marker.sessionId !== expectedSessionId) throw new Error("Encrypted session deletion ID does not match its key.");
     if (record.key !== (await this.headCloudKey(marker.sessionId))) throw new Error("Encrypted session deletion is stored under the wrong opaque key.");
-    if (envelope.revision !== `deleted:${marker.headSequence}:${marker.headDigest}`) {
+    if (
+      envelope.revision !== deletionMarkerRevision(marker) &&
+      envelope.revision !== `deleted:${marker.headSequence}:${marker.headDigest}`
+    ) {
       throw new Error("Encrypted session deletion metadata does not match its contents.");
     }
     return { status: "deleted", marker };
@@ -602,11 +657,22 @@ function parseDeletionMarker(bytes: Uint8Array, prefix: string): SessionDeletion
   if (segmentKeys.some((key) => !key.startsWith(expectedPrefix)) || new Set(segmentKeys).size !== segmentKeys.length) {
     throw new Error("Encrypted session deletion marker contains an invalid segment key.");
   }
+  const headSequence = requiredInteger(value.headSequence, "deleted session head sequence", true);
+  const headDigest = requiredString(value.headDigest, "deleted session head digest");
+  const deletionId = value.deletionId === undefined
+    ? `legacy:${headSequence}:${headDigest}`
+    : requiredString(value.deletionId, "session deletion incarnation ID");
+  const cleanupComplete = value.cleanupComplete === undefined ? false : value.cleanupComplete;
+  if (typeof cleanupComplete !== "boolean" || (cleanupComplete && segmentKeys.length !== 0)) {
+    throw new Error("Encrypted session deletion cleanup state is invalid.");
+  }
   return {
     version: 1,
     sessionId: requiredString(value.sessionId, "deleted session ID"),
-    headSequence: requiredInteger(value.headSequence, "deleted session head sequence", true),
-    headDigest: requiredString(value.headDigest, "deleted session head digest"),
+    headSequence,
+    headDigest,
+    deletionId,
+    cleanupComplete,
     segmentKeys,
   };
 }
@@ -713,6 +779,10 @@ function hasConfirmedReclamation(
     outcomes.size === expectedKeys.length &&
     expectedKeys.every((key) => reclaimed.has(key) && outcomes.get(key)?.reclaimed === true)
   );
+}
+
+function deletionMarkerRevision(marker: SessionDeletionMarker): string {
+  return `deleted:${marker.headSequence}:${marker.headDigest}:${marker.deletionId}:${marker.cleanupComplete ? "complete" : "pending"}`;
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {

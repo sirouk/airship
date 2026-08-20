@@ -211,6 +211,39 @@ class StallingNextCasObjectStore extends MemoryObjectStore {
   }
 }
 
+class ScriptedCasObjectStore extends MemoryObjectStore {
+  private casCalls = 0;
+  private failOnCall?: number;
+  private stallOnCall?: number;
+  private entered?: () => void;
+  private releaseCas?: () => void;
+  private resumeCas?: Promise<void>;
+
+  failCasAfter(calls: number): void {
+    this.failOnCall = this.casCalls + calls;
+  }
+
+  stallCasAfter(calls: number): Promise<void> {
+    this.stallOnCall = this.casCalls + calls;
+    this.resumeCas = new Promise<void>((resolve) => { this.releaseCas = resolve; });
+    return new Promise<void>((resolve) => { this.entered = resolve; });
+  }
+
+  release(): void {
+    this.releaseCas?.();
+  }
+
+  override async compareAndSwap(key: string, expectedEtag: string, bytes: Uint8Array) {
+    this.casCalls += 1;
+    if (this.casCalls === this.failOnCall) throw new Error("The marker retirement CAS was interrupted.");
+    if (this.casCalls === this.stallOnCall) {
+      this.entered?.();
+      await this.resumeCas;
+    }
+    return super.compareAndSwap(key, expectedEtag, bytes);
+  }
+}
+
 /**
  * A store that throws from `trash` the way real providers do: Google Drive
  * rejects a call naming more than its key limit outright, and both it and S3
@@ -389,7 +422,7 @@ async function manifest() {
  * the journal's own view of itself.
  */
 describe("EncryptedObjectJournalBackend deletion", () => {
-  it("removes the head and every segment from the object store", async () => {
+  it("removes every segment and retires the head to an authenticated empty slot", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const store = new MemoryObjectStore();
     const backend = new EncryptedObjectJournalBackend(store, key);
@@ -404,7 +437,7 @@ describe("EncryptedObjectJournalBackend deletion", () => {
 
     expect(await journal.getSession(session.id)).toBeUndefined();
     expect((await journal.listSessions()).map((item) => item.id)).toEqual([kept.id]);
-    // Nothing of the deleted conversation may remain addressable in the store.
+    // No title or event content from the deleted conversation remains addressable.
     const remaining = await Promise.all((await store.list("airship/v1/"))
       .map(async (summary) => new TextDecoder().decode((await store.get(summary.key))!.bytes)));
     expect(remaining.join("\n")).not.toContain("delete me");
@@ -448,10 +481,11 @@ describe("EncryptedObjectJournalBackend deletion", () => {
 
     await expect(append).rejects.toBeInstanceOf(JournalConflictError);
     expect(await seed.getSession(session.id)).toBeUndefined();
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
-  it("makes a deletion winner visible before unconditional trash so a separate writer cannot append", async () => {
+  it("makes a deletion winner visible before segment trash so a separate writer cannot append", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const store = new StallingFirstTrashObjectStore();
     const seed = new EventJournal(new EncryptedObjectJournalBackend(store, key));
@@ -474,7 +508,8 @@ describe("EncryptedObjectJournalBackend deletion", () => {
     await expect(deletion).resolves.toBeUndefined();
     expect(await seed.getSession(session.id)).toBeUndefined();
     expect(await seed.readEvents(session.id)).toEqual([]);
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
   it("conflicts a stale deletion when a separate writer wins the head CAS", async () => {
@@ -532,8 +567,9 @@ describe("EncryptedObjectJournalBackend deletion", () => {
       session.id,
       { sequence: read.headSequence, digest: read.headDigest },
     )).resolves.toBeUndefined();
-    expect(store.trashCalls.at(-1)!.every((key) => key.includes("/session-heads/"))).toBe(true);
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(store.trashCalls.at(-1)!.every((key) => key.includes("/session-segments/"))).toBe(true);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
   it("retries deterministically after a provider throws midway through a segment batch", async () => {
@@ -560,7 +596,8 @@ describe("EncryptedObjectJournalBackend deletion", () => {
       session.id,
       { sequence: read.headSequence, digest: read.headDigest },
     )).resolves.toBeUndefined();
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
   it("allows concurrent cleanup retries and a later absent retry to remain idempotent", async () => {
@@ -591,17 +628,62 @@ describe("EncryptedObjectJournalBackend deletion", () => {
       session.id,
       { sequence: read.headSequence, digest: read.headDigest },
     )).resolves.toBeUndefined();
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
-  it("keeps the marker retryable when its last, post-segment reclamation throws", async () => {
+  it("does not let a delayed cleanup retry trash a restored session with the same ID", async () => {
     const { key } = await WorkspaceRootKey.generate();
-    const store = new ThrowingTrashObjectStore();
+    const store = new ScriptedCasObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const createdAt = "2026-08-20T00:00:00.000Z";
+    const sessionManifest = await manifest();
+    const record = (title: string) => ({
+      id: "restored-session",
+      title,
+      manifest: sessionManifest,
+      createdAt,
+      updatedAt: createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    await backend.createSession(record("original"));
+
+    // The deletion marker commits, but its final marker-last retirement fails.
+    // This leaves an authenticated pending retry record, matching the audit
+    // probe without depending on wall-clock timing or provider behavior.
+    store.failCasAfter(2);
+    await expect(backend.deleteSession(
+      "restored-session",
+      { sequence: 0, digest: "genesis" },
+    )).rejects.toBeInstanceOf(EncryptedJournalCleanupNeededError);
+
+    // Stall an old retry immediately before its incarnation-bound CAS. Restore
+    // the exact durable ID through another backend, then let the stale CAS run.
+    const staleRetirementEntered = store.stallCasAfter(1);
+    const staleRetry = backend.deleteSession(
+      "restored-session",
+      { sequence: 0, digest: "genesis" },
+    );
+    await staleRetirementEntered;
+    const restoringBackend = new EncryptedObjectJournalBackend(store, key);
+    await restoringBackend.createSession(record("replacement"));
+    expect((await restoringBackend.getSession("restored-session"))?.title).toBe("replacement");
+
+    store.release();
+    await expect(staleRetry).resolves.toBeUndefined();
+    expect((await restoringBackend.getSession("restored-session"))?.title).toBe("replacement");
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
+  });
+
+  it("keeps the marker retryable when its last, post-segment retirement CAS throws", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new ScriptedCasObjectStore();
     const journal = new EventJournal(new EncryptedObjectJournalBackend(store, key));
     const session = await journal.createSession("Marker retry", await manifest());
     await journal.append(session.id, [{ type: "message.user", payload: { content: "delete me" } }]);
     const read = (await journal.getSession(session.id))!;
-    store.throwAfterCalls = 1;
+    store.failCasAfter(2);
 
     await expect(journal.deleteSession(
       session.id,
@@ -610,12 +692,12 @@ describe("EncryptedObjectJournalBackend deletion", () => {
     expect(await store.list("airship/v1/session-segments/")).toEqual([]);
     expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
 
-    store.throwAfterCalls = Number.MAX_SAFE_INTEGER;
     await expect(journal.deleteSession(
       session.id,
       { sequence: read.headSequence, digest: read.headDigest },
     )).resolves.toBeUndefined();
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   });
 
   it("sweeps a long conversation's segments in batches no provider will reject outright", async () => {
@@ -636,10 +718,11 @@ describe("EncryptedObjectJournalBackend deletion", () => {
     await journal.deleteSession(session.id, { sequence: record.headSequence, digest: record.headDigest });
 
     // Every segment is confirmed in provider-safe batches before the marker is
-    // reclaimed last — and nothing survives.
-    expect(store.trashBatchSizes).toEqual([500, 1, 1]);
+    // retired last to the compact authenticated empty-slot authority.
+    expect(store.trashBatchSizes).toEqual([500, 1]);
     expect(await journal.getSession(session.id)).toBeUndefined();
-    expect(await store.list("airship/v1/")).toEqual([]);
+    expect(await store.list("airship/v1/session-segments/")).toEqual([]);
+    expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
   }, 60_000);
 
   it("says so rather than reporting a deletion a store cannot perform", async () => {
