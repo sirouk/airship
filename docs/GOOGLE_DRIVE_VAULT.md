@@ -47,7 +47,7 @@ backend exchange, or simulated silent refresh. When the short-lived token is
 near expiry, storage fails with `GoogleDriveAuthorizationRequiredError`; a new
 click/tap must obtain another token. Disconnect drops the token immediately.
 
-Google account authorization does **not** derive or recover the Airship E2EE
+Google account authorization does **not** derive or recover the Airship client-encryption
 root key. Google owns ciphertext, not decryption authority. A user must retain
 the one-time recovery material for another browser/device.
 

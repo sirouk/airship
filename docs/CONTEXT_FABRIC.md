@@ -278,7 +278,7 @@ No dependency is adopted solely because its benchmark is impressive. Airship rec
 ## Privacy boundary
 
 The private default uses opaque, encrypted page objects in the selected Vault.
-Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because
+Managed vector APIs, including S3 Vectors, are optional non-client-encrypted adapters because
 the service must see embeddings and filter metadata to search them.
 
 Encryption does not hide every access pattern. Google Drive or S3 can observe

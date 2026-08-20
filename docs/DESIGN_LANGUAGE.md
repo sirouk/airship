@@ -10,7 +10,7 @@ Use:
 - ink, blued steel, oxidized brass, and restrained copper accents;
 - fine engraved rules, deliberate borders, shallow material layers, and occasional knurled-control cues;
 - a high-contrast editorial serif only for brief display moments, paired with a humanist system sans and a compact mono for evidence/data;
-- small line icons and receipt seals whose shape communicates proof state without color;
+- small line icons and seals whose shape communicates trust state without relying on color;
 - generous breathing room around dense, operational information.
 
 Avoid:
@@ -20,7 +20,7 @@ Avoid:
 - decorative motion, heavy shadows, ornate chrome, or bitmap texture downloads;
 - copying the supplied mockup theme or layout verbatim.
 
-The name Airship can remain a memorable product mark. Product copy stays direct: Session, Workspace, Sources, Worktree, Proof, Funding, Device—not Bridge, Engine Room, Captain, or other role-play vocabulary.
+The name Airship can remain a memorable product mark. Product copy stays direct: Session, Workspace, Sources, Worktree, Providers, Vault, Device—not Bridge, Engine Room, Captain, or other role-play vocabulary.
 
 ## Performance is visual quality
 
@@ -33,11 +33,11 @@ The name Airship can remain a memorable product mark. Product copy stays direct:
 
 ## Responsive parity
 
-Desktop exposes three resizable regions: navigation/source tree, active work surface, and contextual inspector. Mobile presents the same information as top-level Chat, Workspace, Sources, and Proof views with bottom navigation and drill-in sheets. Nothing essential is desktop-only: staging, diffs, approvals, receipts, profile switching, source filters, session recovery, and funding all remain available.
+Desktop exposes three resizable regions: navigation/source tree, active work surface, and contextual inspector. Mobile presents the same information as top-level Chat, Workspace, Sources, and trust views with bottom navigation and drill-in sheets. Nothing essential is desktop-only: staging, diffs, approvals, profile switching, source filters, and session recovery all remain available.
 
-## Proof icon grammar
+## Trust-state icon grammar
 
-Proof icons are compact seals, not status decoration:
+Trust-state icons are compact seals, not status decoration:
 
 - outlined circle: not checked;
 - interrupted circle: checking or stale;

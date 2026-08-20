@@ -58,7 +58,7 @@ Render the library and make activation an explicit host action:
     // context lives in the seed event and is materialized for the provider.
     setMessages([]);
   }}
-  onOpenProof={(id) => openProofFor(id)}
+  onOpenSessionDetails={(id) => openSessionDetailsFor(id)}
 />
 ```
 
@@ -81,7 +81,7 @@ The source journal is not copied, summarized, or rewritten — that is what the 
 
 The seed is bounded, so a long ancestor is normally truncated rather than refused: at most `MAX_FORK_CONTEXT_MESSAGES` (256) messages and `MAX_FORK_CONTEXT_BYTES` (768 KiB) of canonical payload, dropped as whole turns from the oldest end so the seed is never a half-turn. When the single newest turn alone still does not fit, its images are stripped to keep the words. When even the stripped turn does not fit, `prepareForkContext` throws a `RangeError` and the fork is refused: the bound is never met by cutting inside a turn, so one pathological turn is the case truncation cannot serve. Whatever was left out is counted in the omission fields so the surface can say so. The seed is admitted into provider history only after its `contextDigest` is verified and its sealed scope matches the fork's own session ID and lineage; a seed that is tampered with, duplicated, or moved off the second event position is ignored entirely.
 
-## Posture and proof language
+## Posture language
 
 New session creation should pin the transport posture:
 

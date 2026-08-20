@@ -56,7 +56,7 @@ temporary session token. Exposed response headers include `ETag`,
 `Content-Range`, `Content-Length`, `Last-Modified`, provider request IDs, and
 version IDs when available.
 
-Airship's public default CSP allowlists only Chutes and the current Shelbynet
+Airship's public default CSP allowlists only the reviewed provider and storage origins
 API. An exact bucket or gateway origin must be added to both `index.html` and
 `public/_headers` in a provider-specific build/deployment. The two policies
 must remain byte-for-byte aligned because browsers intersect multiple CSPs.

@@ -177,10 +177,10 @@ throw new Error(`JavaScript artifact classification failed:\n- ${failures.join("
 ```
 
 **Status: LIVE, and currently respected.** `src/ui/access-view.tsx:52` imports
-`ChutesEmbeddingModel` from `../indexing/chutes-embedding-catalog` — but as
+`LegacyRemoteEmbeddingModel` from the retired remote-embedding catalog — but as
 `import type`, which is erased at compile time and emits no chunk. That is the
 correct shape and the one this constraint permits. The original entry named
-`CHUTES_EMBEDDING_MODEL`, a value export; **no symbol by that name exists in `src/`
+`LEGACY_REMOTE_EMBEDDING_MODEL`, a value export; **no symbol by that name exists in `src/`
 at `03af2c5`**, so the specific import it warned against cannot currently be
 written. The constraint generalises unchanged to any runtime import across that
 boundary.
@@ -297,7 +297,7 @@ when the model most needs to know the read was partial.
 | its call site | — | `src/core/agent.ts:588` |
 | tool message built from `content` alone | `agent.ts:936-938` | `src/core/agent.ts:1226` |
 
-`src/core/agent.ts:1226` is the proof of the second half:
+`src/core/agent.ts:1226` is the evidence of the second half:
 
 ```
 messages.push({ role: "tool", toolCallId: payload.callId, content: payload.content });

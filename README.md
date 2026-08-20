@@ -1,319 +1,148 @@
 # Airship
 
-Airship is a local-first, browser-native agent runtime for private, stateful
-work on capability-compatible browsers and devices. The browser owns the turn loop, encrypted state,
-workspace, permissions, receipts, and tool orchestration. It is a static PWA:
-there is no Airship application backend. Inference, storage, identity,
-payments, and optional heavy tools are direct service adapters behind narrow
-interfaces.
+**One static PWA. Any device. Any model. Your keys.**
 
-This repository is the first executable milestone. It is intentionally honest
-about the browser boundary:
+Airship is an open-source agent workbench that runs in your browser. There is
+no Airship backend. You can host the built files on any static host or CDN,
+open them on a laptop, phone, or tablet, and connect the app directly to the
+model and storage providers you choose.
 
-- a browser can provide a fast agent loop, a virtual workspace, encrypted
-  persistence, streaming inference, and installable PWA UX;
-- a browser cannot provide arbitrary host shell/filesystem access, reliable
-  background execution after the OS suspends it, or a hardware TEE for its own
-  plaintext;
-- encrypted Chutes transport is not called attested confidential inference
-  until the client verifies a signed instance key and approved enclave
-  measurement.
+Airship keeps the browser boundary honest:
 
-The canonical one-document project overview is [CANON.md](docs/CANON.md). The
-detailed product contract is in [PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md). Start
-technical work with [ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[THREAT_MODEL.md](docs/THREAT_MODEL.md) before changing a trust boundary.
-The turn-level proof format is specified in
-[ATTESTATION_RECEIPTS.md](docs/ATTESTATION_RECEIPTS.md).
-The segmented retrieval design is in
-[CONTEXT_FABRIC.md](docs/CONTEXT_FABRIC.md), and the Walrus/WalruS3 decision is
-in [WALRUS_STORAGE.md](docs/WALRUS_STORAGE.md).
-The provider-account boundary and exact meaning of balance, burst, quota, and
-usage telemetry are in [ACCOUNT_TELEMETRY.md](docs/ACCOUNT_TELEMETRY.md).
-The explicit browser-to-paired-executor design is in
-[COMPUTE_CONTINUUM.md](docs/COMPUTE_CONTINUUM.md); workspace recovery wrappers,
-passkey PRF, device enrollment, and the safe boundary for any future Bitwarden
-adapter are in
-[KEY_CUSTODY_AND_DEVICE_ENROLLMENT.md](docs/KEY_CUSTODY_AND_DEVICE_ENROLLMENT.md).
+- prompts go straight from your browser to the provider you connected;
+- durable state is encrypted in the browser before it leaves the page;
+- provider credentials stay in page memory;
+- local models stay on the current machine;
+- the browser does not pretend to have host-root access, background daemons, or
+  hardware isolation for its own plaintext.
 
-## Current milestone
+## What Airship is for
 
-- installable responsive web shell;
-- framework-independent TypeScript agent runtime;
-- append-only sessions with a byte-stable prompt/tool snapshot;
-- a bounded browser-native session library with search, filter, sort, exact-pin
-  resume, forks that seal an immutable lineage commitment and inherit a
-  bounded, digest-sealed copy of the ancestor context, and full digest/protocol
-  auditing before resume;
-- capability-gated workspace tools;
-- a fail-closed approval dock with a bounded concurrent queue, recursively
-  redacted arguments, timeout/abort denial, and session/turn/operation identity;
-- an ephemeral page-memory workspace plus a real encrypted offline device Vault
-  (OPFS first, IndexedDB fallback), client-encrypted Google Drive, and
-  S3-compatible workspace/journal modes; Google Drive is the
-  ordinary-user default, while the loopback MinIO lab is an explicit advanced
-  provider selection; deterministic Drive boundary acceptance is green, while
-  real-account production acceptance remains a release gate;
-- client-side encrypted object envelopes and a storage-provider seam;
-- independently authenticated encrypted segments with exact range reads;
-- a cloud-authoritative encrypted journal backend that commits immutable event
-  segments before atomically advancing one encrypted session head;
-- a dependency-free browser S3 adapter with SigV4, temporary-token enforcement,
-  namespace confinement, exact ranges, conditional create/CAS, bounded retries,
-  and a destructive-in-the-small live conformance harness;
-- a dependency-free Cognito Identity enhanced-flow credential provider for
-  OIDC-authenticated, per-user AWS session credentials with no custom broker;
-- an S3 Context Fabric prototype that routes locally, streams only selected
-  expert pages, and emits byte-level retrieval commitments;
-- an immutable Walrus browser transport with constrained upload grants and
-  multi-aggregator range-read failover;
-- Chutes E2EE v1 compatibility transport using an opaque Rust/WASM response
-  context;
-- mutually exclusive, in-memory-only Chutes connection paths for already-issued
-  `cak_` OAuth user tokens and `cpk_` inference keys, with their identity,
-  billing, and invocation capabilities kept visibly distinct;
-- direct provider model discovery, optional live management enrichment, and
-  active model selection that creates a new profile revision and pinned session
-  rather than rewriting prior history;
-- simultaneous, page-lifetime inference connections for Chutes, OpenAI,
-  Anthropic, xAI, Ollama, and LM Studio; every conversation pins the provider
-  revision, exact credential generation, model, authentication kind, and
-  transport boundary, while the agent receives only a bounded,
-  credential-free live availability directory; session-library return links
-  carry the immutable pin to Connection, where only an exact held route may
-  reopen it after profile, audit, and head verification; a replacement fails
-  closed without creating another conversation;
-- fixed-origin browser transports for OpenAI Responses, Anthropic Messages,
-  and xAI Responses plus exact-loopback Ollama and LM Studio discovery and
-  streaming; cloud API keys are an explicit advanced compatibility path and
-  are never presented as consumer-account OAuth;
-- Authorization Code + S256 PKCE Chutes sign-in with direct exchange for public
-  browser/native clients; the loopback lab can instead use its same-origin,
-  development-only confidential-client bridge without exposing the secret to
-  browser JavaScript;
-- explicit security posture states: local, encrypted/unattested, and
-  encrypted/attested;
-- a browser-direct Chutes evidence engine with exact receipt-instance E2E key
-  discovery, fresh nonces, strict bounded quote/GPU/certificate parsing,
-  published-measurement comparison, account-partitioned byte-bounded caches,
-  cancellation, conservative `evidence-only` records, and automatic bounded
-  reacquisition when a still-addressed endpoint observation ages; current live
-  evidence and measurement endpoints are directly browser-readable, while any
-  future CORS/scope/network failure remains visibly fail-closed;
-- a unified, lazy-loaded Proof ledger with claim-scoped status icons,
-  endpoint evidence kept separate from assertion-only conversation receipts,
-  historical freshness handling, verifier/measurement inspection, and an
-  unsigned privacy-safe status-summary export that omits raw evidence and
-  plaintext commitments;
-- inspectable receipt/attestation badges and privacy-safe, unsigned status
-  summaries on every assistant turn; a deferred pure-Rust `dcap-qvl` WASM pack
-  can perform Intel collateral, CRL, QE Identity, validity-window, signature,
-  debug, and TCB evaluation locally when the pack and collateral are available,
-  while the compact WebCrypto checker remains an honest partial fallback;
-- an independently recomputed session audit in the Proof view that distinguishes
-  local consistency, completeness, and receipt binding from unproved
-  authenticity and unavailable external attestation;
-- deterministic Rust recovery kernel plus a functional demo provider so the
-  complete agent/tool/workspace loop works without credentials;
-- a responsive original interface for sessions, proof claims, profiles,
-  context candidates, and account posture, plus a route-lazy Workspace
-  workbench with a virtualized ARIA file tree, multi-file tabs, dirty-draft
-  protection, revision-fenced editing, desktop drag/drop and context menus,
-  mobile move sheets, and a bounded Source Control rail;
-- a standards-compatible browser Git adapter over the same Workspace used by
-  Editor, Source Control, explicit `git …` lines in Terminal, and agent tools:
-  real `.git` objects, refs, `HEAD`, config, and binary index back status, diff,
-  stage/unstage, commit, branch creation, and branch switching; Vault mode
-  migrates those exact files through the encrypted Workspace adapter; public
-  GitHub snapshots become genuine local repositories, direct Smart HTTP clone
-  and fetch remain conditional on remote browser CORS, and direct Smart HTTP
-  push is available for anonymous-capable remotes or an integration-supplied,
-  page-memory-only credential broker; browser CORS/remote policy still apply,
-  ambiguous push outcomes require fetch-before-retry; conventional linked
-  worktrees use real `.git` pointers and `.git/worktrees` administration
-  records with independent `HEAD` and binary index state over shared objects
-  and refs; Terminal labels BrowserGitClient answers as Airship sidebands
-  rather than claiming jsh owns a native Git binary;
-- an automatic client context engine over the live virtual workspace with
-  coalesced refresh, cancellation, generation-pinned hybrid retrieval, and
-  exact digest/revision/chunk/query lineage; its hash embeddings are a
-  deterministic bootstrap, not a semantic model;
-- an opt-in pinned local semantic embedding pack with WebGPU/WASM backend
-  reporting and an isolated live browser gate; `npm run semantic:prepare`
-  supplies a hash-verified optional pack that subsequent static builds emit at
-  the configured public base, while builds without it keep the control visibly
-  unavailable and Bootstrap ready;
-- real disposable JavaScript Worker execution and a compact WASI Preview 1
-  command runner with args/env/stdout/stderr; an explicit install action probes
-  locked Pyodide 314.0.2 and promotes real disposable-worker Python to ready,
-  including bounded workspace snapshots and revision-checked text writeback;
-  the optional Node/WebContainer pack runs direct Node/npm project commands in
-  an isolated browser filesystem when its StackBlitz provider boot succeeds,
-  while Wasmer/WASIX remains explicitly unavailable in this release;
-- a first-class client-side egress ladder: every Agent Profile uses the shipped
-  Node/WebContainer core `http`/`https` relay first by default, with browser-direct
-  fallback and a Profile-level browser-only opt-out; exact response bytes
-  return through a digest-verified 8 MiB scratch channel used in full by default,
-  not an external proxy or Airship backend, and every result names the route that
-  actually answered;
-- a fail-closed compute-continuum foundation that chooses browser-first
-  placement, blocks every remote promotion until a private evidence/channel/
-  approval broker exists, and structurally validates bounded, binary-safe,
-  digest-linked remote process records without claiming peer authorship; no
-  remote executor is registered or advertised yet;
-- immutable profile revisions, semantic whole-interface themes, globally or
-  per-profile resolved skills whose exact revisions remain visible on the
-  conversation, Profile-local workspace/session/terminal/index authorities,
-  and a lazy 2D-canvas relationship graph derived from real page-memory lineage;
-- proactive browser capability observation shared by the agent and UI, including
-  WebGPU, WebNN, WebAssembly, OPFS, extension-companion state, executable runtime
-  activation paths, and honest current/peak in-page execution-load readings on
-  desktop and mobile;
-- a direct Chutes Account view for effective balance, actual charged usage,
-  subscription-cycle and fixed four-hour runway, quota records, and live
-  invocation telemetry, with `cak_` and `cpk_` capabilities kept distinct.
-- a mounted Vault coordinator and setup workbench that validates direct S3,
-  encrypted-journal, encrypted-workspace, and CAS contracts, then replaces the
-  active runtime only after migration succeeds; fresh pages reopen and verify
-  the repository registry and conventional `.git` state, while stale
-  Ephemeral writers remain fenced.
+- **Chat in parallel.** Multiple conversations can stream at once. Global UI
+  actions stay responsive while one session is busy.
+- **Switch models lightly.** Each conversation records the exact provider and
+  model that produced every turn. Changing a session's model is an in-place
+  override for the next turn, not a hidden fork.
+- **Use any provider.** One **Providers** surface covers OpenAI, Anthropic,
+  xAI, Chutes, custom OpenAI-compatible endpoints, and local Ollama or
+  LM Studio.
+- **Let the agent work.** The runtime combines chat, workspace tools,
+  approvals, memory/context retrieval, and recursive PRIME subagents.
+- **Code and research in one place.** Airship includes a workspace editor,
+  browser Git, a terminal, execution packs, and session traces you can inspect.
+- **Choose your own storage rung.** Start in ephemeral page memory. Move up to
+  encrypted Local Device storage, Google Drive, S3-compatible storage, or
+  Walrus only when you want durability.
 
-Walrus Quilts, universal remote-interoperable browser Git, production-hosted and
-persisted semantic generations, multi-device key ceremony/recovery, native shells, complete
-NVIDIA verification, and enclave-signed conversation receipts are
-adapters or later milestones, not assumptions baked into the runtime. WalruS3
-is explicitly experimental until it can satisfy Airship's auth, range,
-metadata-recovery, and conditional-write contracts.
+## Storage ladder
+
+1. **Ephemeral** — page memory only.
+2. **Local Device** — encrypted OPFS/IndexedDB on this device.
+3. **Google Drive** — client-encrypted app-scoped storage.
+4. **S3-compatible Vault** — direct browser SigV4 to your bucket.
+5. **Walrus** — immutable encrypted blobs.
+
+Every durable rung stores ciphertext, not plaintext. You own the workspace keys.
+
+## Quickstart
+
+Requires Node.js 22 or newer.
+
+```bash
+npm ci
+npm run dev
+# open http://127.0.0.1:4173
+```
+
+Then open **Providers** and connect one of these:
+
+| Provider | Transport | Default endpoint |
+| --- | --- | --- |
+| OpenAI | direct browser API | `https://api.openai.com/v1` |
+| Anthropic | direct browser API | `https://api.anthropic.com` |
+| xAI | direct browser API | `https://api.x.ai/v1` |
+| Chutes | OpenAI-compatible | `https://llm.chutes.ai/v1` |
+| Ollama | loopback local | `http://127.0.0.1:11434` |
+| LM Studio | loopback local | `http://127.0.0.1:1234` |
+| Custom | OpenAI-compatible | your base URL |
+
+For cloud providers, paste an API key. For local providers, connect the
+loopback server. Airship keeps inference credentials in page memory and does
+not write them to storage, URLs, or logs.
+
+## Honest browser boundary
+
+A browser can host a fast agent loop, a real virtual workspace, encrypted state,
+streaming inference, and sandboxed execution packs.
+
+A browser cannot safely claim:
+
+- arbitrary host shell or filesystem access;
+- reliable work after the OS suspends the tab;
+- secrecy from your own OS, browser, extensions, or DevTools; or
+- stronger remote-provider guarantees than the client can independently verify.
+
+Airship therefore uses only two inference boundary labels:
+
+- **`provider-tls`** — a remote provider received the turn over TLS;
+- **`loopback-local`** — the turn stayed on the current machine.
+
+See [THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full trust model.
+
+## Architecture guide
+
+Start here:
+
+- [CANON.md](docs/CANON.md) — current product definition and scope
+- [PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) — user jobs and required behavior
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — runtime layering and data flow
+- [THREAT_MODEL.md](docs/THREAT_MODEL.md) — assets, boundaries, and claim rules
+- [INFERENCE_PROVIDER_REGISTRY.md](docs/INFERENCE_PROVIDER_REGISTRY.md) —
+  provider connection and session rules
+- [PROTOCOLS.md](docs/PROTOCOLS.md) — stable event and storage shapes
+- [PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) — release gates and
+  external launch work
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — serving the static build
+- [LOCAL_FULL_SYSTEM_LAB.md](docs/LOCAL_FULL_SYSTEM_LAB.md) — reproducible local lab
+- [EXTENSION_BRIDGE.md](docs/EXTENSION_BRIDGE.md) — optional companion extension
+- [PRIME.md](docs/PRIME.md) — the default recursive engine
+- [SIMPLIFICATION.md](docs/SIMPLIFICATION.md) — what the provider-neutral
+  simplification removed, and why
+
+Historical Chutes-era and pre-simplification documents live in
+[docs/archive/](docs/archive/).
 
 ## Develop
 
-Requires Node.js 22 or newer. Rebuilding the cryptographic WASM module also
-requires stable Rust and `wasm-pack`.
-
 ```bash
-npm install
-npx playwright install chromium
+npm ci
+npx playwright install chromium   # once, for browser gates
 npm run dev
+npm run test
 npm run check
 npm run build
+npm run preview
 ```
 
-`npm run check` ends with two browser geometry specs, so it needs a Chromium —
-the same install `.github/workflows/ci.yml` performs before it runs the gate.
-Skip that line and the check fails at the last stage on a machine that has
-everything else it needs.
-
-`npm run check` intentionally leaves the long browser matrices separate. Before
-accepting a browser release candidate, also run the full and specialized command
-set in [Browser product acceptance](docs/RELEASE_GATE.md#browser-product-acceptance).
-
-For a reproducible browser + disposable S3 environment, use:
+Useful optional flows:
 
 ```bash
 npm run lab:start
 npm run lab:status
-# Open http://localhost:4173
 npm run lab:test
-# If a readiness or test step fails:
-npm run lab:logs
-# When finished; permanently removes the disposable lab bucket volume:
 npm run lab:stop
 ```
 
-See [Local full-system lab](docs/LOCAL_FULL_SYSTEM_LAB.md) for the exact Vault
-fields, feature walkthrough, trust boundaries, and teardown behavior.
-
-The destructive-in-the-small loopback S3 harness is opt-in and skipped by the
-ordinary test suite. Supply its six `AIRSHIP_LOCAL_S3_*` variables from the
-calling environment, then run `npm run test:vault:live`; see
-[Strict browser vault composition](docs/VAULT_COMPOSITION.md#opt-in-live-loopback-harness).
-
-Every production build ends at the fail-closed release gate.
-It rejects source maps and credential-shaped payloads, enforces raw and gzip
-budgets, validates the static-service boundary, and writes an explicitly
-unsigned SHA-256 inventory to `dist/release-manifest.json`. See
-[RELEASE_GATE.md](docs/RELEASE_GATE.md) for the exact contract and limits.
-
-Airship does not persist inference credentials. Chutes tokens and API keys for
-other cloud providers stay in browser memory for the active page lifetime;
-Ollama and LM Studio use exact loopback service connections without a remote
-account.
-
-The checked-in local OAuth registration uses `http://localhost:4173` with the
-exact callback `http://localhost:4173/auth/chutes/callback`; the Vite loopback
-bridge performs its confidential token exchange without exposing the secret to
-browser JavaScript. A static production build never reuses that registration.
-It enables sign-in only when the build supplies both:
-
-- `VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID`, registered at Chutes as
-  Browser/native PKCE with token-endpoint authentication `none`; and
-- `VITE_AIRSHIP_PUBLIC_ORIGIN`, an exact HTTPS origin. The registered callback
-  is `<origin><base-path>auth/chutes/callback`; the repository Pages workflow
-  builds with `/airship/` as its base path.
-
-If either value is missing or malformed, the production sign-in control fails
-closed while the deliberate page-memory API-key path remains available.
-
-The optional Airship Companion is available from the first-party
-`/extension/index.html` install hub in every build. It supplies a reviewed, fixed-host
-provider relay, opt-in ciphertext-only local cache, and bounded background
-hash/vector work. `VITE_AIRSHIP_EXTENSION_INSTALL_URL` may replace that route
-with a browser-store listing after publication.
-
-The extension is transport, not provider authorization. Chutes uses its reviewed
-direct public-PKCE flow. OpenAI, Anthropic, and xAI account sign-in must remain
-unavailable until each provider supplies or approves an Airship-usable grant
-flow and Airship wires its controller; installing the extension alone does not
-create that permission. Page-memory API-key routes remain explicit compatibility
-paths. The extension contains no provider client secret and persists no token.
-
-The repository/distribution distinction and exact signed-store launch gates are
-tracked in [Production readiness](docs/PRODUCTION_READINESS.md).
-
-Ephemeral page memory is the default starting mode. Google Drive is the default
-durable Vault provider only for builds that supply a valid
-`VITE_GOOGLE_CLIENT_ID`; Local Device remains the explicit offline choice. A
-production or real local Drive run uses a
-Google OAuth Web application whose exact Airship origin is an Authorized
-JavaScript origin and whose project has the Drive API and `drive.file` consent
-configured. This is a public identifier, not a client secret. Recovery imports
-open an existing app-created hierarchy or fail closed; only a newly generated
-key may create one.
-
-## Design and trust records
-
-- [Canonical project overview](docs/CANON.md)
-- [Product specification](docs/PRODUCT_SPEC.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Protocols](docs/PROTOCOLS.md)
-- [Threat model](docs/THREAT_MODEL.md)
-- [Attestation receipts](docs/ATTESTATION_RECEIPTS.md)
-- [Context Fabric](docs/CONTEXT_FABRIC.md)
-- [Session library](docs/SESSION_LIBRARY.md)
-- [Open WebUI clean-room chat study](docs/OPENWEBUI_CLEANROOM_CHAT.md)
-- [Browser-native Git](docs/BROWSER_GIT.md)
-- [Browser-native coding execution](docs/BROWSER_EXECUTION_PACKS.md)
-- [Client-side Node egress engine](docs/CLIENT_SIDE_EGRESS.md)
-- [Chutes model discovery](docs/MODEL_DISCOVERY.md)
-- [Authoritative storage conformance](docs/STORAGE_CONFORMANCE.md)
-- [Encrypted local-device Vault](docs/LOCAL_DEVICE_VAULT.md)
-- [AWS S3 browser reference](docs/AWS_S3_REFERENCE.md)
-- [Strict browser vault composition](docs/VAULT_COMPOSITION.md)
-- [Shelby integration brief](docs/SHELBY_INTEGRATION.md)
-- [Walrus storage decision](docs/WALRUS_STORAGE.md)
-- [Access and commerce](docs/ACCESS_AND_COMMERCE.md)
-- [Chutes account telemetry](docs/ACCOUNT_TELEMETRY.md)
-- [Static release gate](docs/RELEASE_GATE.md)
-- [Local full-system lab](docs/LOCAL_FULL_SYSTEM_LAB.md)
-- [Adversarial system review](docs/ADVERSARIAL_SYSTEM_REVIEW.md)
-- [Design language](docs/DESIGN_LANGUAGE.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Lineage](docs/LINEAGE.md)
+```bash
+npm run test:e2e
+npm run test:e2e:master
+npm run test:e2e:static-host
+npm run test:e2e:portability
+npm run test:e2e:google-drive
+```
 
 ## Design lineage
 
-Airship takes behavioral inspiration from Hermes Agent (stable prompt prefixes,
-append-only turns, a narrow core, tools at the edge) and implementation ideas
-from `sirouk/claw-code` and `sirouk/claude-code-rs`. It is a clean browser-first
-design, not a source fork. See [LINEAGE.md](docs/LINEAGE.md) for the provenance
-and licensing record.
+Airship takes behavioral inspiration from Hermes Agent and implementation ideas
+from `sirouk/claw-code` and `sirouk/claude-code-rs`, but it is a clean,
+browser-first design rather than a source fork. See [LINEAGE.md](docs/LINEAGE.md).
