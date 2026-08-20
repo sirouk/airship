@@ -13,6 +13,7 @@ import { FlatClientIndex } from "./flat-index";
 import { HashEmbeddingProvider } from "./hash-embeddings";
 import { IncrementalWorkspaceIndexer } from "./incremental-indexer";
 
+const DISPOSED_ERROR = "The context engine has been disposed.";
 const DEFAULT_DIMENSIONS = 384;
 const DEFAULT_MAX_FILE_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_MAX_CHUNK_CHARACTERS = 1_200;
@@ -360,7 +361,7 @@ export class ClientContextEngine {
   }
 
   subscribe(listener: (state: ClientContextEngineState) => void): () => void {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     this.listeners.add(listener);
     listener(this.state);
     return () => this.listeners.delete(listener);
@@ -368,7 +369,7 @@ export class ClientContextEngine {
 
   /** Schedule the latest authoritative workspace entry snapshot for indexing. */
   updateWorkspace(entries: readonly WorkspaceEntry[]): Promise<ClientContextGeneration> {
-    if (this.disposed) return Promise.reject(new ClientContextUnavailableError("The context engine has been disposed."));
+    if (this.disposed) return Promise.reject(new ClientContextUnavailableError(DISPOSED_ERROR));
     let snapshot: NormalizedWorkspaceSnapshot;
     try {
       snapshot = normalizeSnapshot(entries);
@@ -416,7 +417,7 @@ export class ClientContextEngine {
   }
 
   async search(query: string, options: ClientContextSearchOptions = {}): Promise<ClientContextSearchResult> {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     const normalizedQuery = boundedQuery(query);
     const limit = boundedInteger(options.limit ?? 8, "Search result limit", 1, 50);
     if (this.state.phase !== "ready" || !this.active || this.running || this.pending) {
@@ -487,7 +488,7 @@ export class ClientContextEngine {
 
   /** Discard the rebuildable memory index before changing embedding providers. */
   resetMaterialization(): void {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     if (this.running || this.pending || this.pumping) throw new ClientContextUnavailableError("The context engine is still refreshing.");
     this.cancelSearch(new DOMException("The context materialization was reset.", "AbortError"));
     void this.active?.index.clear();
@@ -498,7 +499,7 @@ export class ClientContextEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    const error = new ClientContextUnavailableError("The context engine has been disposed.");
+    const error = new ClientContextUnavailableError(DISPOSED_ERROR);
     this.running?.controller.abort(error);
     if (this.running) rejectWaiters(this.running, error);
     if (this.pending) rejectWaiters(this.pending, error);
