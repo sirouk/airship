@@ -1849,12 +1849,7 @@
  * may never be long enough to be a delay in its own right.
  */
 .platform-scrim,
-.approval-scrim,
-.command-palette,
-.preferences-dialog,
-.approval-dock,
-.workbench-notice,
-.transcript-jump {
+.approval-scrim {
   animation: overlay-fade 120ms ease;
 }
 

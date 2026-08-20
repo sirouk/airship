@@ -415,16 +415,6 @@
   white-space: nowrap;
 }
 
-/* Keep the model control at a fixed measure so model-name changes do not
-   reflow the rest of the session bar. */
-.session-bar .session-runtime {
-  min-height: 28px;
-  border: 1px solid var(--line-control);
-  border-radius: var(--radius-chip);
-  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
-  color: var(--ink-muted);
-}
-
 /* A chip that stands in front of four claims says four. The affordance states
    its own cost, so nothing is quietly folded away. */
 
@@ -1641,7 +1631,6 @@ button.runtime-posture {
 }
 
 .composer {
-  position: relative;
   /* The footer sheds labels based on the composer's own width, not the viewport. */
   container-type: inline-size;
   max-width: 780px;
@@ -1805,8 +1794,7 @@ button.runtime-posture {
 /* `.composer` is the *outer* element — `.composer-wrap > .composer >
    .composer-input-row > textarea` — so a descendant step for it here made all
    four selectors permanently unmatchable and the fade never rendered. */
-.composer-input-row[data-scrolled="top"] textarea,
-.composer-input-row[data-scrolled="both"] textarea {
+.composer-input-row[data-scrolled="top"] textarea {
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
 }
 
