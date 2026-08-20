@@ -35,9 +35,17 @@ function renderedText(value: ComponentChildren | VNode | unknown): string {
   return renderedText((value as VNode).props.children);
 }
 
+function renderedNodes(value: ComponentChildren | VNode | unknown): VNode[] {
+  if (Array.isArray(value)) return value.flatMap(renderedNodes);
+  if (!value || typeof value !== "object" || !("props" in value)) return [];
+  const node = value as VNode;
+  return [node, ...renderedNodes(node.props.children)];
+}
+
 describe("RunDetails receipt disclosure", () => {
   it("keeps every recorded identity, timestamp and available digest in one stable model", () => {
-    expect(receiptTraceFields(RECEIPT).map(({ label, value }) => [label, value])).toEqual([
+    const fields = receiptTraceFields(RECEIPT);
+    expect(fields.map(({ label, value }) => [label, value])).toEqual([
       ["Origin", "Local run record"],
       ["Provider", "provider-route"],
       ["Model", "models/one"],
@@ -53,10 +61,24 @@ describe("RunDetails receipt disclosure", () => {
       ["Timing · totalMs", "900"],
       ["Tool call 1", "read_file · call-1"],
     ]);
+    expect(fields.filter(({ kind }) => kind === "timestamp").map(({ label }) => label)).toEqual([
+      "Created", "Started", "Completed",
+    ]);
+    expect(fields.filter(({ kind }) => kind === "code").map(({ label }) => label)).toEqual([
+      "Model", "Receipt ID", "Conversation ID", "Turn ID",
+      "Request digest", "Response digest", "Tool call 1",
+    ]);
   });
 
-  it("renders the no-upgrade caveat as ordinary component text", () => {
-    const text = renderedText(ReceiptTraceDetails({ receipt: RECEIPT }));
+  it("renders timestamps, identifiers and the no-upgrade caveat as component content", () => {
+    const disclosure = ReceiptTraceDetails({ receipt: RECEIPT });
+    const text = renderedText(disclosure);
+    const nodes = renderedNodes(disclosure);
+    expect(nodes.filter(({ type }) => type === "time")
+      .map(({ props }) => (props as { dateTime?: string }).dateTime)).toEqual([
+      RECEIPT.createdAt, RECEIPT.startedAt, RECEIPT.completedAt,
+    ]);
+    expect(nodes.filter(({ type }) => type === "code")).toHaveLength(7);
     expect(text).toContain("Structural linkage only.");
     expect(text).toContain("Digests not recomputed.");
     expect(text).toContain("Authenticity not proven.");

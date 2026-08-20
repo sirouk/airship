@@ -47,13 +47,16 @@ describe("a failed route chunk is a stated fact with a way out", () => {
 
   it("writes the retry verb once", () => {
     expect(routeRetryLabel("Account")).toBe("Retry loading Account");
-    expect(routeFailure).toContain("{routeRetryLabel(title)}");
+    expect(routeFailure).toContain("{retryLabel(title)}");
+    expect(routeFailure).toContain("return retryLabel(title);");
     // The label is the component's, so no route can spell a tenth version.
     expect(app).not.toContain("Retry loading");
   });
 
-  it("keeps both arms of the shared component an alert", () => {
-    expect([...routeFailure.matchAll(/role="alert"/gu)]).toHaveLength(2);
+  it("keeps either semantic-container arm inside the same alert", () => {
+    expect(routeFailure).toContain('const Tag = inline ? "div" : "section";');
+    expect(routeFailure).toContain('<Tag class={className ?? (inline ? "panel" : "work-view panel")} role="alert">');
+    expect([...routeFailure.matchAll(/role="alert"/gu)]).toHaveLength(1);
   });
 
   /**

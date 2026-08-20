@@ -36,74 +36,85 @@ export type PresenceMessage = Readonly<{ type: "hello" | "present" | "bye"; id: 
  * this replaces was a state machine with no transition out of `true`, which is
  * exactly the thing worth asserting directly.
  */
-export class TabPresenceRoster {
-  readonly #peers = new Map<string, number>();
-
-  constructor(private readonly selfId: string) {}
-
+function createPresenceRoster(selfId: string) {
+  const peers = new Map<string, number>();
   /** Peers seen recently enough to still be believed. */
+  const count = (now: number) =>
+    [...peers.values()].filter((seen) => now - seen < PRESENCE_EXPIRY_MS).length;
+
+  /** Fold a message in and return the reply this tab owes the sender, if any. */
+  const receive = (message: PresenceMessage, now: number): PresenceMessage | undefined => {
+    if (!message || message.id === selfId) return undefined;
+    if (message.type === "bye") {
+      peers.delete(message.id);
+      return undefined;
+    }
+    if (message.type !== "hello" && message.type !== "present") return undefined;
+    peers.set(message.id, now);
+    return message.type === "hello" ? { type: "present", id: selfId } : undefined;
+  };
+
+  /** Drop expired peers and report whether the caller should re-probe. */
+  const sweep = (now: number): boolean => {
+    let dropped = false;
+    for (const [id, seen] of peers) {
+      if (now - seen >= PRESENCE_EXPIRY_MS) {
+        peers.delete(id);
+        dropped = true;
+      }
+    }
+    return dropped;
+  };
+
+  return [count, receive, sweep] as const;
+}
+
+/** Public test adapter over the same closure the production note uses. */
+export class TabPresenceRoster {
+  readonly #roster: ReturnType<typeof createPresenceRoster>;
+
+  constructor(selfId: string) {
+    this.#roster = createPresenceRoster(selfId);
+  }
+
   count(now: number): number {
-    return [...this.#peers.values()].filter((seen) => now - seen < PRESENCE_EXPIRY_MS).length;
+    return this.#roster[0](now);
   }
 
   occupied(now: number): boolean {
     return this.count(now) > 0;
   }
 
-  /**
-   * Fold a message in. Returns the reply this tab owes the sender, if any:
-   * a `hello` is an arrival asking who else is here, so it is answered; a
-   * `present` is already an answer and must not be, or two tabs ping-pong.
-   */
   receive(message: PresenceMessage, now: number): PresenceMessage | undefined {
-    if (!message || message.id === this.selfId) return undefined;
-    if (message.type === "bye") {
-      this.#peers.delete(message.id);
-      return undefined;
-    }
-    if (message.type !== "hello" && message.type !== "present") return undefined;
-    this.#peers.set(message.id, now);
-    return message.type === "hello" ? { type: "present", id: this.selfId } : undefined;
+    return this.#roster[1](message, now);
   }
 
-  /**
-   * Drop the expired and report whether anyone was dropped, so the caller can
-   * re-probe: a peer that merely missed its window under background throttling
-   * answers the follow-up `hello` and is back inside one round trip.
-   */
   sweep(now: number): boolean {
-    let dropped = false;
-    for (const [id, seen] of this.#peers) {
-      if (now - seen >= PRESENCE_EXPIRY_MS) {
-        this.#peers.delete(id);
-        dropped = true;
-      }
-    }
-    return dropped;
+    return this.#roster[2](now);
   }
 }
 
 export function TabPresenceNote() {
   const [peers, setPeers] = useState(0);
-  const peer = peers > 0;
   useEffect(() => {
-    if (!("BroadcastChannel" in globalThis)) return;
-    const selfId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-    const roster = new TabPresenceRoster(selfId);
+    const page = globalThis;
+    if (!("BroadcastChannel" in page)) return;
+    const selfId = page.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const [count, receive, sweep] = createPresenceRoster(selfId);
     const channel = new BroadcastChannel(CHANNEL);
     const announce = (type: PresenceMessage["type"]) => channel.postMessage({ type, id: selfId });
 
     channel.onmessage = (event) => {
-      const reply = roster.receive(event.data as PresenceMessage, Date.now());
+      const reply = receive(event.data as PresenceMessage, Date.now());
       if (reply) channel.postMessage(reply);
-      setPeers(roster.count(Date.now()));
+      setPeers(count(Date.now()));
     };
 
     const heartbeat = setInterval(() => announce("present"), PRESENCE_HEARTBEAT_MS);
-    const sweep = setInterval(() => {
+    const sweepTimer = setInterval(() => {
       const now = Date.now();
-      if (roster.sweep(now)) announce("hello");
-      setPeers(roster.count(now));
+      if (sweep(now)) announce("hello");
+      setPeers(count(now));
     }, PRESENCE_SWEEP_MS);
 
     /*
@@ -117,15 +128,15 @@ export function TabPresenceNote() {
     const restore = (event: PageTransitionEvent) => {
       if (event.persisted) announce("hello");
     };
-    globalThis.addEventListener("pagehide", depart);
-    globalThis.addEventListener("pageshow", restore);
+    page.addEventListener("pagehide", depart);
+    page.addEventListener("pageshow", restore);
 
     announce("hello");
     return () => {
       clearInterval(heartbeat);
-      clearInterval(sweep);
-      globalThis.removeEventListener("pagehide", depart);
-      globalThis.removeEventListener("pageshow", restore);
+      clearInterval(sweepTimer);
+      page.removeEventListener("pagehide", depart);
+      page.removeEventListener("pageshow", restore);
       announce("bye");
       channel.close();
     };
@@ -141,10 +152,10 @@ export function TabPresenceNote() {
    * accessible name, and the count takes its place on screen: the eye gets a
    * legible fact at 40px, a screen reader still gets the whole claim.
    */
-  return peer ? (
+  return peers ? (
     <span class="tab-presence-note" role="status">
       <span class="tab-presence-note__sentence">Open in another tab · page-memory state is not shared</span>
-      <span class="tab-presence-note__count" aria-hidden="true">{peers + 1} tabs</span>
+      <span class="tab-presence-note__count" aria-hidden>{peers + 1} tabs</span>
     </span>
   ) : null;
 }

@@ -26,32 +26,31 @@ export async function createSessionManifest(args: {
   // Snapshot every caller-owned field once, synchronously. Validation, cloning,
   // hashing, and the returned manifest must all describe the same authority
   // even when an embedding caller supplied accessors or later mutates input.
-  const systemPrompt = args.systemPrompt;
-  const providerId = args.providerId;
-  const model = args.model;
-  const inferenceBinding = args.inferenceBinding;
-  const rawTools = args.tools;
-  const workspaceId = args.workspaceId;
-  const rawProfile = args.profile;
-  const securityPosture = args.securityPosture;
-  const rawLineage = args.lineage;
-  const rawContextPolicy = args.contextPolicy;
-  const turnContext = args.turnContext;
-  const capabilityTier = args.capabilityTier;
-  const createdAt = args.now ?? new Date().toISOString();
-
-  assertValidSessionInferenceBinding({
+  const {
+    systemPrompt,
     providerId,
     model,
-    ...(inferenceBinding !== undefined ? { inferenceBinding } : {}),
-  });
-  const binding = inferenceBinding === undefined ? undefined : structuredClone(inferenceBinding);
+    inferenceBinding,
+    tools: rawTools,
+    workspaceId,
+    profile: rawProfile,
+    securityPosture,
+    lineage: rawLineage,
+    contextPolicy: rawContextPolicy,
+    turnContext,
+    capabilityTier,
+    now,
+  } = args;
+  const createdAt = now ?? new Date().toISOString();
+
+  assertValidSessionInferenceBinding({ providerId, model, inferenceBinding });
+  // `structuredClone(undefined)` is defined to return `undefined`, which keeps
+  // optional authority absent without repeating a guard for every snapshot.
+  const binding = structuredClone(inferenceBinding);
   const tools = structuredClone(rawTools).sort((left, right) => left.name.localeCompare(right.name));
-  const profile = rawProfile === undefined ? undefined : structuredClone(rawProfile);
-  const lineage = rawLineage === undefined ? undefined : structuredClone(rawLineage);
-  const contextPolicy = rawContextPolicy === undefined
-    ? undefined
-    : canonicalSessionContextPolicy(rawContextPolicy);
+  const profile = structuredClone(rawProfile);
+  const lineage = structuredClone(rawLineage);
+  const contextPolicy = canonicalSessionContextPolicy(rawContextPolicy);
   if (rawContextPolicy !== undefined && !contextPolicy) {
     throw new TypeError("Session context policy is invalid.");
   }
@@ -61,15 +60,15 @@ export async function createSessionManifest(args: {
     systemPromptDigest: await sha256(systemPrompt),
     providerId,
     model,
-    ...(binding !== undefined ? { inferenceBinding: binding } : {}),
+    ...(binding && { inferenceBinding: binding }),
     toolManifestDigest: await sha256(stableStringify(tools as unknown as JsonValue)),
     tools,
     workspaceId,
     capabilityTier: capabilityTier ?? "web-baseline",
-    ...(securityPosture ? { securityPosture } : {}),
-    ...(profile ? { profile } : {}),
-    ...(lineage ? { lineage } : {}),
-    ...(contextPolicy ? { contextPolicy } : {}),
+    ...(securityPosture && { securityPosture }),
+    ...(profile && { profile }),
+    ...(lineage && { lineage }),
+    ...(contextPolicy && { contextPolicy }),
     turnContext: turnContext ?? "disabled",
     createdAt,
   };

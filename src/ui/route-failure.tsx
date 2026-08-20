@@ -17,9 +17,13 @@ import { useState } from "preact/hooks";
  * not load" cannot appear, and so the retry verb is written once.
  */
 
+function retryLabel(title: string): string {
+  return `Retry loading ${title}`;
+}
+
 /** The retry verb, referenced rather than retyped by every failing route. */
 export function routeRetryLabel(title: string): string {
-  return `Retry loading ${title}`;
+  return retryLabel(title);
 }
 
 /**
@@ -71,8 +75,10 @@ export function RouteFailure({
   // still the failed route — so "have we already tried" lives here rather than
   // being inferred from a prop that never changes.
   const [retried, setRetried] = useState(false);
-  const body = (
-    <>
+  const Tag = inline ? "div" : "section";
+  return (
+    <Tag class={className ?? (inline ? "panel" : "work-view panel")} role="alert">
+      {inline ? null : <h1>{title}</h1>}
       <p>{message}</p>
       <button
         class="small-button"
@@ -81,20 +87,17 @@ export function RouteFailure({
           setRetried(true);
           onRetry();
         }}
-      >{routeRetryLabel(title)}</button>
+      >{retryLabel(title)}</button>
       {retried ? (
         <>
           <p class="route-failure__escalation">{ROUTE_FAILURE_RELOAD_REASON}</p>
           <button
             class="small-button"
             type="button"
-            onClick={() => (onReload ?? (() => window.location.reload()))()}
+            onClick={() => onReload ? onReload() : window.location.reload()}
           >{ROUTE_FAILURE_RELOAD_LABEL}</button>
         </>
       ) : null}
-    </>
+    </Tag>
   );
-  return inline
-    ? <div class={className ?? "panel"} role="alert">{body}</div>
-    : <section class={className ?? "work-view panel"} role="alert"><h1>{title}</h1>{body}</section>;
 }

@@ -22,51 +22,60 @@ export function receiptOriginLabel(receipt: Readonly<ConversationReceipt>): stri
   return receipt.origin === "provider" ? "Provider metadata" : "Local run record";
 }
 
+type ReceiptTraceRow = readonly [
+  key: string,
+  label: string,
+  value: string,
+  /** 1 renders code; 2 renders a machine-readable timestamp. */
+  kind?: 1 | 2,
+];
+
+/** Compact rows keep the disclosure and its public presentation model aligned. */
+function receiptTraceRows(receipt: Readonly<ConversationReceipt>): readonly ReceiptTraceRow[] {
+  return [
+    ["origin", "Origin", receiptOriginLabel(receipt)],
+    ["provider", "Provider", receipt.provider],
+    receipt.model && ["model", "Model", receipt.model, 1],
+    ["receipt-id", "Receipt ID", receipt.receiptId, 1],
+    ["session-id", "Conversation ID", receipt.sessionId, 1],
+    ["turn-id", "Turn ID", receipt.turnId, 1],
+    ["created", "Created", receipt.createdAt, 2],
+    receipt.startedAt && ["started", "Started", receipt.startedAt, 2],
+    receipt.completedAt && ["completed", "Completed", receipt.completedAt, 2],
+    receipt.requestDigest && ["request-digest", "Request digest", receipt.requestDigest, 1],
+    receipt.responseDigest && ["response-digest", "Response digest", receipt.responseDigest, 1],
+    ["format", "Receipt format", `v${receipt.version}`],
+    ...Object.entries(receipt.timings || {}).map(([key, value]) =>
+      [`timing:${key}`, `Timing · ${key}`, `${value}`] as const),
+    ...(receipt.toolCalls || []).map((toolCall, index) => [
+      `tool:${index}:${toolCall.id}`,
+      `Tool call ${index + 1}`,
+      `${toolCall.name} · ${toolCall.id}`,
+      1,
+    ] as const),
+  ].filter(Boolean) as ReceiptTraceRow[];
+}
+
 /** A stable presentation model shared by the turn disclosure and Sessions. */
 export function receiptTraceFields(
   receipt: Readonly<ConversationReceipt>,
 ): readonly ReceiptTraceField[] {
-  const fields: ReceiptTraceField[] = [
-    { key: "origin", label: "Origin", value: receiptOriginLabel(receipt), kind: "text" },
-    { key: "provider", label: "Provider", value: receipt.provider, kind: "text" },
-    ...(receipt.model
-      ? [{ key: "model", label: "Model", value: receipt.model, kind: "code" as const }]
-      : []),
-    { key: "receipt-id", label: "Receipt ID", value: receipt.receiptId, kind: "code" },
-    { key: "session-id", label: "Conversation ID", value: receipt.sessionId, kind: "code" },
-    { key: "turn-id", label: "Turn ID", value: receipt.turnId, kind: "code" },
-    { key: "created", label: "Created", value: receipt.createdAt, kind: "timestamp" },
-    ...(receipt.startedAt
-      ? [{ key: "started", label: "Started", value: receipt.startedAt, kind: "timestamp" as const }]
-      : []),
-    ...(receipt.completedAt
-      ? [{ key: "completed", label: "Completed", value: receipt.completedAt, kind: "timestamp" as const }]
-      : []),
-    ...(receipt.requestDigest
-      ? [{ key: "request-digest", label: "Request digest", value: receipt.requestDigest, kind: "code" as const }]
-      : []),
-    ...(receipt.responseDigest
-      ? [{ key: "response-digest", label: "Response digest", value: receipt.responseDigest, kind: "code" as const }]
-      : []),
-    { key: "format", label: "Receipt format", value: `v${receipt.version}`, kind: "text" },
-    ...Object.entries(receipt.timings ?? {}).map(([key, value]) => ({
-      key: `timing:${key}`,
-      label: `Timing · ${key}`,
-      value: String(value),
-      kind: "text" as const,
-    })),
-    ...(receipt.toolCalls ?? []).map((toolCall, index) => ({
-      key: `tool:${index}:${toolCall.id}`,
-      label: `Tool call ${index + 1}`,
-      value: `${toolCall.name} · ${toolCall.id}`,
-      kind: "code" as const,
-    })),
-  ];
-  return Object.freeze(fields.map((field) => Object.freeze(field)));
+  return Object.freeze(receiptTraceRows(receipt).map(([key, label, value, kind]) =>
+    Object.freeze({
+      key,
+      label,
+      value,
+      kind: kind === 1 ? "code" : kind === 2 ? "timestamp" : "text",
+    })));
 }
 
-export function runDetailsLabel(receipt: Readonly<ConversationReceipt>): string {
+function detailsLabel(receipt: Readonly<ConversationReceipt>): string {
   return `Run details. Provider ${receipt.provider}. Run ${receipt.receiptId}. Opens recorded origin, timestamps, identifiers, available digests, and assessment limits.`;
+}
+
+/** Public label helper over the same copy used by the operable disclosure. */
+export function runDetailsLabel(receipt: Readonly<ConversationReceipt>): string {
+  return detailsLabel(receipt);
 }
 
 export function ReceiptTraceDetails({
@@ -79,24 +88,24 @@ export function ReceiptTraceDetails({
   return (
     <div class="receipt-trace">
       <dl class="receipt-trace__fields">
-        {receiptTraceFields(receipt).map((field) => (
-          <div class="receipt-trace__field" data-field={field.key} key={field.key}>
-            <dt>{field.label}</dt>
+        {receiptTraceRows(receipt).map(([key, label, value, kind]) => (
+          <div class="receipt-trace__field" data-field={key} key={key}>
+            <dt>{label}</dt>
             <dd>
-              {field.kind === "timestamp" ? (
-                <time dateTime={field.value}>{field.value}</time>
-              ) : field.kind === "code" ? (
-                <code>{field.value}</code>
-              ) : field.value}
+              {kind === 2 ? (
+                <time dateTime={value}>{value}</time>
+              ) : kind === 1 ? (
+                <code>{value}</code>
+              ) : value}
             </dd>
           </div>
         ))}
       </dl>
-      {includeAssessmentScope ? (
+      {includeAssessmentScope && (
         <p class="receipt-trace__scope">
           <strong>{RECEIPT_TRACE_SCOPE}</strong> {RECEIPT_TRACE_LIMIT}
         </p>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -107,11 +116,11 @@ export function RunDetails({ receipt }: RunDetailsProps) {
   if (!densityAllows("telemetry", density)) return null;
   return (
     <div class="run-details">
-      {receipt.model ? <span class="message-model">{receipt.model}</span> : null}
+      {receipt.model && <span class="message-model">{receipt.model}</span>}
       <Popover
         class="run-details__disclosure"
         triggerClass="receipt-chip"
-        label={runDetailsLabel(receipt)}
+        label={detailsLabel(receipt)}
         heading="Run details"
         trigger={<span>Run · {receipt.provider} · {receipt.receiptId.slice(-8)}</span>}
       >
