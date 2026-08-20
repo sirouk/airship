@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
+import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 
 describe("canonicalImageInputs", () => {
   it("accepts exact inline base64 bytes and returns an immutable clone", () => {

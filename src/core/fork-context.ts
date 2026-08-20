@@ -7,7 +7,7 @@ import type {
   ToolCall,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
-import { canonicalImageInputs } from "./multimodal";
+import { canonicalImageInputs } from "./multimodal-contract";
 
 export const FORK_CONTEXT_EVENT_TYPE = "session.fork.context.seeded";
 export const MAX_FORK_CONTEXT_MESSAGES = 256;

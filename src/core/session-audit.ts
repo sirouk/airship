@@ -10,7 +10,7 @@ import type {
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
 import type { DurableEvent, SessionRecord } from "./journal";
-import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
+import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
   canonicalContextSelection,
   contextSelectionScopeMatches,

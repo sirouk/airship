@@ -1,6 +1,6 @@
 import type { ApprovalProvenance, JsonValue, SessionManifest } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
-import { canonicalImageInputs } from "../../core/multimodal";
+import { canonicalImageInputs } from "../../core/multimodal-contract";
 import { parseCapabilityTier } from "./capability-tier";
 
 export const MESSAGE_PART_KINDS = [

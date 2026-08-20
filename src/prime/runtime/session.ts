@@ -86,7 +86,7 @@ import {
   verifyLiveEnvironmentSnapshot,
   type LiveEnvironmentSnapshot,
 } from "../../core/live-environment";
-import { canonicalImageInputs } from "../../core/multimodal";
+import { canonicalImageInputs } from "../../core/multimodal-contract";
 import { createLocalReceipt, finalizeProviderReceipt } from "../../receipts/types";
 import type { ConversationReceipt } from "../../receipts/types";
 import type { ToolRegistry } from "../../tools/registry";

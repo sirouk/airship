@@ -17,7 +17,7 @@ import { randomUuid } from "./id";
 import type { DurableEvent, EventDraft } from "./journal";
 import { effectiveSessionContextPolicy, effectiveSessionModel, EventJournal } from "./journal";
 import { approvalProvenance } from "../approvals/modes";
-import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
+import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
   canonicalContextSelection,
   canonicalTurnContextQuery,
