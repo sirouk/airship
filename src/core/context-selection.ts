@@ -6,6 +6,7 @@ const DIGEST = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const MAX_HITS = 8;
 const MAX_TEXT_BYTES = 32 * 1024;
 const MAX_QUERY_CHARACTERS = 8_192;
+const MAX_CONTEXT_SNAPSHOT_COLLECTION_SIZE = 256;
 const TURN_RETRIEVER_IDS = new Set<string>([
   "airship-federated-turn-context-v1",
   "airship-workspace-turn-context-v1",
@@ -125,8 +126,20 @@ export function canonicalTurnContextQuery(query: string): string {
 export async function sealContextSelection(
   input: Omit<CanonicalContextSelection, "selectionDigest">,
 ): Promise<CanonicalContextSelection> {
-  const selectionDigest = await sha256(stableStringify(input as unknown as JsonValue));
-  return Object.freeze({ ...structuredClone(input), selectionDigest });
+  // Snapshot before SHA-256 can yield. The digest and returned evidence both
+  // use this one detached graph, and no caller-owned property is read again.
+  const snapshot = snapshotContextValue(input);
+  if (Object.prototype.hasOwnProperty.call(snapshot, "selectionDigest")) {
+    throw new TypeError("An unsealed context selection cannot contain selectionDigest.");
+  }
+  const selectionDigest = await sha256(stableStringify(snapshot as unknown as JsonValue));
+  Object.defineProperty(snapshot, "selectionDigest", {
+    configurable: true,
+    enumerable: true,
+    value: selectionDigest,
+    writable: true,
+  });
+  return deepFreeze(snapshot as CanonicalContextSelection);
 }
 
 export function canonicalContextSelection(value: unknown): CanonicalContextSelection | undefined {
@@ -256,10 +269,23 @@ function canonicalRetrievalEvidence(value: unknown): CanonicalContextRetrievalEv
 }
 
 export async function verifyContextSelection(selection: CanonicalContextSelection): Promise<boolean> {
-  const { selectionDigest, ...commitment } = selection;
-  if (await sha256(stableStringify(commitment as unknown as JsonValue)) !== selectionDigest) return false;
-  return (await Promise.all(selection.hits.map((hit) => sha256(hit.text))))
-    .every((digestValue, index) => digestValue === selection.hits[index]?.textDigest);
+  // Snapshot before the first digest can yield. Both commitment layers use only
+  // detached data and local expected values from this one call-time graph.
+  const snapshot = snapshotContextValue(selection);
+  const { selectionDigest, ...commitment } = snapshot;
+  const selectionDigestVerification = sha256(stableStringify(commitment as unknown as JsonValue));
+  const hitDigestVerifications = snapshot.hits.map((hit) => ({
+    expected: hit.textDigest,
+    actual: sha256(hit.text),
+  }));
+  const [actualSelectionDigest, hitDigests] = await Promise.all([
+    selectionDigestVerification,
+    Promise.all(hitDigestVerifications.map(({ actual }) => actual)),
+  ]);
+
+  return actualSelectionDigest === selectionDigest && hitDigests.every((digestValue, index) =>
+    digestValue === hitDigestVerifications[index]?.expected
+  );
 }
 
 export async function verifyContextSelectionQuery(
@@ -399,6 +425,203 @@ function canonicalGeneration(value: unknown): CanonicalContextGeneration | undef
     indexFormat: value.indexFormat as string,
     persistence: value.persistence,
   });
+}
+
+/**
+ * Take one synchronous, descriptor-safe snapshot of a selection graph.
+ *
+ * The first phase captures every descriptor reachable through data properties
+ * before any getter runs. This matters because a supported getter can mutate a
+ * sibling object. The second phase invokes each supported getter exactly once
+ * from its captured descriptor and writes only plain data properties to the
+ * owned graph. Only enumerable getter-only accessors are supported. Symbols,
+ * setters, hidden properties, exotic prototypes, sparse arrays, cycles, and
+ * non-JSON values fail closed.
+ */
+function snapshotContextValue<T>(value: T): T {
+  type SnapshotNode = {
+    readonly source: object;
+    readonly target: unknown[] | Record<string, unknown>;
+    readonly descriptors: PropertyDescriptorMap;
+    readonly keys: readonly string[];
+    readonly array: boolean;
+    captureState: "capturing" | "captured";
+    materializeState: "pending" | "materializing" | "materialized";
+  };
+
+  const nodes = new WeakMap<object, SnapshotNode>();
+
+  const scalar = (candidate: unknown): candidate is null | string | number | boolean => {
+    if (candidate === null || typeof candidate === "string" || typeof candidate === "boolean") {
+      return true;
+    }
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) {
+        throw new TypeError("Context selections cannot contain non-finite numbers.");
+      }
+      return true;
+    }
+    if (candidate === undefined || typeof candidate !== "object") {
+      throw new TypeError("Context selections must contain only JSON-shaped data.");
+    }
+    return false;
+  };
+
+  const capture = (candidate: unknown): unknown => {
+    if (scalar(candidate)) return candidate;
+    const source = candidate as object;
+
+    const existing = nodes.get(source);
+    if (existing) {
+      if (existing.captureState === "capturing") {
+        throw new TypeError("Context selections cannot contain cycles.");
+      }
+      return existing.target;
+    }
+
+    let array: boolean;
+    let prototype: object | null;
+    let descriptors: PropertyDescriptorMap;
+    try {
+      array = Array.isArray(source);
+      prototype = Object.getPrototypeOf(source);
+      descriptors = Object.getOwnPropertyDescriptors(source);
+    } catch {
+      throw new TypeError("A context selection could not be inspected safely.");
+    }
+
+    if (
+      (array && prototype !== Array.prototype) ||
+      (!array && prototype !== Object.prototype && prototype !== null)
+    ) {
+      throw new TypeError("Context selections must contain only plain records and arrays.");
+    }
+
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.some((key) => typeof key === "symbol")) {
+      throw new TypeError("Context selections cannot contain symbol properties.");
+    }
+    const keys = ownKeys as string[];
+    if (keys.length > MAX_CONTEXT_SNAPSHOT_COLLECTION_SIZE + 1) {
+      throw new TypeError("A context selection contains too many properties.");
+    }
+
+    let target: unknown[] | Record<string, unknown>;
+    if (array) {
+      const lengthDescriptor = descriptors.length;
+      const length = lengthDescriptor && "value" in lengthDescriptor
+        ? lengthDescriptor.value
+        : undefined;
+      if (
+        !Number.isSafeInteger(length) ||
+        (length as number) < 0 ||
+        (length as number) > MAX_CONTEXT_SNAPSHOT_COLLECTION_SIZE ||
+        lengthDescriptor?.enumerable !== false ||
+        lengthDescriptor?.configurable !== false
+      ) {
+        throw new TypeError("A context selection contains an invalid array descriptor.");
+      }
+      const elementKeys = keys.filter((key) => key !== "length");
+      if (
+        elementKeys.length !== length ||
+        elementKeys.some((key) => !arrayIndex(key, length as number))
+      ) {
+        throw new TypeError("Context selection arrays must be dense and cannot carry extra properties.");
+      }
+      target = new Array(length as number);
+    } else {
+      target = prototype === null
+        ? Object.create(null) as Record<string, unknown>
+        : {};
+    }
+
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      const descriptor = descriptors[key];
+      if (!descriptor || !descriptor.enumerable) {
+        throw new TypeError("Context selections cannot contain hidden properties.");
+      }
+      if (!("value" in descriptor) && (typeof descriptor.get !== "function" || descriptor.set !== undefined)) {
+        throw new TypeError("Context selection accessors must be getter-only.");
+      }
+    }
+
+    const node: SnapshotNode = {
+      source,
+      target,
+      descriptors,
+      keys,
+      array,
+      captureState: "capturing",
+      materializeState: "pending",
+    };
+    nodes.set(source, node);
+
+    // Capture the complete data-property graph before invoking any accessor.
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      const descriptor = descriptors[key]!;
+      if ("value" in descriptor) capture(descriptor.value);
+    }
+    node.captureState = "captured";
+    return target;
+  };
+
+  const materialize = (candidate: unknown): unknown => {
+    if (scalar(candidate)) return candidate;
+    const source = candidate as object;
+    capture(source);
+    const node = nodes.get(source)!;
+    if (node.materializeState === "materialized") return node.target;
+    if (node.materializeState === "materializing") {
+      throw new TypeError("Context selections cannot contain cycles.");
+    }
+    node.materializeState = "materializing";
+
+    for (const key of node.keys) {
+      if (node.array && key === "length") continue;
+      const descriptor = node.descriptors[key]!;
+      const item = "value" in descriptor
+        ? descriptor.value
+        : Reflect.apply(descriptor.get!, node.source, []);
+      // A getter result is captured immediately, before the next getter can
+      // mutate it, and is never obtained from the caller a second time.
+      capture(item);
+      Object.defineProperty(node.target, key, {
+        configurable: true,
+        enumerable: true,
+        value: materialize(item),
+        writable: true,
+      });
+    }
+
+    node.materializeState = "materialized";
+    return node.target;
+  };
+
+  capture(value);
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("A context selection must be a plain record.");
+  }
+  return materialize(value) as T;
+}
+
+function arrayIndex(value: string, length: number): boolean {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) return false;
+  const index = Number(value);
+  return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === value;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  const record = value as Record<PropertyKey, unknown>;
+  const descriptors = Object.getOwnPropertyDescriptors(record);
+  // Freeze before descending so repeated references terminate here.
+  Object.freeze(record);
+  for (const descriptor of Object.values(descriptors)) {
+    if ("value" in descriptor) deepFreeze(descriptor.value);
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
