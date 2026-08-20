@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ownedArrayBuffer } from "../core/bytes";
 import { CognitoIdentityError } from "../storage/cognito-identity-credentials";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import type { ObjectReclamationReceipt, ReclaimableObjectStore } from "../storage/object-store";
 import type { S3TemporaryCredentials } from "../storage/s3-object-store";
 import { VaultCoordinator, type ResettableVaultCredentialProvider } from "./coordinator";

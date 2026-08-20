@@ -139,7 +139,7 @@ describe("unified patch parsing", () => {
    * The first version of this test hand-wrote `diff --git` headers, and the
    * parser it was proving keyed its file boundary on exactly that string —
    * which neither `renderPatch` in git/workspace-adapter.ts nor the one in
-   * git/memory-adapter.ts has ever written. Both emit `--- a/<path>` /
+   * git/memory-adapter.test-support.ts has ever written. Both emit `--- a/<path>` /
    * `+++ b/<path>` / `@@` and nothing else. So the test passed, and every
    * commit touching two or more files rendered its second header as a red
    * deleted line reading `-- a/second.ts` at a fabricated line number.

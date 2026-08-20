@@ -44,7 +44,7 @@ describe("durable same-thread model switching", () => {
 
   it("projects the latest switch across journal backends and preserves the older pin through later renames", async () => {
     const { WorkspaceRootKey } = await import("../storage/encrypted-envelope");
-    const { MemoryObjectStore } = await import("../storage/memory-object-store");
+    const { MemoryObjectStore } = await import("../storage/memory-object-store.test-support");
     const { EncryptedObjectJournalBackend } = await import("../storage/encrypted-object-journal");
     const { key } = await WorkspaceRootKey.generate();
     const backends = [

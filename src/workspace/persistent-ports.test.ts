@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { EncryptedObjectWorkspace } from "../vault/encrypted-workspace";
 import { encodeWorkspaceBytes } from "./content-codec";
 import { workspaceEntryByteLength, type WorkspacePort } from "./contracts";

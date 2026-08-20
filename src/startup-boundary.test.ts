@@ -67,7 +67,7 @@ describe("application startup module boundary", () => {
   it("keeps the fixture-only in-memory Git backend out of the startup graph", () => {
     // src/git/index.ts re-exports it, so importing the barrel anywhere in the
     // shell restores the edge even when nothing in the shell names the class.
-    expect(reachable.has("git/memory-adapter.ts")).toBe(false);
+    expect(reachable.has("git/memory-adapter.test-support.ts")).toBe(false);
     expect(reachable.has("git/index.ts")).toBe(false);
   });
 

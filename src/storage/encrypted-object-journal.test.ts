@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSessionManifest } from "../core/agent";
 import { EventJournal, JournalConflictError } from "../core/journal";
-import { MemoryObjectStore } from "./memory-object-store";
+import { MemoryObjectStore } from "./memory-object-store.test-support";
 import { WorkspaceRootKey } from "./encrypted-envelope";
 import {
   EncryptedJournalCleanupNeededError,

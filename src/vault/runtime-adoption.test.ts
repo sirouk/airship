@@ -7,7 +7,7 @@ import { createBuiltInProfileCatalog } from "../profiles/catalog";
 import { createGlobalSkillSettings } from "../profiles/domain";
 import { EncryptedProfileCatalogStore, MemoryProfileCatalogStore } from "../profiles/persistence";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import {
   adoptionCarriedNote,
   migrateJournalState,

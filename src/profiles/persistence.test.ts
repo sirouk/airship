@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { createBuiltInProfileCatalog, type ProfileCatalog } from "./catalog";
 import { createGlobalSkillSettings, createProfileRevision } from "./domain";
 import {
