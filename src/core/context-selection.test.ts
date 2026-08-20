@@ -95,17 +95,91 @@ describe("context-selection snapshots", () => {
     expect(await verifyContextSelection(selection)).toBe(true);
   });
 
+  it("captures nested data descriptors before a sealing accessor can mutate them", async () => {
+    const hit = await contextHit("good");
+    const input = selectionInput([hit]);
+    let reads = 0;
+    Object.defineProperty(input, "selectedAt", {
+      enumerable: true,
+      configurable: true,
+      get(): string {
+        reads += 1;
+        (hit as { text: string }).text = "mutated-by-getter";
+        return "2026-08-20T00:00:00.000Z";
+      },
+    });
+
+    const sealing = sealContextSelection(input);
+    expect(reads).toBe(1);
+    expect(hit.text).toBe("mutated-by-getter");
+
+    const selection = await sealing;
+    expect(selection.hits[0]?.text).toBe("good");
+    expect(await verifyContextSelection(selection)).toBe(true);
+  });
+
   it.each([
     ["undefined", (input: Record<PropertyKey, unknown>) => { input.extra = undefined; }],
     ["a non-finite number", (input: Record<PropertyKey, unknown>) => { input.extra = Number.NaN; }],
     ["a symbol property", (input: Record<PropertyKey, unknown>) => { input[Symbol("hidden")] = "value"; }],
-    ["a non-plain object", (input: Record<PropertyKey, unknown>) => { input.extra = new Date(0); }],
+    ["a custom prototype", (input: Record<PropertyKey, unknown>) => { Object.setPrototypeOf(input, { poisoned: true }); }],
+    ["a non-plain nested object", (input: Record<PropertyKey, unknown>) => { input.extra = new Date(0); }],
     ["a cycle", (input: Record<PropertyKey, unknown>) => { input.extra = input; }],
   ] as const)("rejects %s instead of hashing a non-JSON graph", async (_label, poison) => {
     const input = selectionInput() as unknown as Record<PropertyKey, unknown>;
     poison(input);
     await expect(sealContextSelection(
       input as unknown as Omit<CanonicalContextSelection, "selectionDigest">,
+    )).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it.each([
+    ["a symbol property", (selection: Record<PropertyKey, unknown>) => {
+      selection[Symbol("hidden")] = "value";
+    }],
+    ["a custom prototype", (selection: Record<PropertyKey, unknown>) => {
+      Object.setPrototypeOf(selection, { poisoned: true });
+    }],
+  ] as const)("rejects verification input with %s", async (_label, poison) => {
+    const selection = {
+      ...await sealContextSelection(selectionInput()),
+    } as Record<PropertyKey, unknown>;
+    poison(selection);
+
+    await expect(verifyContextSelection(
+      selection as unknown as CanonicalContextSelection,
+    )).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("rejects unsafe descriptors without invoking their getters", async () => {
+    const sealed = await sealContextSelection(selectionInput());
+    for (const candidate of [selectionInput(), { ...sealed }]) {
+      let reads = 0;
+      Object.defineProperty(candidate, "selectedAt", {
+        enumerable: true,
+        configurable: true,
+        get(): string {
+          reads += 1;
+          return "2026-08-20T00:00:00.000Z";
+        },
+        set(_value: string) {},
+      });
+
+      const operation = "selectionDigest" in candidate
+        ? verifyContextSelection(candidate as CanonicalContextSelection)
+        : sealContextSelection(candidate);
+      expect(reads).toBe(0);
+      await expect(operation).rejects.toBeInstanceOf(TypeError);
+      expect(reads).toBe(0);
+    }
+
+    const hidden = selectionInput() as Record<string, unknown>;
+    Object.defineProperty(hidden, "hidden", {
+      enumerable: false,
+      value: "not-in-the-digest",
+    });
+    await expect(sealContextSelection(
+      hidden as unknown as Omit<CanonicalContextSelection, "selectionDigest">,
     )).rejects.toBeInstanceOf(TypeError);
   });
 
@@ -143,6 +217,31 @@ describe("context-selection snapshots", () => {
 
     const verification = verifyContextSelection(selection as CanonicalContextSelection);
     expect(reads).toBe(1);
+
+    expect(await verification).toBe(true);
+    expect(reads).toBe(1);
+  });
+
+  it("verifies only the captured nested graph when an accessor mutates caller data", async () => {
+    const sealed = await sealContextSelection(selectionInput([await contextHit("good")]));
+    const hit = { ...sealed.hits[0]! };
+    const selection = { ...sealed, hits: [hit] };
+    let reads = 0;
+    Object.defineProperty(selection, "selectedAt", {
+      enumerable: true,
+      configurable: true,
+      get(): string {
+        reads += 1;
+        hit.text = "mutated-by-getter";
+        return sealed.selectedAt;
+      },
+    });
+
+    const verification = verifyContextSelection(selection);
+    expect(reads).toBe(1);
+    expect(hit.text).toBe("mutated-by-getter");
+    selection.hits = [];
+    selection.selectionDigest = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     expect(await verification).toBe(true);
     expect(reads).toBe(1);
