@@ -900,96 +900,9 @@ function waitForWorkerReady(
 }
 
 function opfsWorkerSource(): string {
-  return `"use strict";
-let directory; let mode = "opfs-async-worker"; let tail = Promise.resolve();
-const valid = value => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
-const partitionLock = key => "${PARTITION_LOCK_PREFIX}" + key;
-const filename = key => "p-" + key + ".bin";
-const notFound = error => error && (error.name === "NotFoundError" || error.name === "TypeMismatchError");
-self.addEventListener("message", event => {
-  const message = event.data;
-  if (message && message.type === "initialize") {
-    tail = tail.then(async () => {
-      if (!valid(message.partitionKey) || !/^[a-z0-9-]{1,64}$/.test(message.rootName)) throw new Error("invalid cache partition");
-      const root = await navigator.storage.getDirectory();
-      const base = await root.getDirectoryHandle(message.rootName, { create: true });
-      // Every live cache holds a shared Web Lock on its own partition for as
-      // long as its worker runs, taken before the directory exists. Reclaiming
-      // a sibling therefore requires taking that sibling's exclusive lock
-      // immediately: a partition any other context still holds is provably in
-      // use and is never deleted. Without the Locks API there is no such guarantee,
-      // so nothing is reclaimed rather than guessing that a sibling is stale.
-      let held = false;
-      if (typeof navigator.locks?.request === "function") {
-        await new Promise(resolve => { navigator.locks.request(partitionLock(message.partitionKey), { mode: "shared", signal: AbortSignal.timeout(${PARTITION_LOCK_TIMEOUT_MS}) }, () => { held = true; resolve(); return new Promise(() => {}); }).catch(() => resolve()); });
-      }
-      directory = await base.getDirectoryHandle(message.partitionKey, { create: true });
-      if (held && typeof base.entries === "function") {
-        try {
-          let scanned = 0;
-          for await (const [name, handle] of base.entries()) {
-            if (++scanned > ${MAX_SWEPT_PARTITIONS}) break;
-            if (name === message.partitionKey || handle.kind !== "directory" || !valid(name)) continue;
-            await navigator.locks.request(partitionLock(name), { mode: "exclusive", ifAvailable: true }, async lock => { if (lock) await base.removeEntry(name, { recursive: true }).catch(() => undefined); });
-          }
-        } catch { /* reclamation is best effort */ }
-      }
-      const probe = await directory.getFileHandle(".sync-probe", { create: true });
-      if (typeof probe.createSyncAccessHandle === "function") {
-        try { const handle = await probe.createSyncAccessHandle(); handle.close(); mode = "opfs-sync-worker"; } catch { mode = "opfs-async-worker"; }
-      }
-      await directory.removeEntry(".sync-probe").catch(() => undefined);
-      self.postMessage({ type: "ready", backend: mode });
-    }).catch(() => { throw new Error("OPFS initialization failed"); });
-    return;
-  }
-  if (!message || message.type !== "operation") return;
-  tail = tail.then(async () => {
-    if (!directory) throw new Error("invalid cache operation");
-    let result;
-    if (message.operation === "list") result = await list();
-    else if (!valid(message.storageKey)) throw new Error("invalid cache operation");
-    else if (message.operation === "read") result = await read(message.storageKey);
-    else if (message.operation === "write") await write(message.storageKey, message.bytes);
-    else if (message.operation === "remove") await directory.removeEntry(filename(message.storageKey)).catch(error => { if (!notFound(error)) throw error; });
-    else throw new Error("invalid cache operation");
-    const response = { type: "result", id: message.id, ok: true, ...(result ? { bytes: result } : {}) };
-    self.postMessage(response, result ? [result] : []);
-  }).catch(() => self.postMessage({ type: "result", id: message.id, ok: false }));
-});
-async function list() {
-  if (typeof directory.entries !== "function") throw new Error("OPFS listing unavailable");
-  const rows = [];
-  for await (const [name, handle] of directory.entries()) {
-    if (rows.length >= ${MAX_LISTED_PAGES}) break;
-    if (handle.kind !== "file" || !/^p-[A-Za-z0-9_-]{43}\\.bin$/.test(name)) continue;
-    rows.push([name.slice(2, 45), (await handle.getFile()).size]);
-  }
-  return new TextEncoder().encode(JSON.stringify(rows)).buffer;
-}
-async function read(key) {
-  let fileHandle;
-  try { fileHandle = await directory.getFileHandle(filename(key)); } catch (error) { if (notFound(error)) return undefined; throw error; }
-  if (mode === "opfs-sync-worker") {
-    const handle = await fileHandle.createSyncAccessHandle();
-    try { const size = handle.getSize(); if (size < 1 || size > ${MAX_PERSISTED_RECORD_BYTES}) throw new Error("invalid OPFS cache size"); const bytes = new Uint8Array(size); let offset = 0; while (offset < bytes.byteLength) { const read = handle.read(bytes.subarray(offset), { at: offset }); if (!read) throw new Error("short OPFS read"); offset += read; } return bytes.buffer; }
-    finally { handle.close(); }
-  }
-  const file = await fileHandle.getFile(); if (file.size < 1 || file.size > ${MAX_PERSISTED_RECORD_BYTES}) throw new Error("invalid OPFS cache size"); return file.arrayBuffer();
-}
-async function write(key, value) {
-  if (!(value instanceof ArrayBuffer)) throw new Error("invalid cache bytes");
-  if (value.byteLength < 1 || value.byteLength > ${MAX_PERSISTED_RECORD_BYTES}) throw new Error("invalid cache bytes");
-  const bytes = new Uint8Array(value); const fileHandle = await directory.getFileHandle(filename(key), { create: true });
-  if (mode === "opfs-sync-worker") {
-    const handle = await fileHandle.createSyncAccessHandle();
-    try { handle.truncate(0); let offset = 0; while (offset < bytes.byteLength) { const written = handle.write(bytes.subarray(offset), { at: offset }); if (!written) throw new Error("short OPFS write"); offset += written; } handle.flush(); }
-    finally { handle.close(); }
-    return;
-  }
-  const writable = await fileHandle.createWritable();
-  try { await writable.write(bytes); await writable.close(); } catch (error) { await writable.abort().catch(() => undefined); throw error; }
-}`;
+  // This Blob payload is opaque to the host minifier. Keep its source minified
+  // so deferred users do not download formatting and comments as runtime data.
+  return `"use strict";let directory,mode="opfs-async-worker",tail=Promise.resolve();const valid=t=>typeof t=="string"&&/^[A-Za-z0-9_-]{43}$/.test(t),partitionLock=t=>"${PARTITION_LOCK_PREFIX}"+t,filename=t=>"p-"+t+".bin",notFound=t=>t&&(t.name==="NotFoundError"||t.name==="TypeMismatchError");self.addEventListener("message",t=>{const e=t.data;if(e&&e.type==="initialize"){tail=tail.then(async()=>{if(!valid(e.partitionKey)||!/^[a-z0-9-]{1,64}$/.test(e.rootName))throw new Error("invalid cache partition");const a=await(await navigator.storage.getDirectory()).getDirectoryHandle(e.rootName,{create:!0});let n=!1;if(typeof navigator.locks?.request=="function"&&await new Promise(i=>{navigator.locks.request(partitionLock(e.partitionKey),{mode:"shared",signal:AbortSignal.timeout(${PARTITION_LOCK_TIMEOUT_MS})},()=>(n=!0,i(),new Promise(()=>{}))).catch(()=>i())}),directory=await a.getDirectoryHandle(e.partitionKey,{create:!0}),n&&typeof a.entries=="function")try{let i=0;for await(const[s,c]of a.entries()){if(++i>${MAX_SWEPT_PARTITIONS})break;s===e.partitionKey||c.kind!=="directory"||!valid(s)||await navigator.locks.request(partitionLock(s),{mode:"exclusive",ifAvailable:!0},async l=>{l&&await a.removeEntry(s,{recursive:!0}).catch(()=>{})})}}catch{}const o=await directory.getFileHandle(".sync-probe",{create:!0});if(typeof o.createSyncAccessHandle=="function")try{(await o.createSyncAccessHandle()).close(),mode="opfs-sync-worker"}catch{mode="opfs-async-worker"}await directory.removeEntry(".sync-probe").catch(()=>{}),self.postMessage({type:"ready",backend:mode})}).catch(()=>{throw new Error("OPFS initialization failed")});return}!e||e.type!=="operation"||(tail=tail.then(async()=>{if(!directory)throw new Error("invalid cache operation");let r;if(e.operation==="list")r=await list();else if(valid(e.storageKey))if(e.operation==="read")r=await read(e.storageKey);else if(e.operation==="write")await write(e.storageKey,e.bytes);else if(e.operation==="remove")await directory.removeEntry(filename(e.storageKey)).catch(n=>{if(!notFound(n))throw n});else throw new Error("invalid cache operation");else throw new Error("invalid cache operation");const a={type:"result",id:e.id,ok:!0,...r?{bytes:r}:{}};self.postMessage(a,r?[r]:[])}).catch(()=>self.postMessage({type:"result",id:e.id,ok:!1})))});async function list(){if(typeof directory.entries!="function")throw new Error("OPFS listing unavailable");const t=[];for await(const[e,r]of directory.entries()){if(t.length>=${MAX_LISTED_PAGES})break;r.kind!=="file"||!/^p-[A-Za-z0-9_-]{43}\\.bin$/.test(e)||t.push([e.slice(2,45),(await r.getFile()).size])}return new TextEncoder().encode(JSON.stringify(t)).buffer}async function read(t){let e;try{e=await directory.getFileHandle(filename(t))}catch(a){if(notFound(a))return;throw a}if(mode==="opfs-sync-worker"){const a=await e.createSyncAccessHandle();try{const n=a.getSize();if(n<1||n>${MAX_PERSISTED_RECORD_BYTES})throw new Error("invalid OPFS cache size");const o=new Uint8Array(n);let i=0;for(;i<o.byteLength;){const s=a.read(o.subarray(i),{at:i});if(!s)throw new Error("short OPFS read");i+=s}return o.buffer}finally{a.close()}}const r=await e.getFile();if(r.size<1||r.size>${MAX_PERSISTED_RECORD_BYTES})throw new Error("invalid OPFS cache size");return r.arrayBuffer()}async function write(t,e){if(!(e instanceof ArrayBuffer))throw new Error("invalid cache bytes");if(e.byteLength<1||e.byteLength>${MAX_PERSISTED_RECORD_BYTES})throw new Error("invalid cache bytes");const r=new Uint8Array(e),a=await directory.getFileHandle(filename(t),{create:!0});if(mode==="opfs-sync-worker"){const o=await a.createSyncAccessHandle();try{o.truncate(0);let i=0;for(;i<r.byteLength;){const s=o.write(r.subarray(i),{at:i});if(!s)throw new Error("short OPFS write");i+=s}o.flush()}finally{o.close()}return}const n=await a.createWritable();try{await n.write(r),await n.close()}catch(o){throw await n.abort().catch(()=>{}),o}}`;
 }
 
 function encodeRecord(header: CacheHeader, bytes: Uint8Array): Uint8Array {
