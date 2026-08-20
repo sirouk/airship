@@ -1,13 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-const [app, connections, boundary, navigation, profileDomain, runDetails] = await Promise.all([
+const [app, connections, boundary, navigation, profileDomain, runDetails, deferredRunDetails] = await Promise.all([
   readFile(new URL("./app.tsx", import.meta.url), "utf8"),
   readFile(new URL("./provider-connections-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("../inference/transport-boundary-label.ts", import.meta.url), "utf8"),
   readFile(new URL("./navigation-model.ts", import.meta.url), "utf8"),
   readFile(new URL("../profiles/domain.ts", import.meta.url), "utf8"),
   readFile(new URL("./chat/run-details.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./chat/deferred-run-details.tsx", import.meta.url), "utf8"),
 ]);
 
 describe("provider-neutral product coherence", () => {
@@ -47,7 +48,14 @@ ${profileDomain}`).toContain(field);
 
   it("presents receipts as operable local run metadata without upgraded claims", () => {
     const card = app.slice(app.indexOf("function MessageCard("), app.indexOf("function ProfileManagerView({"));
-    expect(card).toContain("message.receipt ? <RunDetails receipt={message.receipt} /> : null");
+    expect(app).toContain('import { DeferredRunDetails } from "./chat/deferred-run-details"');
+    expect(card).toContain("message.receipt ? <DeferredRunDetails receipt={message.receipt} /> : null");
+    expect(deferredRunDetails).toContain(
+      'const loadRunDetails = () => import("./run-details").then(({ RunDetails }) => RunDetails);',
+    );
+    expect(deferredRunDetails).toContain(
+      "export const DeferredRunDetails = createDeferredComponent(loadRunDetails);",
+    );
     expect(runDetails).toContain("<Popover");
     expect(runDetails).toContain('triggerClass="receipt-chip"');
     expect(runDetails).toContain("Run details. Provider");
