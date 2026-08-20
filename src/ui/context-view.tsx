@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { RETRIEVAL_FLOOR_HEADING, isContextSupersession, type ClientContextCandidate, type ClientContextEngineState, type ClientContextSearchHit, type ClientContextSearchResult } from "../indexing/client-context-engine";
@@ -886,12 +887,6 @@ function displayPath(path: string): string {
 
 function formatInteger(value: number): string {
   return new Intl.NumberFormat().format(value);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
 }
 
 function formatMilliseconds(milliseconds: number): string {

@@ -8,10 +8,9 @@ needs an explicit host capability / acceptance run.
 ## Decision summary (user-requested determination, evidence below)
 
 - The agentic core is **TypeScript modules inside airship** (`src/prime/**`),
-  not Python and not a parallel repo. Python (Pyodide) is the persistent REPL
-  **engine inside the prime kernel** (engine=javascript ships first;
-  engine=pyodide behind an install+probe gate), so the model gets the
-  prime-agent REPL contract without paying a fresh CPython boot per turn and
+  not Python and not a parallel repo. The shipped kernel uses job-scoped JavaScript.
+  Persistent Pyodide remains quarantined and unavailable because cross-cell task provenance cannot be proven, so the model gets the
+  prime-agent contract without an ambient cross-job interpreter and
   without pretending the browser's executor tiers have ambient network.
 - Airship ports stay authority-ready: `EventJournal`, `ToolRegistry`,
   `ApprovalPolicy`, `WorkspacePort`, `InferenceTransport`/fabrics,
@@ -58,7 +57,7 @@ needs an explicit host capability / acceptance run.
 | airship runtime gate default | — | `src/load-agent-runtime.ts` + `src/prime/runtime/agent-runtimes.ts` + lazy UI tag | done | prime default by journal evidence, fork-the-session refusals, honest status surface (W1/W6) |
 | packages/agent/src/agent.ts | 613 | `src/prime/agent/agent.ts` | done | Agent class + queue semantics + settlement |
 | packages/agent/src/proxy.ts | 367 | — | excluded | daemon transport (in-process single page) |
-| packages/coding-agent/src/core/kernel/* (ZMQ/CPython runtime) | 3329 | `src/prime/kernel/*` | done (kernel-contract, kernel-worker-source, kernel-host, tool-bridge) | job-scoped JavaScript, optional persistent Pyodide, and approval-bound bridge (semantics re-hosted; ZMQ dropped) |
+| packages/coding-agent/src/core/kernel/* (ZMQ/CPython runtime) | 3329 | `src/prime/kernel/*` | done (kernel-contract, kernel-worker-source, kernel-host, tool-bridge) | job-scoped JavaScript, quarantined unavailable Pyodide research, and approval-bound bridge (semantics re-hosted; ZMQ dropped) |
 | packages/coding-agent/src/core/ipython tool | 708 | `src/prime/tools/kernel-tool.ts` | done | execute_code binding to kernel; sequential executionMode preserved |
 | packages/coding-agent/src/core/tools/* (file tools) | ~2k | `src/prime/tools/*.ts` | done | prime vocabulary over WorkspacePort + CAS |
 | packages/coding-agent/src/core/refinement/* | 1018 | `src/prime/harness/*` | done | prompts verbatim; optimistic concurrency; rollback |

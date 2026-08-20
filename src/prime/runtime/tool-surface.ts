@@ -17,10 +17,9 @@ import { createPrimeExecuteCodeTool } from "../tools/kernel-tool";
  * on a prime session it is Airship: the ported system prompt teaches prime's
  * call shapes by name, and a model told to call `read_file` with prime's
  * arguments against Airship's schema fails every time. Prime's `execute_code`
- * is the bigger difference — Airship's is a disposable executor with a fresh
- * interpreter per job, prime's is the persistent kernel `DETERMINATION.md`
- * measured at roughly eight times faster across a ten-job turn, which is the
- * reason the port exists at all.
+ * is job-scoped: JavaScript runs in a fresh strict worker. The historically
+ * faster persistent-Pyodide prototype is quarantined because cross-cell task
+ * provenance cannot be proven, so no production tool can activate it.
  *
  * Everything Airship has that prime-agent does not — git, memory, tasks,
  * network, sessions, context retrieval, the execution-runtime family — is kept

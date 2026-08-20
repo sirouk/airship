@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
@@ -1178,18 +1179,7 @@ export async function readBoundedLocalDeviceBackup(
   }
 }
 
-export function formatLocalDeviceBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "Unknown";
-  if (value < 1024) return `${Math.floor(value)} B`;
-  const units = ["KiB", "MiB", "GiB"] as const;
-  let amount = value / 1024;
-  let unit: (typeof units)[number] = units[0];
-  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
-    amount /= 1024;
-    unit = units[index]!;
-  }
-  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
-}
+export const formatLocalDeviceBytes = formatBytes;
 
 function persistenceCopy(result: "granted" | "not-granted" | "unsupported"): string {
   switch (result) {

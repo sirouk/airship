@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { isReclaimableObjectStore } from "../storage/object-store";
 import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
@@ -11565,11 +11566,6 @@ function humanStatus(value: string): string {
   if (value === "thinking") return "Thinking";
   if (value === "complete") return "Finalizing run details";
   return value.replace(/^running /u, "Running ");
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  return `${(bytes / 1_024).toFixed(1)} KiB`;
 }
 
 function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {

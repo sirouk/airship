@@ -71,9 +71,8 @@ describe("one implementation per question", () => {
   it("declares formatBytes once outside the UI, on the binary vocabulary its divisor earns", async () => {
     const declarations = declaring(/^(?:export )?function formatBytes\(/mu);
     expect(declarations.filter((file) => !IN_UI(file))).toEqual(["core/bytes.ts"]);
-    // Five `formatBytes` copies remain in src/ui, plus `formatVaultBytes` and
-    // `formatLocalDeviceBytes` under other names. Never raise this number.
-    expect(declarations.filter(IN_UI).length).toBeLessThanOrEqual(5);
+    // Every UI surface imports the same binary vocabulary; no local copy remains.
+    expect(declarations.filter(IN_UI)).toEqual([]);
 
     const { formatBytes } = await import("./bytes");
     const { measuredBytesLabel } = await import("../capabilities/runtime-load");

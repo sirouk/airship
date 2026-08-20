@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import { useId, useRef, useState } from "preact/hooks";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
@@ -362,10 +363,10 @@ export function VaultView({
             <dt><VaultBackendMark backend={provider} size={16} /> Stored</dt>
             <dd>{usage.bytes !== undefined
               ? usage.quotaBytes !== undefined
-                ? `${formatVaultBytes(usage.bytes)} of ${formatVaultBytes(usage.quotaBytes)}`
-                : formatVaultBytes(usage.bytes)
+                ? `${formatBytes(usage.bytes)} of ${formatBytes(usage.quotaBytes)}`
+                : formatBytes(usage.bytes)
               : usage.quotaBytes !== undefined
-                ? `Of ${formatVaultBytes(usage.quotaBytes)}`
+                ? `Of ${formatBytes(usage.quotaBytes)}`
                 : "Not measurable"}</dd>
           </div>
           <div class="vault-usage__cell">
@@ -1041,21 +1042,8 @@ export function readinessTally(readiness: VaultReadiness): string {
 function localDeviceUsage(status: LocalDeviceVaultStatus): string {
   const { usageBytes, quotaBytes } = status.readiness;
   if (usageBytes === undefined) return "Not reported";
-  if (quotaBytes === undefined) return formatVaultBytes(usageBytes);
-  return `${formatVaultBytes(usageBytes)} of ${formatVaultBytes(quotaBytes)}`;
-}
-
-function formatVaultBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "Unknown";
-  if (value < 1024) return `${Math.floor(value)} B`;
-  const units = ["KiB", "MiB", "GiB"] as const;
-  let amount = value / 1024;
-  let unit: (typeof units)[number] = units[0];
-  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
-    amount /= 1024;
-    unit = units[index]!;
-  }
-  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
+  if (quotaBytes === undefined) return formatBytes(usageBytes);
+  return `${formatBytes(usageBytes)} of ${formatBytes(quotaBytes)}`;
 }
 
 /**

@@ -35,9 +35,7 @@ persistent job roundtrips (×10): 2.9, 1.0, 0.7, 0.8, 0.8, 1.8, 1.1, 0.8, 0.6, 0
 disposable-per-job at 10 jobs: 20.7 s | persistent: 2.6 s + 11 ms   (~8×)
 ```
 
-The measurement explains why optional Pyodide keeps one interpreter per
-kernel instance: ten fresh CPython boots would spend ≈ 21 s before model
-calls. It does not describe the stock JavaScript engine, whose lightweight
+The measurement records the performance motive for dormant persistent-Pyodide research; it does not authorize activation. A persistent kernel would avoid roughly 21 seconds of fresh CPython boots across ten model calls. It does not describe the stock JavaScript engine, whose lightweight
 worker is intentionally recreated for every job as a hard completion boundary.
 
 **Stream/parse throughput of the ported parsers** (`scripts/bench/parse-throughput.test.ts`,
@@ -74,9 +72,7 @@ Reasons, in order of weight:
    `/root/pa-audit/prime-agent-port-manifest.md`. A faithful port needs those
    exact voucher semantics on live journals — Python-in-Pyodide replicas
    would require a TypeScript "assistant governor" anyway.
-3. **Performance.** Optional persistent Pyodide vs fresh CPython per job is
-   measured ≈ 8× on warm assets, worse with network-fetched assets. Stock
-   JavaScript instead pays a small fresh-worker cost to enforce its hard
+3. **Performance.** Dormant persistent-Pyodide research measured ≈ 8× versus fresh CPython per job on warm assets. It remains quarantined because cross-cell task provenance is unprovable. Stock JavaScript instead pays a small fresh-worker cost to enforce its hard
    post-result boundary; provider streaming stays native TypeScript fetch+SSE.
 4. **The agent keeps a kernel call surface.** The walls are stated honestly:
    stock JavaScript is job-scoped with host-policy budgets (default 5 min wall
@@ -84,8 +80,7 @@ Reasons, in order of weight:
    from code are arbitrary in number (bounded by per-job call budget) and
    each is approval-bound + journaled with its own operation identity
    (`prime-kernel:<jobId>:<seq>`), the harness/persistence runs on IndexedDB,
-   and engine=pyodide (true persistent CPython namespace) sits behind an
-   install+probe gate on the same kernel host.
+   while the persistent `engine=pyodide` implementation is quarantined and unavailable from the production engine factory.
 
 ## 3. What ships (feature accounting vs upstream)
 

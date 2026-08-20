@@ -1,3 +1,4 @@
+import { formatBytes } from "../../core/bytes";
 import { useRef } from "preact/hooks";
 import type { SessionManifest } from "../../core/contracts";
 import { Icon } from "../icons";
@@ -875,12 +876,6 @@ function isBlankText(part: MessagePart): boolean {
 
 function isOperationPart(part: MessagePart): boolean {
   return part.kind === "tool-call" || part.kind === "tool-result";
-}
-
-function formatBytes(size: number): string {
-  if (size < 1_024) return `${String(size)} B`;
-  if (size < 1_048_576) return `${(size / 1_024).toFixed(1)} KiB`;
-  return `${(size / 1_048_576).toFixed(1)} MiB`;
 }
 
 function formatRecordedAt(value: string): string {
