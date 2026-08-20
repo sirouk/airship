@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_BUDGETS,
+  assertSinglePrimeKernelWorkerArtifact,
   assertNoSimulatedGitRuntime,
   assertWithinBudget,
-  assertUnpromotedWasixAbsent,
   assertExclusiveArtifactClassifications,
+  assertExactChunkStems,
   assertOptionalPacksAreNotPreloaded,
   createReleaseManifest,
   inspectPayload,
@@ -16,18 +17,19 @@ import {
   isOptionalExecutionToolsPath,
   isOptionalWasiPreview1WorkerPath,
   isOptionalNodeExecutionPackPath,
-  isOptionalWasixJavaScriptPath,
-  isOptionalWasixWasmPath,
   isOptionalAgentRuntimePath,
   isOptionalMultimodalPath,
   isOptionalContextPolicyPath,
   isOptionalAgentToolsPath,
   isOptionalInferenceProviderPath,
+  assertNoRetiredPrimeProviderChunks,
   isOptionalExtensionObservationPath,
   isOptionalLocalDeviceVaultPath,
   isOptionalWorkspaceWorkbenchPath,
   isOptionalWorkspaceBindingPath,
   isOptionalWorkspaceCodecPath,
+  isOptionalFileDownloadPath,
+  isOptionalRoutePrimitivePath,
   isOptionalRequestFailurePath,
   isOptionalSourceControlPath,
   isOptionalSourceSelectionPath,
@@ -51,25 +53,17 @@ import {
   isOptionalSkillsManagerViewPath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
+  isPrimeKernelWorkerPath,
   isOptionalSemanticPackPath,
   assertOptionalSemanticPackIntegrity,
   parseSemanticPackState,
   isDeferredCapabilityPackPath,
   assertForkContractDocumented,
   serializeReleaseManifest,
+  validateBuiltCsp,
 } from "./release-gate.mjs";
 
 describe("release gate", () => {
-  it("ships zero artifacts and zero bytes for the unpromoted WASIX candidate", () => {
-    expect(RELEASE_BUDGETS.optionalWasixJavaScript).toEqual({ raw: 0, gzip: 0 });
-    expect(RELEASE_BUDGETS.optionalWasixWasm).toEqual({ raw: 0, gzip: 0 });
-    expect(() => assertUnpromotedWasixAbsent("JavaScript candidate", [])).not.toThrow();
-    expect(() => assertUnpromotedWasixAbsent("JavaScript candidate", ["assets/wasix-pack-A.js"]))
-      .toThrow(/must not contain the unpromoted WASIX JavaScript candidate; found 1 artifacts/u);
-    expect(() => assertUnpromotedWasixAbsent("engine WASM", ["assets/wasmer_js_bg-A.wasm"]))
-      .toThrow(/must not contain the unpromoted WASIX engine WASM; found 1 artifacts/u);
-  });
-
   it("discloses only the embedding origin required by the WebContainer frame", () => {
     const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
     expect(html).toContain('<meta name="referrer" content="origin" />');
@@ -83,6 +77,28 @@ describe("release gate", () => {
       expect(policy).not.toContain("http://127.0.0.1:9900");
       expect(policy).not.toContain("http://localhost:9900");
     }
+  });
+
+  it("rejects an unsafe first duplicate connect-src in synchronized built output", () => {
+    const duplicateConnectSrc = (source) => source.replace(
+      "connect-src 'self' https:",
+      "connect-src *; connect-src 'self' https:",
+    );
+    const index = duplicateConnectSrc(readFileSync(new URL("../index.html", import.meta.url), "utf8"));
+    const headers = duplicateConnectSrc(readFileSync(new URL("../public/_headers", import.meta.url), "utf8"));
+
+    let failure;
+    try {
+      validateBuiltCsp(index, headers);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe(
+      "Built CSP directives must be unique because browsers honor the first occurrence:\n"
+      + "- Built index CSP contains a duplicate CSP directive: connect-src.\n"
+      + "- Built response-header CSP contains a duplicate CSP directive: connect-src.",
+    );
   });
 
   it("emits a stable, sorted, explicitly unsigned manifest", () => {
@@ -102,6 +118,20 @@ describe("release gate", () => {
       artifacts: [artifact("assets/a.css", "a"), artifact("z.js", "z")],
     });
     expect(first).not.toMatch(/timestamp|createdAt|generatedAt/iu);
+  });
+
+  it("requires exactly one uniquely suffixed Prime kernel worker artifact", () => {
+    const exact = "assets/AbC_123-x.prime-kernel-worker.js";
+    expect(isPrimeKernelWorkerPath(exact)).toBe(true);
+    expect(isPrimeKernelWorkerPath("assets/prime-kernel-worker-AbC_123-x.js")).toBe(false);
+    expect(isPrimeKernelWorkerPath("assets/AbC_123-x.prime-kernel-worker.js?token=secret")).toBe(false);
+    expect(assertSinglePrimeKernelWorkerArtifact(["assets/index-a.js", exact])).toBe(exact);
+    expect(() => assertSinglePrimeKernelWorkerArtifact(["assets/index-a.js"]))
+      .toThrow(/exactly one Prime kernel worker artifact; found 0/u);
+    expect(() => assertSinglePrimeKernelWorkerArtifact([
+      exact,
+      "assets/Other456.prime-kernel-worker.js",
+    ])).toThrow(/exactly one Prime kernel worker artifact; found 2/u);
   });
 
   it("accepts an optional semantic pack only as the complete reviewed byte set", () => {
@@ -245,6 +275,15 @@ describe("release gate", () => {
    * previous build — one of them saying the gzip ceiling "do[es] not move" directly
    * above the constant that moved it. Hold the file to its own prose.
    */
+  it("prints only measurements the current release result returns", () => {
+    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
+    const printer = source.slice(source.indexOf("function printResult("));
+    expect(printer).toContain("measurements.optionalPrimePack");
+    expect(printer).toContain("measurements.optionalInferenceProviders.raw");
+    expect(printer).toContain("measurements.optionalInferenceProviders.gzip");
+    expect(printer).not.toMatch(/optionalProofSurface|optionalEvidenceAcquisition|optionalChutesOAuth/u);
+  });
+
   it("rejects budget comments that contradict or abandon the ceilings they justify", () => {
     const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
     expect(() => assertDocumentedBudgetMeasurements(source)).not.toThrow();
@@ -270,26 +309,11 @@ describe("release gate", () => {
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
       .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
-    // …and a raise cannot be laundered by deleting the number it contradicts.
-    // AMENDED to the pair the ceiling now rests on: the guard reads the
-    // *largest* pair a comment states, so blanking the older 78,628 B reading
-    // stopped proving anything once Source Control's rail added a bigger one
-    // above it. The claim is unchanged — remove the operative measurement and
-    // the block must stop justifying its ceilings.
-    // AMENDED again for the same reason: the editor-theme pass recorded a
-    // third, larger pair in this block, and a claim that blanks two of three
-    // readings proves nothing while the operative one survives.
-    // AMENDED once more: the surface sweep's dock repairs recorded a fourth,
-    // larger pair, and the same reasoning applies — the guard reads the largest
-    // pair stated, so the newest reading is now the operative one.
-    // The current editor-workbench block has four operative readings. Blank
-    // all four; leaving any one of them would let the largest pair keep
-    // justifying the ceiling.
-    expect(() => assertDocumentedBudgetMeasurements(source
-      .replace("Re-measured at 88,100 B raw / 28,100 B gzip", "Re-weighed at 88,100 B and 28,100 B")
-      .replace("Re-measured on this build: 87,281 B raw / 27,902 B gzip", "Re-weighed at 87,281 B and 27,902 B")
-      .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
-      .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
+    // …and a raise cannot be laundered by deleting the operative measurement.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace(
+      "Measured 86,877 B raw / 27,519 B gzip",
+      "Weighed 86,877 B and 27,519 B",
+    )))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
@@ -304,35 +328,8 @@ describe("release gate", () => {
      */
     for (const [name, ceiling, granted] of [
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
-      // AMENDED with the ceiling it names, for the same reason the
-      // `deferredCapabilities` row below was: 27 KiB is now the tightest step
-      // above this chunk's recorded gzip, so the unpaid-for step is the one
-      // past it.
-      // AMENDED again: the phone pass re-measured this chunk at 27,586 B gzip
-      // and its comment now pays for the second step in as many words — "27 KiB
-      // gzip would have left 62 bytes". So the ceiling is 28 KiB and the step
-      // granted without a sentence behind it is 29.
-      // AMENDED again: the surface sweep re-measured the pack at 28,172 B gzip
-      // and its comment pays for the second step in as many words — "28 KiB
-      // gzip would have left 500 B". So the ceiling is 29 KiB and the step
-      // granted without a sentence behind it is 30.
-      ["optionalWorkspaceWorkbench", "gzip: 29 * 1024", "gzip: 30 * 1024"],
-      // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
-      // 128 KiB after the conversation-proof cleanup operation, and the
-      // step this row grants without paying for it is now the one past it.
-      // AMENDED again: the Vault reclamation machinery (the aged-supersession
-      // queue and bounded sweep) re-measured the pack and the budget comment
-      // pays for 131 KiB with the 130-Would-have-left-143-B sentence, so the
-      // unpaid step is the one past that.
-      // AMENDED again: the surface-repair sweep re-measured the pack at
-      // 133,743 B gzip. The ceiling did not move — 131 KiB still clears it —
-      // but the reading it is measured against did, so the second step this
-      // comment already pays for now lands on 132 and the step granted without
-      // a sentence behind it is 133.
-// AMENDED again: the closing surface waves re-measured the pack at 134,239 B
-      // gzip, so the second step this comment already pays for now lands on 133
-      // and the step granted without a sentence behind it is 134.
-      ["deferredCapabilities", "gzip: 133 * 1024", "gzip: 134 * 1024"],
+      ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
+      ["deferredCapabilities", "gzip: 72 * 1024", "gzip: 73 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
@@ -443,6 +440,36 @@ describe("release gate", () => {
     })).toThrow(/optionalSkillEditor: its comment claims 1\.29 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
   });
 
+  it("classifies only the current deferred route, download, and semantic stems", () => {
+    expect(isOptionalFileDownloadPath("assets/file-download-AbC_123.js")).toBe(true);
+    expect(isOptionalFileDownloadPath("assets/proof-download-AbC_123.js")).toBe(false);
+    for (const stem of ["route-header", "tabs", "brand-icons", "phone-viewport", "bm25", "dedup"]) {
+      expect(isOptionalRoutePrimitivePath(`assets/${stem}-AbC_123.js`), stem).toBe(true);
+    }
+    expect(isOptionalRoutePrimitivePath("assets/metric-strip-AbC_123.js")).toBe(false);
+    expect(isOptionalRoutePrimitivePath("assets/bm25.js")).toBe(false);
+    expect(isOptionalRoutePrimitivePath("assets/bm25-AbC_123.js?stale=1")).toBe(false);
+  });
+
+  it("requires exact lazy chunk stems rather than count-only lookalikes", () => {
+    const required = ["request-state", "turn-recovery"];
+    expect(() => assertExactChunkStems(
+      "Request failure",
+      ["assets/request-state-A.js", "assets/turn-recovery-B_2.js"],
+      required,
+    )).not.toThrow();
+    expect(() => assertExactChunkStems(
+      "Request failure",
+      ["assets/request-state-A.js", "assets/request-state-B.js"],
+      required,
+    )).toThrow(/Request failure chunks do not match the required stems/u);
+    expect(() => assertExactChunkStems(
+      "Request failure",
+      ["assets/request-state-A.js", "assets/turn-recovery.js"],
+      required,
+    )).toThrow(/Request failure chunks do not match the required stems/u);
+  });
+
   it("rejects unknown and multiply owned JavaScript artifacts", () => {
     expect(() => assertExclusiveArtifactClassifications(
       ["assets/core-A.js", "assets/unknown-B.js"],
@@ -488,13 +515,6 @@ describe("release gate", () => {
     expect(isOptionalWasiPreview1WorkerPath("assets/wasi-preview1-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalNodeExecutionPackPath("assets/node-webcontainer-pack-Ab_12-CD.js")).toBe(true);
     expect(isOptionalNodeExecutionPackPath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalWasixJavaScriptPath("assets/wasix-pack-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalWasixJavaScriptPath("assets/wasix-worker-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalWasixJavaScriptPath("assets/dist-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalWasixJavaScriptPath("assets/index-Ab_12-CD.mjs")).toBe(true);
-    expect(isOptionalWasixJavaScriptPath("assets/index-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalWasixWasmPath("assets/wasmer_js_bg-Ab_12-CD.wasm")).toBe(true);
-    expect(isOptionalWasixWasmPath("assets/wasmer_js_bg-Ab_12-CD.js")).toBe(false);
     expect(isOptionalAgentRuntimePath("assets/agent-Ab_12-CD.js")).toBe(true);
     expect(isOptionalAgentRuntimePath("assets/turn-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalMultimodalPath("assets/multimodal-Ab_12-CD.js")).toBe(true);
@@ -547,6 +567,21 @@ describe("release gate", () => {
     expect(isOptionalSemanticWorkerPath("assets/semantic-worker-Ab_12-CD.js")).toBe(false);
     expect(isOptionalInferenceProviderPath("assets/fabric-Ab_12-CD.js")).toBe(true);
     expect(isOptionalInferenceProviderPath("assets/provider-connections-view-Ab_12-CD.js")).toBe(true);
+    // Legacy stems stay recognized so the gate rejects stale Prime provider
+    // chunks as members of this family instead of ignoring them.
+    expect(isOptionalInferenceProviderPath("assets/openai-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalInferenceProviderPath("assets/anthropic-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalInferenceProviderPath("assets/openai-completions-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalInferenceProviderPath("assets/openai-responses-Ab_12-CD.js")).toBe(true);
+    expect(() => assertNoRetiredPrimeProviderChunks([
+      "assets/fabric-Ab_12-CD.js",
+      "assets/session-route-Ab_12-CD.js",
+    ])).not.toThrow();
+    expect(() => assertNoRetiredPrimeProviderChunks([
+      "assets/anthropic-Ab_12-CD.js",
+      "assets/openai-completions-Ab_12-CD.js",
+      "assets/openai-responses-Ab_12-CD.js",
+    ])).toThrow(/retired Prime provider chunks/u);
     expect(isOptionalInferenceProviderPath("assets/provider-panel-Ab_12-CD.js")).toBe(false);
     expect(isOptionalExtensionObservationPath("assets/extension-bridge-Ab_12-CD.js")).toBe(true);
     expect(isOptionalExtensionObservationPath("assets/inference-bridge-pack-Ab_12-CD.js")).toBe(false);
@@ -588,15 +623,6 @@ describe("release gate", () => {
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/node-webcontainer-pack-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/wasix-pack-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/dist-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/index-Ab12.mjs">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/agent-Ab12.js">',

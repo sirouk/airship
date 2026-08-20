@@ -50,9 +50,26 @@ describe("the deployment serves the base path it advertises", () => {
 
   it("anchors every path matcher at the base rather than the origin root", () => {
     expect(caddyfile).toContain(`@immutable path ${BASE}assets/* ${BASE}semantic-pack/v1/*`);
+    expect(caddyfile).toContain(`@primeKernelWorker path ${BASE}assets/*.prime-kernel-worker.js`);
+    expect(caddyfile).toContain(`@notPrimeKernelWorker not path ${BASE}assets/*.prime-kernel-worker.js`);
     expect(caddyfile).toContain(`@nocache path ${BASE}sw.js ${BASE}release-manifest.json`);
     expect(caddyfile).toContain(`header ${BASE}sw.js Service-Worker-Allowed "${BASE}"`);
     expect(caddyfile).toContain(`try_files {path} ${BASE}index.html`);
+  });
+
+  it("keeps page and worker CSP routes disjoint at root and /airship/", () => {
+    const suffix = "assets/*.prime-kernel-worker.js";
+    for (const publicBase of ["/", "/airship/"]) {
+      const path = `${publicBase}${suffix}`;
+      expect(path).toBe(publicBase === "/"
+        ? "/assets/*.prime-kernel-worker.js"
+        : "/airship/assets/*.prime-kernel-worker.js");
+    }
+    expect(caddyfile.match(/^\s*@primeKernelWorker path .*\.prime-kernel-worker\.js$/gmu)).toHaveLength(1);
+    expect(caddyfile.match(/^\s*@notPrimeKernelWorker not path .*\.prime-kernel-worker\.js$/gmu)).toHaveLength(1);
+    expect(caddyfile).toContain(
+      `header @primeKernelWorker Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval'; connect-src 'none'; worker-src 'none'"`,
+    );
   });
 
   it("normalizes the trailing slash Vite adds and Caddy does not", () => {

@@ -121,8 +121,17 @@ jobs:
           VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: ${{ vars.VITE_GOOGLE_CLIENT_ID != '' && 'google-drive' || 'ephemeral' }}
         run: npm run build
 
-      - name: Add static callback fallback
-        run: cp dist/index.html dist/404.html
+      - name: Add and gate the static callback fallback
+        run: |
+          cp dist/index.html dist/404.html
+          npm run check:release
+          node --input-type=module -e 'import { readFile } from "node:fs/promises"; const manifest = JSON.parse(await readFile("dist/release-manifest.json", "utf8")); if (!manifest.artifacts.some((artifact) => artifact.path === "404.html")) process.exit(1);'
+
+      - name: Install Chromium for the headerless-host security gate
+        run: npx playwright install --with-deps chromium
+
+      - name: Prove the Pages takeover and frame boundary
+        run: npx playwright test --config=playwright.static-host.config.ts
 
       - name: Record the deployed artifact inventory
         run: |

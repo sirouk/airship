@@ -17,21 +17,17 @@
 # The header blocks below are not decoration. `public/_headers` is the
 # Netlify/Cloudflare format and **Caddy does not read it**, so serving `dist/`
 # without these would silently publish Airship with no Content-Security-Policy
-# and no cross-origin isolation. The `header { … }` block is kept in step with
-# the `/*` section of `public/_headers` by hand, and two checks refuse a drift:
-# `check-static-security.mjs` — which runs in `npm run check`, so a CSP edit
-# that misses this file is red at review time rather than at deploy time — and
-# `deploy.sh --verify`, which repeats the comparison on the deploying machine.
-# The matcher-scoped caching headers below are not covered by the former.
+# and no cross-origin isolation. The unconditional headers and complementary
+# page/kernel CSP matchers are kept in step with `public/_headers` by hand, and
+# two checks refuse a drift: `check-static-security.mjs` at review time and
+# `deploy.sh --verify` on the deploying machine. Matcher-scoped caching headers
+# remain outside the structural security comparison.
 
 {$CADDY_PROTOCOL:}{$CADDY_DOMAIN:localhost}:{$CADDY_PORT:443} {
 	root * /srv
 	encode zstd gzip
 
 	header {
-		# One policy, matching `public/_headers`.
-		Content-Security-Policy "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src https://stackblitz.com https://accounts.google.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob:; connect-src 'self' https://api.chutes.ai https://llm.chutes.ai https://auth.openai.com https://api.openai.com https://api.anthropic.com https://api.x.ai http://localhost:11434 http://127.0.0.1:11434 http://localhost:11435 http://127.0.0.1:11435 http://localhost:11436 http://127.0.0.1:11436 http://localhost:1234 http://127.0.0.1:1234 http://localhost:1235 http://127.0.0.1:1235 http://localhost:1236 http://127.0.0.1:1236 https://api.github.com https://raw.githubusercontent.com https://api.shelbynet.shelby.xyz https://registry.wasmer.io https://cdn.wasmer.io https://accounts.google.com https://www.googleapis.com https://openidconnect.googleapis.com; worker-src 'self' blob:; manifest-src 'self'; font-src 'self'; trusted-types default airship-static airship-worker airship-semantic-worker airship-wasix-worker airship-wasi-preview1-worker airship-opfs-worker airship-google-identity; require-trusted-types-for 'script'"
-
 		# Cross-origin isolation. `credentialless` is what lets the threaded
 		# WASM runtime start its workers; drop these two and the semantic pack
 		# fails to load with an error that looks like a bug in the pack.
@@ -49,6 +45,15 @@
 		# reconnaissance and buys nothing.
 		-Server
 	}
+
+	# The JavaScript kernel evaluates REPL cells with AsyncFunction. Keep its
+	# `unsafe-eval` grant on the one hashed worker response. These complementary
+	# matchers are deliberate: two Caddy `header` directives that both match the
+	# worker are reordered by the adapter and the page policy wins last.
+	@primeKernelWorker path {$AIRSHIP_PUBLIC_BASE_PATH:/}assets/*.prime-kernel-worker.js
+	@notPrimeKernelWorker not path {$AIRSHIP_PUBLIC_BASE_PATH:/}assets/*.prime-kernel-worker.js
+	header @notPrimeKernelWorker Content-Security-Policy "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src https://stackblitz.com https://accounts.google.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:11434 http://127.0.0.1:11434 http://localhost:11435 http://127.0.0.1:11435 http://localhost:11436 http://127.0.0.1:11436 http://localhost:1234 http://127.0.0.1:1234 http://localhost:1235 http://127.0.0.1:1235 http://localhost:1236 http://127.0.0.1:1236; worker-src 'self' blob:; manifest-src 'self'; font-src 'self'; trusted-types default airship-static airship-worker airship-prime-kernel-worker airship-prime-kernel-worker-asset airship-semantic-worker airship-wasi-preview1-worker airship-opfs-worker airship-google-identity; require-trusted-types-for 'script'"
+	header @primeKernelWorker Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval'; connect-src 'none'; worker-src 'none'"
 
 	# Content-addressed by the build, so a year is safe and a rebuild busts it.
 	@immutable path {$AIRSHIP_PUBLIC_BASE_PATH:/}assets/* {$AIRSHIP_PUBLIC_BASE_PATH:/}semantic-pack/v1/*
