@@ -1,31 +1,18 @@
 name: CI
 
-# The evidence a merge is allowed to rest on.
+# CI keeps two read-only gates:
+# - `head` tests the reviewed commit.
+# - `integration` tests GitHub's current pull-request merge ref.
 #
-# Until this existed, "green" meant one person's workstation. That is strong
-# development evidence and it is not a release gate: the human-journey audit
-# found the release budgets tuned to a chunk layout that only occurs in some
-# checkouts, and a gate reading a gitignored file that no clone has. Both passed
-# locally and neither could pass anywhere else. A clean runner is what makes the
-# difference visible.
-#
-# Two gates, because the reviewed source SHA and the merge result answer
-# different questions. `head` tests exactly what was reviewed. `integration`
-# tests what `main` will actually contain, which is the merge of that branch with
-# whatever `main` has become since. A branch can be green and still break on
-# integration, and only the second gate can say so.
+# The workflow runs on pull requests from contributors and on pushes to `main`,
+# but it never deploys or uses production secrets.
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
 
-# Read-only, and no production secrets: this workflow runs on pull requests from
-# any contributor and must not be able to publish, deploy, or reach a provider
-# account. Deployment lives in `pages.yml`, which is manual-dispatch only; that
-# file's header is the record of what it does and does not enforce. Stating its
-# controls a second time here is how this comment came to claim a protected
-# environment that `pages.yml` had already withdrawn.
+# Least privilege: CI reads the repository and records evidence only.
 permissions:
   contents: read
 

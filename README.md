@@ -112,6 +112,16 @@ Start here:
 Historical Chutes-era and pre-simplification documents live in
 [docs/archive/](docs/archive/).
 
+## Community and open source
+
+- [LICENSE](LICENSE)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md)
+- [Bug report template](.github/ISSUE_TEMPLATE/bug.yml)
+- [Feature request template](.github/ISSUE_TEMPLATE/feature.yml)
+- [Pull request template](.github/pull_request_template.md)
+
 ## Develop
 
 ```bash

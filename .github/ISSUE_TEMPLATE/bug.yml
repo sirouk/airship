@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a reproducible problem in Airship.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include a small repro and remove secrets from logs, screenshots, and recordings.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: What broke?
+      placeholder: One clear sentence.
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      options:
+        - Chromium / Chrome
+        - Firefox
+        - Safari
+        - Edge
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device / OS
+      placeholder: macOS 15 on MacBook Pro, Android 15 on Pixel 8, iPadOS 18, ...
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Inference provider
+      placeholder: OpenAI, Anthropic, xAI, Chutes, Ollama, LM Studio, custom, or not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage mode
+      options:
+        - Ephemeral
+        - Local Device
+        - Google Drive
+        - S3-compatible Vault
+        - Walrus
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime boundary
+      description: If known.
+      options:
+        - provider-tls
+        - loopback-local
+        - Other / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Exact steps, expected result, and actual result.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste or attach only redacted output.
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed secrets, tokens, personal data, and live credentials from anything attached here.
+          required: true

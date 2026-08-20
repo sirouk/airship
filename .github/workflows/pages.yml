@@ -1,38 +1,18 @@
 name: Deploy Airship to GitHub Pages
 
-# Deployment is a deliberate act, not a side effect of merging.
+# Deployment is manual on purpose. Merging to `main` integrates source; it does
+# not publish it.
 #
-# This ran on every push to `main`, so integrating source WAS releasing it: the
-# moment a pull request merged, the build went public. That is the wrong
-# coupling for a product whose whole claim is that its security and durability
-# statements are true in the configuration a person is actually running, and it
-# was actively unsafe at the point it was found — the human-journey audit branch
-# was approved for merge while explicitly classified as "source-complete release
-# candidate, not yet production distributed".
+# This workflow enforces only a few things: manual dispatch, a full 40-character
+# commit SHA, proof that the SHA is already on `main`, and a recorded pointer to
+# the release evidence for that exact commit.
 #
-# So `push` is gone. A merge to `main` integrates source and nothing else.
-# Deploying takes a person and an exact, already-merged commit.
+# This file does not claim a second-person approval gate. Any extra release
+# controls must come from repository settings or external process, not from a
+# comment here.
 #
-# What is actually enforced, here, by this file: manual dispatch only, a full
-# 40-character SHA, that SHA proven an ancestor of `origin/main`, and a recorded
-# location for its release evidence. Those hold regardless of repository plan.
-#
-# What is NOT enforced: approval by a second principal. An earlier version of
-# this comment claimed a protected environment with required reviewers stood in
-# front of this job. It does not. No `production` environment exists; the only
-# one that does, `github-pages`, has no protection rules and admins may bypass
-# it. Required reviewers are a public-repository feature on Free, Pro and Team,
-# so on this private repository no plan upgrade supplies the missing control —
-# only making the repository public, or moving deployment elsewhere, would. A
-# release-control file asserting a control it does not have is the same inert
-# gate this branch twice caught in itself, so the claim is withdrawn rather than
-# restated.
-#
-# Deliberately NOT added: an automatic release-tag trigger. Two clean clones of
-# a byte-identical tree currently produce different artifact graphs (see
-# `docs/audit/JOURNEY_CLOSEOUT.md`), so "the thing tested" and "the thing
-# deployed" are not yet provably the same bytes. Automatic tag deployment can be
-# considered once that is closed, and not before.
+# Automatic push or tag deployment stays disabled until the build is provably
+# reproducible across clean checkouts.
 on:
   workflow_dispatch:
     inputs:
@@ -58,17 +38,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      # Deployment tracking, not an approval gate. This environment has no
-      # protection rules and none can be added while the repository is private
-      # (see the header). Treat the name as a label on the deployment log.
-      #
-      # Known open item, deliberately not changed here because deployment is out
-      # of scope for this branch: `actions/deploy-pages` requires the job to run
-      # in the `github-pages` environment, so this `production` name would fail
-      # a real deploy. That is a live defect to fix when deployment work resumes
-      # — recorded rather than silently patched, because changing it now would be
-      # untested deployment design.
-      name: production
+      # `actions/deploy-pages` publishes from the `github-pages` environment.
+      # The name here is functional, not an approval claim.
+      name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Refuse anything but an exact commit
@@ -138,7 +110,6 @@ jobs:
       - name: Build static release
         env:
           AIRSHIP_PUBLIC_BASE_PATH: /airship/
-          VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID: ${{ vars.VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID }}
           VITE_AIRSHIP_PUBLIC_ORIGIN: ${{ vars.VITE_AIRSHIP_PUBLIC_ORIGIN }}
           # A Google OAuth *Web* client ID is a public deployment identifier, not
           # a secret, so it is a repository variable. Without it Vite strips the
