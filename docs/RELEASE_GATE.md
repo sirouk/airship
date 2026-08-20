@@ -18,12 +18,12 @@ The gate measures raw and gzip bytes. Slash-separated figures follow the budget 
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 378 KiB | 118 KiB |
+| HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 494 KiB | 161 KiB |
-| Deferred advanced capability bundle | 247 KiB | 72 KiB |
-| First-party and other non-vendor JS/workers | 2000 KiB | 625 KiB |
+| Deferred advanced capability bundle | 246 KiB | 72 KiB |
+| First-party and other non-vendor JS/workers | 1962 KiB | 613 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
-| Absolute installed JavaScript/worker backstop | 2685 KiB | 815 KiB |
+| Absolute installed JavaScript/worker backstop | 2646 KiB | 803 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -35,7 +35,7 @@ The gate measures raw and gzip bytes. Slash-separated figures follow the budget 
 | Optional Skills route / skill editor | 8 KiB / 4 KiB | 4 KiB / 2 KiB |
 | Optional Terminal | 425 KiB | 112 KiB |
 | Optional semantic worker | 16 KiB | 6 KiB |
-| Optional inference/provider + Companion protocol packs | 180 KiB | 55 KiB |
+| Optional inference/provider + Companion protocol packs | 142 KiB | 42 KiB |
 | Optional prime runtime pack | 236 KiB | 72 KiB |
 | Pinned same-origin Pyodide distribution | 16384 KiB | 8192 KiB |
 | HTML-referenced entry CSS | 143 KiB | 26 KiB |

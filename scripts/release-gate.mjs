@@ -24,11 +24,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // WASIX surfaces left the startup graph. Re-measured at 384,641 B raw /
   // 119,196 B gzip after the JavaScript kernel gained boot-epoch fencing, a
   // hard per-job worker boundary, and truthful job-scoped prompt copy.
-  // Re-measured at 386,146 B raw / 119,594 B gzip after exact inference-route
-  // admission and post-turn naming removed the last authority races. 377 KiB
-  // raw is 98 B below the artifact and 117 KiB gzip would have left 214 B; the
-  // tight 378/118 KiB steps leave 926 / 1,238 B.
-  entryJavaScript: Object.freeze({ raw: 378 * 1024, gzip: 118 * 1024 }),
+  // An earlier artifact weighed 386,146 B raw / 119,594 B gzip after exact
+  // inference-route admission and post-turn naming removed the last authority
+  // races. In the candidate tree, the canonical config-free artifact measures
+  // 385,247 B raw / 119,150 B gzip. The reviewed origin-inlined variant measures
+  // 385,237 B raw / 119,147 B gzip, and the reviewed Pages variant measures
+  // 385,256 B raw / 119,143 B gzip. The Pages raw reading and config-free gzip
+  // reading set the margins. 376 KiB raw is 232 B below the larger artifact;
+  // 117 KiB gzip would have left 658 B in the config-free build, below the
+  // tripwire floor. The tight 377/118 KiB steps leave at least 792 / 1,682 B.
+  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
   // baseline while keeping the static workbench and its eager preloads.
@@ -39,33 +44,39 @@ export const RELEASE_BUDGETS = Object.freeze({
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
-  // The remaining provider-neutral route and runtime capabilities measure
-  // 251,691 B raw / 72,556 B gzip in the integrated edge-workbench build.
-  // 246 KiB raw would have left 213 B and 71 KiB gzip would have left
-  // 148 B, below the tripwire floor; the tight 247/72 KiB steps leave
-  // 1,237 / 1,172 B. None of this bundle is
-  // fetched on first paint.
-  deferredCapabilities: Object.freeze({ raw: 247 * 1024, gzip: 72 * 1024 }),
+  // The remaining provider-neutral route and runtime capabilities weighed
+  // 251,691 B raw / 72,556 B gzip in an earlier integrated edge-workbench build.
+  // In the candidate tree, the canonical config-free artifact measures 250,266 B
+  // raw / 73,215 B gzip. The reviewed origin-inlined variant measures 250,266 B
+  // raw / 73,214 B gzip. 245 KiB raw would have left 614 B, below the tripwire
+  // floor, so the tight 246 KiB step leaves 1,638 B. The config-free artifact is
+  // 511 B over 71 KiB gzip; the unchanged 72 KiB ceiling leaves 513 B. None of
+  // this bundle is fetched on first paint.
+  deferredCapabilities: Object.freeze({ raw: 246 * 1024, gzip: 72 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
-  // storage, provider, Git, terminal, and extension surfaces. Measured
-  // 2,016,426 B raw / 629,378 B gzip after the kernel, provider, and Git
-  // security boundaries landed. 1969 KiB raw would have left 230 B and
-  // 615 KiB gzip would have left 382 B. The tight 1970/616 KiB steps leave
-  // 854 / 1,406 B above the aggregate tripwire floor.
-  // Re-measured at 2,024,242 B raw / 632,111 B gzip in the integrated build
-  // that emits the reviewed kernel as an independently cached worker and counts
-  // it here rather than hiding it behind a new aggregate. Re-measured at
-  // 2,038,267 B raw / 635,875 B gzip after the hard job boundary, exact redirect
-  // provenance checks, and truthful prompt copy. Re-measured at 2,039,794 B raw /
-  // 636,299 B gzip after exact inference-route admission and post-turn naming.
-  // 1992 KiB raw would have left 14 B and 622 KiB gzip would have left 629 B,
-  // both below the tripwire floor. The tight 1993/623 KiB steps leave
-  // 1,038 / 1,653 B. Vendor code is unchanged.
-  // Re-measured at 2,047,153 B raw / 639,045 B gzip after the strict shared
-  // execution worker and bridge-drain boundary landed. The tight 2000/625 KiB
-  // steps leave 847 / 955 B; vendor code remains unchanged.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2000 * 1024, gzip: 625 * 1024 }),
+  // storage, provider, Git, terminal, and extension surfaces. An earlier
+  // artifact weighed 2,016,426 B raw / 629,378 B gzip after the kernel,
+  // provider, and Git security boundaries landed. Its tight 1970/616 KiB steps
+  // left 854 / 1,406 B above the aggregate tripwire floor.
+  // A later integrated artifact weighed 2,024,242 B raw / 632,111 B gzip after
+  // the reviewed kernel became an independently cached worker counted here
+  // rather than hidden behind a new aggregate. The hard job boundary, exact
+  // redirect provenance checks, and truthful prompt copy took that artifact to
+  // 2,038,267 B raw / 635,875 B gzip. Exact inference-route admission and
+  // post-turn naming then took it to 2,039,794 B raw / 636,299 B gzip. Its tight
+  // 1993/623 KiB steps left 1,038 / 1,653 B. Vendor code was unchanged.
+  // The strict shared execution worker and bridge-drain boundary later took the
+  // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
+  // unchanged. In the candidate tree, the canonical config-free artifact
+  // measures 2,007,903 B raw / 626,741 B gzip. The reviewed origin-inlined
+  // variant measures 2,007,870 B raw / 626,727 B gzip, and the reviewed Pages
+  // variant measures 2,007,941 B raw / 626,698 B gzip. The Pages raw reading
+  // and config-free gzip reading set the margins. 1961 KiB raw would have left
+  // 123 B, below the tripwire floor, and 612 KiB gzip is 53 B below the
+  // config-free artifact. The tight 1962/613 KiB steps leave at least
+  // 1,147 / 971 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -92,24 +103,29 @@ export const RELEASE_BUDGETS = Object.freeze({
   // An earlier reading of 694543 B raw and 192,600 B gzip set the ceilings
   // below — history, phrased so the parser reads the current pair.
   //
-  // Re-measured at 700,570 B raw / 194,318 B gzip after the reviewed Git HTTP
-  // boundary joined the browser-Git pack. 684 KiB raw is already too small;
-  // 190 KiB gzip would have left 242 B. The tight 685/191 KiB ceilings
-  // leave 870 / 1,266 B.
+  // In the candidate tree, the canonical config-free artifact measures 700,648 B
+  // raw / 194,791 B gzip after trailing-slash canonicalization joined the reviewed
+  // Git HTTP boundary. The reviewed origin-inlined variant measures 700,648 B
+  // raw / 194,795 B gzip. The vendor pins remain byte-identical. 684 KiB raw is
+  // 232 B below the artifact, and 190 KiB gzip is 235 B below the larger variant.
+  // The tight 685/191 KiB ceilings leave 792 B raw and at least 789 B gzip.
   optionalVendorRuntimeAggregate: Object.freeze({ raw: 685 * 1024, gzip: 191 * 1024 }),
   // This absolute installed-JavaScript backstop follows the smaller first-party
-  // graph plus the reviewed browser-Git and Terminal packs. Measured
-  // 2,716,996 B raw / 823,700 B gzip. 2654 KiB raw would have left 700 B and
-  // 805 KiB gzip would have left 620 B, both under the tripwire. The tight
-  // 2655/806 KiB steps leave 1,724 / 1,644 B.
-  // Re-measured at 2,740,364 B raw / 830,617 B gzip after exact inference-route
-  // admission and post-turn naming removed the last authority races. The tight
-  // 2677/812 KiB steps leave 884 / 871 B.
-  // Re-measured at 2,747,723 B raw / 833,366 B gzip after the strict shared
-  // execution worker landed. 2684 KiB raw would have left 693 B and 814 KiB
-  // gzip would have left 170 B, so the tight 2685/815 KiB steps leave
+  // graph plus the reviewed browser-Git and Terminal packs. An earlier artifact
+  // weighed 2,716,996 B raw / 823,700 B gzip; its tight 2655/806 KiB steps left
+  // 1,724 / 1,644 B. Exact inference-route admission and post-turn naming later
+  // took it to 2,740,364 B raw / 830,617 B gzip, with tight 2677/812 KiB steps
+  // leaving 884 / 871 B. The strict shared execution worker then took it to
+  // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
   // 1,717 / 1,194 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2685 * 1024, gzip: 815 * 1024 }),
+  // In the candidate tree, the canonical config-free artifact measures 2,708,551 B
+  // raw / 821,532 B gzip. The reviewed origin-inlined variant measures 2,708,518 B
+  // raw / 821,522 B gzip, and the reviewed Pages variant measures 2,708,589 B raw /
+  // 821,490 B gzip. The Pages raw reading and config-free gzip reading set the
+  // margins. The Pages artifact is 109 B over 2645 KiB raw, and the config-free
+  // artifact is 284 B over 802 KiB gzip. The tight 2646/803 KiB steps leave
+  // 915 / 740 B without granting a padding step.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -317,9 +333,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // isomorphic-git's broad CommonJS SHA-1 fallback is replaced at build time
   // by Airship's byte-view-only equivalent; modern Web Crypto remains the
   // preferred path and legacy/pack hashing remains available. The reviewed
-  // pack measures 266,851 B raw / 80,482 B gzip after the exact-origin,
-  // redirect-free reviewed HTTP boundary landed. 261 KiB raw and 79 KiB gzip
-  // would each leave only 413/414 B; 262/80 KiB leave 1,437 / 1,438 B.
+  // pack measures 267,462 B raw / 81,003 B gzip in the candidate tree after the
+  // exact-origin, redirect-free reviewed HTTP boundary gained trailing-slash
+  // remote canonicalization. The reviewed origin-inlined variant also measures
+  // 267,462 B raw / 81,003 B gzip. The artifact is 198 B over 261 KiB raw and
+  // 107 B over 79 KiB gzip; the tight 262/80 KiB steps leave 826 / 917 B.
   optionalBrowserGit: Object.freeze({ raw: 262 * 1024, gzip: 80 * 1024 }),
   // Profile-local thread expansion, durable favorite order, coherent resume,
   // branch and true-fork affordances remain behind the Chat/session route.
@@ -608,19 +626,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Includes the shared page-side companion protocol client used by both the
   // live Providers observation and the opt-in ciphertext cache backend.
   //
-  // Exact conversation return now classifies every held provider route as the
-  // pinned generation, a replacement, or unrelated; locks the pinned model;
-  // and keeps abandon unavailable once verification reaches its commit point.
-  // The provider-neutral custom endpoint path adds the transactional descriptor,
+  // Exact conversation return classified every held provider route as the
+  // pinned generation, a replacement, or unrelated; locked the pinned model;
+  // and kept abandon unavailable once verification reached its commit point.
+  // The provider-neutral custom endpoint path added the transactional descriptor,
   // credential, and catalog setup used by the direct-browser connection form.
   // The generic OpenAI-compatible wire implementation replaced the old Chutes
-  // duplicate, and its single-use descriptor factory folds into the fabric, so
-  // the complete family is eight packs. Measured 182,759 B raw / 54,849 B gzip
-  // after transactional accessor snapshots, cryptographic custom authority,
-  // neutral provider failures, and the accessible custom-endpoint form landed.
-  // 179 KiB raw would have left 537 B and 54 KiB gzip would have left 447 B, both below
-  // the tripwire floor. 180/55 KiB leave 1,561 / 1,471 B.
-  optionalInferenceProviders: Object.freeze({ raw: 180 * 1024, gzip: 55 * 1024 }),
+  // duplicate, and its single-use descriptor factory folded into the fabric, so
+  // that earlier complete family emitted eight packs. It weighed 182,759 B raw /
+  // 54,849 B gzip after transactional accessor snapshots, cryptographic custom
+  // authority, neutral provider failures, and the accessible custom-endpoint form
+  // landed. Its tight 180/55 KiB steps left 1,561 / 1,471 B.
+  // In the candidate tree, the canonical config-free artifact emits five
+  // classified packs and measures 143,680 B raw / 41,803 B gzip. The reviewed
+  // origin-inlined variant measures 143,680 B raw / 41,801 B gzip. 141 KiB raw
+  // would have left 704 B. In the config-free build, 41 KiB gzip would have left
+  // 181 B. Both are below the tripwire floor. The tight 142/42 KiB steps leave
+  // 1,728 / 1,205 B.
+  optionalInferenceProviders: Object.freeze({ raw: 142 * 1024, gzip: 42 * 1024 }),
   // The prime runtime port measured at 88,098 B raw / 26,594 B gzip — the
   // claim states the floor across both build modes, with the origin-inlined
   // Docker variant one raw byte and twenty-nine gzip bytes under the
