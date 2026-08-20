@@ -4,7 +4,7 @@ import type { CanonicalMessage, JsonValue, ToolCall, ToolDefinition } from "./co
 import { sha256, stableStringify } from "./hash";
 import { EventJournal, type DurableEvent, type SessionRecord } from "./journal";
 import { MemoryJournalBackend } from "./memory-journal";
-import { createLocalReceipt } from "../receipts/types";
+import { createLocalReceipt } from "../core/conversation-receipt";
 import { auditSessionHistory } from "./session-audit";
 
 /** The provenance a real ask-first approval journals; see approvalProvenanceIssue. */
@@ -134,6 +134,96 @@ describe("auditSessionHistory", () => {
     },
   );
 
+  it("accepts every capability tier admitted by the durable manifest contract", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const manifest = await createSessionManifest({
+      systemPrompt: "Remote-heavy capability fixture.",
+      providerId: "demo",
+      model: "airship/test-model",
+      tools: [],
+      workspaceId: "memory://remote-heavy-audit",
+      capabilityTier: "remote-heavy",
+      now: "2026-07-18T00:00:00.000Z",
+    });
+    const session = await journal.createSession("Remote-heavy", manifest);
+    const record = (await journal.getSession(session.id))!;
+    const report = await auditSessionHistory({ session: record, events: await journal.readEvents(session.id) });
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+  });
+
+  it("keeps pre-split v1 transport-named provider provenance replay-readable", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const manifest = await createSessionManifest({
+      systemPrompt: "Historical provider vocabulary.",
+      providerId: "chutes-openai-compatible-v1",
+      model: "model-a",
+      inferenceBinding: {
+        version: 1,
+        connectionId: "chutes-primary",
+        connectionGeneration: 1,
+        providerId: "chutes",
+        providerLabel: "Chutes",
+        providerRevision: 1,
+        authMethod: "api-key",
+        transportBoundary: "provider-tls",
+        modelId: "model-a",
+        boundAt: "2026-07-18T00:00:00.000Z",
+      },
+      tools: [],
+      workspaceId: "memory://historical-audit",
+      securityPosture: "plaintext-remote",
+      now: "2026-07-18T00:00:00.000Z",
+    });
+    const session = await journal.createSession("Historical vocabulary", manifest);
+    const turnId = "historical-turn";
+    const operationId = "historical-inference";
+    const user: CanonicalMessage = { role: "user", content: "Continue." };
+    await journal.append(session.id, [{ type: "turn.requested", turnId, payload: { content: user.content } }]);
+    const requestDigest = await inferenceDigest(session, turnId, 0, [user]);
+    const content = "Historical answer.";
+    const responseDigest = await sha256(content);
+    const receipt = createLocalReceipt({
+      sessionId: session.id,
+      turnId,
+      provider: manifest.providerId,
+      model: manifest.model,
+      requestDigest,
+      responseDigest,
+      now: "2026-07-18T00:00:04.000Z",
+    });
+    await journal.append(session.id, [
+      {
+        type: "inference.started",
+        turnId,
+        operationId,
+        payload: {
+          step: 0,
+          providerId: manifest.providerId,
+          model: manifest.model,
+          posture: "plaintext-remote",
+          requestDigest,
+          idempotencyKey: `${session.id}:${turnId}:0`,
+        },
+      },
+      {
+        type: "assistant.completed",
+        turnId,
+        operationId,
+        payload: {
+          message: { role: "assistant", content },
+          finishReason: "stop",
+          responseDigest,
+          receipt: receipt as unknown as JsonValue,
+        },
+      },
+      { type: "turn.completed", turnId, payload: { responseDigest, receiptId: receipt.receiptId } },
+    ]);
+    const record = (await journal.getSession(session.id))!;
+    const events = await journal.readEvents(session.id);
+    expect((await auditSessionHistory({ session: record, events })).status).toBe("verified");
+  });
+
   it("verifies the chain, manifest, transcript request, response, and receipt bindings independently", async () => {
     const fixture = await createFixture([]);
     const turnId = "turn-final";
@@ -191,7 +281,7 @@ describe("auditSessionHistory", () => {
       chain: true,
       manifest: true,
       protocol: true,
-      receiptBindings: true,
+      traceBindings: true,
       complete: true,
     });
     expect(report.counts).toMatchObject({ events: 5, turns: 1, completedTurns: 1 });
@@ -1111,7 +1201,6 @@ describe("auditSessionHistory", () => {
       workspaceBinding: { kind: "active-workspace" },
       memoryScope: "profile",
       approvalMode: "ask-first",
-      minimumPosture: "encrypted-unattested",
     });
 
     expect((await auditFixture(fixture)).status).toBe("verified");
@@ -1258,7 +1347,6 @@ async function askFirstProfile(): Promise<SessionRecord["manifest"]["profile"]> 
     workspaceBinding: { kind: "active-workspace" },
     memoryScope: "profile",
     approvalMode: "ask-first",
-    minimumPosture: "encrypted-unattested",
   };
 }
 

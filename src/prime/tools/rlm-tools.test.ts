@@ -1,7 +1,7 @@
 /**
  * The prime RLM tool surface end-to-end over the REAL registry primitives
  * (src/prime/subagents/registry.ts) wired with the in-memory doubles from
- * ../subagents/test-utils. These are thin-tool tests: the pins are the
+ * ../subagents/test-utils.test-support. These are thin-tool tests: the pins are the
  * translation and pre-check layers (admission-only spawn, data-shaped
  * refusals, depth ladder, receipts, bounded observe), while the deep
  * orchestration itself is covered by the registry's own suite.

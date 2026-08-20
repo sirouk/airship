@@ -57,14 +57,14 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
 .op-strip__fold[open] > .op-strip__header .op-strip__toggle { visibility: hidden; }
 .op-strip__fold[open] > .op-strip__header::after { grid-column: 3; grid-row: 1; justify-self: end; color: var(--ink-muted); content: "Hide steps"; white-space: nowrap; }
 .op-strip__header:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.op-strip .seal { flex: 0 0 auto; }
+.op-strip .status-mark { flex: 0 0 auto; }
 
 /* Steps one provider message issued together read as one bracketed batch. */
 .op-group[data-parallel="true"] { box-shadow: inset 2px 0 0 var(--line-control); }
 .op-group + .op-group, .op-group > .op + .op { border-top: 1px solid var(--line); }
 
 .op { border: 0; border-radius: 0; background: none; }
-/* Five columns at a constant height: the seal, word and digests change in
+/* Five columns at a constant height: the status mark, word and digests change in
    place, so a completing step never jumps the rows beneath it. */
 .op__summary { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; gap: var(--sp-2); align-items: center; min-height: 32px; padding: 0 var(--sp-2); color: var(--ink-muted); cursor: pointer; font: var(--fs-micro)/1.4 var(--font-mono); list-style: none; }
 .op__summary::-webkit-details-marker { display: none; }
@@ -78,7 +78,7 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
 .op[data-outcome="running"] .op__outcome, .op[data-outcome="queued"] .op__outcome { color: var(--state-acting); }
 /* A step the turn ended underneath is neither acting nor settled. */
 .op[data-outcome="abandoned"] .op__outcome { color: var(--ink-muted); }
-/* The crossed seal beside it is red; the word is not. `--v-failed` is 4.24:1
+/* The crossed status mark beside it is red; the word is not. `--v-failed` is 4.24:1
    and §4.3 forbids it as text, where P2 already guarantees shape plus word. */
 .op[data-outcome="failed"] .op__outcome, .op[data-outcome="denied"] .op__outcome { color: var(--ink); }
 /* The tool name is the one cell that never truncates: which tool ran is the
@@ -93,7 +93,7 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
 /* A standing grant is the one authority nobody chose per call, so it is the one
    a reader should find by scanning. Weight, not hue: Full Access is a setting
    the person turned on rather than a failure, and a status colour here would
-   argue with the seal that owns how the step ended. */
+   argue with the status mark that owns how the step ended. */
 .op__authority[data-source="bounded-browser-sandbox"] { color: var(--ink); }
 .op__authority-detail { overflow: hidden; color: var(--ink-muted); font: var(--fs-micro)/1.3 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 

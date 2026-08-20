@@ -20,7 +20,10 @@ const VIEWPORTS = [
   { name: "phone", ...devices["iPhone 14 Pro Max"] },
 ];
 
-const ROUTES = ["", "#chat", "#workspace", "#terminal", "#memory", "#proof", "#profiles", "#vault", "#account"];
+const ROUTES = [
+  "", "#chat", "#sessions", "#workspace", "#editor", "#terminal", "#memory",
+  "#context", "#profiles", "#skills", "#capabilities", "#vault", "#connection",
+];
 
 async function main() {
   await mkdir(outDir, { recursive: true });

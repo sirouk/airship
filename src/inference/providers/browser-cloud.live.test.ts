@@ -41,7 +41,7 @@ describeOpenAi("live OpenAI Responses wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.openai.com/v1/models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload", async () => {
+  it("completes the toolless toolless request payload", async () => {
     expect(await finishReasonOf(openAi(), probeRequest(OPENAI_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -57,7 +57,7 @@ describeAnthropic("live Anthropic Messages wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.anthropic.com/v1/models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload", async () => {
+  it("completes the toolless toolless request payload", async () => {
     expect(await finishReasonOf(anthropic(), probeRequest(ANTHROPIC_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -84,7 +84,7 @@ describeXai("live xAI wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.x.ai/v1/language-models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload against /v1/responses", async () => {
+  it("completes the toolless toolless request payload against /v1/responses", async () => {
     expect(await finishReasonOf(xai(), probeRequest(XAI_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -128,7 +128,7 @@ const REPORT_STATUS: ToolDefinition = {
   effect: "read",
 };
 
-/** Byte-for-byte the shape fabric.ts verifyInvocation sends: no tools at all. */
+/** Byte-for-byte the shape the provider transport contract sends: no tools at all. */
 function probeRequest(model: string): InferenceRequest {
   const requestId = crypto.randomUUID();
   return {

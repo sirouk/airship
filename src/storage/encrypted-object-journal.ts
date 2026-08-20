@@ -780,7 +780,7 @@ function validateManifest(value: Record<string, unknown>): asserts value is Sess
     "web-baseline",
     "web-enhanced",
     "native",
-    "remote-confidential",
+    "remote-heavy",
   ].includes(String(value.capabilityTier))) throw new Error("Encrypted session capability tier is invalid.");
   if (value.contextPolicy !== undefined && !canonicalSessionContextPolicy(value.contextPolicy)) {
     throw new Error("Encrypted session context policy is invalid.");

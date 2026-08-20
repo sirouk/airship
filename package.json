@@ -17,7 +17,7 @@
     "test": "vitest run --maxWorkers=4 --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
     "test:e2e": "playwright test",
     "test:e2e:master": "AIRSHIP_LIVE_WEBCONTAINER=1 playwright test --config=playwright.master.config.ts",
-    "test:e2e:static-host": "AIRSHIP_DISABLE_SEMANTIC_PACK=1 AIRSHIP_PUBLIC_BASE_PATH=/airship/ npm run build:static && npm run check:release && playwright test --config=playwright.static-host.config.ts",
+    "test:e2e:static-host": "npm run build:extension && AIRSHIP_DISABLE_SEMANTIC_PACK=1 AIRSHIP_PUBLIC_BASE_PATH=/airship/ npm run build:static && npm run check:release && playwright test --config=playwright.static-host.config.ts",
     "test:e2e:portability": "playwright test --config=playwright.portability.config.ts",
     "test:e2e:semantic": "AIRSHIP_LIVE_SEMANTIC=1 AIRSHIP_LIVE_SEMANTIC_UI=1 playwright test --config=playwright.semantic.config.ts",
     "test:e2e:headed": "playwright test --headed",

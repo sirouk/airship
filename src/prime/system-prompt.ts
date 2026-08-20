@@ -25,8 +25,8 @@
  * they describe doctrine that is unchanged here. Python- and IPython-shaped
  * prose (%%bash cells, uv pip, `global_=True`, the `rlm.harness` call forms)
  * is NOT shipped: it would advertise a runtime this build cannot answer —
- * the prime kernel is a persistent JavaScript worker whose only egress is
- * the reviewed `pat.call` tool bridge, and subagent/harness call forms land
+ * the prime JavaScript kernel uses one job-scoped worker per call; its only
+ * egress is the reviewed `pat.call` tool bridge, and subagent/harness call forms land
  * with their tools (rlm-tools.ts is a stub). PORT.md maps every layer and
  * lists the deferred pieces.
  *
@@ -107,7 +107,7 @@ export const PRIME_DEFAULT_TOOL_INVENTORY: readonly PrimeToolInventoryEntry[] = 
   }),
   Object.freeze({
     name: "execute_code",
-    description: "Run JavaScript in the persistent prime kernel worker; the namespace survives across calls until a crash resets it.",
+    description: "Run JavaScript in a fresh job-scoped prime kernel worker; its namespace does not survive the call.",
   }),
   Object.freeze({
     name: "list_files",
@@ -173,12 +173,7 @@ function firstSentence(description: string): string {
  */
 const SECURITY_POSTURE_TEXT: Readonly<Record<SecurityPosture, string>> = Object.freeze({
   local: "local — inference runs on this device; prompts do not leave it.",
-  "plaintext-remote":
-    "plaintext-remote — prompts travel to a remote provider over TLS without end-to-end encryption or attestation.",
-  "encrypted-unattested":
-    "encrypted-unattested — prompts are encrypted end-to-end to a confidential enclave whose attestation is not verified.",
-  "encrypted-attested":
-    "encrypted-attested — prompts are encrypted end-to-end to a verified, attested confidential enclave.",
+  "plaintext-remote": "plaintext-remote — prompts travel to a remote provider over TLS.",
 });
 
 /** A pre-read project instruction file (the AGENTS.md equivalents upstream walks the filesystem for). */
@@ -417,14 +412,14 @@ function renderBaseRuntimeFacts(facts: ResolvedFacts): string {
       ]),
     "",
     "Runtime: prime-runtime — the prime-agent core ported into the Airship page runtime.",
-    "Engine: prime kernel worker (persistent; the namespace survives across calls until a crash resets it, and a reset is always reported).",
+    "Engine: prime JavaScript kernel worker (job-scoped; the worker is terminated after every result). Only the optional Pyodide engine has kernel-instance namespace persistence.",
     `Working directory: ${facts.workingDirectory}`,
     `Conversation log: ${facts.conversationLogPath}`,
     `Current date: ${facts.currentDate}`,
     `Recursive agent depth: ${String(facts.recursionDepth)}`,
   ];
   if (facts.securityPosture !== undefined) {
-    lines.push(`Security posture: ${SECURITY_POSTURE_TEXT[facts.securityPosture]}`);
+    lines.push(`Inference path: ${SECURITY_POSTURE_TEXT[facts.securityPosture]}`);
   }
   if (facts.recursionDepth > 0) {
     // Child doctrine: first line verbatim upstream buildChildAgentDoctrine. The
@@ -444,7 +439,7 @@ function renderBaseRuntimeFacts(facts: ResolvedFacts): string {
   }
   lines.push(
     "",
-    "Kernel capabilities: the kernel is persistent, so keep intermediate variables, helper functions, and parsed results in its namespace instead of re-reading. Kernel code has no ambient network, storage, or DOM; workspace and host effects go through the reviewed tool bridge `pat.call(tool, args)`. Every bridged call is journaled and approval-bound with operation identity `prime-kernel:<jobId>:<seq>`, exactly like a top-level tool call.",
+    "Kernel capabilities: each JavaScript call has a fresh job-scoped namespace, so return or durably record anything a later call needs; do not expect variables or helpers to persist. Only the optional Pyodide engine has kernel-instance namespace persistence. Kernel code has no ambient network, storage, or DOM; workspace and host effects go through the reviewed tool bridge `pat.call(tool, args)`. Every bridged call is journaled and approval-bound with operation identity `prime-kernel:<jobId>:<seq>`, exactly like a top-level tool call.",
   );
   return lines.join("\n");
 }
@@ -556,8 +551,8 @@ function renderHarnessOverview(facts: ResolvedFacts): string {
  * Tail instruction segments (upstream's RLM guidance, mirrored). Doctrine
  * that is unchanged ships VERBATIM from prompts/rlm.ts — family reach,
  * reply discipline, fan-in through files. Kernel-use prose keeps upstream's
- * teaching intent (persistent environment; foreign runtimes evaluated
- * through their own interface) but is rewritten for the prime kernel,
+ * teaching intent for foreign runtimes while naming the JavaScript kernel's
+ * job boundary and Pyodide's distinct persistence semantics,
  * because `%%bash` and IPython magics do not exist here and shipping them
  * would teach the model a runtime that cannot answer.
  */
@@ -567,7 +562,7 @@ function renderContinuationPolicy(facts: ResolvedFacts): string {
     "",
     "Turn discipline: break work into sub-tasks and iterate one step at a time; when the task is done, stop calling tools and state your final answer.",
     "",
-    "The prime kernel is the agent's long-lived environment: a persistent worker for reasoning, context management, state, and tool orchestration. Keep intermediate variables, inspect and transform outputs, and write small helper functions there; namespace state persists across calls until a crash reset, which is always reported.",
+    "Each execute_code JavaScript call runs in a fresh job-scoped worker that is terminated after its result. Keep intermediate variables and helpers only within that call; return or durably record anything a later call needs. Only an explicitly selected optional Pyodide engine has kernel-instance namespace persistence, ending at restart, crash, or terminate.",
     "",
     "Do not assume the kernel is the native runtime of the external thing being investigated. A repository, package, service, dataset, paper, website, benchmark, or API may have its own environment and normal interface. Evaluate external systems through their own interface, then use the kernel to coordinate the process and analyze what comes back.",
     "",

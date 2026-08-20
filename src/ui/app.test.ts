@@ -192,3 +192,17 @@ describe("the profile editor's theme preview", () => {
     expect(app).toContain('previewThemeId === selected.theme.themeId ? "Previewing this profile\'s saved theme" : "Previewing — not saved"');
   });
 });
+
+describe("local command runtime authority", () => {
+  it("fences identity with the published runtime while executing with the session projection", () => {
+    const current = functionBody("function localPresentationAuthorityIsCurrent");
+    const builtin = functionBody("async function runSlashBuiltin");
+    expect(current).toContain("runtime.current === authority.identityRuntime");
+    expect(builtin).toContain("const commandRuntime = authority.commandRuntime;");
+    expect(builtin).not.toContain("runtime.current !== commandRuntime");
+    expect(builtin).toContain("runtime: authority.identityRuntime");
+    expect(app).toContain("identityRuntime: ambientRuntime");
+    expect(app).toContain("commandRuntime: admissionRuntime");
+    expect(current).not.toContain("runtime.current === authority.commandRuntime");
+  });
+});

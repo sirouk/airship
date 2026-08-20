@@ -136,6 +136,7 @@ export class ContextSummarizerOutputError extends Error {
  */
 export function createInferenceTransportContextSummarizer(args: Readonly<{
   transport: InferenceTransport;
+  providerId: string;
   model: string;
   sessionId: string;
 }>): ContextSummarizer {
@@ -154,7 +155,7 @@ export function createInferenceTransportContextSummarizer(args: Readonly<{
       } as unknown as JsonValue);
       const requestDigest = await sha256(stableStringify({
         adapterId: INFERENCE_CONTEXT_SUMMARIZER_ID,
-        providerId: args.transport.id,
+        providerId: args.providerId,
         model: args.model,
         systemPrompt: INFERENCE_SUMMARIZER_SYSTEM_PROMPT,
         summaryInput,
@@ -195,7 +196,7 @@ export function createInferenceTransportContextSummarizer(args: Readonly<{
         provenance: Object.freeze({
           kind: "inference-transport-v1",
           adapterId: INFERENCE_CONTEXT_SUMMARIZER_ID,
-          providerId: args.transport.id,
+          providerId: args.providerId,
           model: args.model,
           posture: args.transport.posture,
           requestDigest,

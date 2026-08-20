@@ -108,7 +108,7 @@ export type VaultSnapshot =
       phase: "ready";
       revision: number;
       evidence: VaultProbeEvidence;
-      message: "Vault contract verified for this browser origin; synchronization has not been evaluated.";
+      message: "Storage checks passed in this browser; synchronization was not tested.";
     }>)
     | (ConfiguredFields & Readonly<{
       phase: "degraded";
@@ -239,7 +239,7 @@ export class VaultCoordinator {
    * Sizes are the provider's object sizes — ciphertext for every encrypted
    * write, which is everything the Vault claims to hold — summed from one
    * prefix listing under the configuration's namespace. Reading this is a
-   * read-only list call against the already-verified store: it cannot mutate
+   * read-only list call against the store that completed the storage checks: it cannot mutate
    * anything, and a refusal returns `undefined` rather than a guessed number.
    *
    * The prefix is empty because the store is *already* confined to the
@@ -315,7 +315,7 @@ export class VaultCoordinator {
     const runtime = this.runtime;
     const queue = this.reclamationQueue;
     if (this.current.phase !== "ready" || !runtime || !queue) {
-      throw new Error("Vault reclamation requires a verified Vault runtime; connect the Vault and complete its probe first.");
+      throw new Error("Vault reclamation requires a ready Vault runtime; connect the Vault and complete its storage checks first.");
     }
     // Sweep code rides the same deferred pack as the rest of the Vault
     // runtime; a ready phase has it cached already.
@@ -459,7 +459,7 @@ export class VaultCoordinator {
 
   /**
    * Renew a Google Drive grant from a click/tap without replacing the store,
-   * workspace key, or verified runtime. No refresh token is retained.
+   * workspace key, or ready runtime. No refresh token is retained.
    */
   async reauthorizeGoogleDrive(): Promise<void> {
     if (!this.config || !isGoogleDriveConfiguration(this.config) || !this.directStore) {
@@ -472,7 +472,7 @@ export class VaultCoordinator {
 
   readyRuntime(): ReadyVaultRuntime {
     if (this.current.phase !== "ready" || !this.runtime) {
-      throw new Error("Vault runtime is unavailable until the live probe verifies the configured provider and encryption path.");
+      throw new Error("Vault runtime is unavailable until the configured provider and encryption-path checks pass.");
     }
     return this.runtime;
   }
@@ -562,7 +562,7 @@ export class VaultCoordinator {
         ...conformance.createdKeys,
         ...composition.createdKeys,
       ])].sort());
-      // Probe litter is provably unreachable — nothing but this run ever
+      // Probe litter is unreachable within this coordinator run — nothing else
       // references those keys — so it is the one safe reclamation candidate that
       // needs no safety age. Anything unconfirmed keeps the original warning.
       const cleanup = await this.reclaimProbeObjects(store, allCreatedKeys, controller.signal);
@@ -630,7 +630,7 @@ export class VaultCoordinator {
         phase: "ready",
         ...this.configuredFields(),
         evidence,
-        message: "Vault contract verified for this browser origin; synchronization has not been evaluated.",
+        message: "Storage checks passed in this browser; synchronization was not tested.",
       });
     } catch (error) {
       if (generation !== this.generation) throw abortReason(controller.signal);
@@ -742,8 +742,8 @@ export class VaultCoordinator {
      * Having the verb is not the same as being allowed to use it.
      *
      * This reported `true` for any store carrying a `trash` method, which is a
-     * claim about the adapter rather than about the deployment. Measured
-     * against the local MinIO lab, whose credential policy grants Get/Put/List
+     * claim about the adapter rather than about the deployment. In the local
+     * MinIO lab, the credential policy grants Get/Put/List
      * and not Delete: every key came back refused with a 403 and the runtime
      * still declared deletion available. A sweep that reclaimed nothing is the
      * answer to "can this runtime delete", so it is reported as the answer.
@@ -905,7 +905,7 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: O
       persistence: "memory-only" as const,
       resetEvents: Object.freeze(["logout", "account-switch", "vault-disconnect"] as const),
     }),
-    cspConnectSrc: Object.freeze([...config.credentialSource.authorityOrigins]),
+    networkOrigins: Object.freeze([...config.credentialSource.authorityOrigins]),
     cors: Object.freeze({
       allowedMethods: Object.freeze(["GET", "POST", "PATCH"]),
       allowedRequestHeaders: Object.freeze(["Authorization", "Content-Type", "If-Match", "Range"]),
@@ -1049,7 +1049,7 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
       code: "credential-denied",
       severity: "error",
       operation: "credentials",
-      publicMessage: "Google Drive authorization expired or was cleared. Reconnect Google from an explicit click, then verify the vault again.",
+      publicMessage: "Google Drive authorization expired or was cleared. Reconnect Google from an explicit click, then run the storage checks again.",
       retryable: true,
       commitState: "not-applicable",
       recordedAt,

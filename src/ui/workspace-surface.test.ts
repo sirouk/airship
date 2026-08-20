@@ -70,16 +70,16 @@ describe("source posture chips", () => {
    * was cut mid-word with nothing saying a third and fourth existed.
    */
   it("marks the edge that is hiding a chip, and only while one is hidden", () => {
-    const scroller = sourcesStyles.match(/\.git-posture-chips \{[^}]*overflow-x: auto[^}]*\}/u)?.[0] ?? "";
+    const scroller = sourcesStyles.match(/\.git-source-fact-chips \{[^}]*overflow-x: auto[^}]*\}/u)?.[0] ?? "";
 
     expect(scroller).toContain("scrollbar-width: none");
-    expect(sourcesStyles).toContain('.git-posture-chips[data-scroll-edges="start"] { mask-image: linear-gradient(to right, transparent 0, #000 24px); }');
-    expect(sourcesStyles).toContain('.git-posture-chips[data-scroll-edges="end"] { mask-image: linear-gradient(to left, transparent 0, #000 24px); }');
-    expect(sourcesStyles).toContain('.git-posture-chips[data-scroll-edges="both"] {');
+    expect(sourcesStyles).toContain('.git-source-fact-chips[data-scroll-edges="start"] { mask-image: linear-gradient(to right, transparent 0, #000 24px); }');
+    expect(sourcesStyles).toContain('.git-source-fact-chips[data-scroll-edges="end"] { mask-image: linear-gradient(to left, transparent 0, #000 24px); }');
+    expect(sourcesStyles).toContain('.git-source-fact-chips[data-scroll-edges="both"] {');
     // An always-on fade would assert a hidden chip on a row that fits, so the
     // attribute the mask hangs on has to be the measured one.
     expect(sourcesSource).toContain('useScrollEdges(postureChipsRef, posture.length, "inline")');
     // Forced colours replace the palette a fade dissolves into.
-    expect(sourcesStyles).toMatch(/@media \(forced-colors: active\) \{[\s\S]*\.git-posture-chips \{ mask-image: none; \}/u);
+    expect(sourcesStyles).toMatch(/@media \(forced-colors: active\) \{[\s\S]*\.git-source-fact-chips \{ mask-image: none; \}/u);
   });
 });

@@ -15,7 +15,7 @@ import { type WorkspacePort } from "../../workspace/contracts";
  * claim is "Ephemeral · this page only". It is the wrong home for a session
  * whose journal is durable and encrypted, and `localStorage` would be worse
  * still: plaintext on disk under a chip that reads "Encrypted · this device"
- * is a weaker security posture than the screen claims. So the durable copy goes
+ * is a weaker durability boundary than the screen claims. So the durable copy goes
  * through the adopted Vault's own workspace port, encrypted by the same
  * envelope as everything else it holds, under the reserved `.airship` tree that
  * `isWorkspaceControlPlanePath` already keeps out of retrieval, Git and the

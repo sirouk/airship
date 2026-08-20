@@ -156,7 +156,7 @@ describe("ToolRegistry authorization boundary", () => {
       ctx.turnId = "other-turn";
       ctx.operationId = "other-operation";
       ctx.signal = new AbortController().signal;
-      ctx.capabilityTier = "remote-confidential";
+      ctx.capabilityTier = "remote-heavy";
       ctx.onOutput = vi.fn();
       gate.release();
 

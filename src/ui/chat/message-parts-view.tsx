@@ -2,7 +2,7 @@ import { useRef } from "preact/hooks";
 import type { SessionManifest } from "../../core/contracts";
 import { Icon } from "../icons";
 import { PROFILE_APPROVAL_LABELS } from "../profiles-governance";
-import { Seal, type SealState } from "../seal";
+import { StatusMark, type StatusMarkState } from "../status-mark";
 import { capabilityTierDetail, capabilityTierLabel } from "./capability-tier";
 import { ASSISTANT_LENGTH_CODE } from "./message-parts";
 import type { MessagePart, TextPart, ToolCallAuthority, ToolCallPart, ToolResultPart } from "./message-parts";
@@ -35,7 +35,7 @@ const NARRATIVE_PART_DENSITY_TAG: Partial<Record<NarrativePart["kind"], DensityT
    * It is a fold now, not a density tier: `reasoningVisibility` decides whether
    * it opens, and nothing decides whether it exists.
    */
-  footer: "proof",
+  footer: "raw",
 } as const);
 
 /** The count below which a summary header would hide more than it saves. */
@@ -308,7 +308,7 @@ function outcomeClause(operations: readonly PairedOperation[]): string {
 }
 
 /**
- * One table for the whole outcome vocabulary: the row's visible word, the seal
+ * One table for the whole outcome vocabulary: the row's visible word, the status mark
  * shape beside it, the header's counted clause, and the full sentence a screen
  * reader hears — which is verbatim the sentence the old 17px card title
  * carried, so nothing a reader could hear before is lost.
@@ -317,20 +317,20 @@ const OUTCOME_COPY: Readonly<Record<OperationOutcome, Readonly<{
   word: string;
   clause: string;
   sentence: string;
-  seal: SealState;
+  mark: StatusMarkState;
 }>>> = Object.freeze({
-  ran: { word: "Ran", clause: "completed", sentence: "Tool step completed", seal: "verified" },
-  running: { word: "Running…", clause: "running", sentence: "Tool step running", seal: "checking" },
-  failed: { word: "Failed", clause: "failed", sentence: "Tool step failed", seal: "failed" },
-  denied: { word: "Denied", clause: "denied", sentence: "Tool step denied", seal: "failed" },
-  // The seal vocabulary's own "not checked" belongs to an unverified proof, not
+  ran: { word: "Ran", clause: "completed", sentence: "Tool step completed", mark: "verified" },
+  running: { word: "Running…", clause: "running", sentence: "Tool step running", mark: "checking" },
+  failed: { word: "Failed", clause: "failed", sentence: "Tool step failed", mark: "failed" },
+  denied: { word: "Denied", clause: "denied", sentence: "Tool step denied", mark: "failed" },
+  // The status vocabulary's own "not checked" belongs to an unknown result, not
   // to a step waiting on a person; borrowing it announced a pending approval as
   // a failed verification.
-  queued: { word: "Queued", clause: "queued", sentence: "Tool step queued — waiting for your approval", seal: "none" },
+  queued: { word: "Queued", clause: "queued", sentence: "Tool step queued — waiting for your approval", mark: "none" },
   // A step the turn ended underneath. Not a failure — nothing went wrong with
-  // it — but not settled either, so it wears the attention seal rather than the
+  // it — but not settled either, so it wears the attention status mark rather than the
   // completed one.
-  abandoned: { word: "Stopped", clause: "stopped", sentence: "Tool step stopped before it completed", seal: "attention" },
+  abandoned: { word: "Stopped", clause: "stopped", sentence: "Tool step stopped before it completed", mark: "attention" },
 });
 
 function operationsNode(operations: readonly PairedOperation[]): OperationsNode {
@@ -411,7 +411,7 @@ function authorityTitle(authority: ToolCallAuthority): string {
  * the turn.
  *
  * `approved` was doing double duty as "permission granted" and "currently
- * executing" while wearing the settled-positive seal, because execution start
+ * executing" while wearing the settled-positive status mark, because execution start
  * is only ever a transient signal and never a durable status. An approved call
  * with no result *is* the executing state, so it renders as one — and once the
  * turn is over, no unsettled call is executing anything, so every one of them
@@ -577,7 +577,7 @@ function OperationStrip({ node, mode, liveOutput }: {
   const header = (
     <>
       {state.active
-        ? <Seal state="checking" density="dot" size={16} label="Working" acting />
+        ? <StatusMark state="checking" density="dot" size={16} label="Working" acting />
         : <span class="op-strip__mark" aria-hidden="true">⟡</span>}
       <span class="op-strip__headline" title={state.headline}>{state.headline}</span>
       {state.collapsible
@@ -626,8 +626,8 @@ function OperationRow({ operation, onCapture, onSettle, liveOutput }: {
     <details class="op" data-outcome={operation.outcome} onToggle={(event) => onSettle(event.currentTarget as unknown as HTMLDetailsElement)}>
       <summary class="op__summary" onClick={onCapture}>
         <span class="op__outcome" title={operation.statusSentence}>
-          <Seal
-            state={OUTCOME_COPY[operation.outcome].seal}
+          <StatusMark
+            state={OUTCOME_COPY[operation.outcome].mark}
             density="dot"
             size={16}
             label={operation.statusSentence}

@@ -18,7 +18,7 @@ import type { SessionAuditReport } from "./session-audit";
  * "Ready to resume · Fork not required" from a different code path that had
  * judged the same journal fine.
  *
- * Nothing is hidden by this. The findings still render, the Proof route still
+ * Nothing is hidden by this. The findings still render and session inspection still
  * opens on them, and a history that fails integrity is still refused. The
  * observation was always worth showing; it was never worth locking the door.
  *

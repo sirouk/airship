@@ -4,7 +4,7 @@ import { MOBILE_SHELL_MEDIA_QUERY } from "./chat/composer-focus";
 /**
  * Whether the shell is currently drawing its phone layout.
  *
- * Two routes — Memory and Proof — need a *default* that differs by width
+ * Some document routes, including Memory, need a *default* that differs by width
  * rather than a style that does: which disclosures start open, and how much of
  * a ledger is above the fold. Neither is expressible in CSS, because `open` on
  * a `<details>` is DOM state and a stylesheet cannot set it.

@@ -1,4 +1,4 @@
-import { registerApiProviderLoader } from "../registry";
+import { registerApiProviderLoader, registerProviderDescriptor } from "../registry";
 
 /**
  * Prime-agent's register-builtins.ts uses static imports with lazy internal
@@ -7,6 +7,22 @@ import { registerApiProviderLoader } from "../registry";
  * Providers that only make sense behind a host bridge (bedrock, google
  * vertex, codex OAuth) are deliberately not registered here.
  */
+
+/*
+ * Chutes speaks the generic chat-completions protocol with three compatibility
+ * defaults. Keep them as provider data, not a hostname branch: a connection that
+ * routes through a user proxy still gets the same declaration, while another
+ * provider hosted on the same endpoint keeps the standard defaults.
+ */
+registerProviderDescriptor({
+  api: "openai-completions",
+  provider: "chutes",
+  compat: {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    maxTokensField: "max_tokens",
+  },
+});
 
 registerApiProviderLoader("anthropic-messages", async () => {
   const module = await import("./anthropic");

@@ -82,7 +82,8 @@ describe("every branch kind carries the reach of its seed", () => {
    */
   it("promises the same seeded branch before the click that the notice reports after it", () => {
     expect(FORK_RETRY_TOOLTIP).not.toMatch(/clean fork|empty transcript|blank/iu);
-    expect(FORK_RETRY_TOOLTIP).toContain("bounded, digest-sealed copy");
+    expect(FORK_RETRY_TOOLTIP).toContain("bounded copy");
+    expect(FORK_RETRY_TOOLTIP).toContain("its digest is recorded");
     expect(FORK_RETRY_TOOLTIP).toContain("up to just before this turn");
     // It may not quote a reach: the counts do not exist until the fork does,
     // and this module's whole point is refusing unbacked completeness claims.

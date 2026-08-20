@@ -74,9 +74,11 @@ next-env.d.ts
 # human receives. Same rule: the report is the artifact, not the harness.
 /.sweep-tmp*.mjs
 
-# Editor tooling that is not a repository-level decision.
+# Editor and agent working state that is not a repository-level decision.
 /.kilo/
 /.playwright-mcp/
+/graphify-out/
+/docs/_work/
 
 # Sweep captures are evidence for a review, not source. They live in the
 # scratchpad beside the rest of the campaign's screenshots.

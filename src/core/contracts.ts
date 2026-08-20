@@ -1,13 +1,11 @@
-import type { ConversationReceipt } from "../receipts/types";
+import type { ConversationReceipt } from "../core/conversation-receipt";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export type SecurityPosture =
   | "local"
-  | "plaintext-remote"
-  | "encrypted-unattested"
-  | "encrypted-attested";
+  | "plaintext-remote";
 
 export type MessageRole = "user" | "assistant" | "tool";
 
@@ -19,8 +17,8 @@ export type ToolCall = {
 
 /**
  * An image captured by the client and committed to the canonical transcript.
- * Only inline data URLs are accepted: the inference enclave must not fetch an
- * uncommitted third-party URL after the request has been encrypted.
+ * Only inline data URLs are accepted: a provider must not fetch an uncommitted
+ * third-party URL outside the canonical request.
  */
 export type CanonicalImageInput = Readonly<{
   type: "image";
@@ -70,8 +68,6 @@ export type SessionProfileBindingV2 = SessionProfileBindingBase & {
     | { kind: "workspace-id"; workspaceId: string };
   memoryScope: "session" | "profile" | "workspace";
   approvalMode: "ask-first" | "auto-approve" | "full-access";
-  /** The inference evidence floor required when this session was pinned. */
-  minimumPosture: SecurityPosture;
 };
 
 export type SessionProfileBinding = SessionProfileBindingV1 | SessionProfileBindingV2;
@@ -196,8 +192,8 @@ type SessionManifestBase = {
   tools: ToolDefinition[];
   workspaceId: string;
   /** Page-capability observation at creation; live tool results bind their producing tier. */
-  capabilityTier: "web-baseline" | "web-enhanced" | "native" | "remote-confidential";
-  /** Security posture pinned when the session is created. Older protocol-v1 manifests may omit it. */
+  capabilityTier: "web-baseline" | "web-enhanced" | "native" | "remote-heavy";
+  /** Inference data path pinned when the session is created. Older protocol-v1 manifests may omit it. */
   securityPosture?: SecurityPosture;
   /** Immutable profile resolution copied when the session is forked. */
   profile?: SessionProfileBinding;
@@ -347,7 +343,7 @@ export const CONVERSATION_NAMED_EVENT_TYPE = "conversation.named";
  * Terminal lineage shipped as a bounded record set living only inside
  * `BrowserTerminalManager`, readable from one `<summary>` popover and from
  * nowhere else: a command that rewrote the workspace left no trace in the
- * journal that Proof audits, so the one timeline the product claims —
+ * journal that the local integrity check reads, so the one recorded timeline —
  * intent → effect → workspace head → receipt — had a hole exactly where the
  * shell is. This is the type that closes it, and it lives here for the same
  * reason `HUMAN_INTENT_EVENT_TYPE` does: the producer (the terminal manager's
@@ -367,19 +363,14 @@ export interface ApprovalPolicy {
 }
 
 /**
- * Where a corpus's vectors were computed. This is a privacy claim, so it is
- * declared once and imported: it was previously written out in five places, and
- * adding a posture updated the provider while leaving lineage, selection, the
- * live environment and the publisher describing the old world.
+ * Where a corpus's vectors were computed.
  *
- * `confidential-remote` may only name a provider whose compute is attested. An
- * ordinary remote embedder puts the corpus in someone else's plaintext and does
- * not belong in this union.
+ * The browser currently supports deterministic bootstrap vectors and local
+ * semantic vectors. Remote embedding is not represented as private or local.
  */
 export const EMBEDDING_POSTURES = Object.freeze([
   "deterministic-bootstrap",
   "local-semantic",
-  "confidential-remote",
 ] as const);
 
 export type EmbeddingPosture = (typeof EMBEDDING_POSTURES)[number];

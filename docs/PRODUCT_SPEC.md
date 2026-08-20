@@ -42,8 +42,11 @@ an application server.
 
 - Airship starts in ephemeral page memory.
 - Durable storage is explicit and client-encrypted.
-- Supported rungs are Local Device, Google Drive, S3-compatible storage, and
-  Walrus.
+- The stock product selector supports Local Device and, in configured builds,
+  Google Drive.
+- S3-compatible storage is a host-composed adapter with a loopback development
+  lab; Walrus is an optional immutable blob transport. Neither is presented as
+  a connected stock Vault destination.
 
 ### Append-only sessions with light model switching
 

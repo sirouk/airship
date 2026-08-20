@@ -524,7 +524,7 @@ describe("memory durability and the reload it did not survive", () => {
     // Both claims render, in the one status vocabulary.
     expect(source).toContain('label="Private · on-device"');
     expect(source).toContain("label={recallDurability.label ?? durabilityLabel(recallDurability.state)}");
-    expect(source).toContain("state={durabilitySeal(recallDurability.state)}");
+    expect(source).toContain("state={durabilityStatusMark(recallDurability.state)}");
   });
 
   it("counts what a page-memory reload destroyed, and never invents a loss", () => {

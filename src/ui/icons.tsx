@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 
 export type IconName =
+  | "airship"
   | "chat"
   | "sessions"
   | "workspace"
@@ -9,10 +10,7 @@ export type IconName =
   | "memory"
   | "profiles"
   | "skills"
-  | "billing"
-  | "attestation"
   | "model"
-  | "proof"
   | "access"
   | "settings"
   | "send"
@@ -35,6 +33,7 @@ export type IconName =
   | "storage-ephemeral";
 
 const paths: Record<IconName, JSX.Element> = {
+  airship: <path d="M6.5 12h11M12 6.5V12" />,
   chat: <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 12.5z" />,
   sessions: <path d="M6 4h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4 3v-3H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h8M8 11h5M3 8H2v9a2 2 0 0 0 2 2" />,
   workspace: <path d="M3.5 6.5h7l2-2h8v15h-17zM3.5 9.5h17" />,
@@ -43,10 +42,7 @@ const paths: Record<IconName, JSX.Element> = {
   memory: <path d="M12 3a3 3 0 0 0-3 3v.3A3.5 3.5 0 0 0 5.5 9.8c0 .7.2 1.4.6 2A3.6 3.6 0 0 0 8 18.4V19a2 2 0 0 0 4 0zm0 0a3 3 0 0 1 3 3v.3a3.5 3.5 0 0 1 3.5 3.5c0 .7-.2 1.4-.6 2a3.6 3.6 0 0 1-1.9 6.6V19a2 2 0 0 1-4 0m-3-9.5c.9 0 1.7.4 2.3 1.1M15 9.5c-.9 0-1.7.4-2.3 1.1M8.5 14c1 0 1.8.4 2.4 1.2M15.5 14c-1 0-1.8.4-2.4 1.2" />,
   profiles: <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7.5 8a7.5 7.5 0 0 1 15 0M18.5 5.5h3m-1.5-1.5v3" />,
   skills: <path d="m12 3 1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7zm6 10 .9 2.1L21 16l-2.1.9L18 20l-.9-3.1L15 16l2.1-.9zM6 14l.8 2.2L9 17l-2.2.8L6 20l-.8-2.2L3 17l2.2-.8z" />,
-  billing: <path d="M4 5.5h16v13H4zM4 9h16M8 14h3m5-1.5v3M14.5 14H17.5" />,
-  attestation: <><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" /><path d="M9 9h6v6H9zM9 2.5v2.5m6-2.5v2.5M9 19v2.5m6-2.5v2.5M2.5 9H5m-2.5 6H5m14-6h2.5M19 15h2.5m-11-3 1.2 1.2 2.3-2.5" /></>,
   model: <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zm0 0v9m8-4.5-8 4.5-8-4.5m8 4.5v9" />,
-  proof: <path d="m12 2.5 7 3v5.2c0 4.8-2.9 8.6-7 10.8-4.1-2.2-7-6-7-10.8V5.5zM8.5 12l2.2 2.2 4.8-5" />,
   access: <path d="M7.5 11V7a4.5 4.5 0 0 1 9 0v4m-11 0h13v10h-13zM12 15v2.5" />,
   /* Preferences wore `model` — the same glyph as the model control beside it in
      the top bar, so two different controls read as one. Six teeth, drawn on the

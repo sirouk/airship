@@ -29,10 +29,15 @@ This document describes the fabric behind the **Providers** surface.
 
 ## Connection lifecycle
 
-A candidate credential is staged in memory, validated against the target
-provider, and published as a connection only after the fabric has enough live
-information to use it safely. Failed connection attempts must not destroy an
-existing working route.
+A candidate credential is staged in memory and used to read the configured
+model catalog. The provider descriptor, connection, and models are published
+only after that catalog returns a valid non-empty roster. Selecting a model is
+local and sends no hidden prompt; provider access is exercised by the person's
+first turn. Failed connection attempts must not destroy an existing route.
+
+Custom OpenAI-compatible connections accept a name, HTTPS API base URL,
+optional HTTPS model-catalog URL, API-key header, and bearer/raw key format.
+The descriptor contains no credential and lasts for the current page lifetime.
 
 ## Session routing
 
@@ -54,6 +59,20 @@ Changing a session's model is light:
 - it applies on the next turn;
 - it does not fork history by itself;
 - earlier turns keep their original provider/model provenance.
+
+## Dynamic HTTPS egress
+
+The stock static build intentionally includes one `connect-src https:` grant so
+a user can connect a browser-reachable HTTPS provider without rebuilding
+Airship. The security gate still rejects wildcards, broad plaintext HTTP,
+WebSocket schemes, non-loopback HTTP origins, and policy drift across
+`index.html`, `public/_headers`, and `Caddyfile`.
+
+This is a real egress tradeoff. Airship limits executable code to the shipped
+same-origin bundle, validates custom provider URLs as credential-free HTTPS,
+and sends the key only to the exact API and catalog origins the user entered.
+The provider must also allow the Airship origin through CORS. Credentials stay
+in page memory and never enter provider descriptors, URLs, storage, or logs.
 
 ## Honest claim language
 

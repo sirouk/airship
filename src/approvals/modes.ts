@@ -10,33 +10,11 @@ import { approvalOutcomeReason, approvalRequestId, type ApprovalBroker } from ".
 
 export type ApprovalMode = ApprovalProvenance["mode"];
 
-export type SafetyReviewResult = Readonly<{
-  verdict: "safe" | "unsafe" | "indeterminate";
-  reason: string;
-  requestId?: string;
-  model?: string;
-  /**
-   * What the review itself cost, when the transport reported it. Auto Approve
-   * issues one provider request per effectful action, so leaving this off the
-   * result made those requests structurally unrecordable rather than merely
-   * unrecorded. Absent means "not reported", never zero.
-   */
-  inputTokens?: number;
-  outputTokens?: number;
-}>;
-
-export type SafetyReview = (
-  tool: ToolDefinition,
-  displayArguments: JsonValue,
-  context: ToolContext,
-) => Promise<SafetyReviewResult>;
-
 const MAX_PROVENANCE = 512;
 
 export function createApprovalModePolicy(options: Readonly<{
   mode: ApprovalMode;
   broker: ApprovalBroker;
-  safetyReview?: SafetyReview;
 }>): ApprovalPolicy {
   const provenance = new Map<string, ApprovalProvenance>();
 
@@ -86,36 +64,17 @@ export function createApprovalModePolicy(options: Readonly<{
         return decision;
       }
 
-      let review: SafetyReviewResult;
-      try {
-        review = options.safetyReview
-          ? await options.safetyReview(tool, argumentsValue, context)
-          : { verdict: "indeterminate", reason: "No safety-review transport is available." };
-      } catch (error) {
-        review = {
-          verdict: "indeterminate",
-          reason: error instanceof Error ? `Safety review failed: ${error.message}` : "Safety review failed.",
-        };
-      }
-      if (review.verdict === "safe") {
+      // Auto Approve is a deterministic middle tier. It never asks the
+      // inference model to authorize its own action and never creates a hidden
+      // paid request. Registered write effects stay inside their declared
+      // browser/tool boundary; execute, network, and identity effects ask.
+      if (tool.effect === "write") {
         remember(context, {
           mode: options.mode,
-          source: "model-review",
-          reason: review.reason,
-          ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-          ...(review.model ? { reviewModel: review.model } : {}),
+          source: "bounded-browser-sandbox",
+          reason: "Allowed by Auto Approve's deterministic policy for a registered write effect inside its declared browser tool boundary.",
         });
         return "allow";
-      }
-      if (review.verdict === "unsafe") {
-        remember(context, {
-          mode: options.mode,
-          source: "model-review",
-          reason: review.reason,
-          ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-          ...(review.model ? { reviewModel: review.model } : {}),
-        });
-        return "deny";
       }
 
       const decision = await options.broker.request(tool, argumentsValue, context);
@@ -123,9 +82,7 @@ export function createApprovalModePolicy(options: Readonly<{
       remember(context, {
         mode: options.mode,
         source: "human-fallback",
-        reason: `${review.reason} ${approvalOutcomeReason(fallbackOutcome)}`,
-        ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-        ...(review.model ? { reviewModel: review.model } : {}),
+        reason: `Auto Approve requires a person for ${tool.effect} effects. ${approvalOutcomeReason(fallbackOutcome)}`,
       });
       return decision;
     },
@@ -166,12 +123,9 @@ export type HumanIntentReview = Readonly<{
 /**
  * Adjudicate an effect the *person* proposed, not one the model asked for.
  *
- * Auto Approve's whole premise is "have a model review what the model wants to
- * do". When the proposer is the human at the keyboard — staging a commit,
- * importing a repository, probing a vault — asking a model for permission
- * inverts the relationship, and a model verdict of `unsafe` becomes a machine
- * vetoing its operator. So Auto Approve resolves to the same thing Ask First
- * does here: the person is asked.
+ * Human-proposed actions remain human decisions. Auto Approve only applies its
+ * deterministic write-effect rule to model-proposed tool calls; staging a
+ * commit, importing a repository, or probing storage still asks the person.
  *
  * Full Access is unchanged, because it is the person's own standing decision
  * that their actions need no prompt.

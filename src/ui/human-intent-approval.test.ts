@@ -251,22 +251,7 @@ describe("local slash commands", () => {
     expect(wrote).toBe("hi");
   });
 
-  it("cannot be vetoed by a model verdict the operator never gets to answer", async () => {
-    const unsafe = { verdict: "unsafe" as const, reason: "The model judged this command dangerous." };
-
-    // What the composer did before: an `unsafe` verdict is a terminal denial in
-    // `createApprovalModePolicy` — no dock prompt, no fallback — so a command
-    // the person typed themselves was refused by a model on their behalf.
-    const vetoBroker = new ApprovalBroker();
-    const vetoed = createApprovalModePolicy({
-      mode: "auto-approve",
-      broker: vetoBroker,
-      safetyReview: async () => unsafe,
-    });
-    expect(await vetoed.review(writeTool, { path: "notes.txt" }, localContext())).toBe("deny");
-    expect(vetoBroker.snapshot().pending).toHaveLength(0);
-
-    // What it does now: the person is asked, and there is no reviewer to ask.
+  it("keeps human-proposed effects under human authority in Auto Approve", async () => {
     const broker = new ApprovalBroker();
     const context = localContext();
     const pending = createHumanIntentPolicy({ mode: "auto-approve", broker })

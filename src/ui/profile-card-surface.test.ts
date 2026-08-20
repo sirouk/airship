@@ -30,11 +30,9 @@ describe("a profile name stays inside its own card", () => {
   });
 
   it("wraps rather than cutting to one line, because the list is how two profiles are told apart", () => {
-    // The posture chip beside it takes the one-line ellipsis — a posture label
-    // is one of a fixed handful of words. A name is not, and two names sharing
-    // a prefix must not cut to the same string in a list you pick from.
+    // Two authored names sharing a prefix must not collapse to the same visible
+    // single-line string in a list the person chooses from.
     expect(rule(".profile-card strong")).not.toContain("white-space: nowrap");
-    expect(routes).toContain(".profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis;");
   });
 
   it("clamps the wrap, on the inner display the clamp actually needs", () => {

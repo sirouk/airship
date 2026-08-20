@@ -59,7 +59,7 @@ export function extensionBridgeObservation(
       evidence: "probe-passed" as const,
       detail: `Airship browser extension ${result.version} answered the bridge handshake and declares ${
         result.providers.length > 0 ? result.providers.join(", ") : "no providers"
-      }.${refusals ? ` ${refusals}.` : ""} Reachability only: the bridge creates no attestation or trust claim.`,
+      }.${refusals ? ` ${refusals}.` : ""} Reachability only: this says nothing about provider authenticity or data integrity.`,
       extensionVersion: result.version,
       providers: Object.freeze([...result.providers]),
       unavailable: Object.freeze([...result.unavailable]),

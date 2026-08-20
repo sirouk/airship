@@ -64,30 +64,16 @@ describe("global typography floor", () => {
     expect(violations).toEqual([]);
   });
 
-  it("reserves copper for the asserted verdict", async () => {
+  it("keeps the Airship logo outside the status vocabulary", async () => {
     const markdownStyles = await readFile(new URL("./chat/message-parts-view.css", import.meta.url), "utf8");
     expect(markdownStyles).not.toContain("var(--copper)");
 
-    /*
-     * Copper is the asserted state — a remote party's truth claim, ΔE 2.1 from
-     * --truth-remote. It says one thing, so it may only be spent on one thing.
-     * The brand mark used to wear it, which put the logo and "asserted, not
-     * verified" in the same colour in the same viewport; it now reads from
-     * --brand-mark. The attestation chip used to print asserted in caution
-     * amber while the seal beside it printed the same fact in copper.
-     */
     const shellStyles = await readFile(new URL("./shell.css", import.meta.url), "utf8");
-    expect(rulesFor(shellStyles, "var(--copper)")).toEqual([".attestation-chip.asserted", '.seal[data-state="asserted"]']);
-    expect(rulesFor(shellStyles, "var(--brand-mark)")).toEqual([".brand-seal::after", ".seal.brand-seal"]);
-
-    /*
-     * Specificity, not source order, is what makes that rule win: the mark is
-     * a <Seal state="asserted">, so `.seal[data-state="asserted"]` (0,2,0)
-     * outranks a bare `.brand-seal` (0,1,0) wherever it sits in the file. The
-     * first attempt at this fix was silently painted over for exactly that
-     * reason, and only a screenshot caught it.
-     */
-    expect(shellStyles).toMatch(/\.seal\.brand-seal \{\n\s*color: var\(--brand-mark\);/u);
+    const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(rulesFor(shellStyles, "var(--copper)")).toEqual(['.status-mark[data-state="asserted"]']);
+    expect(rulesFor(shellStyles, "var(--brand-mark)")).toEqual([".brand-mark", ".brand-mark::after"]);
+    expect(app).toContain('<span class="brand-mark" aria-hidden="true"><Icon name="airship" size={25} /></span>');
+    expect(app).not.toMatch(/<StatusMark[^>]*brand-mark/u);
   });
 });
 

@@ -46,25 +46,25 @@ async function sendOneTurn(page: import("@playwright/test").Page, prompt: string
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 20_000 });
   /*
-   * Waits for the turn to be OVER, which is a different moment from every
-   * cheaper signal nearby — and getting that wrong read as a Vault durability
-   * failure for the whole of this pass.
-   *
-   * `.message` nth(1) is the prompt, not the reply, because an empty
-   * conversation renders an assistant-shaped intro card first. The composer
-   * clears at SEND, not at completion, so `toHaveValue("")` is satisfied while
-   * the model is still speaking. The assistant bubble appears with the first
-   * token. Each of those returned early, the caller reloaded, and the turn was
-   * stranded with no durable terminal event — which is exactly what the product
-   * then reported: "TURN_INCOMPLETE: Turn <id> has no durable terminal event",
-   * quarantined on 4 runs in 6.
-   *
-   * The product was right every time. Measured on this build, the journal goes
-   * 5 events to 11 at the moment this footer appears; before it, a reload is
-   * reloading through the middle of a turn.
+   * Wait for the finalized local run record, not a cheaper nearby signal. The
+   * composer clears at SEND and the assistant card appears with the first token;
+   * reloading on either signal strands a turn with no durable terminal event.
+   * The raw completion footer is instrumented-only now. At Balanced, Run details
+   * is the neutral per-turn trace that arrives with the finalized receipt.
    */
-  await expect(page.locator(".part-footer").filter({ hasText: /Turn completed/u }).last())
-    .toBeVisible({ timeout: 40_000 });
+  const run = latestRunDetails(page);
+  await expect(run).toBeVisible({ timeout: 40_000 });
+  await expect(run).toHaveText(/^Run · .+ · [0-9a-f]{8}$/u);
+}
+
+function latestRunDetails(page: import("@playwright/test").Page) {
+  return page.locator('[data-transcript-card][data-message-role="assistant"]').last()
+    .getByRole("button", { name: /^Run details\./u });
+}
+
+function latestRunDetailsPanel(page: import("@playwright/test").Page) {
+  return page.locator('[data-transcript-card][data-message-role="assistant"]').last()
+    .getByRole("group", { name: "Run details" });
 }
 
 test.describe("a person who comes back", () => {
@@ -72,8 +72,8 @@ test.describe("a person who comes back", () => {
     const namespace = `resume-report-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
-    /* Turn-completion rows retire at the house density: the whole journey
-       fences on that row, so the run starts one rung up where the row exists. */
+    /* Finalized Run details retire at the house density. This journey fences
+       on that local record, so the run starts one rung up where it exists. */
     await setProfilePresentationDensity(page, "Balanced");
     await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
@@ -155,7 +155,7 @@ test.describe("a person whose Vault held the conversation", () => {
    * is now made in full, and if the adoption transaction regresses, this is
    * where it will be caught rather than where it was excused.
    */
-  test("keeps the whole conversation, its address and its draft across a reload", async ({ page }, testInfo) => {
+  test("keeps the conversation, address, draft and local run trace across a reload", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name !== "desktop-chromium",
       "One Chromium origin owns the device-Vault ceremony; the mobile project covers presentation.",
@@ -194,7 +194,14 @@ test.describe("a person whose Vault held the conversation", () => {
     const answer = (await page.locator(".message.assistant").last().innerText()).trim();
     expect(answer.length).toBeGreaterThan(0);
     const title = (await page.locator(".session-bar__title").innerText()).trim();
-    const journalHead = (await page.locator(".journal-chip").innerText()).replace(/\s+/gu, " ").trim();
+    const runName = await latestRunDetails(page).getAttribute("aria-label");
+    expect(runName).toMatch(/^Run details\. Provider .+\. Run urn:receipt:/u);
+    await latestRunDetails(page).click();
+    const runPanel = latestRunDetailsPanel(page);
+    await expect(runPanel.locator('[data-field="origin"]')).toContainText("Local run record");
+    const receiptId = await runPanel.locator('[data-field="receipt-id"] code').innerText();
+    expect(receiptId).toMatch(/^urn:receipt:/u);
+    await runPanel.getByRole("button", { name: "Done" }).click();
     const composer = page.getByRole("combobox", { name: "Message Airship" });
     const draft = "and one more thing I still need to check before Friday";
     await composer.fill(draft);
@@ -212,17 +219,18 @@ test.describe("a person whose Vault held the conversation", () => {
     expect(new URL(page.url()).hash).toBe(address);
     // The half-finished sentence is the person's, not the page's.
     await expect(composer).toHaveValue(draft, { timeout: 20_000 });
-    // And the conversation itself: the prompt, the reply, the name it was given
-    // and the journal head that proves the events came back rather than being
-    // re-created. This is the assertion the old exemption withheld.
+    // And the conversation itself: the prompt, the reply, the name it was given,
+    // and the exact neutral run record that came back with it. Receipt identity
+    // distinguishes restored trace metadata from a freshly generated answer.
     await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 30_000 });
-    // Not string-equality: `.message.assistant` includes the avatar's own text
-    // ("A", "Airship"), so comparing a slice compares chrome. The journal head
-    // asserted below is the real proof that these events came back rather than
-    // being re-created; this asserts a reply is there at all.
+    // Not string-equality: `.message.assistant` includes its own interface text;
+    // the stable run record below carries the trace identity.
     await expect(page.locator(".message.assistant").last()).not.toBeEmpty({ timeout: 30_000 });
     expect((await page.locator(".session-bar__title").innerText()).trim()).toBe(title);
-    expect((await page.locator(".journal-chip").innerText()).replace(/\s+/gu, " ").trim()).toBe(journalHead);
+    await expect(latestRunDetails(page)).toHaveAttribute("aria-label", runName!);
+    await latestRunDetails(page).click();
+    await expect(latestRunDetailsPanel(page).locator('[data-field="receipt-id"] code')).toHaveText(receiptId);
+    await expect(latestRunDetailsPanel(page).locator('[data-field="origin"]')).toContainText("Local run record");
     // And nothing on screen mourns a conversation that is on screen.
     await expect(page.locator(".composer-notice").filter({ hasText: LOSS_NOTICE })).toHaveCount(0);
     await expect(page.locator(REPORT)).toHaveCount(0);

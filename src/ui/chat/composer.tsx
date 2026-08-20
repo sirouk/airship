@@ -1,5 +1,4 @@
 import { useEffect, useState } from "preact/hooks";
-import { type SealState } from "../seal";
 import { densityAllows, usePresentationDensity } from "../density";
 import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
 
@@ -8,11 +7,11 @@ import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
  *
  * The composer's footer is the one band whose scope is "the keystroke you are
  * about to make", so everything here answers a question the user has at the
- * instant they press a key: what holds my credential, what will Enter do, and
+ * instant they press a key: what Enter will do, and
  * how much of the screen may this box take before it starts eating the
  * conversation. Each is a pure function first and a component second, because
- * every one of them was previously either invisible (the credential posture was
- * `display:none` on a phone), hover-only (the growth cap), or nowhere at all
+ * every one of them was previously either invisible, hover-only (the growth
+ * cap), or nowhere at all
  * (the Enter contract), and a fact that only exists inside a render pass cannot
  * be asserted.
  */
@@ -92,109 +91,15 @@ export function useNarrowComposer(query = COMPOSER_NARROW_PLACEHOLDER_QUERY): bo
   return narrow;
 }
 
-export type ComposerPostureKind = "local-demo" | "local-endpoint" | "key-in-memory" | "offline";
-
-export type ComposerPostureClaim = Readonly<{
-  kind: ComposerPostureKind;
-  state: SealState;
-  /** ≤ 16 characters: the resting chip may never truncate its own verdict. */
-  label: string;
-  /** The full sentence. Visible in the popover — never hover-only. */
-  detail: string;
-}>;
-
-const COMPOSER_POSTURE_CLAIMS: Readonly<Record<ComposerPostureKind, ComposerPostureClaim>> = Object.freeze({
-  "local-demo": Object.freeze({
-    kind: "local-demo",
-    state: "none",
-    label: "Local demo",
-    /*
-     * A credential claim, and only a credential claim.
-     *
-     * It used to end "…and this conversation's journal is page memory only",
-     * which is a durability claim this chip has no input for. The Atlas caught
-     * it stating the opposite of the truth 40px from the chip that owns the
-     * fact: with the Local Device Vault adopted, the session chip's accessible
-     * name read "Session. Encrypted · this device." while this one read
-     * "…journal is page memory only" — two chips, one composer row, opposite
-     * answers about the same conversation. Durability is derived from the
-     * adopted runtime by `describeSessionDurability` and rendered by the
-     * session status chip; this one speaks for the credential.
-     */
-    detail: "No provider credential is held. Replies come from a deterministic local demo running in this tab.",
-  }),
-  "local-endpoint": Object.freeze({
-    kind: "local-endpoint",
-    state: "verified",
-    label: "Local endpoint",
-    detail: "Inference runs against a model server on this machine. No account credential is held, and nothing leaves this computer.",
-  }),
-  "key-in-memory": Object.freeze({
-    kind: "key-in-memory",
-    state: "asserted",
-    label: "Key in memory",
-    detail: "The provider credential is held in this tab's page memory only. It is never written to disk and is gone when the tab closes.",
-  }),
-  offline: Object.freeze({
-    kind: "offline",
-    state: "attention",
-    label: "Offline",
-    detail: "",
-  }),
-});
-
-/**
- * What holds the credential for the message about to be sent.
- *
- * This fact shipped as a 164.9px caption on desktop and at literally 0×0px on a
- * phone (`.composer-tools span:nth-child(2) { display: none }`), which is a P9
- * violation: the surface that states what your keystroke is about to trust was
- * blank on the device most likely to be someone else's. It is a chip now, at
- * every breakpoint, and the chip expands to the whole sentence.
- */
-export function composerPosture(input: Readonly<{
-  online: boolean;
-  offlineReason: string;
-  inferenceConnected: boolean;
-  /** `"local-none"` is the binding a self-hosted model server produces. */
-  authMethod?: string;
-}>): ComposerPostureClaim {
-  if (!input.online) {
-    return Object.freeze({ ...COMPOSER_POSTURE_CLAIMS.offline, detail: input.offlineReason });
-  }
-  if (!input.inferenceConnected) return COMPOSER_POSTURE_CLAIMS["local-demo"];
-  return input.authMethod === "local-none"
-    ? COMPOSER_POSTURE_CLAIMS["local-endpoint"]
-    : COMPOSER_POSTURE_CLAIMS["key-in-memory"];
-}
-
-/*
- * `ComposerPostureChip` used to be here, and the claim it rendered still is.
- *
- * The chip put "Key in memory" inside the box a person types their message
- * into. It got there for a good reason — the same fact had shipped as a caption
- * that computed to 0×0px on a phone — but the fix moved a standing caveat into
- * the one control on the screen that exists for the reader's own words. The
- * claim `composerPosture` returns is now a row in the runtime chip's sheet,
- * beside the model it is a credential for and the conversation's other facts,
- * which is both visible on every device and somewhere a person looks for it.
- *
- * The chip's second job did not move: the Send refusal it mirrored (because a
- * `title` has no touch gesture) is stated under the composer as a status line,
- * present only while Send is actually refusing.
- */
 
 /**
  * Why an attachment-only composer refuses Enter, in one sentence, everywhere.
  *
- * "Encrypted request" was claimed unconditionally, but every browser-cloud
- * provider declares the `provider-tls` boundary — plaintext beyond TLS, which
- * its own posture chip reads "Remote · not encrypted end to end". The word is
- * earned only on the app-encrypted (`e2ee-attestable`) boundary; everywhere
- * else the sentence says "the request", which is strictly true.
+ * The sentence stays at the one fact this composer owns: the image travels in
+ * the request beside the prompt, so a sendable turn needs both.
  */
-export function composerAttachmentNeedsText(encryptedRequest: boolean): string {
-  return `Add a message to send with this attachment. The image travels inside the ${encryptedRequest ? "encrypted " : ""}request beside your prompt, so a turn needs both.`;
+export function composerAttachmentNeedsText(): string {
+  return "Add a message to send with this attachment. The image travels inside the request beside your prompt, so a turn needs both.";
 }
 
 /** What this page runtime can currently do with an image the composer holds. */
@@ -207,8 +112,8 @@ export type ComposerVisionCapability = "supported" | "model-lacks-vision" | "dis
  * attachment cap was treated as a non-event: only the MIME rejection produced
  * a sentence, and the success clause was derived from the *admitted* count, so
  * dropping a ninth image onto eight pending ones announced "0 images are ready
- * for inline encrypted vision inference" — a success sentence, with a zero in
- * it, for a file that was thrown away. A refusal that cannot be read is
+ * for inline vision inference" — a success sentence, with a zero in it, for a
+ * file that was thrown away. A refusal that cannot be read is
  * indistinguishable from a bug, so the counts are stated and the success
  * clause only appears when something was actually admitted.
  */
@@ -217,13 +122,6 @@ export function composerAttachmentNotice(input: Readonly<{
   rejected: number;
   overflow: number;
   capability: ComposerVisionCapability;
-  /**
-   * True only on the app-encrypted (`e2ee-attestable`) transport boundary.
-   * The "encrypted" in the admitted clause is the same claim
-   * `composerAttachmentNeedsText` parameterizes, and `provider-tls` does not
-   * earn it.
-   */
-  encryptedRequest: boolean;
 }>): string | undefined {
   const refusals: string[] = [];
   if (input.rejected > 0) {
@@ -234,7 +132,7 @@ export function composerAttachmentNotice(input: Readonly<{
   }
   const admitted = input.added > 0
     ? input.capability === "supported"
-      ? `${input.added} image${input.added === 1 ? " is" : "s are"} ready for inline ${input.encryptedRequest ? "encrypted " : ""}vision inference.`
+      ? `${input.added} image${input.added === 1 ? " is" : "s are"} ready for inline vision inference.`
       : input.capability === "model-lacks-vision"
         ? "Choose a model whose provider or local-discovery record explicitly includes image input before sending."
         : "Connect a vision-capable inference model before sending this image."

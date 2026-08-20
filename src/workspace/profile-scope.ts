@@ -37,7 +37,7 @@ export function profileFacingWorkspacePath(storagePath: string): string | undefi
  * Present one Profile's storage namespace as an ordinary `/workspace`.
  *
  * The backing Vault/OPFS/S3 authority remains global, while every path visible
- * to files, Git, indexes, tools, memory, Proof acquisition, and terminals is
+ * to files, Git, indexes, tools, memory, session records, and terminals is
  * rooted under the active Profile. Consumers never receive the backing port.
  */
 export class ProfileWorkspacePort implements WorkspacePort {

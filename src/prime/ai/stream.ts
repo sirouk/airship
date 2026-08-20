@@ -1,6 +1,5 @@
 import { AssistantMessageEventStream } from "./event-stream";
 import { resolveApiProvider } from "./registry";
-import "./providers/register-builtins";
 import type {
   Api,
   AssistantMessage,
@@ -12,8 +11,10 @@ import type {
 
 /**
  * Port of prime-agent packages/ai/src/stream.ts with a browser-native twist:
- * provider registration is lazy, so stream() awaits the provider loader and
- * surfaces loader failures through the stream protocol (never by throwing).
+ * provider resolution is lazy, so stream() awaits an explicitly installed
+ * provider loader and surfaces loader failures through the stream protocol.
+ * The web product does not install the ported built-ins; stock turns use the
+ * admitted Airship InferenceTransport instead.
  */
 export function emptyUsage() {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };

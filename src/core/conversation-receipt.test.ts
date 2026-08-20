@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationReceipt } from "./conversation-receipt";
 import { finalizeProviderReceipt } from "./conversation-receipt";
+
+const AUTHORITY = Object.freeze({
+  sessionId: "session-1",
+  turnId: "turn-1",
+  provider: "final-provider",
+  model: "provider/model",
+});
 import { stableStringify } from "./hash";
 
 describe("finalizeProviderReceipt", () => {
@@ -21,12 +28,11 @@ describe("finalizeProviderReceipt", () => {
       extra: { nested: "drop-me" },
     } as unknown as ConversationReceipt;
 
-    const finalized = finalizeProviderReceipt(
-      receipt,
-      "final-provider",
-      "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      "sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    );
+    const finalized = finalizeProviderReceipt(receipt, {
+      ...AUTHORITY,
+      requestDigest: "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      responseDigest: "sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    });
 
     expect(stableStringify(finalized as unknown as Parameters<typeof stableStringify>[0])).not.toContain("undefined");
     expect(finalized).toMatchObject({
@@ -51,7 +57,7 @@ describe("finalizeProviderReceipt", () => {
       provider: "upstream",
       timings: {},
       toolCalls: [{ id: "call-1", name: undefined }],
-    } as unknown as ConversationReceipt, "final-provider");
+    } as unknown as ConversationReceipt, AUTHORITY);
 
     expect(finalized.timings).toBeUndefined();
     expect(finalized.toolCalls).toBeUndefined();
@@ -74,7 +80,7 @@ describe("finalizeProviderReceipt", () => {
       provider: "upstream",
       timings: oversizedTimings,
       toolCalls: oversizedToolCalls,
-    } as unknown as ConversationReceipt, "final-provider");
+    } as unknown as ConversationReceipt, AUTHORITY);
     const negativeTiming = finalizeProviderReceipt({
       version: 1,
       receiptId: "urn:receipt:test",
@@ -83,7 +89,7 @@ describe("finalizeProviderReceipt", () => {
       createdAt: "2026-07-24T12:00:00.000Z",
       provider: "upstream",
       timings: { totalMs: -1 },
-    } as unknown as ConversationReceipt, "final-provider");
+    } as unknown as ConversationReceipt, AUTHORITY);
 
     expect(finalized.timings).toBeUndefined();
     expect(finalized.toolCalls).toBeUndefined();
@@ -98,7 +104,7 @@ describe("finalizeProviderReceipt", () => {
       turnId: "turn-1",
       createdAt: "2026-07-24T12:00:00.000Z",
       provider: "upstream",
-    } as unknown as ConversationReceipt, "final-provider")).toThrow(/Conversation receipt ID is invalid/u);
+    } as unknown as ConversationReceipt, AUTHORITY)).toThrow(/Conversation receipt ID is invalid/u);
 
     expect(() => finalizeProviderReceipt({
       version: 1,
@@ -107,7 +113,7 @@ describe("finalizeProviderReceipt", () => {
       turnId: "turn-1",
       createdAt: "not-a-timestamp",
       provider: "upstream",
-    } as unknown as ConversationReceipt, "final-provider")).toThrow(/must be canonical ISO 8601/u);
+    } as unknown as ConversationReceipt, AUTHORITY)).toThrow(/must be canonical ISO 8601/u);
 
     expect(() => finalizeProviderReceipt({
       version: 1,
@@ -117,7 +123,7 @@ describe("finalizeProviderReceipt", () => {
       createdAt: "2026-07-24T12:00:00.000Z",
       provider: "upstream",
       requestDigest: "sha256:not-valid",
-    } as unknown as ConversationReceipt, "final-provider")).toThrow(/Conversation request digest is invalid/u);
+    } as unknown as ConversationReceipt, AUTHORITY)).toThrow(/Conversation request digest is invalid/u);
 
     expect(() => finalizeProviderReceipt({
       version: 1,
@@ -126,7 +132,27 @@ describe("finalizeProviderReceipt", () => {
       turnId: "turn-1",
       createdAt: "2026-07-24T12:00:00.000Z",
       provider: "upstream",
-    } as unknown as ConversationReceipt, "")).toThrow(/Conversation provider ID is invalid/u);
+    } as unknown as ConversationReceipt, { ...AUTHORITY, provider: "" })).toThrow(/Conversation provider ID is invalid/u);
+  });
+
+  it("rejects provider receipt identity that is foreign to the active route", () => {
+    const receipt = {
+      version: 1,
+      receiptId: "urn:receipt:foreign",
+      sessionId: "other-session",
+      turnId: "other-turn",
+      createdAt: "2026-07-24T12:00:00.000Z",
+      provider: "upstream",
+      model: "other-model",
+    } as unknown as ConversationReceipt;
+
+    expect(() => finalizeProviderReceipt(receipt, AUTHORITY))
+      .toThrow(/identity does not match the active turn/u);
+    expect(() => finalizeProviderReceipt({
+      ...receipt,
+      sessionId: AUTHORITY.sessionId,
+      turnId: AUTHORITY.turnId,
+    }, AUTHORITY)).toThrow(/model does not match the active inference route/u);
   });
 
   it("drops oversized tool-call ids and names instead of keeping unbounded text", () => {
@@ -138,7 +164,7 @@ describe("finalizeProviderReceipt", () => {
       createdAt: "2026-07-24T12:00:00.000Z",
       provider: "upstream",
       toolCalls: [{ id: "c".repeat(513), name: "read_file" }, { id: "call-2", name: "n".repeat(513) }],
-    } as unknown as ConversationReceipt, "final-provider");
+    } as unknown as ConversationReceipt, AUTHORITY);
 
     expect(finalized.toolCalls).toBeUndefined();
   });
@@ -159,7 +185,7 @@ describe("finalizeProviderReceipt", () => {
       },
     }) as unknown as ConversationReceipt;
 
-    expect(() => finalizeProviderReceipt(receipt, "final-provider")).toThrow(/version is invalid/u);
+    expect(() => finalizeProviderReceipt(receipt, AUTHORITY)).toThrow(/version is invalid/u);
     expect(accessed).toBe(false);
   });
 });

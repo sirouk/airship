@@ -48,6 +48,7 @@ These are the only inference postures Airship currently claims.
 | Storage rollback or fork | authenticated heads, immutable objects, conflict visibility | an isolated device may not notice immediately |
 | Credential leakage | page-memory custody, no URL/storage/log persistence | a compromised runtime can still read live secrets |
 | Tool prompt injection | typed tools, approval policy, origin labeling, least privilege | a user can still approve a bad action |
+| Model-written JavaScript escapes its kernel | dedicated worker-only eval CSP, private controller closure, per-generation capability, ambient-channel scrubbing, strict host frame/state/budget checks | CPU and memory denial remain bounded mainly by worker termination; approved tool effects still have their declared authority |
 | Duplicate side effects after crash | operation IDs and journal-first execution discipline | external systems may still need reconciliation |
 | XSS or malicious same-origin code | strict static-host security boundary and minimized dependencies | trusted same-origin code still sees plaintext |
 | Device compromise | key wrapping, recovery, rotation, revocation flows | a compromised active device can read its plaintext |

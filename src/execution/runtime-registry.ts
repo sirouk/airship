@@ -23,7 +23,6 @@ export type ExecutionRuntimeId =
   | "javascript-worker"
   | "wasi-preview1"
   | "python-pyodide"
-  | "wasix"
   | "node-webcontainer"
   /** Airship's own POSIX-sh interpreter. Deliberately not named `bash`. */
   | "airship-sh";
@@ -65,7 +64,7 @@ export type ExecutionCapability = Readonly<{
     | "direct-process"
     | "unavailable";
   /** `airship-sh` is a POSIX-sh-compatible interpreter, never GNU Bash. */
-  shell: "none" | "airship-sh" | "wasix-bash" | "webcontainer-jsh" | "unavailable";
+  shell: "none" | "airship-sh" | "webcontainer-jsh" | "unavailable";
   workspaceAccess: "none" | "bounded-snapshot-writeback" | "unavailable";
   output: "bounded-stream" | "unavailable";
   /**
@@ -78,8 +77,8 @@ export type ExecutionCapability = Readonly<{
   /**
    * Why an advertised runtime is unavailable *on this host*, and what would
    * change it. Its absence is a different claim from its presence: absent means
-   * the release itself offers no path (wasix), which nothing the reader does can
-   * fix; present means the release does advertise one and this browser or page
+   * the release itself offers no path, which nothing the reader does can fix;
+   * present means the release does advertise one and this browser or page
    * blocked it, which is usually the reader's to act on. Collapsing the two is
    * what let the Capabilities route tell a cross-origin-isolation failure that
    * no activation path was advertised.
@@ -171,21 +170,6 @@ const OPTIONAL_CAPABILITIES: readonly ExecutionCapability[] = Object.freeze([
     output: "bounded-stream",
     cancellation: "terminate-worker",
     detail: "Optional pinned Pyodide pack; explicit cold install, fresh interpreter per job, bounded virtual workspace snapshots with optional revision-checked text writeback, standard library only, and no runtime network binding.",
-  },
-  {
-    id: "wasix",
-    label: "Bash · Wasmer WASIX",
-    languages: ["bash", "shell"],
-    state: "unavailable",
-    tier: "web-enhanced",
-    isolation: "dedicated-worker",
-    persistence: "ephemeral",
-    commandInterface: "unavailable",
-    shell: "unavailable",
-    workspaceAccess: "unavailable",
-    output: "unavailable",
-    cancellation: "unavailable",
-    detail: "Not promoted: the pinned @wasmer/sdk 0.10.0 browser probe separated output and proved Worker-tree cancellation, but did not preserve nonzero Bash status or bidirectional mounted-workspace mutations. Use Node WebContainer for Node/npm projects or Pyodide for Python. Full browser Bash, Git inside WASIX, and a Rust compiler remain unavailable.",
   },
   {
     id: "node-webcontainer",
@@ -327,7 +311,7 @@ export class ClientExecutionRuntime {
         remedy: "Open Airship in a browser release that exposes Web Workers and WebAssembly.",
       });
     }
-    if (capability.id === "node-webcontainer" || capability.id === "wasix") {
+    if (capability.id === "node-webcontainer") {
       if (typeof document === "undefined") {
         return blockedBy(capability, {
           condition: "This environment has no browser document.",

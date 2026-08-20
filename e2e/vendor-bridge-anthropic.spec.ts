@@ -27,16 +27,9 @@ async function mockAnthropicBridge(page: Page): Promise<void> {
   let call = 0;
   await page.route("https://api.anthropic.com/v1/messages", (route) => {
     call += 1;
-    // 1 activation probe; 2 conversation naming; 3 the tool-offering turn;
-    // 4 the continuation after the approved write.
-    const frames = call <= 2
-      ? [
-        frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
-        frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Mint Tea Memory" } }),
-        frame("message_start", { type: "message_start", message: { usage: { input_tokens: 12 } } }),
-        frame("message_stop", { type: "message_stop" }),
-      ]
-      : call === 3
+    // Activation and naming are local. The first provider call offers the tool;
+    // the second is the continuation after the approved write.
+    const frames = call === 1
       ? [
         frame("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tool_bridge_1", name: "update_memory", input: {} } }),
         frame("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(TOOL_ARGS) } }),
@@ -58,7 +51,7 @@ async function mockAnthropicBridge(page: Page): Promise<void> {
 test("anthropic messages lane: tool call docks for approval before the memory write", async ({ page }) => {
   await mockAnthropicBridge(page);
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Cloud and local models", exact: true, level: 2 })).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press("Escape");
   const setup = page.locator("#provider-setup-anthropic");
   await setup.scrollIntoViewIfNeeded();
@@ -98,8 +91,8 @@ test("anthropic messages lane: tool call docks for approval before the memory wr
   if (!(await records.evaluate((element: HTMLDetailsElement) => element.open))) {
     await records.locator("summary").click();
   }
-  // Scoped to the record list, same reason as the OpenAI lane: the proof is
-  // that the write is in the profile's corpus, not that the text is on screen.
+  // Scoped to the record list, same reason as the OpenAI lane: the check shows
+  // that the write is in the profile's corpus, not only that text is on screen.
   const record = records.locator("text=Likes mint tea").first();
   await expect(record).toBeVisible({ timeout: 15_000 });
 });

@@ -127,7 +127,7 @@ const LOCAL_COMMAND_VERB: Readonly<Record<LocalCommandOutcome, string>> = Object
  *
  * The command is named because this lane routinely runs several in a row, and
  * the detail is the sentence already written into the transcript, so audible
- * proof and durable proof carry the same claim.
+ * audible feedback and the durable record describe the same outcome.
  */
 export function localCommandAnnouncement(
   command: string,

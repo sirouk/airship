@@ -51,10 +51,10 @@ export function labEnvironment(base = process.env) {
     AIRSHIP_LOCAL_S3_NAMESPACE: LOCAL_LAB.namespace,
     AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
     AIRSHIP_LOCAL_S3_SECRET_KEY: LOCAL_LAB.secretAccessKey,
-    // The ordinary product must remain Drive-first even when its disposable
-    // MinIO harness is running. S3 is reachable only after the user selects
-    // the explicit advanced/local-lab provider; the harness never changes the
-    // storage promise visible to an ordinary browser session.
+    // Host composition is explicit. Stock Vite builds never expose this adapter,
+    // even on localhost; only this lab-owned process opts the selector in.
+    VITE_AIRSHIP_ENABLE_LOCAL_LAB: "1",
+    // The lab still starts Drive-first. Local MinIO remains an explicit choice.
     VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "google-drive",
     VITE_GOOGLE_CLIENT_ID: base.VITE_GOOGLE_CLIENT_ID ?? LOCAL_LAB_GOOGLE_CLIENT_ID,
   });

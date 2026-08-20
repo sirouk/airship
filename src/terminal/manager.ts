@@ -260,7 +260,7 @@ export class BrowserTerminalManager {
       .map(snapshot));
   }
 
-  /** Closed tabs stay available to audit/proof integration until bounded pruning. */
+  /** Closed tabs stay available to local history inspection until bounded pruning. */
   archived(profileId?: string): readonly TerminalSessionSnapshot[] {
     return Object.freeze([...this.sessions.values()]
       .filter((session) => Boolean(session.closedAt) && session.profileId === profileId)

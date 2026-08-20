@@ -135,7 +135,7 @@ export function createPrimeListFilesTool(workspace: WorkspacePort): Tool {
         .sort((left, right) => left.path.localeCompare(right.path));
       /*
        * Cursor ordering uses localeCompare because both airship backends
-       * sort with it (src/workspace/memory.ts, src/workspace/indexeddb.ts);
+       * sort with it (including src/workspace/memory.ts);
        * comparing the same way means a cursor names the same boundary the
        * inventory was sorted by, not a boundary byte-ordered differently.
        */

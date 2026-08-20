@@ -138,7 +138,7 @@ async function harness() {
       version: 2, profileId: "engineer", profileRevision: digest, themeId: "plain", themeDigest: digest,
       resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
       workspaceBinding: { kind: "active-workspace" }, memoryScope: "profile",
-      approvalMode: "ask-first", minimumPosture: "local",
+      approvalMode: "ask-first",
     },
   });
   const session = await journal.createSession("Engineer", manifest);

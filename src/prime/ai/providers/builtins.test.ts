@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { hasApiProvider, registeredApis, resolveApiProvider, stream } from "../index";
+import "./register-builtins";
+import { hasApiProvider, registeredApis, resolveApiProvider } from "../registry";
+import { stream } from "../stream";
 import type { Context, Model } from "../types";
 import { collectEvents, sseJson, sseResponse, stubFetch } from "./provider.test-support";
 
@@ -25,6 +27,52 @@ describe("builtin provider registration", () => {
       expect(provider?.api).toBe(api);
       expect(typeof provider?.stream).toBe("function");
       expect(typeof provider?.streamSimple).toBe("function");
+    }
+  });
+
+  it("applies Chutes wire metadata by provider id through a custom proxy URL", async () => {
+    const model: Model<"openai-completions"> = {
+      id: "org/reasoning-model",
+      name: "Reasoning model",
+      api: "openai-completions",
+      provider: "chutes",
+      baseUrl: "https://proxy.example/openai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32_000,
+      maxTokens: 4_096,
+    };
+    const context: Context = {
+      systemPrompt: "Use the tools carefully.",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    };
+    const stub = stubFetch(() =>
+      sseResponse([
+        sseJson("message", {
+          id: "chatcmpl-1",
+          model: model.id,
+          choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+        }),
+        { data: "[DONE]" },
+      ]),
+    );
+    try {
+      await stream(model, context, { apiKey: "k", maxTokens: 100 }).result();
+      expect(stub.requests).toHaveLength(1);
+      expect(stub.requests[0].url).toBe("https://proxy.example/openai/v1/chat/completions");
+      const body = stub.requests[0].body as {
+        max_tokens?: number;
+        max_completion_tokens?: number;
+        store?: boolean;
+        messages: { role: string }[];
+      };
+      expect(body.max_tokens).toBe(100);
+      expect(body.max_completion_tokens).toBeUndefined();
+      expect(body.store).toBeUndefined();
+      expect(body.messages[0].role).toBe("system");
+    } finally {
+      stub.restore();
     }
   });
 

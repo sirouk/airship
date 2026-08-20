@@ -1,6 +1,6 @@
 export const OFFLINE_RUNTIME_LABEL = "Offline · local only";
 export const OFFLINE_RUNTIME_DETAIL = "Remote inference, sync, and account reads are paused";
-export const OFFLINE_INLINE_REASON = "Offline · remote services are paused. Local commands, workspace, memory, and cached proof remain available.";
+export const OFFLINE_INLINE_REASON = "Offline · remote services are paused. Local commands, workspace, memory, and cached records remain available.";
 
 export type ConnectivityNavigator = Readonly<{ onLine: boolean }>;
 
@@ -26,7 +26,7 @@ export function remoteComposerBlocked(
 /**
  * Owns the browser connectivity event pair and immediately reconciles the
  * caller with the current navigator value. The signal is reachability posture,
- * not proof that any particular provider is healthy.
+ * not evidence that any particular provider is healthy.
  */
 export function observeConnectivity(
   events: ConnectivityEventSource,

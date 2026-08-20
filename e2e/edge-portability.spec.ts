@@ -248,7 +248,7 @@ function assertPromptPromotionContract(snapshot: PortabilitySnapshot): void {
       expect(snapshot.prompt).toContain(`${entry.id} [api-exposed]`);
     }
   }
-  expect(snapshot.prompt).toContain("not an execution grant or proof that a workload is using an accelerator");
+  expect(snapshot.prompt).toContain("not an execution grant or evidence that a workload is using an accelerator");
   expect(snapshot.prompt).toContain("consuming runtimes report their active backend separately");
   expect(snapshot.entries.every(({ evidence }) => evidence === "probe-passed" || evidence === "api-exposed")).toBe(true);
 
@@ -381,22 +381,26 @@ async function exerciseCoreLocalSurfaces(page: Page): Promise<void> {
   await expectNoPageOverflow(page, "Terminal");
   await expectSemanticAccessibility(page, "Terminal");
 
-  await page.goto("/#proof");
-  await expect(page.getByRole("heading", { name: "Proof", level: 1 })).toBeVisible();
-  const summaryTab = page.getByRole("tab", { name: "Receipt & journal" });
-  const evidenceTab = page.getByRole("tab", { name: "Attestation evidence" });
-  await expect(summaryTab).toHaveAttribute("aria-selected", "true");
-  await expect(summaryTab).toHaveAttribute("aria-controls", "proof-panel-summary");
-  await expect(evidenceTab).toHaveAttribute("aria-controls", "proof-panel-attestations");
-  await summaryTab.focus();
-  await summaryTab.press("ArrowRight");
-  await expect(evidenceTab).toHaveAttribute("aria-selected", "true");
-  await expect(evidenceTab).toBeFocused();
-  await evidenceTab.press("ArrowLeft");
-  await expect(summaryTab).toHaveAttribute("aria-selected", "true");
-  await expect(summaryTab).toBeFocused();
-  await expectNoPageOverflow(page, "Proof");
-  await expectSemanticAccessibility(page, "Proof");
+  await page.goto("/#sessions");
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
+  const traceToggle = page.locator(".session-integrity__row");
+  await expect(traceToggle).toBeVisible();
+  await traceToggle.focus();
+  if (await traceToggle.getAttribute("aria-expanded") === "false") await traceToggle.press("Enter");
+  await expect(traceToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("Journal structure passed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Conversation continuity" })).toContainText("Journal head");
+
+  const runtimeRecord = page.locator("details.session-library-technical");
+  const runtimeRecordSummary = runtimeRecord.locator(":scope > summary");
+  await runtimeRecordSummary.focus();
+  await runtimeRecordSummary.press("Enter");
+  await expect(runtimeRecord).toHaveAttribute("open", "");
+  await expect(page.locator("#session-transcript-title")).toHaveText("Transcript");
+  await expect(runtimeRecord.getByRole("region", { name: "Transcript" }))
+    .toContainText("Tool payloads and internal events are intentionally not rendered here.");
+  await expectNoPageOverflow(page, "All conversations");
+  await expectSemanticAccessibility(page, "All conversations");
 }
 
 async function expectNoPageOverflow(page: Page, surface: string): Promise<void> {

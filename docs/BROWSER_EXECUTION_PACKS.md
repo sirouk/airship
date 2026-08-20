@@ -13,7 +13,6 @@ pretending that every device contains a Linux host.
 | JavaScript Worker | ready when disposable Workers are available | calculations, transformations, small scripts | 64 KiB source, 10 s maximum, terminated Worker, no DOM/network/storage binding |
 | WASI Preview 1 (`browser_wasi_shim` 0.4.2) | ready when Worker + WebAssembly are available | precompiled command artifacts, including Rust built elsewhere for `wasm32-wasip1` | artifact supplied as a workspace `wasmPath` or inline `wasmBase64`, 4 MiB either way; 64 MiB memory check; 10 s maximum; printable-ASCII argv, env, stdout/stderr, clock/random; optional 256-file, 4 MiB virtual-workspace snapshot with revision-checked writeback; no sockets, host filesystem, Bash, or compiler |
 | Pyodide Python 314.0.2 | installable, then ready after a live probe | Python standard library, bounded workspace projects, args/env, streams, JSON-compatible results | locked same-origin npm assets; fresh disposable Worker; 64 KiB source, 256 KiB per stream; a 10 s job budget that starts after the interpreter reports ready, plus a separate 30 s cold-boot budget; no packages or runtime network |
-| Wasmer/WASIX | unavailable; research-only live promotion gate | possible future real WASIX Bash scripts | `@wasmer/sdk` 0.10.0, Bash 1.0.18, and coreutils 1.0.25 are pinned; separated output and Worker-tree cancellation work, but exit status and bidirectional mounted-workspace semantics do not, so no Bash tool is advertised |
 | Node WebContainer 1.6.4 | explicitly activatable or unavailable | real Node/npm/pnpm/yarn project commands | StackBlitz runtime delivery, cross-origin isolation, provider terms/licensing, network approval, and browser suspension apply |
 
 The Workspace Terminal uses the same singleton WebContainer host through a
@@ -66,9 +65,7 @@ selected workspace root can be projected into a bounded in-memory preopen;
 successful changes use per-file revision checks before adoption, while failed,
 aborted, and timed-out commands adopt nothing. Airship does not ship `rustc`,
 Cargo, a Rust source compiler, Bash, sockets, host files, or an ambient persistent
-guest filesystem in that tier. The separate WASIX Bash candidate remains non-ready until its
-bidirectional workspace, subprocess-output, cancellation, and browser-matrix
-gates pass below.
+guest filesystem in that tier.
 
 The pinned shim is the MIT/Apache-2.0 upstream implementation documented at
 <https://github.com/bjorn3/browser_wasi_shim>. Its own contract is a subset of
@@ -166,144 +163,6 @@ Because
 `WorkspacePort` has no multi-file transaction, a cross-device race late in a
 multi-file adoption can produce a reported partial write before the conflict.
 Interpreter and plaintext scratch state are never written to the selected Vault.
-
-For fuller CLI compatibility, the Wasmer SDK can run WASIX packages and mount
-virtual directories. Airship now ships that integration only as an explicit,
-fail-closed promotion candidate. It is not added to the session capability tier
-unless command, Worker-tree cancellation, bidirectional workspace, and
-subprocess-output probes all pass.
-
-## WASIX Bash promotion candidate
-
-The candidate locks `@wasmer/sdk` 0.10.0 and resolves exact Bash 1.0.18 through
-`fromRegistry()` so its declared coreutils dependency is not discarded. It
-admits only the pinned Bash and coreutils 1.0.25 metadata, atom signatures, and
-content-addressed WebC digests. Its fetch guard allows the same-origin SDK
-assets, one Wasmer registry POST shape, and the two exact CDN URLs; it does not
-expose ambient guest fetch or a WASIX network gateway. Registry/CDN delivery is
-therefore an explicit provider boundary, not the execution authority.
-
-Each job gets a disposable outer Worker. The Worker replaces its nested Worker
-constructor before loading the SDK, tracks every SDK child Worker, and
-terminates the set before acknowledging cancellation. Activation runs a real
-Bash marker, starts and cancels an infinite Bash loop, requires an explicit
-`exit 7` with separated stdout/stderr, and checks bidirectional mounted bytes.
-The capability becomes ready only if every probe passes and cancellation
-observes at least one SDK child Worker. A missing acknowledgment fails closed
-and the outer Worker is terminated after one second.
-
-Workspace admission uses the shared opaque-byte codec: 256 files, 512 KiB per
-file, 4 MiB total, and 512 directory entries on return. `.git`, `.airship`, `node_modules`,
-and all Airship control-plane paths are excluded on both ingress and egress.
-Successful explicit writeback preflights source revisions and uses per-file CAS.
-It is deliberately not described as an atomic multi-file transaction; a late
-race can report a partial adoption. Binary outputs round-trip through the same
-reversible envelope instead of being dropped or decoded as UTF-8.
-Stdout and stderr each have a 256 KiB streaming/final-result budget.
-
-Current live Chromium evidence on 2026-07-22 is a **no-go**, not a simulated
-success. A dedicated outer Worker runs pinned real Bash, separates bounded
-stdout/stderr through nonce-bound control records, and proves that cancellation
-terminates the SDK child-Worker tree. That control channel is not a valid exit
-status oracle: both `false` and `exit 7` were observed as status 0 while the raw
-SDK `Output.code` was 45. Spawning a nested Bash instead produced 45 for
-`exit 7` and intermittently for success. Airship records the SDK code as
-provider telemetry; it does not normalize 45 into success.
-
-The mounted-workspace probe is independently non-conforming. With known input
-and a pre-created output, the script's stdout/stderr were empty and the output
-mutation was not surfaced by the SDK `Directory`, so nothing could be adopted.
-Activation's explicit `exit 7` probe rejects before registration; the mounted
-workspace defect is also reproduced independently by the same live diagnostic.
-The public runtime remains `unavailable`. Intermittent dependency-registry
-failures likewise remain provider failures, not local execution results.
-
-The 2026-07-23 rerun also corrected every `DirectoryInit` key to the SDK's
-documented absolute spelling and changed the loader from a bare Bash
-`fromFile()` to dependency-aware exact `fromRegistry()`. The same status and
-mounted-writeback failures reproduced. Those integration corrections remain in
-the candidate, but they do not justify promotion.
-
-The opt-in live gate is:
-
-```text
-AIRSHIP_LIVE_WASIX=1 npx playwright test e2e/browser-worker.spec.ts \
-  --project=desktop-chromium --grep "pinned WASIX candidate records its live no-go"
-```
-
-Promotion requires a faithful Bash child exit, correctly separated
-streamed output, byte-identical bidirectional workspace access, writeback, and
-tracked child-Worker cancellation in the same run.
-Nothing in this pack claims Git, a Rust compiler, Cargo, a package manager,
-guest sockets, host files, process resume, or offline availability.
-
-## BrowserPod 2.14 and CheerpX evaluation — not promoted
-
-BrowserPod is a technically credible future shell candidate, but it is not an
-Airship execution pack. The 2026-07-23 audit used the published
-`browserpod@2.14.0` package and current official documentation. BrowserPod 2.0
-added real browser-side Bash, Git, curl, BusyBox-style utilities, and Node;
-2.9/2.10 describe preliminary Rust support. The current changelog does not
-record a Python release, so Airship does not infer one from the product
-roadmap. These are useful capabilities, but they do not override the pack
-contract or product boundary.
-
-Promotion is a **NO-GO** for the current release:
-
-- `BrowserPod.boot()` requires a BrowserPod API key. The provider explicitly
-  says that the secret is ultimately available to client JavaScript, identifies
-  the application, and tracks usage. There is no documented public-client OAuth
-  or short-lived delegated-token flow. Airship will not embed a shared metered
-  key, add another long-lived credential field, or silently put that key in a
-  static bundle.
-- Boot is a billed control-plane operation: ten tokens are charged per start
-  and again for each additional hour. Personal and Pro plans are both metered;
-  commercial use requires Pro, while self-hosting requires Enterprise. This is
-  a separately billed proprietary service, not a dependency Airship can add as
-  a universal browser capability.
-- The npm package is a 3 KiB proprietary loader, not a self-contained runtime.
-  Its entry point constructs a dynamic import with `new Function()` and loads
-  `https://rt.browserpod.io/2.14.0/browserpod.js`. That conflicts with Airship's
-  no-`unsafe-eval`, same-origin/script-digest release policy; the runtime itself
-  is neither shipped nor digest-bound by the npm artifact.
-- The published 2.14 type contract exposes an empty `Process` handle, and
-  `run()` resolves only after exit. It documents no `kill`, abort, signal, or
-  trustworthy numeric exit-status API. The filesystem API exposes create/open
-  handles but no directory walk or bounded change-set export. A terminal
-  control-string wrapper would not prove child exit, hard cancellation, or a
-  complete byte-safe delta, so it cannot satisfy `ExecutionAdapter`.
-- BrowserPod's optional `storageKey` persists a second runtime filesystem in
-  origin-scoped IndexedDB. Airship would require ephemeral mode plus an
-  explicitly bounded snapshot/delta bridge; it will not treat that opaque
-  provider disk as the encrypted Workspace or Vault.
-- No BrowserPod key was available for a reproducible live-browser promotion
-  gate. In accordance with the capability policy, documentation and package
-  metadata are evidence for a candidate and its boundary, not evidence that a
-  live adapter works.
-
-The direct CheerpX path does not cure those constraints. CheerpX 1.2.8 can run
-32-bit x86 Linux entirely in-browser, stream an ext2 image, return a command
-status, and maintain a local overlay. It is nevertheless proprietary. Its
-Community License permits CDN use for personal/FOSS/evaluation and certain
-one-person-company uses; ordinary business use, redistribution/OEM, and
-self-hosting require a commercial license. The documented `Linux.run()` API
-also returns only when the process terminates and exposes no hard-cancel handle.
-A full Debian image would add a large external disk-image boundary, and the
-current BrowserPod roadmap describes CheerpX-backed Linux-class workloads as a
-later milestone rather than BrowserPod 2.14's execution engine.
-
-Reconsider this lane only when there is an acceptable redistribution/commercial
-license (or an open implementation), a credentialless or user-delegated
-short-lived boot flow with no second bill, a content-addressable runtime/image
-delivery option compatible with Airship CSP, and a live browser gate proving
-exact exit status, separated bounded output, hard cancellation, and
-revision-checked bidirectional Workspace reconciliation. Official evidence:
-<https://browserpod.io/docs/more/changelog>,
-<https://browserpod.io/docs/reference/BrowserPod/boot>,
-<https://browserpod.io/docs/understanding-browserpod/api-key>,
-<https://browserpod.io/docs/more/licensing>,
-<https://browserpod.io/pricing-policy/>, and
-<https://cheerpx.io/docs/licensing>.
 
 ## Node and npm projects — implemented optional pack
 
@@ -451,21 +310,12 @@ This makes ephemeral execution useful with either storage mode:
   adapter. Interpreters and plaintext scratch directories remain disposable;
   execution-specific durable receipts and dependency caches are not implemented.
 
-## Paired executor boundary
+## Remote execution boundary
 
-The browser packs remain browser-authority adapters. They are not widened to
-pretend that a remote Linux process has the same provenance. The separate
-compute-continuum planner can resolve a prepared job to a browser adapter or,
-later, a separately attested executor before spawn.
-
-The browser-only placement, isolated job-transition skeleton, and digest-linked
-structural stream-validation foundation is implemented, but the skeleton is not
-an authority boundary, no remote adapter is registered, and no plain record can
-authorize one. Remote execution therefore remains
-unavailable in capability reports. A future executor receives an
-immutable selected snapshot and returns a copy-on-write delta; it never receives
-the active `WorkspacePort`, Vault/root key, or provider credentials. See
-[`COMPUTE_CONTINUUM.md`](COMPUTE_CONTINUUM.md).
+This release registers browser execution adapters only. It has no remote
+executor, remote placement planner, attestation channel, or remote writeback
+path. Adding one requires a separate authenticated protocol and product review;
+plain records or capability copy cannot activate it.
 
 ## Capability result and future receipt
 
@@ -483,16 +333,16 @@ runtime ID + runtime/artifact digest + browser capability probe
 + started/finished time + cancellation/suspension state
 ```
 
-That future receipt could prove what Airship asked a local runtime to do and
-what files it adopted. Current tool results are not signed attestations, and a
-browser Worker is neither a TEE nor evidence that arbitrary code is trustworthy.
+A future run record could state what Airship asked a local runtime to do and
+what files it adopted. Current tool results are unsigned local traces, and a
+browser Worker is not evidence that arbitrary code is trustworthy.
 
 ## Tests and release gates
 
 The current implementation has unit coverage for adapter registration,
 capability truthfulness, bounded WebContainer boot, streaming, cancellation,
-manifest-bound workspace composition, failed-command non-adoption, dispatch,
-and unavailable packs. Chromium coverage runs JavaScript, a real Rust-produced
+manifest-bound workspace composition, failed-command non-adoption, and dispatch.
+Chromium coverage runs JavaScript, a real Rust-produced
 WASI command covering two output streams, exact exit 23, workspace
 input/output/writeback, failed-command non-adoption, hard cancellation, and the
 same Rust artifact executed from a workspace `wasmPath` while staying out of its

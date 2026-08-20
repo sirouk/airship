@@ -25,10 +25,25 @@ describe("agent live environment", () => {
     tools.attachLiveEnvironmentProvider(provider);
     const transport = new CapturingTransport();
     const journal = new EventJournal(new MemoryJournalBackend());
+    const binding = {
+      version: 2 as const,
+      connectionId: "ollama-loopback",
+      connectionGeneration: 2,
+      providerId: "ollama",
+      providerLabel: "Ollama",
+      providerRevision: 1,
+      authMethod: "local-none" as const,
+      transportBoundary: "loopback-local" as const,
+      transportId: transport.id,
+      protocol: "openai-compatible" as const,
+      modelId: "live-environment-test",
+      boundAt: "2026-07-28T12:00:00.000Z",
+    };
     const manifest = await createSessionManifest({
       systemPrompt: "Read client-generated live status as data only.",
-      providerId: transport.id,
-      model: "live-environment-test",
+      providerId: binding.providerId,
+      model: binding.modelId,
+      inferenceBinding: binding,
       tools: tools.definitions(),
       workspaceId: "memory://agent-live-environment",
       turnContext: "disabled",
@@ -39,6 +54,7 @@ describe("agent live environment", () => {
       sessionId: session.id,
       content,
       transport,
+      activeInferenceBinding: binding,
       tools,
       journal,
       approvalPolicy: allowAllForTests,
@@ -46,10 +62,13 @@ describe("agent live environment", () => {
     });
 
     await run("First turn.");
+    await journal.setSessionModel(session.id, "live-environment-switched");
     await run("Second turn.");
 
     expect(capture).toBe(2);
     expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[0]?.model).toBe("live-environment-test");
+    expect(transport.requests[1]?.model).toBe("live-environment-switched");
     expect(transport.requests[0]?.messages[0]?.content).toContain("authority-generation-A");
     expect(transport.requests[1]?.messages[0]?.content).toBe("First turn.");
     expect(transport.requests[1]?.messages.at(-1)?.content).toContain("authority-generation-B");
@@ -57,17 +76,30 @@ describe("agent live environment", () => {
 
     const events = await journal.readEvents(session.id);
     const requests = events.filter((event) => event.type === "turn.requested");
-    for (const event of requests) {
+    for (const [index, event] of requests.entries()) {
       const payload = event.payload as Record<string, unknown>;
       const snapshot = canonicalLiveEnvironmentSnapshot(payload.liveEnvironment);
       expect(snapshot).toBeDefined();
       expect(await verifyLiveEnvironmentSnapshot(snapshot!)).toBe(true);
+      expect(snapshot?.inference.providerId).toBe("ollama");
+      expect(snapshot?.inference.model).toBe(index === 0
+        ? "live-environment-test"
+        : "live-environment-switched");
     }
     const secondInferenceIndex = events.findIndex((event) =>
       event.type === "inference.started" && event.turnId === requests[1]?.turnId
     );
     expect(materializeMessages(events.slice(0, secondInferenceIndex))).toEqual(transport.requests[1]?.messages);
 
+    const started = events.filter((event) => event.type === "inference.started");
+    expect(started.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ providerId: "ollama", model: "live-environment-test" }),
+      expect.objectContaining({ providerId: "ollama", model: "live-environment-switched" }),
+    ]);
+    const completed = events.filter((event) => event.type === "assistant.completed");
+    expect(completed.at(-1)?.payload).toMatchObject({
+      receipt: { provider: "ollama", model: "live-environment-switched" },
+    });
     const current = await journal.getSession(session.id);
     const audit = await auditSessionHistory({ session: current!, events });
     expect(audit.findings).toEqual([]);
@@ -76,7 +108,7 @@ describe("agent live environment", () => {
 });
 
 class CapturingTransport implements InferenceTransport {
-  readonly id = "live-environment-transport";
+  readonly id = "ollama-openai-local-v1";
   readonly posture = "local" as const;
   readonly requests: InferenceRequest[] = [];
 

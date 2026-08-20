@@ -483,7 +483,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
             />
             <span>{recoveryMode === "generate"
               ? "I saved the generated recovery key outside this page and understand it cannot be recovered by Airship."
-              : "I verified this imported recovery key and understand Airship will clear the form but cannot recover the key for me."}</span>
+              : "I checked this imported recovery key and understand Airship will clear the form but cannot recover the key for me."}</span>
           </label>
         </div>
 
@@ -541,7 +541,7 @@ function ProductionLabBoundary() {
   );
 }
 
-// The reviewed production CSP cannot connect to loopback services. Keeping the
-// credential form out of that build makes the shipped code match its boundary;
-// Vite retains the full form for `npm run dev` and the local full-system suite.
+// Disposable lab credentials are a development-only surface even though the
+// network policy permits reviewed loopback provider ports. Vite retains the
+// full form for `npm run dev` and the local full-system suite.
 export const LocalLabSetup = import.meta.env.DEV ? LocalLabSetupForm : ProductionLabBoundary;

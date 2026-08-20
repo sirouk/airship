@@ -1,6 +1,6 @@
 # Walrus storage in Airship
 
-Walrus is an optional immutable storage rung in Airship's encrypted storage
+Walrus is an optional immutable blob transport in Airship's encrypted storage
 ladder.
 
 ## Product role
@@ -8,6 +8,20 @@ ladder.
 Use Walrus when you want immutable encrypted blob storage rather than a mutable
 primary vault. Airship encrypts objects locally before upload and treats Walrus
 as a blob transport, not as the session authority.
+
+It is a host-composed source module rather than a stock Vault choice:
+
+```ts
+import { WalrusBlobTransport } from "../src/storage/walrus-blob-transport";
+
+const blobs = new WalrusBlobTransport({
+  publisherUrl: "https://publisher.example/",
+  aggregatorUrls: ["https://aggregator.example/"],
+});
+```
+
+The host must review those HTTPS origins and provide any short-lived upload
+`grantIssuer`; Airship does not mint wallet authority in the browser.
 
 ## What Walrus is good for
 

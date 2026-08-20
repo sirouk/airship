@@ -65,15 +65,11 @@ describe("application startup module boundary", () => {
   });
 
   it("keeps the fixture-only in-memory Git backend out of the startup graph", () => {
-    // src/git/index.ts re-exports it, so importing the barrel anywhere in the
-    // shell restores the edge even when nothing in the shell names the class.
     expect(reachable.has("git/memory-adapter.test-support.ts")).toBe(false);
     expect(reachable.has("git/index.ts")).toBe(false);
   });
 
-  it("keeps the Chutes account-telemetry client with the Billing surface", () => {
-    // The Account route already awaits the deferred capability pack before it
-    // can request a snapshot, so this costs the user nothing at the point of use.
+  it("keeps deleted provider-only packs out of the startup graph", () => {
     expect(reachable.has("billing/client.ts")).toBe(false);
   });
 

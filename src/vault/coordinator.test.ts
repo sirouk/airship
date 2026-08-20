@@ -79,7 +79,7 @@ describe("VaultCoordinator", () => {
       encryptedWorkspace: "verified",
       dataSynchronization: "not-evaluated",
     });
-    expect(snapshot.message).toContain("synchronization has not been evaluated");
+    expect(snapshot.message).toBe("Storage checks passed in this browser; synchronization was not tested.");
     expect(snapshot.evidence.createdKeys.length).toBeGreaterThan(8);
     // The probe now clears its own litter. `MemoryObjectStore` gained a real
     // `trash` when page memory stopped being a durability that could not delete
@@ -264,9 +264,9 @@ describe("VaultCoordinator", () => {
     expect(await coordinator.collectStorageStats()).toMatchObject({ objectCount: 0, totalBytes: 0 });
   });
 
-it("refuses a reclamation sweep before a verified runtime exists", async () => {
+it("refuses a reclamation sweep before a ready runtime exists", async () => {
     const coordinator = new VaultCoordinator();
-    await expect(coordinator.runReclamationSweep()).rejects.toThrow("requires a verified Vault runtime");
+    await expect(coordinator.runReclamationSweep()).rejects.toThrow("requires a ready Vault runtime");
   });
 
   it("records workspace supersessions into the durable queue and sweeps them with fresh-root verification", async () => {

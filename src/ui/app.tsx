@@ -1,28 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import type {
-  AttestationEvidenceClientErrorCode,
-  ChutesAttestationEvidenceClient,
-} from "../attestation/provider-client";
-import type {
-  ChutesEndpointAttestationSnapshot,
-  ChutesEndpointEvidenceRecord,
-} from "../attestation/provider-types";
 import { isReclaimableObjectStore } from "../storage/object-store";
 import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
 import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
-import {
-  DISCONNECTED_CHUTES_CONNECTION,
-  isChutesConnected,
-  parseChutesCredential,
-  withChutesModel,
-  withVerifiedInvocation,
-  type ActiveChutesConnection,
-  type ChutesConnection,
-} from "../auth/connection";
-import { setConfidentialAuthority } from "../indexing/confidential-authority";
-import type { ChutesOAuthRegistration } from "../auth/chutes-oauth-registration";
-import type { ChutesOAuthTokenSet } from "../auth/chutes-oauth";
 import type { VaultUsageFacts } from "./vault-view";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import type { ExtensionBridgeObservation } from "../capabilities/extension-bridge";
@@ -31,25 +11,25 @@ import {
   type SlashCommandRegistry,
   type SlashCompletion,
 } from "../commands";
-import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../core/contracts";
-import { sha256, stableStringify } from "../core/hash";
-import { finalizeProviderReceipt } from "../receipts/types";
-import type { CanonicalMessage, InferenceTransport, JsonValue, SecurityPosture, SessionManifest, ToolContext, ToolDefinition } from "../core/contracts";
+import { HUMAN_INTENT_EVENT_TYPE } from "../core/contracts";
+import type { ConversationReceipt } from "../core/conversation-receipt";
+import { conversationTitleFromPrompt } from "../core/conversation-title";
+import type { CanonicalMessage, InferenceTransport, JsonValue, SessionManifest, ToolContext, ToolDefinition } from "../core/contracts";
 import type { LiveEnvironmentEntry } from "../core/live-environment";
 import type { InferenceDirectoryPromptDefinition } from "../core/operating-charter";
 import { EventJournal, effectiveSessionModel, type DurableEvent, type SessionRecord } from "../core/journal";
-import { planChutesModelSwitch, modelSwitchNeedsCompressionGate } from "./model-switch-plan";
+import { planModelSwitch, modelSwitchNeedsCompressionGate } from "./model-switch-plan";
 import { parseReasoningVisibility, setReasoningVisibility } from "./chat/reasoning-visibility";
 import { densityAllows, parsePresentationDensity, setPresentationDensity, usePresentationDensity } from "./density";
 import { randomUuid } from "../core/id";
 import { loadBrowserGit } from "../load-browser-git";
 import { runTurn } from "../load-agent-runtime";
+import { runTurnBeforeNaming } from "./turn-naming";
 import { inspectBrowserExecutionTier } from "../load-execution-runtime";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import type { SessionAuditReport } from "../core/session-audit";
 import { sessionAuditRefusesResume } from "../core/session-audit-admission";
 import { DemoInferenceTransport } from "../inference/demo";
-import { withoutCredential } from "../inference/credential-unavailable";
 import type {
   ActivatedInferenceRoute,
   BrowserInferenceFabric,
@@ -57,7 +37,6 @@ import type {
 } from "../inference/fabric";
 import type {
   InspectInferenceConnectionsTool,
-  InferenceAvailabilityConnection,
   InferenceAvailabilitySnapshot,
   InferenceModelDescriptor,
 } from "../inference/providers";
@@ -68,8 +47,6 @@ import type { BrowserGitClient } from "../git/client";
 import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceGitRepositorySeed } from "../git/workspace-adapter";
 import type { VaultContextFabricPort } from "../vault/context-fabric-port";
-import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
-import { modelInputModalityCapability, sortModels, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
 import {
   archiveProfileRevision,
@@ -89,12 +66,7 @@ import {
 import {
   PROFILE_BOUNDARY_NOTE,
   PROFILE_MEMORY_SCOPE_LABELS,
-  PROFILE_POSTURE_FIELD_LABEL,
 } from "./profiles-governance";
-import { postureFloorRefusal } from "./posture-floor";
-/* The leaf record, not `attestation-gate` — that module carries the DCAP
-   verifier's WASM and this file paints first. */
-import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY as strictProofCapability } from "../inference/chutes/strict-proof-capability";
 import type { VNode } from "preact";
 import type { QuarantineReportProps, ResumeReportProps } from "./chat/resume-report";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
@@ -116,7 +88,6 @@ import {
   type ThemeColorScheme,
   type ThemeManifest,
 } from "../profiles/domain";
-import type { ConversationReceipt } from "../receipts/types";
 import {
   READY_SESSION_LIFECYCLE,
   SessionLibrary,
@@ -129,6 +100,7 @@ import {
   type SessionListItem,
 } from "../sessions";
 import {
+  forkActivationManifestMatches,
   inferenceBindingsMatch,
   profileOwnedSessions,
   profileOwnsSession,
@@ -169,18 +141,6 @@ import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentit
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
 
 import { nextEditorSelection, type EditorSelection } from "./editor-selection";
-import { type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
-import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
-// The two per-message rung words, taken from the one dictionary rather than
-// retyped, so `RETIRED_TRUST_LABELS` cannot be re-spelled back into this file.
-import { TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT, TRUST_LABEL_MESSAGE_NO_EVIDENCE } from "./trust-language";
-// The one fail-closed rule for a stored receipt, imported rather than restated.
-// `#proof` renders the hero verdict and this inspector on the same screen; if
-// they fed their shared reducer from two different predicates the route would
-// print two verdicts for one turn, which is the defect this package closes.
-
-import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
-import type { AttestationRefreshTarget } from "./attestations-view";
 import { Icon } from "./icons";
 import type {
   LocalDeviceActivationReason,
@@ -188,25 +148,22 @@ import type {
 } from "./local-device-vault-setup";
 import { chatHash, chatSessionIdFromHash } from "./chat-route";
 import {
-  accessLaneForProvider,
   accessReconnectHash,
   canonicalAccessHash,
   parseAccessReconnectIntent,
   reconnectIntentsEqual,
-  reconnectRouteDisposition,
   type AccessReconnectIntent,
 } from "./access-intent";
 import { useBottomFloor } from "./bottom-floor";
 import { loadRetryableChunk } from "./chunk-recovery";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
-import { activeConnectionProofLabel, ModelControl } from "./model-control";
-import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
+import { ModelControl } from "./model-control";
+import { RunDetails } from "./chat/run-details";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
   PwaUpdateBanner,
   SHORTCUT_SHEET_CHORD,
-  TrustPostureSheet,
   ViewErrorBoundary,
   applyPreferenceOverrides,
   approvalModeLabel,
@@ -223,21 +180,9 @@ import {
   usePwaUpdate,
   useVisualViewport,
   vaultBackendUnavailableReason,
-  type ClaimRow,
   type PreferenceOverrides,
   type VaultBackend,
-  type TrustAxis,
 } from "./platform-shell";
-import {
-  proofHash,
-  proofSelectionForReceipt,
-  proofSelectionForSession,
-  proofSelectionFromHash,
-  proofSectionFromHash,
-  resolveProofReceipt,
-  type ProofSection,
-  type ProofSelection,
-} from "./proof-route";
 import { Rail } from "./rail";
 import { collapseLineageBranches } from "./recent-lineage";
 import {
@@ -251,7 +196,7 @@ import {
   type RailPreference,
   type RailState,
 } from "./rail-state";
-import { SEAL_LABELS, Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
@@ -278,7 +223,6 @@ import {
   composerAttachmentNotice,
   composerGrowthCap,
   composerPlaceholder,
-  composerPosture,
   ComposerKeyhintLegend,
   COMPOSER_NARROW_PLACEHOLDER_QUERY,
   COMPOSER_PLACEHOLDER_TITLE,
@@ -334,7 +278,7 @@ import {
 } from "./chat/turn-housekeeping";
 import { StreamingMessageSlot, StreamingReasoningSlot, TranscriptStreamStore } from "./chat/streaming-slot";
 import { focusTranscriptTurn, isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
-import { DemoModelChip, pinnedSkillsDetail, pinnedSkillsLabel, SessionBar } from "./chat/session-bar";
+import { DemoModelChip, SessionBar } from "./chat/session-bar";
 import { sessionStatusShort, type SessionStatusFact } from "./chat/session-status-chip";
 import {
   TRANSCRIPT_INTRO_DEMO_LINE,
@@ -343,19 +287,14 @@ import {
   TranscriptMarker,
   transcriptIntroNote,
 } from "./chat/transcript-intro";
-import { TopbarPostureChip } from "./topbar";
 import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
-import { PostureChip } from "./posture-chip";
-import { durabilityLabel, durabilitySeal, durabilityShort, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilityStatusMark, durabilityShort, type DurabilityState } from "./durability-indicator";
 import { RouteFailure } from "./route-failure";
 import { RouteSkeleton } from "./route-skeleton";
 import type { ProfileSwitchFailure } from "./skills-manager-view";
-import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
   OFFLINE_INLINE_REASON,
-  OFFLINE_RUNTIME_DETAIL,
-  OFFLINE_RUNTIME_LABEL,
   observeConnectivity,
   readOnlineState,
   remoteComposerBlocked,
@@ -479,7 +418,7 @@ type QueuedComposerItem = Readonly<{
 
 /** The conversation rail is intentionally a light index, rather than a
  * miniature session inspector.  It carries just enough local metadata to let
- * a person re-find a thread without exposing runtime pins or proof state. */
+ * a person re-find a thread without exposing runtime pins or credentials. */
 type RecentConversation = Readonly<{
   id: string;
   profileId: string;
@@ -543,6 +482,8 @@ type Runtime = {
   tools: Awaited<ReturnType<typeof createAirshipToolRegistry>>;
 };
 
+type SessionRuntimeAuthority = Pick<Runtime, "transport" | "model" | "inferenceBinding" | "workspaceId">;
+
 type ForkActivationAuthority = Readonly<{
   runtime: Runtime;
   profileId: string;
@@ -552,50 +493,12 @@ type ForkActivationAuthority = Readonly<{
 }>;
 
 type LocalPresentationAuthority = Readonly<{
-  runtime: Runtime;
+  identityRuntime: Runtime;
+  commandRuntime: Runtime;
   profileId: string;
   profileRevision: string;
   sessionId: string;
 }>;
-
-type ChutesAvailabilityAuthority = Readonly<{
-  connection: ActiveChutesConnection;
-  connectionId: string;
-  generation: number;
-  models: readonly AirshipModel[];
-}>;
-
-/**
- * The loopback model servers the Connect surface's Local lane may contact, and
- * nothing else: the endpoints are the fabric's compiled-in defaults, restated
- * here only so the result line can name the address that was actually tried.
- */
-const LOCAL_MODEL_SERVERS = Object.freeze([
-  Object.freeze({ kind: "ollama" as const, label: "Ollama", endpoint: "127.0.0.1:11434" }),
-  Object.freeze({ kind: "lm-studio" as const, label: "LM Studio", endpoint: "127.0.0.1:1234" }),
-]);
-
-/** Wall clock for the whole two-server check. A refused port answers far sooner. */
-const LOCAL_PROBE_DEADLINE_MS = 15_000;
-
-/*
- * Scheduled OAuth rotation retries after a transient failure. Bounded on
- * purpose: three attempts over ~3.5 minutes outlast a blip, and past that the
- * connection claim has no honest basis left, so the original release applies.
- */
-const OAUTH_ROTATION_RETRY_DELAYS = Object.freeze([30_000, 60_000, 120_000]);
-
-/**
- * The Account route's non-Chutes tabs, in the order that route lists them.
- *
- * Restated rather than imported from `billing-view`: importing `BILLING_PROVIDERS`
- * would pull the Account route and its stylesheet into the shell's eager chunk
- * for three string constants. `billing-view.test.ts` pins this list to
- * `BILLING_PROVIDERS` so the two cannot drift. Chutes is absent on purpose —
- * the route reads its own credential for that tab.
- */
-const BILLING_INVENTORY_PROVIDER_IDS: readonly Exclude<BillingProviderId, "chutes">[] =
-  Object.freeze(["openai", "anthropic", "xai"]);
 
 const EMPTY_INFERENCE_AVAILABILITY: InferenceAvailabilitySnapshot = Object.freeze({
   version: 1,
@@ -603,25 +506,6 @@ const EMPTY_INFERENCE_AVAILABILITY: InferenceAvailabilitySnapshot = Object.freez
   connections: Object.freeze([]),
   omittedConnections: 0,
 });
-
-/*
- * Stable identities, so a route scoped away from the active conversation
- * re-renders with the same empty collection rather than a fresh literal each
- * pass. Frozen because these are handed to evidence surfaces that must not be
- * able to accumulate another session's records into them.
- */
-const EMPTY_ENDPOINT_EVIDENCE: readonly ChutesEndpointEvidenceRecord[] = Object.freeze([]);
-const EMPTY_CONVERSATION_RECEIPTS: readonly ConversationReceipt[] = Object.freeze([]);
-
-/**
- * What the Attestation evidence ledger says when Proof is open for a
- * conversation that is not the active one. Endpoint evidence is acquired per
- * active session in this page runtime; it is not fetched for a conversation
- * you have only inspected, and pretending otherwise by showing the active
- * session's records would be the defect this sentence exists to prevent.
- */
-const PROOF_UNSCOPED_EVIDENCE_NOTICE =
-  "Endpoint evidence for this conversation is not loaded in this page runtime. Resume the conversation to acquire its own evidence; Airship will not show another conversation's records here.";
 
 type DurableAdoptionDescriptor = Readonly<{
   ready: DurableStateRuntime;
@@ -631,17 +515,9 @@ type DurableAdoptionDescriptor = Readonly<{
   source: "migrate-active" | "target-authoritative";
 }>;
 
-type OAuthCallbackStatus = { kind: "verified" | "blocked" | "error"; message: string };
-type ActiveOAuthRegistration = Readonly<{
-  registration: ChutesOAuthRegistration;
-  exchangeMode: "local-confidential-bridge" | "public-pkce";
-}>;
-type AttestationsScreenComponent = typeof import("./attestations-view").AttestationsView;
-type ProofInspectorComponent = typeof import("./proof-inspector").ProofInspector;
 type EditorScreenComponent = typeof import("./editor-view").EditorView;
 type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
-type ModelPickerComponent = typeof import("./model-picker").ModelPicker;
 type MemoryScreenComponent = typeof import("./memory-view").MemoryView;
 type SkillsScreenComponent = typeof import("./skills-manager-view").SkillsManagerView;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
@@ -649,68 +525,8 @@ type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
 type LocalDeviceVaultSetupComponent = typeof import("./local-device-vault-setup").LocalDeviceVaultSetup;
 type SessionsScreenComponent = typeof import("./sessions-route").SessionsView;
 type VaultScreenComponent = typeof import("./vault-view").VaultView;
-type AccessScreenComponent = typeof import("./access-view").AccessView;
 type ProviderConnectionsScreenComponent = typeof import("./provider-connections-view").ProviderConnectionsView;
-type BillingScreenComponent = typeof import("./billing-view").BillingView;
-type BillingProviderId = import("./billing-view").BillingProviderId;
-type ProofScreenComponent = typeof import("./proof-view").ProofView;
-type ProofJournalRead = import("./proof-view").ProofJournalRead;
-type EvidenceAcquisitionQueueController = import("../attestation/evidence-acquisition-queue").ReceiptEvidenceAcquisitionQueue;
-type EvidenceAcquisitionQueueSnapshot = import("../attestation/evidence-acquisition-queue").EvidenceAcquisitionQueueSnapshot;
-type EvidenceAcquisitionQueueAuthorityController = import("../attestation/workspace-evidence-acquisition-persistence").WorkspaceEvidenceAcquisitionAuthority;
-type EvidenceAcquisitionQueueLoad = Readonly<{
-  workspace: WorkspacePort;
-  workspaceId: string;
-  profileId: string;
-  promise: Promise<EvidenceAcquisitionQueueController>;
-}>;
-type EndpointEvidenceAuthorityController = import("../attestation/workspace-endpoint-evidence-persistence").WorkspaceEndpointEvidenceAuthority;
-type EndpointEvidenceBinding = import("../attestation/workspace-endpoint-evidence-persistence").WorkspaceEndpointEvidenceBinding;
-type EndpointEvidenceRecordIdentity = import("../attestation/workspace-endpoint-evidence-persistence").EndpointEvidenceRecordIdentity;
-type EndpointEvidenceScope = Readonly<{
-  workspace: WorkspacePort;
-  workspaceId: string;
-  profileId: string;
-}>;
-type EndpointEvidenceFence = EndpointEvidenceScope & Readonly<{
-  sessionId: string;
-  receiptId?: string;
-  instanceId: string;
-  endpointKeyDigest?: string;
-}>;
-type EndpointEvidenceAuthorityLoad = EndpointEvidenceScope & Readonly<{
-  promise: Promise<EndpointEvidenceBinding>;
-}>;
-type AttestationClientBinding = EndpointEvidenceScope & Readonly<{
-  client: ChutesAttestationEvidenceClient;
-  generation: number;
-}>;
 const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
-class MountedAttestationError extends Error {
-  readonly name = "AttestationEvidenceClientError";
-
-  constructor(
-    readonly code: AttestationEvidenceClientErrorCode,
-    message: string,
-    readonly context: Readonly<{ retryable?: boolean; status?: number }> = {},
-  ) {
-    super(message);
-  }
-}
-type AttestationAcquisitionFailure = Readonly<{
-  label: string;
-  scope: "connection" | "endpoint" | "receipt";
-  receiptId?: string;
-  instanceId?: string;
-  endpointKeyDigest?: string;
-}>;
-type AttestationPresentationState = EndpointEvidenceScope & Readonly<{
-  sessionId: string;
-  records: readonly ChutesEndpointEvidenceRecord[];
-  failure?: AttestationAcquisitionFailure;
-  selectedRecordId?: string;
-  durabilityNotice?: string;
-}>;
 type ProfileEditorDraft = {
   profileId: string;
   name: string;
@@ -723,13 +539,9 @@ type ProfileEditorDraft = {
   approvalMode: "ask-first" | "auto-approve" | "full-access";
   webEgress: "node-first" | "browser-only";
   webBodies: "any" | "text-only";
-  minimumPosture: SecurityPosture;
   reasoningVisibility: "collapsed" | "expanded";
   density: "minimal" | "balanced" | "instrumented";
 };
-
-const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
-const CHUTES_OAUTH_RECONNECT_INTENT_KEY = "airship.chutes.oauth-reconnect-intent.v1";
 
 /**
  * The return ledger, fetched rather than shipped at first paint.
@@ -1077,11 +889,11 @@ type StarterCard = Readonly<{
 
 const CONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
   Object.freeze({
-    title: "Explain my trust posture",
-    hint: "What's encrypted, attested, and still unverified",
+    title: "Review this setup",
+    hint: "See the provider, model, storage, and tool boundaries",
     action: Object.freeze({
       kind: "prompt" as const,
-      prompt: "Walk me through this session's current security posture: what is encrypted, what is attested, and what remains unverified.",
+      prompt: "Summarize this session's current provider, model, storage, workspace, and tool setup. Name any limits that affect the work.",
     }),
   }),
   Object.freeze({
@@ -1120,7 +932,7 @@ const CONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
 const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
   Object.freeze({
     title: "Connect a model",
-    hint: "Chutes, another cloud provider, or a model on this machine",
+    hint: "A cloud provider or a model on this machine",
     lead: true as const,
     action: Object.freeze({ kind: "route" as const, view: "access" as const }),
   }),
@@ -1185,50 +997,6 @@ function presentationHistory(
     turnStatus: message.turnStatus,
     providerContext: message.providerContext,
   }] : []);
-}
-
-/** The last turn in the page that carried a receipt, if any. */
-function lastPresentationRowReceipt(presentation: SessionMessagePresentation): ConversationReceipt | undefined {
-  return presentation.rows.flatMap((row) => row.receipt ? [row.receipt] : []).at(-1);
-}
-
-/**
- * The transcript rows for an audited presentation: its turns AND its markers.
- *
- * Two call sites built this list from `presentation.rows` alone — vault
- * adoption and library resume — and they were byte-for-byte the same twenty
- * lines, which is exactly the shape in which one of them would have gained the
- * session-scoped records and the other would not. They are one function now.
- *
- * Markers are merged in durable sequence order rather than appended: a rename
- * that happened between turn 3 and turn 4 belongs between turn 3 and turn 4,
- * and a divider floating at the end of a transcript is a record whose position
- * has quietly been lost.
- */
-/**
- * Every receipt the Proof route can resolve for the conversation on screen.
- *
- * Proof addresses receipts only through this list, so a receipt missing from it
- * is unreachable no matter how well it was minted, finalized and journaled —
- * which is exactly what happened to the conversation-naming receipt, which
- * rides no transcript row until a reload replays its record as a marker.
- *
- * Two rules do the work. Ancillary receipts are filtered to this conversation,
- * because the page keeps them across conversation switches and one
- * conversation's evidence must never answer for another's. And they come
- * *first*, because `resolveProofReceipt` walks this list backwards when the
- * selection names no receipt: the conversation's most recent turn stays the
- * default hero, exactly as it did before anything beside a turn was listed.
- */
-export function proofResolvableReceipts(
-  ancillary: readonly ConversationReceipt[],
-  messages: readonly Readonly<{ receipt?: ConversationReceipt }>[],
-  sessionId: string | undefined,
-): ConversationReceipt[] {
-  return [
-    ...ancillary.filter((receipt) => receipt.sessionId === sessionId),
-    ...messages.flatMap((message) => message.receipt ? [message.receipt] : []),
-  ];
 }
 
 function markComposerScroll(element: HTMLTextAreaElement): void {
@@ -1309,12 +1077,9 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
       // height estimate, because a marker never reaches `MessageCard`.
       role: "assistant",
       content: marker.detail,
+      // `TranscriptMarker` reads any historical run receipt directly from
+      // this marker; it never masquerades as an assistant answer.
       marker,
-      // A marker that records a billed request carries its receipt onto the
-      // transcript item so `inPageReceipts` — the only list Proof resolves
-      // against — contains it. Without this the naming receipt was minted,
-      // validated and journaled, and then addressable by nothing.
-      ...(marker.receipt ? { receipt: marker.receipt } : {}),
       sourcePoint: { sequence: marker.sequence, digest: marker.digest },
     });
   }
@@ -1537,7 +1302,6 @@ export function App() {
   /** Whether the composer's queue is showing its whole backlog. See `.composer-queue`. */
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [trustSheetOpen, setTrustSheetOpen] = useState(false);
   const [approvalPending, setApprovalPending] = useState(false);
   const [preferences, setPreferences] = useState<PreferenceOverrides>(loadPreferenceOverrides);
   const [catalog, setCatalog] = useState<ProfileCatalog>();
@@ -1591,16 +1355,6 @@ export function App() {
   // able to ask twice in a row, and the editor that answers it lives in the
   // session bar. See `paletteActions`.
   const [renameRequest, setRenameRequest] = useState(0);
-  const [proofSelection, setProofSelection] = useState<ProofSelection | undefined>(() =>
-    typeof window === "undefined" ? undefined : proofSelectionFromHash(window.location.hash)
-  );
-  const [proofSelectionAuthority, setProofSelectionAuthority] = useState<Readonly<{
-    profileId: string;
-    sessionId: string;
-  }>>();
-  const [proofSection, setProofSection] = useState<ProofSection>(() =>
-    typeof window === "undefined" ? "summary" : proofSectionFromHash(window.location.hash)
-  );
   const [gitClient, setGitClient] = useState<BrowserGitClient>();
   const [messages, setMessages] = useState<UiMessage[]>([welcomeMessage]);
   const [unreadTurnCount, setUnreadTurnCount] = useState(0);
@@ -1721,20 +1475,7 @@ export function App() {
   const railDurableEventCount = recentProfileConversations.length > 0
     ? recentDurableEventCount
     : eventCount;
-  const [connection, setConnection] = useState<ChutesConnection>(DISCONNECTED_CHUTES_CONNECTION);
-  const [availableModels, setAvailableModels] = useState<readonly AirshipModel[]>([]);
   const [modelSwitching, setModelSwitching] = useState(false);
-  const [lastReceipt, setLastReceipt] = useState<ConversationReceipt>();
-  /**
-   * Receipts for requests made beside a turn rather than in one.
-   *
-   * A turn receipt reaches Proof on the assistant row that carries it; a naming
-   * receipt has no row until a reload replays it as a marker, so this is what
-   * keeps it addressable in the meantime. Bounded and filtered by session at
-   * the point of use: it outlives a conversation switch, and one conversation's
-   * evidence must never be able to answer for another's.
-   */
-  const [ancillaryReceipts, setAncillaryReceipts] = useState<readonly ConversationReceipt[]>([]);
   const [sessionLifecycle, setSessionLifecycle] = useState<SessionLifecycle>(READY_SESSION_LIFECYCLE);
   const [transcriptBoundary, setTranscriptBoundary] = useState<Readonly<{
     omittedMessages: number;
@@ -1743,30 +1484,9 @@ export function App() {
   const [transcriptLeadingHeight, setTranscriptLeadingHeight] = useState(0);
   const [transcriptDetached, setTranscriptDetached] = useState(false);
   const [stageScrolled, setStageScrolled] = useState(false);
-  const [invocationTelemetry, setInvocationTelemetry] = useState<ChutesInvocationTelemetry>();
   const [credentialRevision, setCredentialRevision] = useState(0);
-  const [oauthCallbackStatus, setOauthCallbackStatus] = useState<OAuthCallbackStatus>();
-  const [activeOAuthRegistration, setActiveOAuthRegistration] = useState<ActiveOAuthRegistration>();
-  const [oauthBootstrapRevision, setOauthBootstrapRevision] = useState(0);
-  const [oauthTokenRevision, setOauthTokenRevision] = useState(0);
-  const [attestationPresentation, setAttestationPresentation] = useState<AttestationPresentationState>();
-  const [evidenceAcquisitionSnapshot, setEvidenceAcquisitionSnapshot] = useState<EvidenceAcquisitionQueueSnapshot>();
-  /**
-   * Whether a refused queue checkpoint is currently parking acquisition.
-   *
-   * State rather than a render-time read of the controller ref: the fault is not
-   * part of the persisted snapshot, so a ref read had no reactive channel of its
-   * own — the notice appeared only if something else happened to re-render, and
-   * the self-heal effect had nothing to key on.
-   */
-  const [evidenceCheckpointFaulted, setEvidenceCheckpointFaulted] = useState(false);
   /** Re-runs the automatic vault adoptions once a cockpit transition has settled. */
   const [cockpitSettleRetry, setCockpitSettleRetry] = useState(0);
-  const [attestationNow, setAttestationNow] = useState(() => Date.now());
-  /** One automatic refresh request per expired observation record. */
-  const automaticEvidenceRefreshes = useRef(new Set<string>());
-  const [AttestationsScreen, setAttestationsScreen] = useState<AttestationsScreenComponent>();
-  const [attestationsViewError, setAttestationsViewError] = useState<string>();
   const [EditorScreen, setEditorScreen] = useState<EditorScreenComponent>();
   const [editorViewError, setEditorViewError] = useState<string>();
   /**
@@ -1792,18 +1512,6 @@ export function App() {
     workspaceIdentity: string;
   }>>();
   const [CapabilitiesScreen, setCapabilitiesScreen] = useState<CapabilitiesScreenComponent>();
-  /*
-   * The same picker Connection opens, loaded on demand.
-   *
-   * Chat used to render a flattened `{id,label,detail}` projection through a
-   * plain menu, which is why it grew a second capability formatter: it never
-   * had the model objects the shared picker takes. It has them — `availableModels`
-   * is right here — so the only thing missing was the component, and the only
-   * reason it was missing is that the picker travels with its own stylesheet in
-   * a deferred pack. Deferred load keeps the pack boundary and still ends the
-   * second vocabulary.
-   */
-  const [ModelPickerControl, setModelPickerControl] = useState<ModelPickerComponent>();
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [MemoryScreen, setMemoryScreen] = useState<MemoryScreenComponent>();
   const [memoryViewError, setMemoryViewError] = useState<string>();
@@ -1825,74 +1533,12 @@ export function App() {
   const [quarantinedSession, setQuarantinedSession] = useState<QuarantinedSession>();
   const [VaultScreen, setVaultScreen] = useState<VaultScreenComponent>();
   const [vaultViewError, setVaultViewError] = useState<string>();
-  const [AccessScreen, setAccessScreen] = useState<AccessScreenComponent>();
   const [ProviderConnectionsScreen, setProviderConnectionsScreen] = useState<ProviderConnectionsScreenComponent>();
-  const [accessViewError, setAccessViewError] = useState<string>();
-  /*
-   * `provider-connections-view` is its own build asset, so it fails
-   * independently of the pack that supplies `AccessScreen`. Its catch used to
-   * write `accessViewError`, which is rendered only in the branch where
-   * `AccessScreen` is *absent* — i.e. never, in the normal case — so the
-   * OpenAI/Anthropic/xAI/local-server section spun forever and said nothing.
-   */
   const [providerFabricError, setProviderFabricError] = useState<string>();
-  /*
-   * Same dead write, same route: a failed OAuth registration fetch reported
-   * itself into `accessViewError`, whose branch the loaded Connection route
-   * never reaches. It belongs in the Chutes panel's own notice, beside the
-   * sign-in button it disables.
-   */
-  const [oauthRegistrationError, setOAuthRegistrationError] = useState<string>();
-  const [BillingScreen, setBillingScreen] = useState<BillingScreenComponent>();
-  const [billingViewError, setBillingViewError] = useState<string>();
-  const [ProofScreen, setProofScreen] = useState<ProofScreenComponent>();
-  const [proofViewError, setProofViewError] = useState<string>();
-  /*
-   * Whether the claim stack is a rail or a line.
-   *
-   * Measured, one cause, two readings: the rail mounted itself the moment a
-   * receipt existed and was hidden entirely below 1050px. A novice's first
-   * ordinary question opened 310px of a 1440px viewport — 22% — and took the
-   * visible control count from 35 to 48, none of it asked for (J005); the same
-   * turn on a phone showed the "N events" chip with nothing on the page
-   * qualifying it (J127). The default follows the turn: a local demo turn has
-   * one asserted claim and seven absences, which is a line; anything that
-   * reached a provider has a stack worth standing open. Once a person opens it,
-   * it stays open — including across reloads, which is what "their level" means
-   * for somebody who reads this every turn.
-   */
-  const [claimRailOpen, setClaimRailOpen] = useState(() => readClaimRailPreference());
-  /*
-   * The Profile's information density, subscribed once at the shell so every
-   * gate in this file — proof rail, suggestions, first run — reads the same
-   * authority the profile publishes. One store, one frame.
-   */
+  /** The active Profile's information density, shared by every presentation gate. */
   const appDensity = usePresentationDensity();
-  useEffect(() => {
-    // The rail opens itself only at the rungs where proof is ambient chrome.
-    // At minimal the first receipt does not rearrange the layout: the rail
-    // stays collapsed, and opening it is one deliberate action, exactly like
-    // expanding an attestation pill at that perch.
-    if (!lastReceipt || lastReceipt.posture === "local" || claimRailOpen) return;
-    if (!densityAllows("proof", appDensity)) return;
-    setClaimRailOpen(true);
-  }, [lastReceipt?.receiptId, appDensity]);
-  useEffect(() => {
-    try { localStorage.setItem(CLAIM_RAIL_STORAGE_KEY, claimRailOpen ? "open" : "summary"); }
-    catch { /* The rail stays as it is for this page. */ }
-  }, [claimRailOpen]);
   /** A "Return to this turn" waiting for its conversation's transcript. */
   const [pendingTranscriptReturn, setPendingTranscriptReturn] = useState<Readonly<{ sessionId: string; turnId: string }>>();
-  const [ProofInspector, setProofInspector] = useState<ProofInspectorComponent>();
-  /*
-   * `proof-inspector` and `proof-view` are separate assets, so the claim stack
-   * can fail while the route around it loads. Its catch was silent on the
-   * premise that `#proof` reports the failure; `setProofViewError` is written
-   * only by the `proof-view` catch, so nothing did — and the one route whose
-   * promise is that state is never overstated showed an indefinite skeleton
-   * where the verdict belongs.
-   */
-  const [proofInspectorError, setProofInspectorError] = useState<string>();
   /*
    * The second attempt every failed chunk lacked.
    *
@@ -1908,7 +1554,6 @@ export function App() {
   const catalogMutationTail = useRef<Promise<void>>(Promise.resolve());
   const workspaceOpenRequest = useRef(0);
   const workspaceRefreshCoordinator = useMemo(() => new WorkspaceRefreshCoordinator(), []);
-  const proofSelectionOperation = useRef(0);
   const inferenceRouteChanging = useRef(false);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
   /**
@@ -1935,59 +1580,11 @@ export function App() {
   const activeApprovalMode = liveApprovalMode && liveApprovalMode.sessionId === activeSessionRecord?.id
     ? liveApprovalMode.mode
     : pinnedApprovalMode;
-  const approvalModePolicies = useMemo(() => {
-    const safetyReview = async (tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext) => {
-      const active = runtime.current;
-      if (!active) return { verdict: "indeterminate" as const, reason: "No active inference runtime is available." };
-      // The model reviewer only runs when a governed tool action actually needs
-      // adjudicating, so it is fetched then rather than carried through first
-      // paint by every visitor who never triggers one.
-      const { reviewToolActionWithModel } = await import("../approvals/model-reviewer");
-      const review = await reviewToolActionWithModel({
-        transport: active.transport,
-        model: active.model,
-        tool,
-        argumentsValue,
-        context,
-      });
-      /*
-       * The adjudication is a provider request the person never sees, made on
-       * their behalf and billed to them, so it gets the same durable record any
-       * other inference gets. It is keyed to the call being adjudicated —
-       * `context.operationId` is the tool-call ID — because that is the only
-       * identity it has: the review has no step of its own in the turn.
-       *
-       * Best-effort by construction. A journal that refuses this append must
-       * not turn into a denied tool action, so the failure is swallowed after
-       * the fact; the append is serialized per session by `EventJournal`, so it
-       * cannot interleave with the turn's own chain.
-       */
-      if (review.inputTokens !== undefined || review.outputTokens !== undefined) {
-        try {
-          await active.journal.append(context.sessionId, [{
-            type: "inference.usage",
-            turnId: context.turnId,
-            operationId: context.operationId,
-            payload: {
-              ...(review.inputTokens !== undefined ? { inputTokens: review.inputTokens } : {}),
-              ...(review.outputTokens !== undefined ? { outputTokens: review.outputTokens } : {}),
-              source: "approval-review",
-              ...(review.requestId ? { requestId: review.requestId } : {}),
-              ...(review.model ? { model: review.model } : {}),
-            },
-          }]);
-        } catch {
-          // A recorded cost must never become a denied action.
-        }
-      }
-      return review;
-    };
-    return Object.freeze({
-      "ask-first": createApprovalModePolicy({ mode: "ask-first", broker: approvalBroker, safetyReview }),
-      "auto-approve": createApprovalModePolicy({ mode: "auto-approve", broker: approvalBroker, safetyReview }),
-      "full-access": createApprovalModePolicy({ mode: "full-access", broker: approvalBroker, safetyReview }),
-    });
-  }, [approvalBroker]);
+  const approvalModePolicies = useMemo(() => Object.freeze({
+    "ask-first": createApprovalModePolicy({ mode: "ask-first", broker: approvalBroker }),
+    "auto-approve": createApprovalModePolicy({ mode: "auto-approve", broker: approvalBroker }),
+    "full-access": createApprovalModePolicy({ mode: "full-access", broker: approvalBroker }),
+  }), [approvalBroker]);
   const approvalModePolicy = approvalModePolicies[activeApprovalMode];
   /*
    * One switchable delegate per conversation, and this is the half of
@@ -2103,7 +1700,7 @@ export function App() {
    * Declared here rather than beside the other vault derivations further down
    * because the effect that resolves `#chat/<id>` runs before them, and the
    * whole point is that no surface may answer for an address before this does.
-   * `vaultRuntimeAdopted` below asks the same question of the *presented* trust
+   * `vaultRuntimeAdopted` below asks the same question of the presented adoption status
    * state and is what every visible claim reads; this one asks it of the
    * runtime this render is actually writing through, which is the fact the
    * draft store and the ledger posture need.
@@ -2376,34 +1973,11 @@ export function App() {
   const [vaultContextPublishing, setVaultContextPublishing] = useState(false);
   const [vaultContextPublicationMessage, setVaultContextPublicationMessage] = useState<string>();
   const vaultContextPublication = useRef<AbortController>();
-  const oauthTokens = useRef<ChutesOAuthTokenSet>();
-  const pendingOAuthCredential = useRef<string>();
-  const accountCredential = useRef<string>();
-  const providerCredential = useRef<string>();
-  const attestationCredentialKind = useRef<ActiveChutesConnection["credentialKind"]>();
-  const chutesTransport = useRef<ChutesInferenceTransport>();
-  const chutesConnectionId = useRef<string>();
-  const chutesConnectionGeneration = useRef(0);
-  const chutesAuthorityRevision = useRef(0);
-  const chutesAvailability = useRef<ChutesAvailabilityAuthority>();
   const [activeExternalRoute, setActiveExternalRoute] = useState<ActivatedInferenceRoute>();
   const activeExternalRouteRef = useRef<ActivatedInferenceRoute>();
   const inferenceFabric = useRef<BrowserInferenceFabric>();
   const [providerFabricRevision, setProviderFabricRevision] = useState(0);
   const providerAvailabilityTool = useRef<InspectInferenceConnectionsTool>();
-  const attestationClient = useRef<ChutesAttestationEvidenceClient>();
-  const attestationClientBinding = useRef<AttestationClientBinding>();
-  const attestationClientGeneration = useRef(0);
-  const attestationOperation = useRef(0);
-  const endpointEvidenceAuthority = useRef<EndpointEvidenceAuthorityController>();
-  const endpointEvidenceAuthorityLoad = useRef<EndpointEvidenceAuthorityLoad>();
-  const endpointEvidenceAuthorityOperation = useRef(0);
-  const evidenceScopeTransition = useRef(0);
-  const evidenceAcquisitionQueue = useRef<EvidenceAcquisitionQueueController>();
-  const evidenceAcquisitionQueueAuthority = useRef<EvidenceAcquisitionQueueAuthorityController>();
-  const evidenceAcquisitionQueueLoad = useRef<EvidenceAcquisitionQueueLoad>();
-  const evidenceAcquisitionQueueOperation = useRef(0);
-  const evidenceAcquisitionUnsubscribe = useRef<() => void>();
   /**
    * Every running turn, by the conversation that owns it. A conversation holds
    * at most one — the immutable session head admits one writer — but the page
@@ -2595,7 +2169,6 @@ export function App() {
     const providers = combinedInferenceAvailability(
       inferenceFabric.current?.availability(activeExternalRouteRef.current?.pin)
         ?? EMPTY_INFERENCE_AVAILABILITY,
-      chutesAvailability.current,
       runtime.current?.inferenceBinding,
     );
     return Object.freeze({
@@ -2677,19 +2250,18 @@ export function App() {
   }, [sessionId]);
 
   /*
-   * Any platform overlay (command palette, preferences, trust sheet, mobile
+   * Any platform overlay (command palette, preferences, mobile
    * "more" sheet, approval prompt, profile transition) makes the routed
    * surface inert — but inert does not stop a window-level keydown, so a `g`
    * chord could swap the route and push history invisibly behind the dialog.
    * The navigation-jump hook consults this gate before acting on a chord.
-   * Rail buttons and overlay-owned navigation (palette entries, trust-sheet
+   * Rail buttons and overlay-owned navigation (palette entries, sheet
    * rows) call `navigatePrimary` directly and stay ungated.
    */
   const platformOverlayOpen = mobileMoreOpen
     || (paletteOpen && Boolean(Overlays))
     || (shortcutsOpen && Boolean(ShortcutSheetView))
     || (preferencesOpen && Boolean(Overlays))
-    || trustSheetOpen
     || approvalPending || Boolean(profileCockpitTransition);
   const platformOverlayOpenRef = useRef(platformOverlayOpen);
   platformOverlayOpenRef.current = platformOverlayOpen;
@@ -2712,28 +2284,16 @@ export function App() {
     for (const url of attachmentPreviewUrls.current) URL.revokeObjectURL(url);
     attachmentPreviewUrls.current.clear();
   }, []);
-  useEffect(() => {
-    const connectionId = chutesConnectionId.current;
-    if (!isChutesConnected(connection) || !connectionId) {
-      chutesAvailability.current = undefined;
-      return;
-    }
-    chutesAvailability.current = Object.freeze({
-      connection,
-      connectionId,
-      generation: Math.max(1, chutesConnectionGeneration.current),
-      models: Object.freeze(availableModels.slice()),
-    });
-  }, [connection, availableModels]);
   const pwaUpdate = usePwaUpdate();
   const providerAvailability = useMemo(
     () => combinedInferenceAvailability(
       inferenceFabric.current?.availability(activeExternalRoute?.pin)
         ?? EMPTY_INFERENCE_AVAILABILITY,
-      chutesAvailability.current,
-      activeSessionRecord?.manifest.inferenceBinding ?? runtime.current?.inferenceBinding,
+      activeSessionRecord && runtime.current
+        ? activeSessionRuntime(runtime.current, activeSessionRecord).inferenceBinding
+        : runtime.current?.inferenceBinding,
     ),
-    [providerFabricRevision, activeExternalRoute, connection, availableModels, activeSessionRecord],
+    [providerFabricRevision, activeExternalRoute, activeSessionRecord],
   );
 
   const activeProfile = catalog?.profiles.find((profile) => profile.profileId === profileId);
@@ -2750,55 +2310,6 @@ export function App() {
     setReasoningVisibility(parseReasoningVisibility(activeProfile?.presentation?.reasoningVisibility));
     setPresentationDensity(parsePresentationDensity(activeProfile?.presentation?.density));
   }, [activeProfile?.revision]);
-  useEffect(() => {
-    const requested = proofSelection;
-    const active = runtime.current;
-    const expectedProfileId = profileAuthorityId.current;
-    const operation = ++proofSelectionOperation.current;
-    if (
-      view !== "proof"
-      || !requested
-      || !active
-      || !sessionId
-      || requested.sessionId === sessionId
-    ) {
-      setProofSelectionAuthority(undefined);
-      return;
-    }
-    let disposed = false;
-    setProofSelectionAuthority(undefined);
-    void active.journal.getSession(requested.sessionId).then((target) => {
-      if (
-        disposed
-        || operation !== proofSelectionOperation.current
-        || runtime.current !== active
-        || profileAuthorityId.current !== expectedProfileId
-        || currentView.current !== "proof"
-        || proofSelectionFromHash(window.location.hash)?.sessionId !== requested.sessionId
-      ) return;
-      if (target && profileOwnsSession(target, expectedProfileId)) {
-        setProofSelectionAuthority(Object.freeze({
-          profileId: expectedProfileId,
-          sessionId: requested.sessionId,
-        }));
-        return;
-      }
-      const fallback = proofSelectionForSession(activeSessionIdentity.current);
-      setProofSelection(fallback);
-      setProofSelectionAuthority(undefined);
-      const canonical = proofHash(fallback, proofSection);
-      if (window.location.hash !== canonical) {
-        window.history.replaceState({ view: "proof" }, "", canonical);
-      }
-      setRuntimeStatus("Proof is scoped to the active Profile. Switch Profiles before opening that session's evidence.");
-    }).catch(() => {
-      if (disposed || operation !== proofSelectionOperation.current) return;
-      const fallback = proofSelectionForSession(activeSessionIdentity.current);
-      setProofSelection(fallback);
-      setProofSelectionAuthority(undefined);
-    });
-    return () => { disposed = true; };
-  }, [profileId, proofSection, proofSelection?.sessionId, sessionId, view]);
   const activeTheme = activeProfile
     ? catalog?.themes.find((theme) => theme.themeId === activeProfile.theme.themeId && theme.digest === activeProfile.theme.digest)
     : undefined;
@@ -2851,76 +2362,12 @@ export function App() {
     const frame = requestAnimationFrame(() => setApprovalDockFailurePositionReady(true));
     return () => cancelAnimationFrame(frame);
   }, [approvalDockNoticeVisible, shellMounted]);
-  const activeAttestationPresentation = attestationPresentation
-    && runtime.current
-    && attestationPresentation.workspace === runtime.current.workspace
-    && attestationPresentation.workspaceId === runtime.current.workspaceId
-    && attestationPresentation.profileId === profileId
-    && attestationPresentation.sessionId === sessionId
-      ? attestationPresentation
-      : undefined;
-  const attestationRecords = activeAttestationPresentation?.records ?? Object.freeze([]);
-  const attestationFailure = activeAttestationPresentation?.failure;
-  const selectedAttestationRecordId = activeAttestationPresentation?.selectedRecordId;
-  const endpointEvidenceDurabilityNotice = activeAttestationPresentation?.durabilityNotice;
-  const chutesConnected = isChutesConnected(connection);
-  const activeInferenceBinding = activeSessionRecord?.manifest.inferenceBinding
-    ?? runtime.current?.inferenceBinding;
-  const activeChutesAuthorityId = chutesConnectionId.current;
-  const activeChutesConnection = chutesConnected
-    && Boolean(activeChutesAuthorityId)
-    && activeInferenceBinding !== undefined
-    && activeInferenceBinding?.connectionId === activeChutesAuthorityId
-    && activeInferenceBinding.connectionGeneration === Math.max(1, chutesConnectionGeneration.current)
-    && activeInferenceBinding.providerId === "chutes"
-    && activeInferenceBinding.providerLabel === "Chutes"
-    && activeInferenceBinding.providerRevision === 1
-    && activeInferenceBinding.authMethod === (connection.kind === "chutes-oauth" ? "oauth-pkce" : "api-key")
-    && activeInferenceBinding.transportBoundary === "e2ee-attestable"
-    && activeInferenceBinding.modelId === connection.model;
-  const chutesReconnectExact = accessReconnectIntent?.lane === "chutes"
-    && chutesConnected
-    && Boolean(activeChutesAuthorityId)
-    && availableModels.some((candidate) => candidate.id === accessReconnectIntent.model)
-    && reconnectRouteDisposition(accessReconnectIntent, {
-      lane: "chutes",
-      method: connection.kind === "chutes-oauth" ? "oauth-pkce" : "api-key",
-      model: accessReconnectIntent.model,
-      connectionId: activeChutesAuthorityId ?? "",
-      connectionGeneration: Math.max(1, chutesConnectionGeneration.current),
-    }) === "exact";
+  const activeInferenceBinding = activeSessionRecord && runtime.current
+    ? activeSessionRuntime(runtime.current, activeSessionRecord).inferenceBinding
+    : runtime.current?.inferenceBinding;
   const activeExternalResolution = activeExternalRoute && inferenceFabric.current
     ? inferenceFabric.current.resolve(activeExternalRoute.pin)
     : undefined;
-  /*
-   * Which providers hold a live page-memory connection, read from the fabric
-   * this render. `providerFabricRevision` is the fabric's own change signal, so
-   * a released connection stops being claimed on the very next render. Before
-   * the fabric loads this is empty, which can only under-claim.
-   */
-  const connectedInferenceProviderIds = useMemo(
-    () => (inferenceFabric.current?.list() ?? []).map((entry) => entry.provider.id),
-    [providerFabricRevision, Boolean(inferenceFabric.current)],
-  );
-  /*
-   * The same fact, addressed to the Account route.
-   *
-   * Account's provider tabs default to `unavailable`, which is written for "the
-   * host said nothing" — and nothing ever said anything, so a working OpenAI
-   * connection read as an absent capability. This states connection only: no
-   * quota, usage, reset or identity is invented, because none of it is
-   * observed. Nothing is emitted until the fabric exists, so "not observed yet"
-   * still falls through to `unavailable` rather than being claimed as absence.
-   */
-  const billingProviderInventory = useMemo(
-    () => inferenceFabric.current
-      ? Object.freeze(BILLING_INVENTORY_PROVIDER_IDS.map((providerId) => Object.freeze({
-          providerId,
-          state: connectedInferenceProviderIds.includes(providerId) ? "connected" as const : "not-connected" as const,
-        })))
-      : undefined,
-    [connectedInferenceProviderIds, Boolean(inferenceFabric.current)],
-  );
   const pinnedExternalRoute = activeExternalRoute
     && activeInferenceBinding
     && inferenceBindingsMatch(activeInferenceBinding, coreInferenceBinding(activeExternalRoute))
@@ -2930,17 +2377,12 @@ export function App() {
     && activeExternalResolution?.state === "ready"
       ? pinnedExternalRoute
       : undefined;
-  /**
-   * A provider can have a complete, reachable catalog before a person has
-   * chosen which model should own a conversation. Keep that catalog visible in
-   * Chat instead of falling back to the demo chip; selecting one model is the
-   * only path that performs the protected invocation check.
-   */
+  /** Keep a connected catalog visible until one model owns a conversation. */
   const standbyExternalConnections = useMemo(
-    () => activeExternalConnection || activeChutesConnection || activeInferenceBinding
+    () => activeExternalConnection || activeInferenceBinding
       ? Object.freeze([] as readonly BrowserInferenceConnection[])
-      : Object.freeze((inferenceFabric.current?.list() ?? []).filter((entry) => entry.provider.id !== "chutes")),
-    [activeChutesConnection, activeExternalConnection, activeInferenceBinding, providerFabricRevision],
+      : Object.freeze(inferenceFabric.current?.list() ?? []),
+    [activeExternalConnection, activeInferenceBinding, providerFabricRevision],
   );
   const standbyExternalModels = useMemo(
     () => Object.freeze(standbyExternalConnections.flatMap((entry) => entry.models.map((model) => ({
@@ -2956,48 +2398,28 @@ export function App() {
   const standbyExternalProviderLabel = standbyExternalConnections.length === 1
     ? standbyExternalConnections[0]?.provider.label
     : standbyExternalConnections.length > 1 ? "Connected models" : undefined;
-  const inferenceConnected = Boolean(activeChutesConnection || activeExternalConnection);
-  const activeChutesModel = chutesConnected
-    ? availableModels.find((model) => model.id === connection.model)
-    : undefined;
+  const inferenceConnected = Boolean(activeExternalConnection);
   const activeExternalModel = activeExternalConnection?.models.find((model) =>
     model.id === activeInferenceBinding?.modelId
   );
-  const inferenceStatusLabel = activeChutesConnection
-    ? `Chutes · ${compactModelLabel(activeChutesModel?.id ?? connection.model)}`
-    : activeExternalConnection
-      ? `${activeExternalConnection.pin.provider.label} · ${compactModelLabel(activeExternalModel?.label ?? activeExternalConnection.pin.model.id)}`
-      : pinnedExternalRoute
-        ? `${pinnedExternalRoute.pin.provider.label} · disconnected`
-        : activeInferenceBinding?.providerId === "chutes"
-          ? "Chutes · disconnected"
-          : "Connect a model";
-  const inferenceStatusDetail = activeChutesConnection
-    ? `${connection.model} · ${connection.invokeAuthorization === "verified" ? "encrypted invocation verified" : "encrypted invocation ready; permission not tested yet"}`
-    : activeExternalConnection
-      ? `${activeExternalConnection.pin.model.id} · invocation checked · ${providerBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary)}`
-      : pinnedExternalRoute && activeExternalResolution && activeExternalResolution.state !== "ready"
-        ? `${pinnedExternalRoute.pin.model.id} remains pinned to this conversation. ${activeExternalResolution.detail}`
-        : activeInferenceBinding?.providerId === "chutes"
-          ? `${activeInferenceBinding.modelId} remains as a read-only pin. Reconnecting Chutes starts a new pinned conversation.`
-          : "Connect Chutes, another cloud provider, Ollama, or LM Studio. Local slash commands remain available without inference.";
-  const imageInputCapability = activeChutesConnection && activeChutesModel
-    ? modelInputModalityCapability(activeChutesModel, "image")
-    : activeExternalModel
-      ? providerModelCapability(activeExternalModel, "image-input")
-      : "unsupported";
-  const activeRemoteInference = activeInferenceBinding?.transportBoundary === "e2ee-attestable"
-    || activeInferenceBinding?.transportBoundary === "provider-tls";
-  /*
-   * Whether "encrypted request" is a claim this composer may make.
-   *
-   * Only the app-encrypted boundary earns the word: `provider-tls` is
-   * plaintext beyond TLS (its posture chip reads "Remote · not encrypted end
-   * to end"), `loopback-local` never leaves the machine and needs no cipher
-   * claim, and the demo makes no request at all. Every attachment sentence
-   * below speaks through this one derivation so chip and refusal cannot drift.
-   */
-  const composerRequestEncrypted = activeInferenceBinding?.transportBoundary === "e2ee-attestable";
+  const inferenceStatusLabel = activeExternalConnection
+    ? `${activeExternalConnection.pin.provider.label} · ${compactModelLabel(activeExternalModel?.label ?? activeExternalConnection.pin.model.id)}`
+    : pinnedExternalRoute
+      ? `${pinnedExternalRoute.pin.provider.label} · disconnected`
+      : activeInferenceBinding
+        ? `${activeInferenceBinding.providerLabel} · disconnected`
+        : "Connect a model";
+  const inferenceStatusDetail = activeExternalConnection
+    ? `${activeExternalConnection.pin.model.id} · route checked · ${providerBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary)}`
+    : pinnedExternalRoute && activeExternalResolution && activeExternalResolution.state !== "ready"
+      ? `${pinnedExternalRoute.pin.model.id} remains pinned to this conversation. ${activeExternalResolution.detail}`
+      : activeInferenceBinding
+        ? `${activeInferenceBinding.modelId} remains as a read-only pin. Reconnect its exact provider connection to continue.`
+        : "Connect a cloud provider, Ollama, or LM Studio. Local slash commands remain available without inference.";
+  const imageInputCapability = activeExternalModel
+    ? providerModelCapability(activeExternalModel, "image-input")
+    : "unsupported";
+  const activeRemoteInference = activeInferenceBinding?.transportBoundary === "provider-tls";
   const sessionRuntime = activeSessionRecord && runtime.current
     ? activeSessionRuntime(runtime.current, activeSessionRecord)
     : undefined;
@@ -3079,7 +2501,7 @@ export function App() {
       navigate("chat");
       requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
     },
-  }), [slashRegistry, lastReceipt, sessionId, paletteSessions, paletteActions, catalog, profileId]);
+  }), [slashRegistry, sessionId, paletteSessions, paletteActions, catalog, profileId]);
   // The rail's chord has a searchable twin: a shortcut nobody can discover is
   // a shortcut that does not exist, and the chevron is 700px away on a laptop.
   const paletteEntriesWithRail = useMemo(() => Object.freeze([
@@ -3128,10 +2550,6 @@ export function App() {
     estimateHeight: uiMessageEstimate,
     leadingOffset: transcriptLeadingHeight,
   });
-  const inPageReceipts = useMemo(
-    () => proofResolvableReceipts(ancillaryReceipts, messages, sessionId),
-    [ancillaryReceipts, messages, sessionId],
-  );
   /*
    * Land the "Return to this turn" once the transcript it names has rendered.
    *
@@ -3193,7 +2611,7 @@ export function App() {
         frame = requestAnimationFrame(land);
         return;
       }
-      setRuntimeStatus("That turn is in this conversation, but its card did not mount in time to land on. Scroll up to it, or open it again from Proof.");
+      setRuntimeStatus("That turn is in this conversation, but its card did not mount in time to land on. Scroll up, or reopen it from All conversations.");
     };
     frame = requestAnimationFrame(land);
     return () => { if (frame !== undefined) cancelAnimationFrame(frame); };
@@ -3465,7 +2883,7 @@ export function App() {
    *
    * Terminal lineage was complete and durable and reachable from exactly one
    * `<summary>` popover: a command that rewrote the workspace produced no
-   * journal event, so Proof audited a chain with a hole where the shell is, and
+   * journal event, so the local integrity check saw a chain with a hole where the shell is, and
    * the product's claim — intent → effect → workspace head → receipt — was true
    * of tools and false of `jsh`.
    *
@@ -3828,34 +3246,6 @@ export function App() {
     });
     return () => cancelAnimationFrame(frame);
   }, [recordedTranscriptSize, unrecoveredWork]);
-  const proofSelectionAuthorized = !proofSelection
-    || proofSelection.sessionId === sessionId
-    || (
-      proofSelectionAuthority?.profileId === profileId
-      && proofSelectionAuthority.sessionId === proofSelection.sessionId
-    );
-  const effectiveProofSelection = proofSelectionAuthorized
-    ? proofSelection
-    : proofSelectionForSession(sessionId);
-  const proofTargetId = effectiveProofSelection?.sessionId ?? sessionId;
-  const proofReceipt = resolveProofReceipt(
-    inPageReceipts,
-    effectiveProofSelection,
-    proofTargetId === sessionId ? lastReceipt : undefined,
-  );
-  const attestationSeal = describeAttestationSeal({
-    connected: activeChutesConnection,
-    proofPolicy: activeChutesConnection && connection.posture === "encrypted-attested" ? "strict" : "record",
-    receipt: lastReceipt,
-    records: attestationRecords,
-    failure: attestationFailure,
-    now: attestationNow,
-  });
-  const automaticEvidenceAcquisitionNotice = evidenceAcquisitionNotice(
-    evidenceAcquisitionSnapshot,
-    proofReceipt?.receiptId,
-    evidenceCheckpointFaulted,
-  );
   const localDeviceRuntimeAdopted = Boolean(
     localDeviceStatus
     && runtime.current?.storageId.startsWith("vault+local-device://"),
@@ -3868,10 +3258,6 @@ export function App() {
   const googleDriveVaultAdopted = cloudVaultRuntimeAdopted
     && vaultSnapshot.phase === "ready"
     && isGoogleDriveConfiguration(vaultSnapshot.config);
-  const localS3VaultRuntimeAdopted = cloudVaultRuntimeAdopted
-    && vaultSnapshot.phase === "ready"
-    && !isGoogleDriveConfiguration(vaultSnapshot.config)
-    && vaultSnapshot.config.mode === "local-development";
   const vaultRuntimeAdopted = localDeviceRuntimeAdopted || cloudVaultRuntimeAdopted;
   // Declared here rather than beside the other global hooks because adoption is
   // one of its three terms, and adoption is what decides whether closing the tab
@@ -3884,212 +3270,7 @@ export function App() {
     eventCount,
     vaultAdopted: vaultRuntimeAdopted,
   }));
-  const trustAxes: readonly TrustAxis[] = Object.freeze([
-    { id: "local", scope: "tab", label: online ? "Browser / Edge runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
-    {
-      id: "vault",
-      // Vault *adoption* is a property of this tab's runtime; where this
-      // conversation's journal actually lives is the session bar's durability
-      // claim. Two claims, two bands, and the labels stopped matching in
-      // round 1 so the scope tag now records why.
-      scope: "tab",
-      label: localDeviceRuntimeAdopted
-        ? "Local Device Vault active"
-        : localS3VaultRuntimeAdopted
-          ? "Local S3 Vault active"
-          : googleDriveVaultAdopted && !online
-            ? "Vault adopted · currently unreachable"
-            : cloudVaultRuntimeAdopted
-            ? "Cloud Vault active"
-          : preferences.vaultBackend === "local-device"
-            // Not "Local Device setup". The Atlas measured this state being
-            // announced only as a transient status string — "Local Device Vault
-            // needs a saved recovery key before first use" — which the first
-            // turn overwrote and never restored, so the label has to state the
-            // consequence rather than name the unfinished ceremony.
-            ? localDeviceBusy ? "Opening Local Device Vault" : "Not saved · Vault not set up"
-            // "Ephemeral" here answered "is a vault backend adopted in this
-            // tab", while the session chip's "Ephemeral · this page only"
-            // answers "where does *this conversation's* journal live". Two
-            // different claims that read identically only because both are
-            // currently empty. Naming the axis for what it measures is what
-            // stops one screen printing the same word twice for two facts.
-            : vaultSnapshot.phase === "ready" ? "Vault adoption pending" : vaultSnapshot.phase === "probing" ? "Vault testing" : vaultSnapshot.phase === "configured" ? "Vault configured" : vaultSnapshot.phase === "degraded" ? "Vault blocked" : "No vault adopted",
-      state: vaultRuntimeAdopted
-        // Adoption is a local fact and stays true offline; "verified" is not.
-        // A Drive-backed runtime cannot be reached without connectivity, so
-        // the axis degrades instead of certifying a sync that cannot run.
-        ? googleDriveVaultAdopted && !online ? "attention" : "verified"
-        : localDeviceBusy || vaultSnapshot.phase === "ready" || vaultSnapshot.phase === "probing"
-          ? "checking"
-          : vaultSnapshot.phase === "configured"
-            ? "asserted"
-            : vaultSnapshot.phase === "degraded" || Boolean(localDeviceError)
-              ? "failed"
-              // A durable destination is selected and nothing has been adopted,
-              // so every keystroke in this tab is in page memory. `none` — "no
-              // evidence was requested" — was the rung that let the whole state
-              // be carried by a transient status string; it is a state the
-              // reader has to act on, which is what `attention` means here.
-              // `ephemeral` stays `none`: that one is a decision the Vault route
-              // offers, its consequence is stated on the conversation's own
-              // durability claim, and a standing alarm about a choice Airship
-              // invited is the kind of noise that teaches people to ignore the
-              // real ones.
-              : preferences.vaultBackend === "ephemeral" ? "none" : "attention",
-      detail: localDeviceRuntimeAdopted
-        ? "Workspace, journal, profiles, Git objects, and context state are encrypted and persistent in this browser profile. No cloud synchronization is active."
-        : localS3VaultRuntimeAdopted
-          ? "This page uses the tested client-encrypted local S3 workspace, journal, and profile adapters. No remote cloud synchronization is active."
-        : googleDriveVaultAdopted && !online
-          ? "The adopted client-encrypted Google Drive runtime cannot be reached while this browser is offline; nothing is synchronizing and no local claim has changed."
-          : cloudVaultRuntimeAdopted
-          ? "This page uses the tested client-encrypted cloud workspace, journal, and profile adapters; cross-device convergence is not certified."
-          : localDeviceError ?? (vaultSnapshot.phase === "ready"
-            ? "The storage contract passed, but this active runtime is still page-memory until adoption completes."
-            // The sentence a person can act on, in the place the alarm is
-            // raised. It shipped as `vaultSnapshot.message` — the coordinator's
-            // "No cloud vault is configured." — which describes a subsystem
-            // rather than the consequence to the reader.
-            : preferences.vaultBackend === "local-device"
-              ? "No device key is enrolled yet, so this tab's conversations, workspace files and memory live in page memory and are released when it closes. Open Vault to create the encrypted device Vault; nothing is enrolled until you save the one-time recovery key."
-              : vaultSnapshot.message),
-      view: "vault",
-    },
-    { id: "e2ee", scope: "conversation", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
-    { id: "attestation", scope: "conversation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
-  ]);
-  /*
-   * The three facts that used to each own a slot of the phone's session bar or
-   * a permanent line under the composer, gathered into the sheet the topbar's
-   * runtime chip already opens.
-   *
-   * They are not trust *axes* and are deliberately not added to `trustAxes`:
-   * the count that chip renders ("4 runtime claims") stands for the four
-   * independently-scoped posture claims, and folding presentation facts into it
-   * would make the number mean two things. They ride in the sheet's "This
-   * conversation" group as claim rows, which is the shape the sheet already
-   * renders and the group whose heading says whose facts these are.
-   *
-   * What was retired to get here, measured at 430×932: the pinned-skills chip
-   * (a 44px glyph whose entire content was a popover), the composer's permanent
-   * `Encrypted inference through …` caption (a line of chrome under the input
-   * on every turn, connected or not), and the composer's credential-posture
-   * chip, which put "Key in memory" inside the box a person types their message
-   * into. None of the sentences changed; the places they interrupt did.
-   */
-  const composerCredentialPosture = composerPosture({
-    online,
-    offlineReason: OFFLINE_INLINE_REASON,
-    inferenceConnected,
-    authMethod: activeInferenceBinding?.authMethod,
-  });
-  /*
- * The visible conversation's own relationship to the connected Chutes route:
- * truthy when this thread's manifest pins the live connection, making it the
- * thread whose model can change in place. Every "which model am I talking
- * to" surface reads the durable in-flight choice before the connection
- * default, so an in-place switch is seen everywhere at once — the chip, the
- * picker, and the proof sheet can never disagree about what answers next.
- */
-const visibleChutesThread = Boolean(
-  activeSessionRecord
-  && activeSessionRecord.manifest.inferenceBinding?.providerId === "chutes"
-  && activeSessionRecord.manifest.inferenceBinding.connectionId === chutesConnectionId.current,
-);
-const visibleSessionEffectiveModel = visibleChutesThread ? activeSessionRecord!.modelOverride : undefined;
-const conversationFacts: readonly ClaimRow[] = Object.freeze([
-    /*
-     * The bound model, and only while there is one.
-     *
-     * The `e2ee` axis two rows above already says "Connect a model" with this
-     * exact sentence when nothing is connected, so an unconditional row here
-     * would print one fact twice in one sheet — the duplication this whole
-     * package exists to remove. Connected, the two rows are different claims:
-     * the axis carries the *posture* under a compacted provider·model label,
-     * this row carries the *identifier* being talked to and the sentence the
-     * composer used to print under the input on every single turn.
-     */
-    ...(inferenceConnected ? [Object.freeze({
-      id: "session-model",
-      state: "asserted" as const,
-      label: activeChutesConnection
-        ? (visibleSessionEffectiveModel ?? connection.model)
-        : activeExternalConnection?.pin.model.id ?? inferenceStatusLabel,
-      detail: isChutesConnected(connection)
-        ? connection.posture === "encrypted-attested"
-          ? `Encrypted inference through ${visibleSessionEffectiveModel ?? connection.model}; fresh endpoint proof is required before the next invocation.`
-          : `Encrypted inference through ${visibleSessionEffectiveModel ?? connection.model}; this compatibility connection has no required endpoint-proof gate.`
-        : inferenceStatusDetail,
-      action: Object.freeze({ label: "Models", onSelect: () => navigatePrimary("access") }),
-    })] : []),
-    Object.freeze({
-      id: "credential-posture",
-      state: composerCredentialPosture.state,
-      label: composerCredentialPosture.label,
-      detail: composerCredentialPosture.detail,
-      action: Object.freeze({ label: "Connections", onSelect: () => navigatePrimary("access") }),
-    }),
-    ...(activeSessionRecord?.manifest.profile ? [Object.freeze({
-      id: "pinned-skills",
-      state: "asserted" as const,
-      label: pinnedSkillsLabel(activeSessionRecord.manifest.profile.resolvedSkills.length),
-      detail: pinnedSkillsDetail({
-        skillSetDigest: activeSessionRecord.manifest.profile.skillSetDigest,
-        skills: activeSessionRecord.manifest.profile.resolvedSkills.map((resolved) => ({
-          skillId: resolved.skillId,
-          digest: resolved.digest,
-          name: catalog?.skills.find((candidate) => candidate.skillId === resolved.skillId && candidate.digest === resolved.digest)?.name
-            ?? resolved.skillId,
-        })),
-      }),
-      action: Object.freeze({ label: "Skills", onSelect: () => navigatePrimary("skills") }),
-    })] : []),
-  ]);
-  const attestationReceipts = useMemo(() => sessionAttestationReceipts({
-    messages,
-    sessionId,
-    selectedRecordId: selectedAttestationRecordId,
-  }), [messages, sessionId, selectedAttestationRecordId]);
-  /*
-   * The Proof route carries two identities and must enforce one.
-   *
-   * `proofTargetId` is the conversation the route is *about* — the library can
-   * open Proof for a conversation that was never resumed. Endpoint evidence,
-   * receipts and acquisition failures, by contrast, are only ever acquired for
-   * the ACTIVE conversation: `activeAttestationPresentation` is fenced on
-   * `sessionId` a few hundred lines above. Handing the active collections to a
-   * route scoped to a different session is how conversation A's TDX quotes end
-   * up inside a verification bundle stamped `scope.sessionId === B`. When the
-   * two identities diverge the route is given nothing, and says so.
-   */
-  const proofScoped = proofTargetId === sessionId;
-  const proofEndpointRecords = proofScoped ? attestationRecords : EMPTY_ENDPOINT_EVIDENCE;
-  const proofLedgerReceipts = proofScoped ? attestationReceipts : EMPTY_CONVERSATION_RECEIPTS;
-  const ledgerSelectedRecordId = proofScoped
-    ? selectedAttestationRecordId
-      ?? (effectiveProofSelection?.receiptId ? `receipt:${effectiveProofSelection.receiptId}` : undefined)
-    : undefined;
-  /*
-   * One turn, one verdict — including its modifier.
-   *
-   * `describeMessageAttestation` already admits an acquisition failure onto a
-   * turn only when `attestationFailureAppliesToReceipt` holds, so the Proof
-   * hero and the claim rail must apply the same predicate or the same turn
-   * reads "evidence not pulled" in the transcript and says nothing about it on
-   * the route dedicated to saying it.
-   */
-  const proofAcquisitionFailure = proofScoped
-    && attestationFailure
-    && (!proofReceipt || attestationFailureAppliesToReceipt(attestationFailure, proofReceipt))
-      ? attestationFailure.label
-      : undefined;
-  const inspectorAcquisitionFailure = attestationFailure
-    && (!lastReceipt || attestationFailureAppliesToReceipt(attestationFailure, lastReceipt))
-      ? attestationFailure.label
-      : undefined;
-
-  async function selectSessionForActivation(
+    async function selectSessionForActivation(
     session: SessionRecord,
     sourceRuntime = runtime.current,
     signal?: AbortSignal,
@@ -4129,85 +3310,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   useEffect(() => () => {
     approvalBroker.denyAll();
     vaultContextPublication.current?.abort(new DOMException("Airship is closing.", "AbortError"));
-    attestationOperation.current += 1;
-    attestationClient.current?.dispose();
-    attestationClient.current = undefined;
-    attestationClientBinding.current = undefined;
-    endpointEvidenceAuthorityOperation.current += 1;
-    endpointEvidenceAuthorityLoad.current = undefined;
-    void endpointEvidenceAuthority.current?.release();
-    evidenceAcquisitionQueueOperation.current += 1;
-    evidenceAcquisitionUnsubscribe.current?.();
-    evidenceAcquisitionUnsubscribe.current = undefined;
-    evidenceAcquisitionQueue.current?.dispose();
-    evidenceAcquisitionQueue.current = undefined;
-    evidenceAcquisitionQueueLoad.current = undefined;
-    void evidenceAcquisitionQueueAuthority.current?.release();
-    providerCredential.current = undefined;
-    setConfidentialAuthority(undefined);
   }, [approvalBroker]);
-
-  /*
-   * The confidential embedding mode's writer.
-   *
-   * `setConfidentialAuthority` had no caller, so `hasConfidentialAuthority()`
-   * was permanently false: the `chutes` branch of `readStoredEmbeddingMode` was
-   * dead, `SwitchableEmbeddingProvider`'s confidential path was unreachable,
-   * and the whole mode existed as code nothing could enter.
-   *
-   * It hands the indexing side a *capability*, not a credential: the corpus is
-   * sealed to the serving instance's own public key and posted to `/e2e/invoke`
-   * by the same transport the chat lane uses, so the bearer never leaves the
-   * connection that owns it. The transport is read from the ref at each call
-   * rather than captured, so a rotation is picked up without reinstalling
-   * anything and a release is observed as a refusal. Nothing is persisted
-   * — this effect is the only thing that makes a persisted `chutes` preference
-   * admissible on a page load, which is exactly the check
-   * `readStoredEmbeddingMode` performs.
-   *
-   * Keyed on the connection rather than on `activeChutesConnection`: that
-   * derivation additionally requires the *active session* to be pinned to this
-   * connection, and the index is not a conversation. A workspace index may be
-   * rebuilt while the open session is a local one.
-   */
-  useEffect(() => {
-    if (!isChutesConnected(connection)) {
-      setConfidentialAuthority(undefined);
-      return;
-    }
-    setConfidentialAuthority((request) => {
-      const transport = chutesTransport.current;
-      if (!transport) throw new Error("Chutes is no longer connected, so nothing can be embedded confidentially.");
-      return transport.invokeJson(request, request.signal);
-    });
-    return () => setConfidentialAuthority(undefined);
-  }, [connection]);
-
-  // Endpoint proof and its scheduler are one Profile cockpit. A switch first
-  // pauses the no-longer-authoritative worker/client, then installs a client
-  // fenced to the new Profile+WorkspacePort, recovers that Profile's records,
-  // and only then resumes persisted queue work. A disconnected page never
-  // burns queue attempts merely because no credential-backed client exists.
-  useEffect(() => {
-    const active = runtime.current;
-    if (!active) return;
-    const credential = providerCredential.current;
-    const credentialKind = attestationCredentialKind.current;
-    if (!credential || !credentialKind) {
-      setEvidenceAcquisitionSnapshot(undefined);
-      return;
-    }
-    void rebindProfileEvidenceScope(active, profileId, credential, credentialKind)
-      .catch((error) => publishAttestationFailureForCurrent({
-        label: error instanceof Error && error.message.includes("checkpoint")
-          ? "Stored endpoint evidence rejected"
-          : "Evidence client unavailable",
-        scope: "connection",
-      }));
-    // Runtime authority changes with the same Profile are rebound explicitly
-    // by storage transitions; Profile identity is this effect's only key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId]);
 
   /*
    * A capability request is a real modal only once its dialog is resident.
@@ -4372,7 +3475,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
            * replaced it for the next three hours (J114), and on the way past it
            * overwrote the completion signal for a profile switch (J020).
            *
-           * The vault trust axis below carries it instead: derived from state,
+           * The Vault adoption status below carries it instead: derived from state,
            * so nothing can evict it; rendered by the topbar posture chip, which
            * is a control and is the one piece of chrome measured legible at
            * 390px; and stated again by the durability claim on the conversation
@@ -4416,7 +3519,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, catalog, activeProfile, gitClient, vaultProviderSwitching, cockpitSettleRetry]);
 
-  // Readiness is not durability until the verified adapters replace the active
+  // Readiness is not durability until the configured adapters replace the active
   // page-memory runtime. This effect waits for both halves, then adopts once.
   useEffect(() => {
     if (
@@ -4506,64 +3609,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, preferences.vaultBackend, vaultSnapshot, localDeviceStatus, sessionRevision]);
 
-  /*
-   * The queue's own recovery channel, keyed on the fault and nothing else.
-   *
-   * A refused checkpoint write parks `schedule()` until an explicit `wake()`,
-   * and this is the only production caller of it — so where it is driven from
-   * decides whether the "acquisition is paused until the queue snapshot commits
-   * again" notice is a promise or a lie. It used to ride the attestation
-   * freshness tick, which cannot see the state that produces the fault: that
-   * effect returns early with no records, and the *first* acquisition of a fresh
-   * conversation is exactly when there are none. The queue is Profile-scoped and
-   * outlives any one conversation, so opening a second conversation also tore
-   * the tick down and left a still-faulted queue with no waker at all.
-   *
-   * `evidenceCheckpointFaulted` is state published from the queue's own
-   * emission (see `publishEvidenceAcquisitionQueue`), so this runs whenever a
-   * queue is faulted, regardless of what the Proof route happens to be showing.
-   */
-  useEffect(() => {
-    if (!evidenceCheckpointFaulted) return;
-    const retry = () => { wakeFaultedEvidenceAcquisitionQueue(evidenceAcquisitionQueue.current); };
-    retry();
-    const timer = window.setInterval(retry, 30_000);
-    return () => window.clearInterval(timer);
-  }, [evidenceCheckpointFaulted]);
-
-  useEffect(() => {
-    if (attestationRecords.length === 0) return;
-    const tick = () => {
-      const now = Date.now();
-      setAttestationNow(now);
-      if (!online || !chutesConnected || !attestationClient.current || !lastReceipt || !sessionId) return;
-      const record = attestationRecords.find((candidate) => attestationRecordMatchesReceipt(candidate, lastReceipt));
-      if (!record) return;
-      if (isDisplayFreshAttestation(record, now)) {
-        automaticEvidenceRefreshes.current.delete(record.recordId);
-        return;
-      }
-      if (automaticEvidenceRefreshes.current.has(record.recordId)) return;
-      automaticEvidenceRefreshes.current.add(record.recordId);
-      void enqueueAutomaticReceiptEvidence(lastReceipt, sessionId, profileId).catch(() => {
-        // The durable queue owns retries and its failure projection. Releasing
-        // this record here would enqueue the same expired observation every
-        // thirty seconds and turn a bounded retry into a polling storm.
-      });
-    };
-    tick();
-    const timer = window.setInterval(tick, 30_000);
-    return () => window.clearInterval(timer);
-  }, [attestationRecords, chutesConnected, lastReceipt, online, profileId, sessionId]);
-
-  useEffect(() => {
-    const binding = endpointEvidenceAuthority.current?.current();
-    if (binding && sessionId) projectEndpointEvidencePresentation(binding, sessionId);
-    // A selected row/failure belongs to the prior session even when the record
-    // store itself remains bound to the same Profile and workspace authority.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId, sessionId]);
-
   /**
    * The one recovery verb, shared by every route that can fail to load.
    *
@@ -4574,54 +3619,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     setDeferredChunkAttempt((value) => value + 1);
   }
 
-  useEffect(() => {
-    if (view !== "proof" || proofSection !== "attestations" || AttestationsScreen) return;
-    let current = true;
-    setAttestationsViewError(undefined);
-    void loadDeferredCapabilities()
-      .then((module) => {
-        if (current) setAttestationsScreen(() => module.AttestationsView);
-      })
-      .catch(() => {
-        if (current) setAttestationsViewError("The attestation interface chunk could not be loaded. No trust claim changed.");
-      });
-    return () => { current = false; };
-  }, [view, proofSection, AttestationsScreen, deferredChunkAttempt]);
-
-  /*
-   * The claim rail is fetched the moment a receipt exists — or the Proof route
-   * opens — and never before. It cannot render without one, so paying for it
-   * at first paint bought an empty conversation nothing.
-   */
-  useEffect(() => {
-    if ((view !== "proof" && !lastReceipt) || ProofInspector) return;
-    let current = true;
-    setProofInspectorError(undefined);
-    void import("./proof-inspector").then((module) => {
-      if (current) setProofInspector(() => module.ProofInspector);
-    }).catch(() => {
-      // This was silent on the premise that `#proof` reports the same failure.
-      // It does not: `proofViewError` is written only by the `proof-view`
-      // catch, and `proof-inspector` is a separate build asset that fails on
-      // its own. The premise being false is how the claim stack came to render
-      // an endless skeleton on the route that promises never to overstate.
-      if (current) setProofInspectorError("The claim stack could not be loaded. No receipt, evidence, or journal state changed.");
-    });
-    return () => { current = false; };
-  }, [view, lastReceipt, ProofInspector, deferredChunkAttempt]);
-
-  useEffect(() => {
-    if (view !== "proof" || ProofScreen) return;
-    let current = true;
-    setProofViewError(undefined);
-    void import("./proof-view").then((module) => {
-      if (current) setProofScreen(() => module.ProofView);
-    }).catch(() => {
-      if (current) setProofViewError("The Proof interface could not be loaded. No receipt, evidence, or journal state changed.");
-    });
-    return () => { current = false; };
-  }, [view, ProofScreen, deferredChunkAttempt]);
-
+  /* Sessions and Vault share a deferred route chunk. Load it only when one
+     of those destinations is open, and keep a route-local failure state. */
   useEffect(() => {
     if ((view !== "sessions" || SessionsScreen) && (view !== "vault" || VaultScreen)) return;
     let current = true;
@@ -4678,54 +3677,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   }, [view, preferences.vaultBackend, LocalDeviceVaultSetupScreen, deferredChunkAttempt]);
 
   useEffect(() => {
-    if ((view !== "access" || AccessScreen) && (view !== "billing" || BillingScreen)) return;
-    let current = true;
-    if (view === "access") setAccessViewError(undefined);
-    if (view === "billing") setBillingViewError(undefined);
-    void loadDeferredCapabilities().then((module) => {
-      if (!current) return;
-      if (view === "access") setAccessScreen(() => module.AccessView);
-      if (view === "billing") setBillingScreen(() => module.BillingView);
-    }).catch(() => {
-      if (!current) return;
-      if (view === "access") setAccessViewError("The Connection interface could not be loaded. No credential or session state changed.");
-      if (view === "billing") setBillingViewError("The Account interface could not be loaded. No credential or billing state changed.");
-    });
-    return () => { current = false; };
-  }, [view, AccessScreen, BillingScreen, deferredChunkAttempt]);
-
-  useEffect(() => {
-    if (view !== "access" || activeOAuthRegistration) return;
-    let current = true;
-    setOAuthRegistrationError(undefined);
-    void import("../auth/chutes-oauth-registration").then((module) => {
-      if (!current) return;
-      setActiveOAuthRegistration({
-        registration: module.CHUTES_ACTIVE_REGISTRATION,
-        exchangeMode: module.chutesOAuthExchangeMode(module.CHUTES_ACTIVE_REGISTRATION),
-      });
-    }).catch(() => {
-      // Not `accessViewError`: that state renders only where `AccessScreen` is
-      // absent, so writing this there described the route's own chunk failing
-      // and was unreachable the moment the route loaded. The sign-in lane this
-      // actually disables carries it instead.
-      if (current) setOAuthRegistrationError("Chutes OAuth registration metadata could not be loaded, so browser sign-in is unavailable. Existing connections were not changed.");
-    });
-    return () => { current = false; };
-  }, [view, activeOAuthRegistration, deferredChunkAttempt]);
-
-  useEffect(() => {
     if (view !== "access" || ProviderConnectionsScreen) return;
     let current = true;
     setProviderFabricError(undefined);
     void import("./provider-connections-view").then((module) => {
       if (current) setProviderConnectionsScreen(() => module.ProviderConnectionsView);
     }).catch(() => {
-      // Its own state, for the same reason as the registration loader above:
-      // `accessViewError` is unrenderable once `AccessScreen` has loaded, and
-      // this chunk is the normal case's *only* path to every non-Chutes
-      // provider.
-      if (current) setProviderFabricError("The provider fabric could not be loaded. Existing Chutes and conversation state were not changed.");
+      // This route loads directly now, so its failure state must render here.
+      if (current) setProviderFabricError("The Providers interface could not be loaded. Existing connections and conversations were not changed.");
     });
     return () => { current = false; };
   }, [view, ProviderConnectionsScreen, deferredChunkAttempt]);
@@ -4767,19 +3726,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   }, [view, CapabilitiesScreen, deferredChunkAttempt]);
 
   useEffect(() => {
-    // Only for the route that has a catalogue to search. A failure here is not
-    // reported: the control keeps its own trigger and the flattened menu, so a
-    // pack that will not load costs the search field, never the ability to
-    // change model.
-    if (!activeChutesConnection || ModelPickerControl) return;
-    let current = true;
-    void import("./model-picker").then((module) => {
-      if (current) setModelPickerControl(() => module.ModelPicker);
-    }).catch(() => undefined);
-    return () => { current = false; };
-  }, [activeChutesConnection, ModelPickerControl]);
-
-  useEffect(() => {
     if ((view !== "memory" && view !== "context") || MemoryScreen) return;
     let current = true;
     setMemoryViewError(undefined);
@@ -4817,20 +3763,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     });
     return () => { current = false; };
   }, [view, SkillsScreen, deferredChunkAttempt]);
-
-  // When the Proof evidence section opens on a live connection with no evidence yet,
-  // probe + verify a currently-live endpoint so the ledger shows real state
-  // (verified/failed) instead of an empty "no records" panel.
-  useEffect(() => {
-    if (view !== "proof" || proofSection !== "attestations" || !chutesConnected || !attestationClient.current) return;
-    if (attestationRecords.length > 0) return;
-    const controller = new AbortController();
-    void probeCurrentEndpoint(controller.signal).catch(() => {
-      // failure state is surfaced by probeCurrentEndpoint/acquireEndpointAttestation
-    });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, proofSection, chutesConnected, credentialRevision]);
 
   /**
    * The one place the rail's width is chosen deliberately.
@@ -4884,10 +3816,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     setMobileMoreOpen(false);
     setView(next);
     if (next === "chat") setChatRouteRequest(chatSessionIdFromHash(resolvedTargetHash));
-    if (next !== "proof") {
-      setProofSelection(undefined);
-      setProofSection("summary");
-    }
     if (window.location.hash !== resolvedTargetHash) {
       window.history.pushState(
         next === "chat" ? { view: next, sessionId: chatSessionIdFromHash(resolvedTargetHash) } : { view: next },
@@ -4906,15 +3834,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     setMobileMoreOpen(false);
     setView("access");
     setChatRouteRequest(undefined);
-    setProofSelection(undefined);
-    setProofSection("summary");
   }
 
   function navigatePrimary(next: View) {
-    if (next === "proof") {
-      openSessionProof();
-      return;
-    }
     navigate(next);
   }
 
@@ -4994,7 +3916,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         /*
          * A history click is already an explicit request to continue that
          * conversation.  When only the model pin differs, use the same
-         * audited, digest-sealed fork path as the visible Sessions action and
+         * locally checked fork path as the visible Sessions action and
          * bind it to the current authority manifest.  This preserves the
          * source identity, bounded context seed, profile contract, and exact
          * credential generation without making the reader reconnect the old
@@ -5081,28 +4003,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     setSessionRevision((value) => value + 1);
   }
 
-  /**
-   * Retire every live projection of a deleted conversation. The journal row is
-   * removed by SessionsView; this callback keeps the shell's rail/palette in
-   * step and only erases separately stored endpoint evidence when the person
-   * explicitly asked for that second, destructive scope.
-   */
-  async function adoptLibraryDelete(deletedSessionId: string, removeEvidence: boolean): Promise<void> {
-    let cleanupFailure: unknown;
-    if (removeEvidence) {
-      try {
-        const { removeConversationProofEvidence } = await loadDeferredCapabilities();
-        await removeConversationProofEvidence(deletedSessionId, {
-          evidenceAcquisitionQueue: evidenceAcquisitionQueue.current,
-          endpointEvidenceAuthority: endpointEvidenceAuthority.current,
-        });
-        setAncillaryReceipts((current) => current.filter((receipt) => receipt.sessionId !== deletedSessionId));
-        setAttestationPresentation((current) => current?.sessionId === deletedSessionId ? undefined : current);
-      } catch (error) {
-        cleanupFailure = error;
-      }
-    }
-
+  /** Keep shell projections in step after SessionsView deletes the journal. */
+  function adoptLibraryDelete(deletedSessionId: string): void {
     if (activeSessionIdentity.current === deletedSessionId) {
       activeSessionIdentity.current = undefined;
       activeSessionByProfile.current.delete(profileAuthorityId.current);
@@ -5110,85 +4012,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       setActiveSessionRecord(undefined);
       setMessages([{ ...welcomeMessage, id: randomUuid(), content: "The conversation was deleted. Start a new conversation when you are ready." }]);
       setEventCount(0);
-      setLastReceipt(undefined);
-      setAncillaryReceipts((current) => removeEvidence
-        ? current.filter((receipt) => receipt.sessionId !== deletedSessionId)
-        : current);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
-      setProofSelection(undefined);
     }
     setSessionRevision((value) => value + 1);
-    setProofSelection((current) => current?.sessionId === deletedSessionId ? undefined : current);
-    if (cleanupFailure) {
-      throw new Error(`The conversation was deleted, but its endpoint evidence was kept because cleanup failed: ${cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)}`);
-    }
-  }
-
-  function openReceiptAttestation(receipt: ConversationReceipt): void {
-    if (receipt.sessionId === sessionId) {
-      selectEndpointEvidenceRecord(attestationRecordIdForReceipt(receipt));
-    }
-    const selection = proofSelectionForReceipt(receipt);
-    setProofSelection(selection);
-    setProofSection("attestations");
-    navigate("proof", proofHash(selection, "attestations"));
-  }
-
-  async function startOAuthSignIn(): Promise<void> {
-    if (!online) throw new Error(OFFLINE_INLINE_REASON);
-    const oauth = await import("../auth/chutes-oauth");
-    const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
-    if (!registration.configured) {
-      throw new Error(registration.configurationError ?? "Chutes sign-in is not configured for this build.");
-    }
-    const locationState = oauth.chutesOAuthLocationState(registration.homepageUrl, window.location.href);
-    if (!locationState.available) throw new Error(locationState.reason);
-    pendingOAuthCredential.current = undefined;
-    setOauthCallbackStatus(undefined);
-    const request = await oauth.createChutesAuthorizationRequest({
-      clientId: registration.clientId,
-      registration,
-    });
-    try {
-      sessionStorage.setItem(CHUTES_OAUTH_ATTEMPT_KEY, JSON.stringify(request.attempt));
-      if (accessReconnectIntent) {
-        sessionStorage.setItem(
-          CHUTES_OAUTH_RECONNECT_INTENT_KEY,
-          accessReconnectHash(accessReconnectIntent),
-        );
-      } else {
-        sessionStorage.removeItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
-      }
-    } catch {
-      throw new Error("This browser denied the tab-local PKCE state needed for Chutes sign-in. Allow session storage for this Airship origin and retry.");
-    }
-    window.location.assign(request.url.href);
-  }
-
-  function currentOAuthBearer(): string {
-    const tokenSet = oauthTokens.current;
-    if (!tokenSet || tokenSet.expiresAt <= Date.now() + 5_000) {
-      throw new Error("The memory-only Chutes OAuth session is unavailable or expired.");
-    }
-    return tokenSet.accessToken;
-  }
-
-  /*
-   * Deliberately non-destructive.
-   *
-   * This used to consume the ref, which made a completed OAuth exchange a
-   * single-use handoff: AccessView is conditionally mounted, so navigating off
-   * #connection — or any remount at all — destroyed the only copy of a
-   * credential the user had already paid a full authorization round trip for,
-   * and the route came back as the empty entry stack. The token itself is
-   * still live in `oauthTokens`, so the honest lifetime of this pointer is
-   * "until it is committed or released": `connectChutes` clears it on commit,
-   * `startOAuthSignIn` clears it before a new exchange, and
-   * `releaseChutesAuthority` clears it when the authority goes away.
-   */
-  function readPendingOAuthCredential(): string | undefined {
-    return pendingOAuthCredential.current;
   }
 
   function clearPendingDelta(messageId: string) {
@@ -5340,7 +4167,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         activeSession: () => activeExternalRouteRef.current?.pin,
         project: (snapshot) => combinedInferenceAvailability(
           snapshot,
-          chutesAvailability.current,
           runtime.current?.inferenceBinding,
         ),
       });
@@ -5388,7 +4214,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         inferenceDirectory: () => inferenceDirectoryFromAvailability(
           combinedInferenceAvailability(
             browserInferenceFabric.availability(activeExternalRouteRef.current?.pin),
-            chutesAvailability.current,
             runtime.current?.inferenceBinding,
           ),
         ),
@@ -5460,79 +4285,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   }, [activeTheme, preferences]);
 
   useEffect(() => {
-    if (window.location.pathname !== `${import.meta.env.BASE_URL}auth/chutes/callback`) return;
-    let disposed = false;
-    const callbackSearch = window.location.search;
-    let rawAttempt: string | null;
-    let reconnectHash = "#connection";
-    try {
-      rawAttempt = sessionStorage.getItem(CHUTES_OAUTH_ATTEMPT_KEY);
-      sessionStorage.removeItem(CHUTES_OAUTH_ATTEMPT_KEY);
-      const savedReconnectHash = sessionStorage.getItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
-      sessionStorage.removeItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
-      const restoredIntent = savedReconnectHash
-        ? parseAccessReconnectIntent(savedReconnectHash)
-        : undefined;
-      if (restoredIntent) reconnectHash = accessReconnectHash(restoredIntent);
-    } catch {
-      window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
-      setView("access");
-      setOauthCallbackStatus({
-        kind: "error",
-        message: "This browser denied the tab-local PKCE state needed to finish Chutes sign-in. Allow session storage and start again.",
-      });
-      return;
-    }
-    window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}${reconnectHash}`);
-    setView("access");
-    void (async () => {
-      let oauth: typeof import("../auth/chutes-oauth") | undefined;
-      let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
-      try {
-        oauth = await import("../auth/chutes-oauth");
-        const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
-        exchangeMode = oauth.chutesOAuthExchangeMode(registration);
-        if (disposed) return;
-        setOauthCallbackStatus({
-          kind: "blocked",
-          message: exchangeMode === "local-confidential-bridge"
-            ? "oauth:exchange-local"
-            : "oauth:exchange-public",
-        });
-        if (!rawAttempt) throw new Error("No matching Chutes authorization attempt was found in this tab.");
-        const attempt = oauth.parseChutesPkceAttempt(rawAttempt);
-        const callback = oauth.consumeChutesAuthorizationCallback({ search: callbackSearch, attempt });
-        const tokenSet = await oauth.exchangeChutesAuthorizationCode({
-          callback,
-          clientId: registration.clientId,
-          registration,
-        });
-        if (disposed) return;
-        oauthTokens.current = tokenSet;
-        pendingOAuthCredential.current = tokenSet.accessToken;
-        setOauthTokenRevision((value) => value + 1);
-        setOauthBootstrapRevision((value) => value + 1);
-        setOauthCallbackStatus({
-          kind: "verified",
-          message: exchangeMode === "local-confidential-bridge"
-            ? "oauth:complete-local"
-            : "oauth:complete-public",
-        });
-      } catch (error) {
-        if (disposed) return;
-        oauthTokens.current = undefined;
-        pendingOAuthCredential.current = undefined;
-        setOauthCallbackStatus({
-          kind: "error",
-          message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
-            ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
-        });
-      }
-    })();
-    return () => { disposed = true; };
-  }, []);
-
-  useEffect(() => {
     const updateFromHistory = () => {
       const next = readViewHash();
       if (!mayNavigateFromProfileDraft(next)) {
@@ -5545,21 +4297,15 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       const requestedChatSession = next === "chat" ? chatSessionIdFromHash(window.location.hash) : undefined;
       setDestinationArrival((current) => current + 1);
       setMobileMoreOpen(false);
-      const nextProofSelection = next === "proof" ? proofSelectionFromHash(window.location.hash) : undefined;
-      const nextProofSection = next === "proof" ? proofSectionFromHash(window.location.hash) : "summary";
       setView(next);
       setChatRouteRequest(requestedChatSession);
-      setProofSelection(nextProofSelection);
-      setProofSection(nextProofSection);
-      const canonicalHash = next === "proof"
-        ? proofHash(nextProofSelection, nextProofSection)
-        : next === "chat"
-          ? requestedChatSession
-            ? chatHash(requestedChatSession)
-            : chatHash(activeSessionIdentity.current)
-          : next === "access"
-            ? canonicalAccessHash(window.location.hash)
-            : navigationHashForView(next);
+      const canonicalHash = next === "chat"
+        ? requestedChatSession
+          ? chatHash(requestedChatSession)
+          : chatHash(activeSessionIdentity.current)
+        : next === "access"
+          ? canonicalAccessHash(window.location.hash)
+          : navigationHashForView(next);
       if (window.location.hash !== canonicalHash) window.history.replaceState({ view: next }, "", canonicalHash);
     };
     window.addEventListener("hashchange", updateFromHistory);
@@ -5590,76 +4336,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
-
-  useEffect(() => {
-    if (connection.kind !== "chutes-oauth") return;
-    const tokenSet = oauthTokens.current;
-    if (!tokenSet?.refreshToken) return;
-    const controller = new AbortController();
-    let disposed = false;
-    let retries = 0;
-    let timer = 0;
-    const scheduleRotation = (delayMs: number) => {
-      timer = window.setTimeout(() => {
-        void (async () => {
-          let oauth: typeof import("../auth/chutes-oauth") | undefined;
-          let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
-          try {
-            oauth = await import("../auth/chutes-oauth");
-            const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
-            exchangeMode = oauth.chutesOAuthExchangeMode(registration);
-            const next = await oauth.refreshChutesOAuthToken({
-              clientId: registration.clientId,
-              refreshToken: tokenSet.refreshToken!,
-              signal: controller.signal,
-              registration,
-            });
-            if (disposed) return;
-            oauthTokens.current = next;
-            accountCredential.current = next.accessToken;
-            providerCredential.current = next.accessToken;
-            setOauthTokenRevision((value) => value + 1);
-            setCredentialRevision((value) => value + 1);
-            setOauthCallbackStatus({
-              kind: "verified",
-              message: "The memory-only Chutes session rotated successfully.",
-            });
-          } catch (error) {
-            if (disposed || controller.signal.aborted) return;
-            /*
-             * A refused fetch, a timeout or a 5xx names a bad minute of
-             * network, not a dead grant: the refresh token may still be
-             * entirely valid, so the connection is kept and the rotation is
-             * retried on a bounded backoff. Only the token endpoint's own
-             * rejection (invalid_grant / invalid_client) releases the
-             * authority immediately — that grant is already gone no matter
-             * what this page does. Exhausted retries fall through to the
-             * original failure handling: minutes of failed rotation leave no
-             * honest basis to keep claiming the connection.
-             */
-            if (!oauth?.isChutesOAuthProviderRejection(error) && retries < OAUTH_ROTATION_RETRY_DELAYS.length) {
-              const retryDelay = OAUTH_ROTATION_RETRY_DELAYS[retries]!;
-              retries += 1;
-              scheduleRotation(retryDelay);
-              return;
-            }
-            setOauthCallbackStatus({
-              kind: "error",
-              message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
-                ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
-            });
-            releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
-          }
-        })();
-      }, delayMs);
-    };
-    scheduleRotation(Math.max(0, tokenSet.expiresAt - Date.now() - 60_000));
-    return () => {
-      disposed = true;
-      window.clearTimeout(timer);
-      controller.abort(new DOMException("OAuth refresh schedule changed.", "AbortError"));
-    };
-  }, [connection.kind, oauthTokenRevision]);
 
   useEffect(() => {
     const label = destinationLabel(view) ?? "Agent";
@@ -5774,13 +4450,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (!shellMounted) return;
     if (!shouldClaimComposerFocus({
       chatView: view === "chat",
-      overlayOpen: mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending,
+      overlayOpen: mobileMoreOpen || paletteOpen || preferencesOpen || approvalPending,
       narrowViewport: window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
       focusAtDocumentRoot: document.activeElement === null || document.activeElement === document.body,
     })) return;
     const frame = requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
-  }, [shellMounted, view, mobileMoreOpen, paletteOpen, preferencesOpen, trustSheetOpen, approvalPending]);
+  }, [shellMounted, view, mobileMoreOpen, paletteOpen, preferencesOpen, approvalPending]);
 
   useEffect(() => {
     const reconcileVisibility = () => {
@@ -5988,9 +4664,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       throw new Error("Wait for the current session or inference route change before switching profiles.");
     }
     workspaceRefreshCoordinator.invalidate();
-    proofSelectionOperation.current += 1;
-    setProofSelection(undefined);
-    setProofSelectionAuthority(undefined);
     pendingForkRetry.current = undefined;
     sessionNavigationChanging.current = true;
     const operation = ++profileOperation.current;
@@ -6105,7 +4778,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         ? `${profile.name}'s most recent conversation was not resumed, so Airship started a new one here. ${unresumableReason} That conversation is unchanged and still readable in Sessions. ${welcomeMessage.content}`
         : `${profile.name} had no compatible conversation, so Airship started one. ${welcomeMessage.content}` }]);
       setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setRuntimeStatus(`${profile.name} cockpit started`);
@@ -6127,7 +4799,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
        * client, slash registry, catalog checkpoint, session library, durable
        * authority and an activated Vault conversation. Restoring here would
        * splice four of those back to the outgoing page-memory values and leave
-       * the rest adopted: the trust axis would read "not adopted" under a
+       * the rest adopted: the adoption status would read "not adopted" under a
        * vault-journal conversation, and the next `mutateProfileCatalog` would
        * hand a checkpoint minted by one store to another and fail forever.
        * `active` and the runtime this call itself published are the only two we
@@ -6242,7 +4914,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       const activated = await activateSession(created);
       setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${created.title} is a new isolated conversation. ${welcomeMessage.content}` }]);
       setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setSessionRevision((value) => value + 1);
@@ -6283,7 +4954,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (!localPresentationAuthorityIsCurrent(authority)) {
       throw new Error("The active Profile or conversation changed before the command could run.");
     }
-    const commandRuntime = authority.runtime;
+    const commandRuntime = authority.commandRuntime;
     const commandProfile = activeProfileRef.current;
     const commandSessionId = authority.sessionId;
     if (
@@ -6310,7 +4981,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (action.type === "sessions.list") {
       const sessions = profileOwnedSessions(await commandRuntime.journal.listSessions(), commandProfile.profileId);
       if (
-        runtime.current !== commandRuntime
+        runtime.current !== authority.identityRuntime
         || activeProfileRef.current?.revision !== commandProfile.revision
         || profileAuthorityId.current !== commandProfile.profileId
         || activeSessionIdentity.current !== commandSessionId
@@ -6331,7 +5002,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       if (!target) throw new Error("The requested conversation is unavailable.");
       requireProfileOwnedSession(target, commandProfile.profileId, "open");
       if (
-        runtime.current !== commandRuntime
+        runtime.current !== authority.identityRuntime
         || activeProfileRef.current?.revision !== commandProfile.revision
         || profileAuthorityId.current !== commandProfile.profileId
         || activeSessionIdentity.current !== commandSessionId
@@ -6353,7 +5024,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         if (!sourceSession) throw new Error("The requested source session is unavailable.");
         requireProfileOwnedSession(sourceSession, commandProfile.profileId, "fork");
         if (
-          runtime.current !== commandRuntime
+          runtime.current !== authority.identityRuntime
           || activeProfileRef.current?.revision !== commandProfile.revision
           || profileAuthorityId.current !== commandProfile.profileId
           || activeSessionIdentity.current !== commandSessionId
@@ -6364,7 +5035,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           expectedSourceHead: { sequence: sourceSession.headSequence, digest: sourceSession.headDigest },
         });
         await activateForkedSessionAgainst(result, Object.freeze({
-          runtime: commandRuntime,
+          runtime: authority.identityRuntime,
           profileId: commandProfile.profileId,
           profileRevision: commandProfile.revision,
           activeSessionId: commandSessionId,
@@ -6384,22 +5055,20 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
     if (action.type === "models.list") {
       const query = action.query?.toLowerCase();
-      const activeModels = activeChutesConnection
-        ? availableModels.map((model) => model.id)
-        : activeExternalRoute?.models.map((model) => model.id) ?? [runtime.current.model];
+      const activeModels = activeExternalRoute?.models.map((model) => model.id)
+        ?? [effectiveSessionModel(activeSessionRecord)];
       const modelIds = activeModels
         .filter((model) => !query || model.toLowerCase().includes(query));
       appendLocalExchangeForAuthority(authority, source, modelIds.length
         ? [
             `Connection: ${activeInferenceBinding?.providerLabel ?? "local demo"} / ${activeInferenceBinding?.connectionId ?? "built-in"}`,
-            ...modelIds.map((model) => `${model === runtime.current?.model ? "•" : "○"} ${model}`),
+            ...modelIds.map((model) => `${model === effectiveSessionModel(activeSessionRecord) ? "•" : "○"} ${model}`),
           ].join("\n")
         : "No matching model is available.");
       return;
     }
     if (action.type === "models.select") {
-      if (activeChutesConnection) await switchChutesModel(action.modelId);
-      else if (activeExternalRoute) await switchExternalModel(action.modelId);
+      if (activeExternalRoute) await switchExternalModel(action.modelId);
       else throw new Error("Connect an inference provider before selecting a model.");
     }
   }
@@ -6557,7 +5226,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   }
 
   function localPresentationAuthorityIsCurrent(authority: LocalPresentationAuthority): boolean {
-    return runtime.current === authority.runtime
+    return runtime.current === authority.identityRuntime
       && profileAuthorityId.current === authority.profileId
       && activeProfileRef.current?.revision === authority.profileRevision
       && activeSessionIdentity.current === authority.sessionId
@@ -6617,7 +5286,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       capability: imageInputCapability === "supported"
         ? "supported"
         : inferenceConnected ? "model-lacks-vision" : "disconnected",
-      encryptedRequest: composerRequestEncrypted,
     }));
   }
 
@@ -6632,7 +5300,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (busy || sessionNavigationChanging.current || !message.sourcePoint) {
       setComposerNotice(busy
         ? "Stop the active turn before creating a branch."
-        : "This message does not expose a verified historical boundary yet. Resume the conversation and try again.");
+        : "This message does not expose a recorded historical boundary yet. Resume the conversation and try again.");
       return;
     }
     // Retry regenerates the turn, so it forks *before* the request. Fail closed
@@ -6641,7 +5309,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // answer it was replacing would be a false claim, not a degraded one.
     const forkPoint = action === "retry" ? message.turnStartPoint : message.sourcePoint;
     if (!forkPoint) {
-      setComposerNotice("This answer does not expose a verified pre-turn boundary, so Airship did not create a retry branch that still contained the answer it was replacing.");
+      setComposerNotice("This answer does not expose a recorded pre-turn boundary, so Airship did not create a retry branch that still contained the answer it was replacing.");
       return;
     }
     const prompt = action === "retry"
@@ -6873,7 +5541,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     // one would change what a receipt binds. So the refusal names itself
     // instead of the requirement being loosened.
     if (!content && (retryPrompt ? retryAttachments : attachments).length > 0) {
-      setComposerNotice(composerAttachmentNeedsText(composerRequestEncrypted));
+      setComposerNotice(composerAttachmentNeedsText());
       return false;
     }
     if (
@@ -6898,7 +5566,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
       return false;
     }
-    const admissionRuntime = runtime.current;
+    const ambientRuntime = runtime.current;
     const admissionSessionId = sessionId;
     const admissionProfile = activeProfileRef.current;
     if (
@@ -6911,13 +5579,15 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
       return false;
     }
+    const admissionRuntime = runtimeForSessionRecord(ambientRuntime, activeSessionRecord);
     // An explicit send is the only thing that lifts a Stop. Placed past every
     // admission bail so a refused send does not silently resume the queue, and
     // scoped to non-queue sends so automatic dispatch can never clear its own
     // latch.
     if (!queue) setQueuePausedForSession(admissionSessionId, false);
     const localPresentationAuthority = Object.freeze({
-      runtime: admissionRuntime,
+      identityRuntime: ambientRuntime,
+      commandRuntime: admissionRuntime,
       profileId: admissionProfile.profileId,
       profileRevision: admissionProfile.revision,
       sessionId: admissionSessionId,
@@ -6979,21 +5649,18 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
     const turnSessionId = admissionSessionId;
     const turnRuntime = admissionRuntime;
-    // `runtime.model` is the connection/Profile default. A same-thread model
-    // change deliberately leaves that default alone, so every auxiliary
-    // request for this turn must carry the conversation's durable route.
-    const turnModel = effectiveSessionModel(activeSessionRecord);
+    // The turn runtime projects the conversation's durable model onto the
+    // live connection without changing the Profile default for new sessions.
     const turnTransport = turnRuntime.transport;
     const turnProfileId = admissionProfile.profileId;
     const turnProfileRevision = admissionProfile.revision;
     const turnAuthorityStillCurrent = () => (
-      runtime.current === turnRuntime
+      runtime.current === ambientRuntime
       && profileAuthorityId.current === turnProfileId
       && activeProfileRef.current?.revision === turnProfileRevision
       && (!sessionNavigationChanging.current || sessionResumeDuringTurn.current === turnSessionId)
     );
     const externalPreflight = turnRuntime.inferenceBinding
-      && turnRuntime.inferenceBinding.providerId !== "chutes"
       ? resolveExternalInferencePreflight(
           turnRuntime.inferenceBinding,
           activeExternalRouteRef.current,
@@ -7001,13 +5668,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         )
       : undefined;
     if (externalPreflight && externalPreflight.state !== "ready") {
-      setComposerNotice(`${externalPreflight.detail} This conversation remains read-only; reconnecting or selecting another model starts a new pinned conversation. Your prompt remains here.`);
+      setComposerNotice(`${externalPreflight.detail} This conversation remains read-only; reconnect its exact provider connection to continue. Your prompt remains here.`);
       setRuntimeStatus("Pinned inference route unavailable · prompt preserved");
       requestAnimationFrame(() => textarea.current?.focus());
       return false;
     }
     if (turnRuntime.inferenceBinding && !inferenceConnected) {
-      setComposerNotice("This conversation is permanently pinned to a released inference generation and remains read-only. Reconnect in Connection to start a new pinned conversation; your prompt, messages, journal, and workspace remain here.");
+      setComposerNotice("This conversation is permanently pinned to a released inference generation and remains read-only. Reconnect its exact provider connection in Providers to continue; your prompt, messages, journal, and workspace remain here.");
       setRuntimeStatus("Remote inference disconnected · prompt preserved");
       requestAnimationFrame(() => textarea.current?.focus());
       return false;
@@ -7076,134 +5743,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       requestAnimationFrame(() => textarea.current?.focus());
       return false;
     }
-    /*
-     * Name the conversation on its first real message.
-     *
-     * The gate is "still carrying its default name", not a head sequence. This
-     * used to also require `headSequence === 1`, which silently stopped being
-     * true the moment the Profile cockpit began journaling its own pointer
-     * event at creation — and titling simply stopped happening, with nothing to
-     * show for it. The default title is the fact that matters; how many
-     * bookkeeping events preceded the message is not.
-     *
-     * The gate reads the whole set of names the app mints, not just the one the
-     * new-conversation button uses. It compared against `"<Profile>
-     * conversation"` alone, so a conversation opened by the Vault-attach path —
-     * `"<Profile> · encrypted vault"` — never qualified and never took a name
-     * from its content: the Atlas found five separate rows all titled "General ·
-     * encrypted vault", one of which was the thread whose first message was
-     * "Draft the Q3 pricing memo intro paragraph." (J091). A conversation is
-     * named by what is in it, whatever code path minted it.
-     */
-    if (
-      !retryPrompt
-      && activeSessionRecord?.id === turnSessionId
-      && activeProfile
-      && isAppMintedConversationTitle(activeSessionRecord.title, activeProfile.name)
-    ) {
-      const applyTitle = async (title: string) => {
-        const renamed = await turnRuntime.journal.renameSession(turnSessionId, title, controller.signal);
-        if (activeSessionIdentity.current === turnSessionId) {
-          setActiveSessionRecord(renamed);
-          setEventCount((count) => count + 1);
-          setSessionRevision((value) => value + 1);
-        }
-      };
-      try {
-        // The heuristic lands first so the thread is never nameless.
-        await applyTitle(conversationTitleFromPrompt(content));
-      } catch {
-        // Titling is presentational. A storage race must never prevent the turn.
-      }
-      /*
-       * Then ask the model for a real name, off the turn's critical path. This
-       * is not awaited: the answer arrives when it arrives, the turn never
-       * waits on it, and a failed or unusable answer leaves the heuristic in
-       * place — but an unusable answer is still recorded, because the request
-       * that produced it was still made.
-       */
-      const namingTurnId = `naming-${randomUuid()}`;
-      const namingOperationId = `naming-request-${randomUuid()}`;
-      void conversationTitleFromModel(
-        { transport: turnRuntime.transport, model: turnModel },
-        content,
-        { sessionId: turnSessionId, turnId: namingTurnId, operationId: namingOperationId },
-        controller.signal,
-      )
-        .then(async (named) => {
-          if (!named) return;
-          /*
-           * The record lands before the rename, and lands even when the model's
-           * answer matches the heuristic, and even when the answer is no name at
-           * all: a request that was made and paid for is a fact about this
-           * conversation whether or not it changed the title. The usage rides in
-           * its own `inference.usage` event so that every provider request this
-           * session caused is counted the same way, and the naming event carries
-           * the receipt that proves it happened.
-           *
-           * It is also written whether or not the user is still looking at this
-           * conversation. The append is addressed by session id, so leaving the
-           * thread cannot be what decides whether a charge is recorded; only the
-           * counter and the rename below are gated on still being here.
-           */
-          try {
-            await turnRuntime.journal.append(turnSessionId, [
-              {
-                type: CONVERSATION_NAMED_EVENT_TYPE,
-                turnId: namingTurnId,
-                operationId: namingOperationId,
-                payload: {
-                  // Absent when the answer was a refusal or an essay: the record
-                  // then states what came back and that no name was adopted,
-                  // rather than inventing one or vanishing.
-                  ...(named.title ? { title: named.title } : {}),
-                  answer: named.answer,
-                  model: turnModel,
-                  ...(named.receipt ? { receipt: named.receipt as unknown as JsonValue } : {}),
-                },
-              },
-              ...(named.usage ? [{
-                type: "inference.usage" as const,
-                turnId: namingTurnId,
-                operationId: namingOperationId,
-                payload: {
-                  ...(named.usage.inputTokens !== undefined ? { inputTokens: named.usage.inputTokens } : {}),
-                  ...(named.usage.outputTokens !== undefined ? { outputTokens: named.usage.outputTokens } : {}),
-                  source: "conversation-naming",
-                },
-              }] : []),
-            ]);
-            if (activeSessionIdentity.current === turnSessionId) {
-              setEventCount((count) => count + (named.usage ? 2 : 1));
-            }
-            // Committed, so it can be shown. Bounded because this survives
-            // conversation switches for the life of the page.
-            const committed = named.receipt;
-            if (committed) setAncillaryReceipts((current) => [...current, committed].slice(-32));
-          } catch {
-            // Presentational titling must not be able to fail a turn, and a
-            // journal that refuses the record has already failed louder
-            // elsewhere; the heuristic title stands either way.
-          }
-          if (activeSessionIdentity.current !== turnSessionId) return;
-          // No usable name, or the same name the heuristic already applied:
-          // either way there is nothing left to rename, and the record above
-          // already accounts for the request.
-          if (!named.title || named.title === conversationTitleFromPrompt(content)) return;
-          await applyTitle(named.title);
-        })
-        .catch(() => undefined);
-    }
-    if (controller.signal.aborted) {
-      releasePreflight();
-      setRuntimeStatus("Turn stopped before submission");
-      requestAnimationFrame(() => textarea.current?.focus());
-      return false;
-    }
-    if (
-      turnRuntime.inferenceBinding
-      && turnRuntime.inferenceBinding.providerId !== "chutes"
-    ) {
+    if (turnRuntime.inferenceBinding) {
       try {
         const route = activeExternalRouteRef.current;
         const fabric = inferenceFabric.current;
@@ -7219,12 +5759,34 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         releasePreflight();
         setComposerNotice(
           `${error instanceof Error ? error.message : "Inference route preflight failed."} `
-          + "This conversation is now read-only; reconnecting or choosing another route starts a new pinned conversation. Your prompt and attachments remain here.",
+          + "This conversation is now read-only; reconnect its exact provider connection to continue. Your prompt and attachments remain here.",
         );
         setRuntimeStatus("Pinned inference route unavailable · prompt preserved");
         requestAnimationFrame(() => textarea.current?.focus());
         return false;
       }
+    }
+    /*
+     * Compute the local title synchronously, but do not write it yet. Naming is
+     * presentation-only and must never open an async gap between exact-route
+     * preflight and turn admission. `runTurnBeforeNaming` starts this write
+     * only after the authority-checked turn has completed durably.
+     */
+    const firstMessageNaming = (
+      !retryPrompt
+      && activeSessionRecord?.id === turnSessionId
+      && activeProfile
+      && isAppMintedConversationTitle(activeSessionRecord.title, activeProfile.name)
+    ) ? Object.freeze({
+      title: conversationTitleFromPrompt(content),
+      profileName: activeProfile.name,
+    }) : undefined;
+
+    if (controller.signal.aborted) {
+      releasePreflight();
+      setRuntimeStatus("Turn stopped before submission");
+      requestAnimationFrame(() => textarea.current?.focus());
+      return false;
     }
     /*
      * The queue head leaves the durable queue when the turn it became is
@@ -7316,11 +5878,14 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       },
     ]);
     try {
-      const result = await runTurn({
+      const result = await runTurnBeforeNaming(() => runTurn({
         sessionId: turnSessionId,
         content,
         ...(images?.length ? { images } : {}),
         transport: turnTransport,
+        ...(turnRuntime.inferenceBinding
+          ? { activeInferenceBinding: turnRuntime.inferenceBinding }
+          : {}),
         tools: turnRuntime.tools,
         journal: turnRuntime.journal,
         /* The Profile-scoped port, and the only one tools may see. The prime
@@ -7427,6 +5992,22 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             queueToolOutput(assistantId, signal);
           }
         },
+      }), async () => {
+        if (!firstMessageNaming) return;
+        const latest = await turnRuntime.journal.getSession(turnSessionId);
+        if (!latest || !isAppMintedConversationTitle(latest.title, firstMessageNaming.profileName)) return;
+        const renamed = await turnRuntime.journal.renameSession(
+          turnSessionId,
+          firstMessageNaming.title,
+          controller.signal,
+        );
+        if (activeSessionIdentity.current === turnSessionId) {
+          setActiveSessionRecord(renamed);
+          setEventCount((count) => count + 1);
+          setSessionRevision((value) => value + 1);
+        }
+        // Naming is local and follows the completed turn, so it cannot create
+        // an admission race or a second provider request.
       });
       /*
        * Retire the live row here, where the turn stopped being live — not in
@@ -7438,7 +6019,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
        * `busy` still true and this ref still set, sees a row with no status,
        * and helpfully puts the status back. Nothing cleared it a second time,
        * so every finished answer kept its three streaming dots and its last
-       * status line — "Sealing receipt" — spinning under it for the rest of
+       * status line — "Finalizing run details" — spinning under it for the rest of
        * the session.
        */
       if (liveTurnRow.current?.messageId === assistantId) liveTurnRow.current = undefined;
@@ -7480,15 +6061,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
               : message,
           ),
         );
-        setLastReceipt(result.receipt);
-        announceCompletedTurnAwayFromChat();
-        if (turnTransport.id === "chutes-e2ee-v1") {
-          setConnection((current) => isChutesConnected(current) ? withVerifiedInvocation(current) : current);
-          void enqueueAutomaticReceiptEvidence(result.receipt, turnSessionId, turnProfileId).catch(() => {
-            // The queue and evidence client record bounded public failure state.
-            // Background acquisition never changes the completed turn or receipt.
-          });
-        }
+          announceCompletedTurnAwayFromChat();
       }
       const workspaceRefreshWarning = await refreshCompletedTurnWorkspace(async () => {
         await refreshWorkspacePresentation(turnRuntime, turnProfileId);
@@ -7508,7 +6081,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       flushPendingToolOutput();
       const cancelled = controller.signal.aborted;
       // The whole classification, not only its sentence: `turn-recovery` owns a
-      // cause vocabulary — rate limit, out of credit, access rejected, provider
+      // cause vocabulary — rate limit, provider usage limit, access rejected, provider
       // unreachable — and passing it nothing meant every failure over a working
       // connection closed on "Turn failed", the one cause it could still not
       // have been. An import that does not land still degrades to the
@@ -7776,7 +6349,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         backup: request.backup,
         signal: request.signal,
       });
-      setRuntimeStatus(`Encrypted backup restored · ${String(result.restored)} objects verified`);
+      setRuntimeStatus(`Encrypted backup restored · ${String(result.restored)} objects checked`);
       return Object.freeze(result);
     } catch (error) {
       // Restore is authenticated and atomic. If replacement did not commit,
@@ -7924,9 +6497,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
    * Three surfaces — Git, GitHub import, vault probe — each opened their own
    * approval and then dropped everything the registry path keeps: no journal
    * event, so an approved commit or a probe that wrote immutable objects left
-   * no evidence at all; no abort, so a broker request outlived the screen that
-   * asked for it; and Auto Approve's model reviewer sat in the middle of it,
-   * able to deny an action its own operator had just proposed.
+   * no evidence at all; and no abort, so a broker request outlived the screen
+   * that asked for it. Human actions stay under human authority in every mode.
    *
    * Routing all three through here is the point: a fourth surface cannot skip
    * the record by forgetting to write it.
@@ -8131,41 +6703,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     authority: DurableAdoptionDescriptor,
   ): Promise<void> {
     if (catalogAuthorityChanging.current) throw new Error("Another profile storage transition is already active.");
-    const priorEvidenceRuntime = runtime.current;
-    const priorEvidenceProfileId = activeProfileRef.current?.profileId;
-    const priorEvidenceCredential = providerCredential.current;
-    const priorEvidenceCredentialKind = attestationCredentialKind.current;
-    const shouldRebindEvidence = Boolean(
-      evidenceAcquisitionQueueAuthority.current
-      || evidenceAcquisitionQueueLoad.current
-      || evidenceAcquisitionQueue.current
-      || attestationClientBinding.current
-      || endpointEvidenceAuthority.current?.current(),
-    );
-    let adoptedProfileId: string | undefined;
     catalogAuthorityChanging.current = true;
     try {
       await catalogMutationTail.current;
-      adoptedProfileId = await adoptDurableRuntimeExclusive(authority);
-    } catch (error) {
-      await rebindEvidenceAfterStorageTransition(
-        shouldRebindEvidence,
-        runtime.current ?? priorEvidenceRuntime,
-        priorEvidenceProfileId,
-        priorEvidenceCredential,
-        priorEvidenceCredentialKind,
-      );
-      throw error;
+      await adoptDurableRuntimeExclusive(authority);
     } finally {
       catalogAuthorityChanging.current = false;
     }
-    await rebindEvidenceAfterStorageTransition(
-      shouldRebindEvidence,
-      runtime.current,
-      adoptedProfileId,
-      priorEvidenceCredential,
-      priorEvidenceCredentialKind,
-    );
   }
 
   async function adoptDurableRuntimeExclusive(
@@ -8226,19 +6770,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       ?? adoptedProfiles.find((candidate) => candidate.profileId === "general")
       ?? adoptedProfiles[0];
     if (!selectedProfile) throw new Error("The encrypted Vault profile catalog has no profile available for new work.");
-    if (
-      evidenceAcquisitionQueueAuthority.current
-      || evidenceAcquisitionQueueLoad.current
-      || evidenceAcquisitionQueue.current
-      || attestationClientBinding.current
-      || endpointEvidenceAuthority.current?.current()
-    ) {
-      // Freeze the worker, client cache, and record CAS authority before
-      // WorkspacePort migration. Recovery is credential client → records →
-      // scheduler only after the destination authority has been adopted.
-      await releaseEvidenceAcquisitionQueue();
-      await quiesceEndpointEvidenceClientAndStore(true);
-    }
     // A freshly opened page contains deterministic sample state only. An
     // existing encrypted vault is authoritative; release-copy changes must not
     // be mistaken for user conflicts or create a throwaway session on reload.
@@ -8336,7 +6867,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     let resumableSession: SessionRecord | undefined;
     let resumedPresentation: Readonly<{
       messages: readonly UiMessage[];
-      lastReceipt?: ConversationReceipt;
       lifecycle: SessionLifecycle;
       boundary?: Readonly<{ omittedMessages: number; shortened: boolean }>;
     }> | undefined;
@@ -8391,10 +6921,8 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           history: presentationHistory(detail.transcript.messages),
         });
         const messages = transcriptMessagesFromPresentation(presentation);
-        const lastPresentationReceipt = lastPresentationRowReceipt(presentation);
         resumedPresentation = Object.freeze({
           messages: Object.freeze(messages),
-          ...(lastPresentationReceipt ? { lastReceipt: lastPresentationReceipt } : {}),
           lifecycle: detail.transcript.lifecycle,
           ...(detail.transcript.truncated ? {
             boundary: Object.freeze({
@@ -8452,13 +6980,12 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             ? `Resumed ${resumableSession.title} from the encrypted Vault. ${welcomeMessage.content}`
             : `${authority.kind === "local-device"
               ? "The encrypted Local Device Vault is active. This new pinned session writes workspace files, explicit memories, task state, and session events as encrypted browser-managed objects that remain available offline."
-              : "The verified Vault contract is now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable."
+              : "The Vault storage checks passed and its encrypted adapters are now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable."
             }${adoptionCarriedNote(adoptionCarried)}`,
         }]);
     setEventCount(activated.headSequence);
     setQuarantinedSession(quarantined);
     setSessionRevision((value) => value + 1);
-    setLastReceipt(resumedPresentation?.lastReceipt);
     setSessionLifecycle(resumedPresentation?.lifecycle ?? READY_SESSION_LIFECYCLE);
     setTranscriptBoundary(resumedPresentation?.boundary);
     let workspaceRefreshDeferred = false;
@@ -8515,7 +7042,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       || !authority
       || authority.workspaceId !== active.storageId
     ) {
-      setVaultContextPublicationMessage("Adopt a verified encrypted Vault before publishing context shards.");
+      setVaultContextPublicationMessage("Activate an encrypted Vault before publishing context shards.");
       return;
     }
     const ready = authority.ready;
@@ -8578,41 +7105,13 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
 
   async function adoptEphemeralRuntime(): Promise<void> {
     if (catalogAuthorityChanging.current) throw new Error("Another profile storage transition is already active.");
-    const priorEvidenceRuntime = runtime.current;
-    const priorEvidenceProfileId = activeProfileRef.current?.profileId;
-    const priorEvidenceCredential = providerCredential.current;
-    const priorEvidenceCredentialKind = attestationCredentialKind.current;
-    const shouldRebindEvidence = Boolean(
-      evidenceAcquisitionQueueAuthority.current
-      || evidenceAcquisitionQueueLoad.current
-      || evidenceAcquisitionQueue.current
-      || attestationClientBinding.current
-      || endpointEvidenceAuthority.current?.current(),
-    );
-    let adoptedProfileId: string | undefined;
     catalogAuthorityChanging.current = true;
     try {
       await catalogMutationTail.current;
-      adoptedProfileId = await adoptEphemeralRuntimeExclusive();
-    } catch (error) {
-      await rebindEvidenceAfterStorageTransition(
-        shouldRebindEvidence,
-        runtime.current ?? priorEvidenceRuntime,
-        priorEvidenceProfileId,
-        priorEvidenceCredential,
-        priorEvidenceCredentialKind,
-      );
-      throw error;
+      await adoptEphemeralRuntimeExclusive();
     } finally {
       catalogAuthorityChanging.current = false;
     }
-    await rebindEvidenceAfterStorageTransition(
-      shouldRebindEvidence,
-      runtime.current,
-      adoptedProfileId,
-      priorEvidenceCredential,
-      priorEvidenceCredentialKind,
-    );
   }
 
   async function adoptEphemeralRuntimeExclusive(): Promise<string> {
@@ -8635,16 +7134,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       prior.workspace,
       "Storage authority changed to page memory. Restart this terminal against the adopted workspace.",
     );
-    if (
-      evidenceAcquisitionQueueAuthority.current
-      || evidenceAcquisitionQueueLoad.current
-      || evidenceAcquisitionQueue.current
-      || attestationClientBinding.current
-      || endpointEvidenceAuthority.current?.current()
-    ) {
-      await releaseEvidenceAcquisitionQueue();
-      await quiesceEndpointEvidenceClientAndStore(true);
-    }
     const storage = new MemoryWorkspace();
     const storageId = "memory://airship-page";
     const journalBackend = new MemoryJournalBackend();
@@ -8710,7 +7199,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       content: "Ephemeral mode is active. The current workspace and session history were copied into page memory, and the Vault connection was closed. New changes are not synced.",
     }]);
     setEventCount(activated.headSequence);
-    setLastReceipt(undefined);
     setSessionLifecycle(READY_SESSION_LIFECYCLE);
     setTranscriptBoundary(undefined);
     let workspaceRefreshDeferred = false;
@@ -8868,7 +7356,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         ];
         if (retained) parts.push(`${retained.toLocaleString()} offered but not confirmed removed, kept for a later run`);
         if (receipt.queue.deferredYoung) parts.push(`${receipt.queue.deferredYoung.toLocaleString()} still inside the safety window`);
-        if (receipt.queue.skippedUnverifiable) parts.push(`${receipt.queue.skippedUnverifiable.toLocaleString()} untouched because a live reference could not be re-verified`);
+        if (receipt.queue.skippedUnverifiable) parts.push(`${receipt.queue.skippedUnverifiable.toLocaleString()} untouched because a live reference could not be checked again`);
         if (receipt.queue.confirmationCommitted === "uncommitted") parts.push("the queue could not be told which removals landed; the next run re-checks them");
         if (untracked?.status === "truncated") parts.push("more provider-side leftovers remain; run again");
         if (!receipt.queue.queueReadable) parts.push("the reclamation queue could not be read this run");
@@ -8999,847 +7487,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
   }
 
-  function endpointEvidenceScope(
-    active: Runtime | undefined = runtime.current,
-    activeProfileId: string | undefined = activeProfileRef.current?.profileId,
-  ): EndpointEvidenceScope | undefined {
-    if (!active || !activeProfileId) return undefined;
-    return Object.freeze({
-      workspace: active.workspace,
-      workspaceId: active.workspaceId,
-      profileId: activeProfileId,
-    });
-  }
-
-  function endpointEvidenceFence(args: Readonly<{
-    sessionId?: string;
-    receiptId?: string;
-    instanceId: string;
-    endpointKeyDigest?: string;
-    runtime?: Runtime;
-    profileId?: string;
-  }>): EndpointEvidenceFence {
-    const scope = endpointEvidenceScope(args.runtime, args.profileId);
-    const ownerSessionId = args.sessionId ?? activeSessionIdentity.current ?? sessionId;
-    if (!scope || !ownerSessionId) {
-      throw new MountedAttestationError(
-        "invalid-input",
-        "Endpoint evidence requires an active Profile, workspace authority, and session identity.",
-      );
-    }
-    return Object.freeze({
-      ...scope,
-      sessionId: ownerSessionId,
-      ...(args.receiptId ? { receiptId: args.receiptId } : {}),
-      instanceId: args.instanceId,
-      ...(args.endpointKeyDigest ? { endpointKeyDigest: args.endpointKeyDigest } : {}),
-    });
-  }
-
-  function sameEndpointEvidenceScope(
-    left: EndpointEvidenceScope | undefined,
-    right: EndpointEvidenceScope | undefined,
-  ): boolean {
-    return Boolean(
-      left
-      && right
-      && left.workspace === right.workspace
-      && left.workspaceId === right.workspaceId
-      && left.profileId === right.profileId,
-    );
-  }
-
-  function isCurrentEndpointEvidenceFence(fence: EndpointEvidenceFence): boolean {
-    const current = endpointEvidenceScope();
-    return sameEndpointEvidenceScope(fence, current)
-      && (activeSessionIdentity.current ?? sessionId) === fence.sessionId;
-  }
-
-  function recordsForEvidenceSession(
-    binding: EndpointEvidenceBinding,
-    ownerSessionId: string,
-  ): readonly ChutesEndpointEvidenceRecord[] {
-    return Object.freeze(binding.snapshot.entries
-      .filter((entry) => entry.identity.sessionId === ownerSessionId)
-      .map((entry) => entry.record));
-  }
-
-  function projectEndpointEvidencePresentation(
-    binding: EndpointEvidenceBinding,
-    ownerSessionId: string,
-    options: Readonly<{
-      failure?: AttestationAcquisitionFailure;
-      selectedRecordId?: string;
-      durabilityNotice?: string;
-    }> = {},
-  ): void {
-    const fenceScope = endpointEvidenceScope();
-    if (!sameEndpointEvidenceScope(binding, fenceScope)) return;
-    setAttestationPresentation(Object.freeze({
-      workspace: binding.workspace,
-      workspaceId: binding.workspaceId,
-      profileId: binding.profileId,
-      sessionId: ownerSessionId,
-      records: recordsForEvidenceSession(binding, ownerSessionId),
-      ...(options.failure ? { failure: options.failure } : {}),
-      ...(options.selectedRecordId ? { selectedRecordId: options.selectedRecordId } : {}),
-      ...(options.durabilityNotice ? { durabilityNotice: options.durabilityNotice } : {}),
-    }));
-  }
-
-  function publishAttestationFailureForFence(
-    fence: EndpointEvidenceFence,
-    failure: AttestationAcquisitionFailure | undefined,
-  ): void {
-    setAttestationPresentation((current) => {
-      if (!isCurrentEndpointEvidenceFence(fence)) return current;
-      const records = current
-        && sameEndpointEvidenceScope(current, fence)
-        && current.sessionId === fence.sessionId
-          ? current.records
-          : Object.freeze([]);
-      return Object.freeze({
-        workspace: fence.workspace,
-        workspaceId: fence.workspaceId,
-        profileId: fence.profileId,
-        sessionId: fence.sessionId,
-        records,
-        ...(failure ? { failure } : {}),
-        ...(current?.selectedRecordId ? { selectedRecordId: current.selectedRecordId } : {}),
-        ...(current?.durabilityNotice ? { durabilityNotice: current.durabilityNotice } : {}),
-      });
-    });
-  }
-
-  function publishAttestationFailureForCurrent(failure: AttestationAcquisitionFailure): void {
-    const active = runtime.current;
-    const ownerSessionId = activeSessionIdentity.current ?? sessionId;
-    const activeProfileId = activeProfileRef.current?.profileId;
-    if (!active || !ownerSessionId || !activeProfileId) return;
-    const instanceId = failure.instanceId ?? "connection";
-    publishAttestationFailureForFence(Object.freeze({
-      workspace: active.workspace,
-      workspaceId: active.workspaceId,
-      profileId: activeProfileId,
-      sessionId: ownerSessionId,
-      ...(failure.receiptId ? { receiptId: failure.receiptId } : {}),
-      instanceId,
-      ...(failure.endpointKeyDigest ? { endpointKeyDigest: failure.endpointKeyDigest } : {}),
-    }), failure);
-  }
-
-  function selectEndpointEvidenceRecord(recordId: string | undefined): void {
-    const scope = endpointEvidenceScope();
-    const ownerSessionId = activeSessionIdentity.current ?? sessionId;
-    if (!scope || !ownerSessionId) return;
-    setAttestationPresentation((current) => {
-      if (!current || !sameEndpointEvidenceScope(current, scope) || current.sessionId !== ownerSessionId) return current;
-      return Object.freeze({
-        ...current,
-        ...(recordId ? { selectedRecordId: recordId } : { selectedRecordId: undefined }),
-      });
-    });
-  }
-
-  async function ensureEndpointEvidenceAuthority(
-    target: EndpointEvidenceScope,
-    expectedClientBinding: AttestationClientBinding,
-  ): Promise<EndpointEvidenceBinding> {
-    if (
-      attestationClientBinding.current !== expectedClientBinding
-      || !sameEndpointEvidenceScope(expectedClientBinding, target)
-      || !providerCredential.current
-    ) {
-      throw new DOMException("The credential-backed endpoint-evidence client is not active for this scope.", "AbortError");
-    }
-    const current = endpointEvidenceAuthority.current?.current();
-    if (current && sameEndpointEvidenceScope(current, target)) return current;
-    const pending = endpointEvidenceAuthorityLoad.current;
-    if (pending && sameEndpointEvidenceScope(pending, target)) return pending.promise;
-
-    const operation = ++endpointEvidenceAuthorityOperation.current;
-    const loading = import("../attestation/workspace-endpoint-evidence-persistence").then(async (module) => {
-      if (attestationClientBinding.current !== expectedClientBinding || !providerCredential.current) {
-        throw new DOMException("Endpoint-evidence authority changed while loading.", "AbortError");
-      }
-      const authority = endpointEvidenceAuthority.current ?? new module.WorkspaceEndpointEvidenceAuthority();
-      endpointEvidenceAuthority.current = authority;
-      const binding = await authority.activate(target);
-      if (
-        operation !== endpointEvidenceAuthorityOperation.current
-        || attestationClientBinding.current !== expectedClientBinding
-        || runtime.current?.workspace !== target.workspace
-        || runtime.current?.workspaceId !== target.workspaceId
-        || activeProfileRef.current?.profileId !== target.profileId
-      ) {
-        throw new DOMException("Endpoint-evidence recovery was superseded.", "AbortError");
-      }
-      const ownerSessionId = activeSessionIdentity.current ?? sessionId;
-      if (ownerSessionId) projectEndpointEvidencePresentation(binding, ownerSessionId);
-      return binding;
-    });
-    const load: EndpointEvidenceAuthorityLoad = Object.freeze({ ...target, promise: loading });
-    endpointEvidenceAuthorityLoad.current = load;
-    try {
-      return await loading;
-    } finally {
-      if (endpointEvidenceAuthorityLoad.current === load) endpointEvidenceAuthorityLoad.current = undefined;
-    }
-  }
-
-  async function releaseEndpointEvidenceAuthority(): Promise<boolean> {
-    const authority = endpointEvidenceAuthority.current;
-    const pending = endpointEvidenceAuthorityLoad.current;
-    const wasActive = Boolean(authority?.current() || pending);
-    endpointEvidenceAuthorityOperation.current += 1;
-    endpointEvidenceAuthorityLoad.current = undefined;
-    if (pending) await pending.promise.catch(() => undefined);
-    await authority?.release();
-    return wasActive;
-  }
-
-  async function rebindProfileEvidenceScope(
-    active: Runtime,
-    activeProfileId: string,
-    credential: string,
-    credentialKind: ActiveChutesConnection["credentialKind"],
-  ): Promise<void> {
-    const transition = ++evidenceScopeTransition.current;
-    await releaseEvidenceAcquisitionQueue();
-    if (transition !== evidenceScopeTransition.current) return;
-    await quiesceEndpointEvidenceClientAndStore(true);
-    if (transition !== evidenceScopeTransition.current || runtime.current !== active) return;
-    const installed = await installAttestationEvidenceClient(credential, credentialKind, {
-      runtime: active,
-      profileId: activeProfileId,
-    });
-    if (!installed || transition !== evidenceScopeTransition.current || runtime.current !== active) return;
-    await ensureEvidenceAcquisitionQueue(activeProfileId, active);
-  }
-
-  async function ensureEvidenceAcquisitionQueue(
-    receiptProfileId: string,
-    expectedRuntime: Runtime | undefined = runtime.current,
-  ): Promise<EvidenceAcquisitionQueueController> {
-    if (!expectedRuntime || runtime.current !== expectedRuntime) {
-      throw new Error("The evidence acquisition workspace authority is not active.");
-    }
-    const expectedClient = attestationClientBinding.current;
-    const expectedEndpointBinding = endpointEvidenceAuthority.current?.current();
-    const evidenceScope = endpointEvidenceScope(expectedRuntime, receiptProfileId);
-    if (
-      !expectedClient
-      || !expectedEndpointBinding
-      || !evidenceScope
-      || !providerCredential.current
-      || !sameEndpointEvidenceScope(expectedClient, evidenceScope)
-      || !sameEndpointEvidenceScope(expectedEndpointBinding, evidenceScope)
-    ) {
-      throw new DOMException(
-        "Automatic endpoint evidence remains paused until a credential-backed client and matching record authority are installed.",
-        "AbortError",
-      );
-    }
-    const target = Object.freeze({
-      workspace: expectedRuntime.workspace,
-      workspaceId: expectedRuntime.workspaceId,
-      profileId: receiptProfileId,
-    });
-    const currentBinding = evidenceAcquisitionQueueAuthority.current?.current();
-    if (
-      currentBinding
-      && currentBinding.workspace === target.workspace
-      && currentBinding.workspaceId === target.workspaceId
-      && currentBinding.profileId === target.profileId
-    ) {
-      publishEvidenceAcquisitionQueue(currentBinding.queue);
-      return currentBinding.queue;
-    }
-    const pending = evidenceAcquisitionQueueLoad.current;
-    if (
-      pending
-      && pending.workspace === target.workspace
-      && pending.workspaceId === target.workspaceId
-      && pending.profileId === target.profileId
-    ) return pending.promise;
-
-    const operation = ++evidenceAcquisitionQueueOperation.current;
-    const loading = Promise.all([
-      import("../attestation/evidence-acquisition-queue"),
-      import("../attestation/workspace-evidence-acquisition-persistence"),
-    ]).then(async ([queueModule, persistenceModule]) => {
-      if (runtime.current !== expectedRuntime) {
-        throw new DOMException("Evidence acquisition authority changed while loading.", "AbortError");
-      }
-      let authority = evidenceAcquisitionQueueAuthority.current;
-      if (!authority) {
-        authority = new persistenceModule.WorkspaceEvidenceAcquisitionAuthority({
-          worker: {
-            async acquire(request, context) {
-              try {
-                await acquireEndpointAttestation({
-                  chuteId: request.chuteId,
-                  instanceId: request.instanceId,
-                  signal: context.signal,
-                  // A receipt identity receives its own fresh client challenge;
-                  // it never reuses another session's memory-cache observation.
-                  forceRefresh: true,
-                  fence: endpointEvidenceFence({
-                    runtime: expectedRuntime,
-                    profileId: request.profileId,
-                    sessionId: request.sessionId,
-                    receiptId: request.receiptId,
-                    instanceId: request.instanceId,
-                    endpointKeyDigest: request.endpointKeyDigest,
-                  }),
-                  failureTarget: {
-                    scope: "receipt",
-                    receiptId: request.receiptId,
-                    instanceId: request.instanceId,
-                    ...(request.endpointKeyDigest ? { endpointKeyDigest: request.endpointKeyDigest } : {}),
-                  },
-                });
-              } catch (error) {
-                if (error instanceof DOMException && error.name === "AbortError") throw error;
-                const mounted = error instanceof MountedAttestationError ? error : undefined;
-                const code = mounted?.code ?? "network";
-                const retryable = mounted?.context.retryable
-                  ?? ["network", "timeout", "http", "evidence-unavailable", "subject-not-found"].includes(code);
-                throw new queueModule.EvidenceAcquisitionAttemptError(
-                  code,
-                  attestationFailureLabel(code),
-                  retryable,
-                );
-              }
-            },
-          },
-        });
-        evidenceAcquisitionQueueAuthority.current = authority;
-      }
-      const binding = await authority.activate(target);
-      if (
-        operation !== evidenceAcquisitionQueueOperation.current
-        || runtime.current !== expectedRuntime
-        || attestationClientBinding.current !== expectedClient
-        || endpointEvidenceAuthority.current?.current() !== expectedEndpointBinding
-        || authority.current()?.queue !== binding.queue
-      ) {
-        throw new DOMException("Evidence acquisition binding was superseded.", "AbortError");
-      }
-      publishEvidenceAcquisitionQueue(binding.queue);
-      return binding.queue;
-    });
-    const load: EvidenceAcquisitionQueueLoad = Object.freeze({ ...target, promise: loading });
-    evidenceAcquisitionQueueLoad.current = load;
-    try {
-      return await loading;
-    } finally {
-      if (evidenceAcquisitionQueueLoad.current === load) evidenceAcquisitionQueueLoad.current = undefined;
-    }
-  }
-
-  function publishEvidenceAcquisitionQueue(queue: EvidenceAcquisitionQueueController): void {
-    if (evidenceAcquisitionQueue.current !== queue) {
-      evidenceAcquisitionUnsubscribe.current?.();
-      // Two publications per emission, because the queue has two kinds of truth:
-      // the task snapshot, and whether its last checkpoint write committed. The
-      // second is not in the snapshot, and it is what parks scheduling, so it
-      // gets its own reactive channel here rather than a render-time ref read.
-      evidenceAcquisitionUnsubscribe.current = queue.subscribe((snapshot) => {
-        setEvidenceAcquisitionSnapshot(snapshot);
-        setEvidenceCheckpointFaulted(Boolean(queue.fault()));
-      });
-      evidenceAcquisitionQueue.current = queue;
-    }
-    setEvidenceAcquisitionSnapshot(queue.snapshot());
-    setEvidenceCheckpointFaulted(Boolean(queue.fault()));
-  }
-
-  async function releaseEvidenceAcquisitionQueue(): Promise<boolean> {
-    const authority = evidenceAcquisitionQueueAuthority.current;
-    const pending = evidenceAcquisitionQueueLoad.current;
-    const wasActive = Boolean(authority?.current() || pending || evidenceAcquisitionQueue.current);
-    evidenceAcquisitionQueueOperation.current += 1;
-    evidenceAcquisitionQueueLoad.current = undefined;
-    if (pending) await pending.promise.catch(() => undefined);
-    evidenceAcquisitionUnsubscribe.current?.();
-    evidenceAcquisitionUnsubscribe.current = undefined;
-    evidenceAcquisitionQueue.current = undefined;
-    setEvidenceAcquisitionSnapshot(undefined);
-    // No queue, no fault to heal: a released scope must not leave the self-heal
-    // effect waking a controller this page no longer owns.
-    setEvidenceCheckpointFaulted(false);
-    await authority?.release();
-    return wasActive;
-  }
-
-  async function rebindEvidenceAcquisitionQueue(
-    shouldRebind: boolean,
-    nextRuntime: Runtime | undefined,
-    nextProfileId: string | undefined,
-  ): Promise<void> {
-    if (!shouldRebind || !nextRuntime || !nextProfileId || runtime.current !== nextRuntime) return;
-    try {
-      await ensureEvidenceAcquisitionQueue(nextProfileId, nextRuntime);
-    } catch (error) {
-      reportEvidenceAcquisitionQueueFailure(error);
-    }
-  }
-
-  async function rebindEvidenceAfterStorageTransition(
-    shouldRebind: boolean,
-    nextRuntime: Runtime | undefined,
-    nextProfileId: string | undefined,
-    credential: string | undefined,
-    credentialKind: ActiveChutesConnection["credentialKind"] | undefined,
-  ): Promise<void> {
-    if (!shouldRebind || !nextRuntime || !nextProfileId || !credential || !credentialKind) return;
-    if (runtime.current !== nextRuntime) return;
-    const installed = await installAttestationEvidenceClient(credential, credentialKind, {
-      runtime: nextRuntime,
-      profileId: nextProfileId,
-    });
-    if (!installed || !endpointEvidenceAuthority.current?.current()) return;
-    await rebindEvidenceAcquisitionQueue(true, nextRuntime, nextProfileId);
-  }
-
-  function reportEvidenceAcquisitionQueueFailure(error: unknown): void {
-    if (error instanceof DOMException && error.name === "AbortError") return;
-    publishAttestationFailureForCurrent({
-      label: "Automatic evidence queue unavailable",
-      scope: "connection",
-    });
-  }
-
-  async function enqueueAutomaticReceiptEvidence(
-    receipt: ConversationReceipt,
-    receiptSessionId: string,
-    receiptProfileId: string,
-  ): Promise<void> {
-    if (!isChutesReceiptProvider(receipt.provider) || !receipt.instanceId || !receipt.model) return;
-    const model = availableModels.find((candidate) => candidate.id === receipt.model);
-    if (!model) {
-      const fence = endpointEvidenceFence({
-        profileId: receiptProfileId,
-        sessionId: receiptSessionId,
-        receiptId: receipt.receiptId,
-        instanceId: receipt.instanceId,
-        endpointKeyDigest: receipt.bindings.endpointKeyDigest,
-      });
-      publishAttestationFailureForFence(fence, {
-        label: "Endpoint model unavailable",
-        scope: "receipt",
-        receiptId: receipt.receiptId,
-        instanceId: receipt.instanceId,
-        ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
-      });
-      return;
-    }
-    const queue = await ensureEvidenceAcquisitionQueue(receiptProfileId);
-    const enqueued = await queue.enqueue({
-      version: 1,
-      receiptId: receipt.receiptId,
-      sessionId: receiptSessionId,
-      profileId: receiptProfileId,
-      providerId: "chutes",
-      modelId: receipt.model,
-      chuteId: model.chuteId,
-      instanceId: receipt.instanceId,
-      ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
-    });
-    if (
-      enqueued.disposition === "duplicate"
-      && (enqueued.task.status === "failed" || enqueued.task.status === "cancelled")
-    ) {
-      // "Duplicate" answers the identity question, not the scheduling one: a
-      // scope-released or exhausted task stays terminal if this path takes the
-      // duplicate as "already handled", and the receipt is never re-acquired.
-      // Re-arming a completed success would re-fetch settled evidence, so only
-      // genuinely terminal non-success tasks get a fresh budget.
-      await queue.retryTerminal(receipt.receiptId);
-    }
-  }
-
-  function cancelQueuedEvidenceAcquisitions(): void {
-    const queue = evidenceAcquisitionQueue.current;
-    if (!queue) return;
-    for (const task of queue.list()) {
-      if (["succeeded", "failed", "cancelled"].includes(task.status)) continue;
-      void queue.cancel(task.request.receiptId, "scope-released").catch(() => {
-        // The queue exposes persistence faults separately; connection teardown
-        // must still release the credential and mounted verifier immediately.
-      });
-    }
-  }
-
-  async function installAttestationEvidenceClient(
-    credential: string,
-    credentialKind: ActiveChutesConnection["credentialKind"],
-    target: Readonly<{ runtime: Runtime; profileId: string }> = {
-      runtime: runtime.current!,
-      profileId: activeProfileRef.current!.profileId,
-    },
-  ): Promise<AttestationClientBinding | undefined> {
-    const operation = ++attestationOperation.current;
-    attestationClient.current?.dispose();
-    attestationClient.current = undefined;
-    attestationClientBinding.current = undefined;
-    providerCredential.current = credential;
-    attestationCredentialKind.current = credentialKind;
-    const scope = endpointEvidenceScope(target.runtime, target.profileId);
-    if (!scope || runtime.current !== target.runtime) return undefined;
-    try {
-      const {
-        ChutesAttestationEvidenceClient: EvidenceClient,
-        createIntelDcapQvlVerifierPort,
-      } = await loadDeferredCapabilities();
-      if (operation !== attestationOperation.current || runtime.current !== target.runtime) return undefined;
-      const generation = ++attestationClientGeneration.current;
-      const cachePartition = `connection-${scope.profileId}-${generation}-${randomUuid()}`;
-      const client = new EvidenceClient({
-        authorization: {
-          kind: credentialKind === "oauth-user-token" ? "oauth" : "api-key",
-          cachePartition,
-          getBearerToken(signal) {
-            if (signal.aborted) throw signal.reason ?? new DOMException("Attestation acquisition cancelled.", "AbortError");
-            const activeBinding = attestationClientBinding.current;
-            if (
-              !activeBinding
-              || activeBinding.generation !== generation
-              || !sameEndpointEvidenceScope(activeBinding, scope)
-            ) {
-              throw new DOMException("The endpoint-evidence client authority changed.", "AbortError");
-            }
-            const current = providerCredential.current;
-            if (!current) throw new Error("The memory-only Chutes credential was cleared.");
-            return current;
-          },
-        },
-        // Complete Intel DCAP QVL runs locally in deferred WASM. When QVL or
-        // collateral is unavailable, its compact verifier preserves an exact
-        // partial diagnosis and never promotes the claim.
-        verifierPorts: { dcap: createIntelDcapQvlVerifierPort() },
-      });
-      if (operation !== attestationOperation.current || runtime.current !== target.runtime) {
-        client.dispose();
-        return undefined;
-      }
-      const binding: AttestationClientBinding = Object.freeze({ ...scope, client, generation });
-      attestationClient.current = client;
-      attestationClientBinding.current = binding;
-      try {
-        await ensureEndpointEvidenceAuthority(scope, binding);
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          publishAttestationFailureForCurrent({
-            label: "Stored endpoint evidence rejected",
-            scope: "connection",
-          });
-        }
-      }
-      return binding;
-    } catch {
-      if (operation !== attestationOperation.current) return undefined;
-      providerCredential.current = undefined;
-      attestationCredentialKind.current = undefined;
-      publishAttestationFailureForCurrent({ label: "Evidence client unavailable", scope: "connection" });
-      return undefined;
-    }
-  }
-
-  async function quiesceEndpointEvidenceClientAndStore(preserveCredential: boolean): Promise<boolean> {
-    const wasActive = Boolean(attestationClient.current || endpointEvidenceAuthority.current?.current());
-    attestationOperation.current += 1;
-    attestationClientGeneration.current += 1;
-    attestationClient.current?.cancel();
-    attestationClient.current?.dispose();
-    attestationClient.current = undefined;
-    attestationClientBinding.current = undefined;
-    if (!preserveCredential) {
-      providerCredential.current = undefined;
-      attestationCredentialKind.current = undefined;
-    }
-    await releaseEndpointEvidenceAuthority();
-    return wasActive;
-  }
-
-  function clearAttestationEvidence(preservePresentation = false): void {
-    cancelQueuedEvidenceAcquisitions();
-    void releaseEvidenceAcquisitionQueue();
-    void quiesceEndpointEvidenceClientAndStore(false);
-    if (!preservePresentation) setAttestationPresentation(undefined);
-  }
-
-  async function acquireEndpointAttestation(args: {
-    chuteId: string;
-    instanceId: string;
-    signal?: AbortSignal;
-    forceRefresh: boolean;
-    fence?: EndpointEvidenceFence;
-    failureTarget?: Omit<AttestationAcquisitionFailure, "label">;
-  }): Promise<ChutesEndpointEvidenceRecord> {
-    const client = attestationClient.current;
-    const clientBinding = attestationClientBinding.current;
-    const fence = args.fence ?? endpointEvidenceFence({
-      sessionId: args.failureTarget?.scope === "receipt" ? undefined : activeSessionIdentity.current ?? sessionId,
-      receiptId: args.failureTarget?.receiptId,
-      instanceId: args.instanceId,
-      endpointKeyDigest: args.failureTarget?.endpointKeyDigest,
-    });
-    if (
-      !client
-      || !clientBinding
-      || clientBinding.client !== client
-      || !providerCredential.current
-      || !sameEndpointEvidenceScope(clientBinding, fence)
-    ) {
-      throw new MountedAttestationError(
-        "invalid-input",
-        "Connect a memory-only Chutes credential before acquiring endpoint evidence.",
-      );
-    }
-    // This is a client-authority generation, not a "latest request wins"
-    // counter. Independent receipt acquisitions may run concurrently; a
-    // Profile/client teardown increments the generation and fences every late
-    // result without causing sibling receipts to cancel one another.
-    const operation = attestationOperation.current;
-    let snapshot = await client.inspect({
-      chuteId: args.chuteId,
-      instanceId: args.instanceId,
-      evidenceRoute: "instance",
-      includePublishedPolicy: true,
-      forceRefresh: args.forceRefresh,
-      signal: args.signal,
-    });
-    if (
-      snapshot.status === "unavailable" &&
-      (snapshot.unavailable?.code === "forbidden" || snapshot.unavailable?.code === "unauthorized") &&
-      !args.signal?.aborted
-    ) {
-      // The authenticated per-instance route can still reject a caller at its
-      // handler-level ownership/shared/public check. Public hosted chutes permit
-      // a batch evidence read; selection still requires the exact authenticated
-      // discovery instance and key. Reuse the first discovery snapshot so a
-      // second random bounded subset cannot create a false "unavailable" result.
-      snapshot = await client.inspect({
-        chuteId: args.chuteId,
-        instanceId: args.instanceId,
-        evidenceRoute: "public-chute",
-        includePublishedPolicy: true,
-        forceRefresh: false,
-        signal: args.signal,
-      });
-    }
-    if (args.signal?.aborted) {
-      throw args.signal.reason ?? new DOMException("Attestation acquisition cancelled.", "AbortError");
-    }
-    if (
-      operation !== attestationOperation.current
-      || attestationClientBinding.current !== clientBinding
-      || !sameEndpointEvidenceScope(clientBinding, fence)
-    ) {
-      throw new MountedAttestationError(
-        "network",
-        "A newer evidence operation superseded this acquisition.",
-        { retryable: true },
-      );
-    }
-    if (snapshot.status !== "evidence" || !snapshot.record) {
-      const error = attestationSnapshotError(snapshot);
-      publishAttestationFailureForFence(fence, {
-        label: attestationFailureLabel(error.code),
-        ...(args.failureTarget ?? { scope: "endpoint", instanceId: args.instanceId }),
-      });
-      throw error;
-    }
-    const completeRecord = endpointEvidenceForPersistence(snapshot.record);
-    const authority = endpointEvidenceAuthority.current;
-    const binding = authority?.current();
-    if (!authority || !binding || !sameEndpointEvidenceScope(binding, fence)) {
-      throw new MountedAttestationError(
-        "network",
-        "The endpoint-evidence storage authority is not active for this Profile and workspace.",
-        { retryable: true },
-      );
-    }
-    const identity: EndpointEvidenceRecordIdentity = Object.freeze({
-      version: 1,
-      profileId: fence.profileId,
-      sessionId: fence.sessionId,
-      ...(fence.receiptId ? { receiptId: fence.receiptId } : {}),
-      instanceId: fence.instanceId,
-      endpointKeyDigest: fence.endpointKeyDigest ?? completeRecord.subject.e2ePublicKeyDigest,
-    });
-    try {
-      const result = await authority.commit(binding, { identity, record: completeRecord }, args.signal);
-      if (
-        operation !== attestationOperation.current
-        || attestationClientBinding.current !== clientBinding
-        || !sameEndpointEvidenceScope(clientBinding, fence)
-      ) {
-        throw new DOMException("Endpoint-evidence presentation was superseded after its durable commit.", "AbortError");
-      }
-      const accepted = result.disposition === "page-only" && result.reason
-        ? endpointEvidenceWithDurabilityWarning(result.entry.record, result.reason)
-        : result.entry.record;
-      if (isCurrentEndpointEvidenceFence(fence)) {
-        const activeBinding = authority.current();
-        const durableRecords = activeBinding && sameEndpointEvidenceScope(activeBinding, fence)
-          ? recordsForEvidenceSession(activeBinding, fence.sessionId)
-          : Object.freeze([]);
-        const records = result.disposition === "page-only"
-          ? Object.freeze([accepted, ...durableRecords.filter((record) => record.recordId !== accepted.recordId)])
-          : durableRecords;
-        setAttestationPresentation(Object.freeze({
-          workspace: fence.workspace,
-          workspaceId: fence.workspaceId,
-          profileId: fence.profileId,
-          sessionId: fence.sessionId,
-          records,
-          ...(result.reason ? { durabilityNotice: result.reason } : {}),
-        }));
-      }
-      return accepted;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
-      const reason = "The complete endpoint-evidence record remains available for this page only because its CAS persistence failed. Raw quote, certificate, GPU, nonce, key, and binding material were not truncated.";
-      const pageOnly = endpointEvidenceWithDurabilityWarning(completeRecord, reason);
-      if (isCurrentEndpointEvidenceFence(fence)) {
-        setAttestationPresentation((current) => Object.freeze({
-          workspace: fence.workspace,
-          workspaceId: fence.workspaceId,
-          profileId: fence.profileId,
-          sessionId: fence.sessionId,
-          records: Object.freeze([
-            pageOnly,
-            ...(current?.records ?? []).filter((record) => record.recordId !== pageOnly.recordId),
-          ]),
-          durabilityNotice: reason,
-        }));
-      }
-      throw new MountedAttestationError("network", "Endpoint evidence could not be committed to the active storage authority.", {
-        retryable: true,
-      });
-    }
-  }
-
-  /**
-   * Pull + verify fresh evidence for a currently-live instance of the connected
-   * chute. Unlike a receipt refresh, this needs no prior turn: it discovers an
-   * active endpoint and attests it as endpoint-evidence (never a retroactive
-   * conversation upgrade). This is what makes "Refresh evidence" work cold.
-   */
-  async function probeCurrentEndpoint(signal?: AbortSignal): Promise<void> {
-    const client = attestationClient.current;
-    const clientBinding = attestationClientBinding.current;
-    if (!client || !clientBinding || !providerCredential.current || !isChutesConnected(connection)) return;
-    const model = availableModels.find((candidate) => candidate.id === connection.model);
-    if (!model) {
-      publishAttestationFailureForCurrent({ label: "Endpoint model unavailable", scope: "connection" });
-      return;
-    }
-    let discovery;
-    try {
-      discovery = await client.discover(model.chuteId, { signal, forceRefresh: true });
-    } catch (error) {
-      if (!signal?.aborted && attestationClientBinding.current === clientBinding) {
-        publishAttestationFailureForCurrent({ label: "Endpoint discovery failed", scope: "endpoint" });
-      }
-      throw error;
-    }
-    if (attestationClientBinding.current !== clientBinding || !sameEndpointEvidenceScope(clientBinding, endpointEvidenceScope())) {
-      throw new DOMException("Endpoint discovery completed under an obsolete Profile or workspace authority.", "AbortError");
-    }
-    const endpoint = discovery.endpoints[0];
-    if (!endpoint) {
-      publishAttestationFailureForCurrent({ label: "No live endpoint is currently discoverable", scope: "endpoint" });
-      return;
-    }
-    const fence = endpointEvidenceFence({
-      instanceId: endpoint.instanceId,
-    });
-    // forceRefresh:false so inspect() reuses the discovery subset we just pulled
-    // above — otherwise it re-discovers a different random subset that may not
-    // contain this instance, and refuses to substitute → false rejection.
-    await acquireEndpointAttestation({
-      chuteId: model.chuteId,
-      instanceId: endpoint.instanceId,
-      forceRefresh: false,
-      signal,
-      fence,
-      failureTarget: { scope: "endpoint", instanceId: endpoint.instanceId },
-    });
-  }
-
-  async function acquireReceiptAttestation(
-    receipt: ConversationReceipt,
-    signal: AbortSignal | undefined,
-    forceRefresh: boolean,
-  ): Promise<void> {
-    if (!isChutesReceiptProvider(receipt.provider) || !receipt.instanceId || !receipt.model) {
-      throw new MountedAttestationError(
-        "invalid-input",
-        "The selected receipt does not name an exact Chutes model and instance.",
-      );
-    }
-    const model = availableModels.find((candidate) => candidate.id === receipt.model);
-    if (!model) {
-      throw new MountedAttestationError(
-        "subject-not-found",
-        "The exact receipt model is unavailable in the active authoritative model snapshot.",
-        { retryable: true },
-      );
-    }
-    await acquireEndpointAttestation({
-      chuteId: model.chuteId,
-      instanceId: receipt.instanceId,
-      signal,
-      forceRefresh,
-      fence: endpointEvidenceFence({
-        sessionId: receipt.sessionId,
-        receiptId: receipt.receiptId,
-        instanceId: receipt.instanceId,
-        endpointKeyDigest: receipt.bindings.endpointKeyDigest,
-      }),
-      failureTarget: {
-        scope: "receipt",
-        receiptId: receipt.receiptId,
-        instanceId: receipt.instanceId,
-        ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
-      },
-    });
-  }
-
-  async function refreshAttestation(target: AttestationRefreshTarget, signal: AbortSignal): Promise<void> {
-    if (!online) throw new Error(OFFLINE_INLINE_REASON);
-    if (target.kind === "conversation-receipt") {
-      await acquireReceiptAttestation(target.receipt, signal, true);
-      return;
-    }
-    const chuteId = target.record.subject.chuteId;
-    if (!chuteId) {
-      throw new MountedAttestationError(
-        "invalid-input",
-        "The selected endpoint record does not identify its Chutes chute.",
-      );
-    }
-    await acquireEndpointAttestation({
-      chuteId,
-      instanceId: target.record.subject.instanceId,
-      signal,
-      forceRefresh: true,
-      fence: endpointEvidenceFence({
-        instanceId: target.record.subject.instanceId,
-        endpointKeyDigest: target.record.subject.e2ePublicKeyDigest,
-      }),
-      failureTarget: {
-        scope: "endpoint",
-        instanceId: target.record.subject.instanceId,
-        endpointKeyDigest: target.record.subject.e2ePublicKeyDigest,
-      },
-    });
-  }
-
   async function runInferenceRouteTransition<T>(
     operation: (signal?: AbortSignal) => Promise<T>,
     reconnectIntent?: AccessReconnectIntent,
@@ -9878,519 +7525,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
   }
 
-  async function connectChutes(
-    transport: ChutesInferenceTransport,
-    model: AirshipModel,
-    models: readonly AirshipModel[],
-    credential: string,
-    connectionMetadata: ActiveChutesConnection,
-  ) {
-    const routeProfile = activeProfileRef.current;
-    if (!runtime.current || !routeProfile || !catalog) throw new Error("The local runtime is not ready.");
-    const reconnectIntent = accessReconnectIntent;
-    const parsedCredential = parseChutesCredential(credential);
-    if (
-      connectionMetadata.model !== model.id ||
-      connectionMetadata.credentialKind !== parsedCredential.kind ||
-      connectionMetadata.posture !== transport.posture ||
-      !models.some((candidate) => candidate.id === model.id)
-    ) {
-      throw new Error("The selected model, transport posture, and credential metadata do not form one connection.");
-    }
-    const priorRuntime = runtime.current;
-    const priorChutesTransport = chutesTransport.current;
-    const expectedChutesAuthorityRevision = chutesAuthorityRevision.current;
-    return runInferenceRouteTransition(async (reconnectSignal) => {
-      abortAllTurns(new DOMException("Inference route is changing.", "AbortError"));
-      setRuntimeStatus("Pinning encrypted Chutes session");
-      const nextGeneration = chutesConnectionGeneration.current + 1;
-      const nextConnectionId = `chutes-${randomUuid()}`;
-      const binding = Object.freeze({
-        version: 1 as const,
-        connectionId: nextConnectionId,
-        connectionGeneration: nextGeneration,
-        providerId: "chutes",
-        providerLabel: "Chutes",
-        providerRevision: 1,
-        authMethod: parsedCredential.kind === "oauth-user-token" ? "oauth-pkce" as const : "api-key" as const,
-        transportBoundary: "e2ee-attestable" as const,
-        modelId: model.id,
-        boundAt: new Date().toISOString(),
-      });
-      const committedRuntime: Runtime = {
-        ...priorRuntime,
-        transport,
-        model: model.id,
-        inferenceBinding: binding,
-        contextPolicy: await contextPolicyForModel(model),
-      };
-      const nextAvailability = Object.freeze({
-        connection: connectionMetadata,
-        connectionId: nextConnectionId,
-        generation: nextGeneration,
-        models: Object.freeze(models.slice()),
-      });
-      const candidateRuntime: Runtime = {
-        ...committedRuntime,
-        inferenceDirectory: () => inferenceDirectoryFromAvailability(
-          combinedInferenceAvailability(
-            inferenceFabric.current?.availability() ?? EMPTY_INFERENCE_AVAILABILITY,
-            nextAvailability,
-            binding,
-          ),
-        ),
-      };
-      let nextSession: SessionRecord | undefined;
-      let nextProfile: ProfileRevision | undefined;
-      let reconnectSession: Awaited<ReturnType<typeof prepareReconnectSession>> | undefined;
-      await mutateProfileCatalog(async (current) => {
-        const selected = current.profiles.find((candidate) => candidate.profileId === routeProfile.profileId);
-        if (!selected || runtime.current !== priorRuntime) {
-          throw new Error("The active profile or browser runtime changed while the connection was being pinned.");
-        }
-        nextProfile = await bindProfileToRuntime(selected, candidateRuntime);
-        const next = nextProfile === selected ? current : replaceProfile(current, nextProfile);
-        if (reconnectIntent) {
-          reconnectSession = await prepareReconnectSession(
-            reconnectIntent,
-            candidateRuntime,
-            nextProfile,
-            next,
-            reconnectSignal,
-          );
-        } else {
-          nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
-        }
-        return next;
-      });
-      if (!nextProfile || (!nextSession && !reconnectSession)) {
-        throw new Error("The encrypted Chutes connection did not produce a conversation transition.");
-      }
-      if (
-        runtime.current !== priorRuntime
-        || chutesAuthorityRevision.current !== expectedChutesAuthorityRevision
-      ) {
-        throw new Error("The Chutes credential authority changed before the new session could commit.");
-      }
-      const reconnectSelection = reconnectSession && reconnectIntent
-        ? await selectPreparedReconnectSession(reconnectSession, reconnectIntent, candidateRuntime, reconnectSignal)
-        : undefined;
-      if (reconnectSession && !reconnectSelection) throw new Error("The requested conversation selection did not commit.");
-
-      runtime.current = committedRuntime;
-      chutesAvailability.current = nextAvailability;
-      accountCredential.current = credential;
-      // Commit is the one moment the pending OAuth handoff has done its job.
-      // Clearing it earlier is what stranded a completed exchange on remount.
-      pendingOAuthCredential.current = undefined;
-      chutesTransport.current = transport;
-      chutesConnectionId.current = nextConnectionId;
-      chutesConnectionGeneration.current = nextGeneration;
-      const committedAuthorityRevision = expectedChutesAuthorityRevision + 1;
-      chutesAuthorityRevision.current = committedAuthorityRevision;
-      if (priorChutesTransport && priorChutesTransport !== transport) {
-        priorChutesTransport.revokeCredential(
-          new DOMException("A replacement Chutes credential was activated.", "AbortError"),
-        );
-      }
-      activeExternalRouteRef.current = undefined;
-      setActiveExternalRoute(undefined);
-      if (reconnectSession) {
-        publishSelectedAuditedSession(
-          reconnectSession.detail,
-          reconnectSelection!,
-          reconnectSession.presentation,
-          `Reconnected ${model.id} · audited conversation resumed`,
-        );
-        setComposerNotice(undefined);
-      } else {
-        const activated = await activateSession(nextSession!);
-        setSessionRevision((value) => value + 1);
-        setMessages([
-          {
-            ...welcomeMessage,
-            id: randomUuid(),
-            content: connectionMetadata.posture === "encrypted-attested"
-              ? `Connected to ${model.id} through Chutes E2EE v1 with a fail-closed proof gate. Before each encrypted invocation, Airship must locally accept fresh endpoint evidence and its key binding. Turn receipts show the evidence actually established; this connection policy alone is not proof.`
-              : `Connected to ${model.id} through Chutes E2EE v1 with the verify-and-record evidence policy. Payloads use E2EE; endpoint evidence is acquired and evaluated after completed invocations. Missing or partial verifier evidence stays visibly unverified and does not block encrypted chat.`,
-          },
-        ]);
-        setEventCount(activated.headSequence);
-        setLastReceipt(undefined);
-        setSessionLifecycle(READY_SESSION_LIFECYCLE);
-        setTranscriptBoundary(undefined);
-      }
-      const evidenceClient = await installAttestationEvidenceClient(
-        credential,
-        connectionMetadata.credentialKind,
-        { runtime: committedRuntime, profileId: nextProfile.profileId },
-      );
-      if (
-        chutesAuthorityRevision.current !== committedAuthorityRevision
-        || chutesTransport.current !== transport
-        || chutesConnectionId.current !== nextConnectionId
-        || runtime.current !== committedRuntime
-      ) {
-        throw new Error("The Chutes credential authority was released while connection setup was finishing.");
-      }
-      // Reconnection is the first point after reload where a credential-backed
-      // worker can safely resume a persisted queue. Recovery before this point
-      // would spend retry attempts while no evidence client exists.
-      if (evidenceClient && endpointEvidenceAuthority.current?.current()) {
-        await rebindEvidenceAcquisitionQueue(true, committedRuntime, nextProfile.profileId);
-      }
-      setAvailableModels(Object.freeze(models.slice()));
-      setCredentialRevision((value) => value + 1);
-      setInvocationTelemetry(undefined);
-      setConnection(connectionMetadata);
-      // The callback notice describes an exchange in flight ("finish the
-      // connection"). Commitment is its terminal transition, and nothing else
-      // wrote one, so a connected user kept being told to finish what they had
-      // already finished.
-      setOauthCallbackStatus(undefined);
-      setRuntimeStatus(reconnectSession
-        ? `Audited conversation resumed · ${encryptedSessionReadyStatus(connectionMetadata.posture)}`
-        : encryptedSessionReadyStatus(connectionMetadata.posture));
-      navigate("chat");
-    }, reconnectIntent);
-  }
-
-  function releaseChutesAuthority(status: string): void {
-    chutesAuthorityRevision.current += 1;
-    const active = runtime.current;
-    const releasedTransport = chutesTransport.current;
-    const releasedTokens = oauthTokens.current;
-    const releasesActiveRoute = active?.inferenceBinding?.providerId === "chutes"
-      && active.transport.id === "chutes-e2ee-v1";
-    if (releasesActiveRoute && active) {
-      abortAllTurns(new DOMException("Remote inference credential was released.", "AbortError"));
-      // Preserve the provider/model/posture pin used to interpret this immutable
-      // conversation, while ensuring a direct API key cannot remain captured by
-      // the old transport. Reconnection performs the next semantic rebind.
-      active.transport = withoutCredential(active.transport);
-    }
-    oauthTokens.current = undefined;
-    pendingOAuthCredential.current = undefined;
-    accountCredential.current = undefined;
-    chutesTransport.current = undefined;
-    chutesConnectionId.current = undefined;
-    chutesAvailability.current = undefined;
-    clearAttestationEvidence(true);
-    setAvailableModels([]);
-    setCredentialRevision((value) => value + 1);
-    setOauthTokenRevision((value) => value + 1);
-    setInvocationTelemetry(undefined);
-    setConnection(DISCONNECTED_CHUTES_CONNECTION);
-    releasedTransport?.revokeCredential(
-      new DOMException("Chutes connection was released from page memory.", "AbortError"),
-    );
-    /*
-     * Clearing page memory ends Airship's use of the credential. It does not
-     * end the grant: a refresh token that has leaked stays valid at the
-     * provider for the rest of its lifetime unless something asks the
-     * revocation endpoint to drop it, and the only caller that ever did was a
-     * broker production never mounts. The transport's identically named
-     * `revokeCredential` above is why the gap was invisible here.
-     *
-     * Detached and best-effort by construction: teardown above is already
-     * complete and released state is set whatever happens next, so a hung or
-     * refused revocation cannot hold sign-out open. Its result is never
-     * reported as proof the provider session ended — the endpoint answers 200
-     * for tokens it has never seen (docs/gap-audit/inference.md).
-     */
-    if (releasedTokens) {
-      void (async () => {
-        const { CHUTES_ACTIVE_REGISTRATION, revokeChutesToken } = await import("../auth/chutes-oauth");
-        for (const [token, tokenTypeHint] of [
-          [releasedTokens.refreshToken, "refresh_token"],
-          [releasedTokens.accessToken, "access_token"],
-        ] as const) {
-          if (!token) continue;
-          await revokeChutesToken({
-            token,
-            tokenTypeHint,
-            clientId: CHUTES_ACTIVE_REGISTRATION.clientId,
-            registration: CHUTES_ACTIVE_REGISTRATION,
-          }).catch(() => undefined);
-        }
-      })().catch(() => undefined);
-    }
-    if (releasesActiveRoute) {
-      setComposerNotice("Remote inference is disconnected. This conversation remains readable and pinned to the released authority; reconnecting starts a new conversation.");
-      setRuntimeStatus(status);
-    } else {
-      setRuntimeStatus("Chutes connection released · active conversation unchanged");
-    }
-  }
-
-  async function disconnectChutes() {
-    if (inferenceRouteChanging.current) {
-      throw new Error("Wait for the current inference route change before clearing Chutes.");
-    }
-    setOauthCallbackStatus(undefined);
-    releaseChutesAuthority("Inference disconnected · conversation retained");
-  }
-
-  async function switchChutesModel(modelId: string): Promise<ChutesModelSwitchOutcome> {
-    const routeProfile = activeProfileRef.current;
-    if (!runtime.current || !routeProfile || !catalog || !isChutesConnected(connection)) {
-      throw new Error("Connect Chutes before selecting a remote model.");
-    }
-    const model = availableModels.find((candidate) => candidate.id === modelId);
-    if (!model) throw new Error("The selected model is not in the active authoritative Chutes catalog snapshot.");
-    const reconnectIntent = accessReconnectIntent;
-    /*
-     * A conversation whose manifest pins this same Chutes connection changes
-     * its model in place: one durable `session.model-changed` event beside
-     * the manifest, and the next reply routes to the new model without a
-     * fork, a transcript reset, or a dropped turn. The planner reads the
-     * record's *effective* model — choosing the connection's pinned model
-     * while an override is active is the change "back to the thread's birth
-     * model", not a no-op — and only a thread pinning this exact connection
-     * earns the in-place route; everything else keeps the fork it had.
-     */
-    const plan = planChutesModelSwitch({
-      reconnectIntent: Boolean(reconnectIntent),
-      activeSession: activeSessionRecord,
-      connectionId: chutesConnectionId.current,
-      connectionModel: connection.model,
-      activeConnection: Boolean(activeChutesConnection),
-      targetModelId: model.id,
-    });
-    if (plan.kind === "noop") return;
-    if (plan.kind === "in-place") {
-      return switchChutesModelInPlace(model, plan.session);
-    }
-    const transport = chutesTransport.current;
-    const connectionId = chutesConnectionId.current;
-    const expectedAuthorityRevision = chutesAuthorityRevision.current;
-    if (!transport) {
-      throw new Error("The Chutes credential transport is no longer in page memory. Reconnect before creating a new Chutes session.");
-    }
-    if (!connectionId) {
-      throw new Error("The Chutes connection authority is no longer in page memory. Reconnect before creating a new session.");
-    }
-
-    const priorRuntime = runtime.current;
-    return runInferenceRouteTransition(async (reconnectSignal) => {
-      setRuntimeStatus(reconnectIntent
-        ? "Verifying the requested Chutes conversation"
-        : "Forking a model-pinned session");
-      abortAllTurns(new DOMException("Inference model is changing.", "AbortError"));
-      await transport.verifyModelAccess(model.id, reconnectSignal);
-      if (runtime.current !== priorRuntime) {
-        throw new Error("The browser runtime changed while Chutes model access was being checked.");
-      }
-      const nextConnection = withChutesModel(connection, model.id);
-      const binding = Object.freeze({
-        version: 1 as const,
-        connectionId,
-        connectionGeneration: Math.max(1, chutesConnectionGeneration.current),
-        providerId: "chutes",
-        providerLabel: "Chutes",
-        providerRevision: 1,
-        authMethod: connection.kind === "chutes-oauth" ? "oauth-pkce" as const : "api-key" as const,
-        transportBoundary: "e2ee-attestable" as const,
-        modelId: model.id,
-        boundAt: new Date().toISOString(),
-      });
-      const committedRuntime: Runtime = {
-        ...priorRuntime,
-        transport,
-        model: model.id,
-        inferenceBinding: binding,
-        contextPolicy: await contextPolicyForModel(model),
-      };
-      const nextAvailability = Object.freeze({
-        connection: nextConnection,
-        connectionId,
-        generation: Math.max(1, chutesConnectionGeneration.current),
-        models: Object.freeze(availableModels.slice()),
-      });
-      const candidateRuntime: Runtime = {
-        ...committedRuntime,
-        inferenceDirectory: () => inferenceDirectoryFromAvailability(
-          combinedInferenceAvailability(
-            inferenceFabric.current?.availability() ?? EMPTY_INFERENCE_AVAILABILITY,
-            nextAvailability,
-            binding,
-          ),
-        ),
-      };
-      let nextSession: SessionRecord | undefined;
-      let nextProfile: ProfileRevision | undefined;
-      let reconnectSession: Awaited<ReturnType<typeof prepareReconnectSession>> | undefined;
-      await mutateProfileCatalog(async (current) => {
-        const selected = current.profiles.find((candidate) => candidate.profileId === routeProfile.profileId);
-        if (!selected || runtime.current !== priorRuntime) {
-          throw new Error("The active profile or browser runtime changed while the model was being pinned.");
-        }
-        nextProfile = await bindProfileToRuntime(selected, candidateRuntime);
-        const next = nextProfile === selected ? current : replaceProfile(current, nextProfile);
-        if (reconnectIntent) {
-          reconnectSession = await prepareReconnectSession(
-            reconnectIntent,
-            candidateRuntime,
-            nextProfile,
-            next,
-            reconnectSignal,
-          );
-        } else {
-          nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
-        }
-        return next;
-      });
-      if (!nextProfile || (!nextSession && !reconnectSession)) {
-        throw new Error("The Chutes route did not produce a conversation transition.");
-      }
-      if (
-        runtime.current !== priorRuntime
-        || chutesAuthorityRevision.current !== expectedAuthorityRevision
-        || chutesTransport.current !== transport
-        || chutesConnectionId.current !== connectionId
-        || chutesConnectionGeneration.current !== binding.connectionGeneration
-      ) {
-        throw new Error("The Chutes credential authority changed before the model switch could commit.");
-      }
-      const reconnectSelection = reconnectSession && reconnectIntent
-        ? await selectPreparedReconnectSession(reconnectSession, reconnectIntent, candidateRuntime, reconnectSignal)
-        : undefined;
-      if (reconnectSession && !reconnectSelection) throw new Error("The requested conversation selection did not commit.");
-
-      runtime.current = committedRuntime;
-      chutesAvailability.current = nextAvailability;
-      activeExternalRouteRef.current = undefined;
-      setActiveExternalRoute(undefined);
-      if (reconnectSession) {
-        publishSelectedAuditedSession(
-          reconnectSession.detail,
-          reconnectSelection!,
-          reconnectSession.presentation,
-          `Reconnected ${model.id} · audited conversation resumed`,
-        );
-        setComposerNotice(undefined);
-      } else {
-        const activated = await activateSession(nextSession!);
-        setSessionRevision((value) => value + 1);
-        setMessages([{
-          ...welcomeMessage,
-          id: randomUuid(),
-          content: `${model.id} is active in a new pinned session. The prior session and its receipt chain were not rewritten.`,
-        }]);
-        setEventCount(activated.headSequence);
-        setLastReceipt(undefined);
-        setSessionLifecycle(READY_SESSION_LIFECYCLE);
-        setTranscriptBoundary(undefined);
-      }
-      attestationOperation.current += 1;
-      attestationClient.current?.cancel();
-      attestationClient.current?.clear();
-      setAttestationPresentation(undefined);
-      setInvocationTelemetry(undefined);
-      setConnection(nextConnection);
-      setRuntimeStatus(reconnectSession
-        ? `Audited conversation resumed · ${encryptedSessionReadyStatus(connection.posture)}`
-        : encryptedSessionReadyStatus(connection.posture));
-      if (reconnectSession) navigate("chat");
-      return "forked" as const;
-    }, reconnectIntent);
-  }
-
-  /**
-   * The same-thread model change. Where the fork path mints a new pinned
-   * session and rewires the profile routing, a conversation whose manifest
-   * already names this connection takes one durable event instead: the
-   * record's modelOverride governs the next turn's minting, digests, and
-   * receipts — and a turn already running keeps the model its request was
-   * minted with, because honest sequencing beats cosmetic immediacy. The
-   * profile default is untouched, and the runtime is deliberately left
-   * alone: it expresses the profile/connection default, which the status
-   * sentence below promises did not change.
-   *  /**
-   * The same-thread model change. Where the fork path mints a new pinned
-   * session and rewires the profile routing, a conversation whose manifest
-   * already names this connection takes one durable event instead: the
-   * record's modelOverride governs the next turn's minting, digests, and
-   * receipts — and a turn already running keeps the model its request was
-   * minted with, because honest sequencing beats cosmetic immediacy. The
-   * profile default is untouched, and the runtime is deliberately left
-   * alone: it expresses the profile/connection default, which the status
-   * sentence below promises did not change.
-   *
-   * Failures throw rather than sink into a notice: every caller of this
-   * path — the chat model control, the Connection screen — owns an error
-   * surface that an exception routes into, and the compression dialog's
-   * deferred `proceed` catches its own. Swallowing here would let the
-   * Connection screen print "model changed" over a refusal.
-   */
-  async function switchChutesModelInPlace(model: AirshipModel, session: SessionRecord): Promise<ChutesModelSwitchOutcome> {
-    const conversationRuntime = runtime.current;
-    const transport = chutesTransport.current;
-    if (!conversationRuntime || !transport || !chutesConnectionId.current
-      || inferenceRouteChanging.current || sessionNavigationChanging.current) {
-      throw new Error("The active conversation is not ready to change its model.");
-    }
-    setModelSwitching(true);
-    try {
-      await transport.verifyModelAccess(model.id);
-      const policy = await contextPolicyForModel(model);
-      const candidateWindow = policy?.contextWindowTokens;
-      if (candidateWindow !== undefined) {
-        const used = await recentSessionUseTokens(conversationRuntime.journal, session);
-        if (modelSwitchNeedsCompressionGate(used, candidateWindow)) {
-          setPendingModelSwitch({
-            modelLabel: model.id,
-            usedTokens: used,
-            windowTokens: candidateWindow,
-            proceed: async () => {
-              try {
-                await commitChutesModelInPlace(model, session.id, policy);
-              } catch (error) {
-                setComposerNotice(error instanceof Error
-                  ? `The model could not be changed for this conversation. ${error.message}`
-                  : "The model could not be changed for this conversation.");
-              }
-            },
-          });
-          return "confirming-compression";
-        }
-      }
-      await commitChutesModelInPlace(model, session.id, policy);
-      return "in-place";
-    } finally {
-      setModelSwitching(false);
-    }
-  }
-
-  async function commitChutesModelInPlace(
-    model: AirshipModel,
-    sessionId: string,
-    policy: SessionManifest["contextPolicy"],
-  ): Promise<void> {
-    const conversationRuntime = runtime.current;
-    if (!conversationRuntime || inferenceRouteChanging.current || sessionNavigationChanging.current) {
-      throw new Error("The active conversation is not ready to change its model.");
-    }
-    sessionNavigationChanging.current = true;
-    try {
-      /*
-       * `policy ?? null`: a model whose window the catalog does not know must
-       * not inherit the previous override's window — `null` clears the
-       * override so the manifest policy resumes, never a stale number.
-       */
-      const updated = await conversationRuntime.journal.setSessionModel(sessionId, model.id, {
-        contextPolicy: policy ?? null,
-      });
-      if (activeSessionRecord?.id === updated.id) setActiveSessionRecord(updated);
-      setEventCount(updated.headSequence);
-      setSessionRevision((value) => value + 1);
-      setRuntimeStatus(`Model changed to ${model.id} for this conversation. The profile default for new conversations is unchanged.`);
-      setComposerNotice(undefined);
-    } finally {
-      sessionNavigationChanging.current = false;
-    }
-  }
-
   async function activateExternalInference(
     route: ActivatedInferenceRoute,
     callerSignal?: AbortSignal,
@@ -10407,7 +7541,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
     const priorRuntime = runtime.current;
     const reconnectIntent = accessReconnectIntent;
-    const expectedChutesAuthorityRevision = chutesAuthorityRevision.current;
     const activate = async (reconnectSignal?: AbortSignal) => {
       const fabric = inferenceFabric.current;
       if (!fabric || fabric.preflight(route.pin).transport !== route.transport) {
@@ -10425,15 +7558,10 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         inferenceBinding: binding,
         contextPolicy: await contextPolicyForProviderModel(route.pin.model),
       };
-      const stagedChutesAvailability = chutesAvailability.current;
       const candidateRuntime: Runtime = {
         ...committedRuntime,
         inferenceDirectory: () => inferenceDirectoryFromAvailability(
-          combinedInferenceAvailability(
-            fabric.availability(route.pin),
-            stagedChutesAvailability,
-            binding,
-          ),
+          combinedInferenceAvailability(fabric.availability(route.pin), binding),
         ),
       };
       let nextSession: SessionRecord | undefined;
@@ -10464,7 +7592,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       }
       if (
         runtime.current !== priorRuntime
-        || chutesAuthorityRevision.current !== expectedChutesAuthorityRevision
         || fabric.preflight(route.pin).transport !== route.transport
       ) {
         throw new Error("The inference connection directory changed before activation committed.");
@@ -10497,10 +7624,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session. Boundary: ${providerBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
         }]);
         setEventCount(activated.headSequence);
-        setLastReceipt(undefined);
-        setSessionLifecycle(READY_SESSION_LIFECYCLE);
+          setSessionLifecycle(READY_SESSION_LIFECYCLE);
         setTranscriptBoundary(undefined);
-        setRuntimeStatus(`${route.pin.provider.label} session ready · invocation checked`);
+        setRuntimeStatus(`${route.pin.provider.label} session ready · model catalog and route checked`);
       }
       navigate("chat");
     };
@@ -10509,18 +7635,95 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       : runInferenceRouteTransition(activate, reconnectIntent, callerSignal);
   }
 
-  async function switchExternalModel(modelId: string): Promise<void> {
-    const current = activeExternalRoute;
-    if (!current) throw new Error("Connect a cloud or local provider before selecting its model.");
-    if (current.pin.model.id === modelId) return;
-    return runInferenceRouteTransition(async () => {
+  async function switchExternalModel(modelId: string): Promise<ModelSwitchOutcome> {
+    const current = activeExternalRouteRef.current;
+    const conversationRuntime = runtime.current;
+    const session = activeSessionRecord;
+    if (!current || !activeExternalConnection || !conversationRuntime || !session) {
+      throw new Error("Reconnect this conversation's exact provider route before changing its model.");
+    }
+    const model = current.models.find((candidate) => candidate.id === modelId);
+    if (!model) throw new Error("The selected model is no longer in this connection's catalog.");
+    if (!chatModelCapable(model)) {
+      throw new Error(`${model.label} is not advertised as a text-generation model.`);
+    }
+    const plan = planModelSwitch({ activeSession: session, targetModelId: model.id });
+    if (plan.kind === "noop") return;
+    const policy = await contextPolicyForProviderModel(model);
+    const candidateWindow = policy?.contextWindowTokens;
+    const used = await recentSessionUseTokens(conversationRuntime.journal, plan.session);
+    if (candidateWindow !== undefined && modelSwitchNeedsCompressionGate(used, candidateWindow)) {
+      setPendingModelSwitch({
+        modelLabel: model.label,
+        usedTokens: used,
+        windowTokens: candidateWindow,
+        proceed: async () => {
+          try {
+            await commitExternalModelInPlace(current, model.id, plan.session.id, policy);
+          } catch (error) {
+            setComposerNotice(error instanceof Error
+              ? `The model could not be changed for this conversation. ${error.message}`
+              : "The model could not be changed for this conversation.");
+          }
+        },
+      });
+      return "confirming-compression";
+    }
+    await commitExternalModelInPlace(current, model.id, plan.session.id, policy);
+    return "in-place";
+  }
+
+  async function commitExternalModelInPlace(
+    expectedRoute: ActivatedInferenceRoute,
+    modelId: string,
+    targetSessionId: string,
+    policy: SessionManifest["contextPolicy"],
+  ): Promise<void> {
+    return runInferenceRouteTransition(async (signal) => {
       const fabric = inferenceFabric.current;
-      if (!fabric) throw new Error("The inference connection directory is still starting.");
+      const conversationRuntime = runtime.current;
+      if (!fabric || !conversationRuntime) throw new Error("The inference connection directory is not ready.");
+      if (activeExternalRouteRef.current !== expectedRoute || activeSessionIdentity.current !== targetSessionId) {
+        throw new Error("The conversation or provider route changed before the model switch began.");
+      }
       const route = await fabric.activate(
-        current.pin.connection.id,
+        expectedRoute.pin.connection.id,
         modelId,
+        signal ?? new AbortController().signal,
       );
-      await activateExternalInference(route, undefined, true);
+      if (
+        runtime.current !== conversationRuntime
+        || activeExternalRouteRef.current !== expectedRoute
+        || activeSessionIdentity.current !== targetSessionId
+        || route.pin.provider.id !== expectedRoute.pin.provider.id
+        || route.pin.connection.id !== expectedRoute.pin.connection.id
+        || route.pin.connection.generation !== expectedRoute.pin.connection.generation
+      ) {
+        throw new Error("The conversation or provider authority changed while model access was checked.");
+      }
+      sessionNavigationChanging.current = true;
+      try {
+        const updated = await conversationRuntime.journal.setSessionModel(targetSessionId, route.pin.model.id, {
+          contextPolicy: policy ?? null,
+        });
+        if (
+          runtime.current !== conversationRuntime
+          || activeExternalRouteRef.current !== expectedRoute
+          || activeSessionIdentity.current !== targetSessionId
+          || fabric.preflight(route.pin).transport !== route.transport
+        ) {
+          throw new Error("The model change was recorded, but the live provider route changed before presentation committed.");
+        }
+        activeExternalRouteRef.current = route;
+        setActiveExternalRoute(route);
+        setActiveSessionRecord(updated);
+        setEventCount(updated.headSequence);
+        setSessionRevision((value) => value + 1);
+        setRuntimeStatus(`Model changed to ${route.pin.model.label} for this conversation. The profile default for new conversations is unchanged.`);
+        setComposerNotice(undefined);
+      } finally {
+        sessionNavigationChanging.current = false;
+      }
     });
   }
 
@@ -10535,7 +7738,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     const selected = fabric.list()
       .flatMap((entry) => entry.models.map((model) => ({ entry, model })))
       .find(({ entry, model }) => externalModelSelectionId(entry.connection.id, model.id) === selectionId);
-    if (!selected) throw new Error("The selected model is no longer in the connected catalog. Refresh the Connection page and choose it again.");
+    if (!selected) throw new Error("The selected model is no longer in the connected catalog. Refresh Providers and choose it again.");
     if (!chatModelCapable(selected.model)) {
       throw new Error(`${selected.model.label} is not advertised as a text-generation model, so it cannot answer Chat prompts.`);
     }
@@ -10568,68 +7771,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     }
   }
 
-  /**
-   * The Local lane's "Check this machine" button, wired to the same loopback
-   * connect the provider fabric uses.
-   *
-   * The lane's copy promises that 127.0.0.1 is contacted only when this runs,
-   * so this must issue the request rather than describe one: each server is
-   * either answered, with the roster it returned, or refused, with the cause
-   * the browser gave. A server already held in page memory is reported as such
-   * without a second connect, which would otherwise reserve a duplicate
-   * connection id for a provider that is plainly already there.
-   */
-  async function checkLocalModelServers(): Promise<readonly LocalProviderProbeResult[]> {
-    const fabric = inferenceFabric.current;
-    if (!fabric) throw new Error("The inference connection directory is still starting, so nothing on this machine was contacted.");
-    const controller = new AbortController();
-    const deadline = setTimeout(
-      () => controller.abort(new DOMException("The local model-server check exceeded its deadline.", "TimeoutError")),
-      LOCAL_PROBE_DEADLINE_MS,
-    );
-    try {
-      const results: LocalProviderProbeResult[] = [];
-      for (const server of LOCAL_MODEL_SERVERS) {
-        const held = fabric.list().find((entry) => entry.provider.id === server.kind);
-        if (held) {
-          results.push(Object.freeze({
-            id: server.kind,
-            label: server.label,
-            outcome: "answered" as const,
-            detail: `Already connected in this tab · ${modelCountLabel(held.models.length)}${modelNameList(held.models)}.`,
-          }));
-          continue;
-        }
-        try {
-          const connected = await fabric.connectLocal({ kind: server.kind, signal: controller.signal });
-          results.push(Object.freeze({
-            id: server.kind,
-            label: server.label,
-            outcome: "answered" as const,
-            detail: `Answered on ${server.endpoint} · ${modelCountLabel(connected.models.length)}${modelNameList(connected.models)}.`,
-          }));
-        } catch (caught) {
-          // A refusal by one server says nothing about the other, so the loop
-          // continues; a deadline abort is not a refusal and stops everything.
-          controller.signal.throwIfAborted();
-          results.push(Object.freeze({
-            id: server.kind,
-            label: server.label,
-            outcome: "silent" as const,
-            reason: `${server.endpoint} did not answer: ${localProbeCause(caught)}`,
-          }));
-        }
-      }
-      // Catalog discovery is intentionally the end of this check. It must not
-      // issue a protected invocation merely because one provider happened to
-      // advertise one model; that request can load a large local model and is
-      // only justified after the person chooses a specific model in Chat or
-      // the connected-provider card.
-      return Object.freeze(results);
-    } finally {
-      clearTimeout(deadline);
-    }
-  }
+
 
   async function saveProfileRevision(draft: ProfileEditorDraft): Promise<ProfileRevision> {
     let savedProfileId = draft.profileId;
@@ -10646,7 +7788,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         systemPrompt: draft.systemPrompt,
         providerId: current.providerId,
         model: current.model,
-        minimumPosture: draft.minimumPosture,
         workspaceBinding: draft.workspaceBinding === "workspace-id"
           ? { kind: "workspace-id", workspaceId: draft.workspaceId }
           : { kind: "active-workspace" },
@@ -10742,7 +7883,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         systemPrompt: latest.systemPrompt,
         providerId: latest.providerId,
         model: latest.model,
-        minimumPosture: latest.minimumPosture,
         workspaceBinding: latest.workspaceBinding,
         memoryScope: latest.memoryScope,
         approvalMode: latest.approvalMode,
@@ -10834,6 +7974,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         if (!profile) throw new Error("The selected profile no longer exists.");
         revisedProfile = await createProfileRevision({
           ...profile,
+          version: 3,
           parentRevision: profile.revision,
           skillModes: profileSkillModes(profile.skillModes, skillId, mode),
           createdAt: new Date().toISOString(),
@@ -10864,7 +8005,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         content: `Skill policy changed in this new pinned conversation for ${revisedProfile.name}. The previous conversation remains unchanged and addressable from its URL and All Conversations.`,
       }]);
       setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setSessionRevision((value) => value + 1);
@@ -10902,18 +8042,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
   async function deleteSkillRevision(skillId: string): Promise<void> {
     await mutateProfileCatalog((current) => removeAuthoredSkill(current, skillId));
     setRuntimeStatus(`Skill removed from ${profileCatalogAuthorityLabel()} · conversations already running keep the instruction text they pinned`);
-  }
-
-  async function loadBillingSnapshot(signal: AbortSignal) {
-    if (!online) throw new Error(OFFLINE_INLINE_REASON);
-    const credential = accountCredential.current;
-    if (!credential || !isChutesConnected(connection)) {
-      throw new Error("A connected Chutes credential is required for account telemetry.");
-    }
-    // Account telemetry travels with the Billing surface in the deferred pack;
-    // the shell must not carry the Chutes account client on its boot path.
-    const { loadChutesAccountSnapshot } = await loadDeferredCapabilities();
-    return loadChutesAccountSnapshot({ credential, signal });
   }
 
   async function loadAuditedSessionSnapshot(
@@ -10979,10 +8107,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     if (!pinnedBinding) {
       throw new Error("This older conversation does not record an exact inference connection generation, so this return request cannot continue it. No new conversation was created.");
     }
-    const pinnedLane = accessLaneForProvider(pinnedBinding.providerId);
     if (
-      pinnedLane !== intent.lane
-      || target.manifest.model !== intent.model
+      pinnedBinding.providerId !== intent.providerId
+      || effectiveSessionModel(target) !== intent.model
       || pinnedBinding.authMethod !== intent.method
       || pinnedBinding.connectionId !== intent.connectionId
       || pinnedBinding.connectionGeneration !== intent.connectionGeneration
@@ -11042,29 +8169,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     );
   }
 
-  /*
-   * Proof reads the journal, not only the verdict about it.
-   *
-   * It used to receive `SessionAuditReport` alone, so the only thing it could
-   * say about a session was what `counts` classifies — and `counts` has no
-   * field for a human-approved effect, no record of what a local command ran,
-   * and no way to reach the selected sources the turn seam already journals.
-   * Four measured readings came out of that one narrowing. The events are
-   * already in hand here (the audit is computed over them); handing them on
-   * costs a reference.
-   */
-  async function loadSessionAudit(targetSessionId: string): Promise<ProofJournalRead> {
-    const expectedRuntime = runtime.current;
-    const expectedProfileId = profileAuthorityId.current;
-    if (!expectedRuntime) throw new Error("The local runtime is not ready.");
-    const audited = await loadAuditedSessionSnapshot(targetSessionId, expectedProfileId);
-    if (
-      runtime.current !== expectedRuntime
-      || profileAuthorityId.current !== expectedProfileId
-    ) throw new Error("The Profile or Proof authority changed while the session audit was loading.");
-    return Object.freeze({ report: audited.report, events: audited.events, title: audited.session.title });
-  }
-
   async function stageAuditedSessionPresentation(
     fresh: SessionLibraryDetail,
     audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>,
@@ -11085,7 +8189,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           history: presentationHistory(fresh.transcript.messages),
         });
       } catch (error) {
-        throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact — open Proof.`);
+        throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact.`);
       }
     })();
   }
@@ -11113,13 +8217,11 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       ? transcriptMessagesFromPresentation(presentation)
       : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
     setEventCount(activated.headSequence);
-    setLastReceipt(lastPresentationRowReceipt(presentation));
     setSessionLifecycle(fresh.transcript.lifecycle);
     setTranscriptBoundary(fresh.transcript.truncated ? {
       omittedMessages: fresh.transcript.omittedMessages,
       shortened: fresh.transcript.messages.some((message) => message.truncated),
     } : undefined);
-    setProofSelection(undefined);
     setSessionRevision((value) => value + 1);
     setRuntimeStatus(status);
   }
@@ -11302,7 +8404,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         || activeSessionIdentity.current !== activationSessionId
         || profileAuthorityId.current !== activationProfile.profileId
         || activeProfileRef.current?.revision !== activationProfile.revision
-      ) throw new Error("The active Profile/session authority changed before the fork could be verified.");
+      ) throw new Error("The active Profile/session authority changed before the fork could be confirmed.");
       requireProfileOwnedSession(authoritySession, activationProfile.profileId, "fork");
       await activateForkedSessionAgainst(result, Object.freeze({
         runtime: activationRuntime,
@@ -11331,12 +8433,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     ) throw new Error("The active Profile/session authority changed before this fork could become active.");
     if (
       result.session.manifest.profile?.profileId !== authority.profileId
-      || !resumableProfileManifestMatches(result.session.manifest, authority.manifest)
+      || !forkActivationManifestMatches(result.session.manifest, authority.manifest)
     ) throw new Error("The fork manifest is not compatible with the active Profile and runtime authority.");
     const library = new SessionLibrary(authority.runtime.journal);
     const fresh = await library.inspect(
       result.session.id,
-      sessionManifestRuntime(authority.runtime, authority.manifest),
+      sessionManifestRuntime(
+        authority.runtime,
+        result.session.manifest,
+        result.session.manifest.model,
+      ),
     );
     if (fresh.compatibility?.action !== "resume") {
       throw new Error(
@@ -11363,48 +8469,21 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       || activeProfileRef.current?.revision !== authority.profileRevision
       || activeSessionIdentity.current !== authority.activeSessionId
     ) throw new Error("The active Profile/session authority changed during fork verification.");
-    await publishAuditedSession(fresh, audited, "Verified context fork active");
+    await publishAuditedSession(fresh, audited, "Context fork active");
     navigate("chat");
   }
 
-  function openSessionProof(targetSessionId = sessionId) {
-    const selection = targetSessionId && lastReceipt?.sessionId === targetSessionId
-      ? proofSelectionForReceipt(lastReceipt)
-      : proofSelectionForSession(targetSessionId);
-    setProofSelection(selection);
-    setProofSection("summary");
-    navigate("proof", proofHash(selection));
-  }
-
-  function openAttestationEvidence(targetSessionId = sessionId): void {
-    const selection = targetSessionId && lastReceipt?.sessionId === targetSessionId
-      ? proofSelectionForReceipt(lastReceipt)
-      : proofSelectionForSession(targetSessionId);
-    setProofSelection(selection);
-    setProofSection("attestations");
-    navigate("proof", proofHash(selection, "attestations"));
-  }
-
   /*
-   * The other half of "Inspect evidence →".
+   * Restore a transcript-targeted return after the requested conversation has rendered.
    *
-   * The address already carried the turn; nothing on the chat side could be
-   * found by it, so Proof was a one-way door. The request is state rather than
-   * a scroll call because the conversation may still be resuming when the route
-   * changes — `pendingTranscriptReturn` is consumed by the effect below once
-   * the transcript for that session has rendered, and reports what happened
-   * either way.
+   * The request is state rather than a scroll call because the conversation may
+   * still be resuming when the route changes — `pendingTranscriptReturn` is
+   * consumed by the effect below once the transcript for that session has
+   * rendered, and reports what happened either way.
    */
   function returnToTurn(targetSessionId: string, turnId: string): void {
     setPendingTranscriptReturn(Object.freeze({ sessionId: targetSessionId, turnId }));
     navigate("chat", chatHash(targetSessionId));
-  }
-
-  function openReceiptProof(receipt: ConversationReceipt): void {
-    const selection = proofSelectionForReceipt(receipt);
-    setProofSelection(selection);
-    setProofSection("summary");
-    navigate("proof", proofHash(selection));
   }
 
   if (bootFailure || !catalog || !activeProfile || !activeTheme) {
@@ -11459,52 +8538,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
    * buttons were extra weight beside it.
    */
   const firstRunTranscript = messages.length <= 1 && !isBranchTranscript && densityAllows("suggestion", appDensity);
-  const e2eeTrustAxis = trustAxes.find((axis) => axis.id === "e2ee")!;
   // The vocabulary this claim belongs to owns the mapping: page memory is `none`
   // rather than `failed` (nothing went wrong, no durability evidence was asked
   // for), a running sync is `checking`, and a stopped one is `attention`. Read
   // from `durability-indicator` rather than restated, because a fourth copy of
   // the ternary is how the chip and the pill came to disagree.
-  const sessionDurabilitySeal: SealState = durabilitySeal(sessionDurability.state);
-  /**
-   * The four claims the session bar used to render as four separate objects —
-   * an attestation button, a lifecycle dot, a durability pill and a boundary
-   * pill 140px away in the model card. They are assembled here rather than
-   * inside the chip because every string is quoted verbatim from the vocabulary
-   * that owns it, and none of those vocabularies belong to the chip.
-   */
-  /*
-   * One string, read by the session chip, its abbreviation and the model card.
-   *
-   * These are the three surfaces the auditor found describing one connection
-   * in two languages, and they were three separate expressions of the same
-   * ternary. Computed once, they cannot drift; `activeConnectionProofLabel`
-   * (in `model-control.tsx`, beside its test) is the only definition of the
-   * words themselves.
-   */
-  const e2eeBoundaryLabel = activeChutesConnection ? activeConnectionProofLabel(connection) : e2eeTrustAxis.label;
+  const sessionDurabilityStatusMark: StatusMarkState = durabilityStatusMark(sessionDurability.state);
   const sessionStatusFacts: readonly SessionStatusFact[] = Object.freeze([
     Object.freeze({
-      id: "posture" as const,
-      state: e2eeTrustAxis.state,
-      label: e2eeBoundaryLabel,
-      detail: e2eeTrustAxis.detail,
-      short: sessionStatusShort(e2eeBoundaryLabel, SEAL_LABELS[e2eeTrustAxis.state]),
-      action: Object.freeze({ label: "Models", onSelect: () => navigate("access") }),
-    }),
-    Object.freeze({
-      id: "attestation" as const,
-      state: attestationSeal.state,
-      // Verbatim from `.session-attestation`, which stated the scope clause and
-      // then hid the sentence explaining it in a `title`. Both are visible now.
-      label: `${attestationSeal.label} · this session`,
-      detail: attestationSeal.detail,
-      short: sessionStatusShort(attestationSeal.label, SEAL_LABELS[attestationSeal.state]),
-      action: Object.freeze({ label: "Proof", onSelect: () => openSessionProof() }),
-    }),
-    Object.freeze({
       id: "durability" as const,
-      state: sessionDurabilitySeal,
+      state: sessionDurabilityStatusMark,
       label: durabilityLabel(sessionDurability.state),
       detail: sessionDurability.detail,
       // The vocabulary's own abbreviation, not `sessionStatusShort`'s head-of-
@@ -11518,7 +8561,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
     Object.freeze({
       id: "lifecycle" as const,
       // A completed turn is not `verified`: nothing cryptographic was checked by
-      // finishing. It stays `none` so the seal vocabulary keeps meaning what
+      // finishing. It stays `none` so the status-mark vocabulary keeps meaning what
       // §4.4 says it means.
       state: sessionLifecycle.state === "running"
         ? "checking"
@@ -11540,7 +8583,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       data-active-profile={profileId}
       data-session-profile={activeSessionRecord?.manifest.profile?.profileId}
       data-active-session={sessionId}
-      data-proof-session={view === "proof" ? proofTargetId : undefined}
     >
       {/* Tabbing from the document start otherwise crosses the whole rail, the
           recent-conversation list and the profile switcher — 35 stops — before
@@ -11570,7 +8612,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         {/* The third target, and the one the document order argues hardest for.
             Navigation is the *last* thing in the phone's DOM: measured, the
             mobile bar was entered at tab stop 22 of 25 and "More" — behind
-            which Vault, Memory, Account, Proof and seven other destinations
+            which Vault, Memory, Providers and the remaining destinations
             live — was stop 25, so reaching any of them from a cold phone load
             cost a sweep of the entire page. The rail is `display: none` below
             the phone breakpoint, which is what picks the destination here. */}
@@ -11589,7 +8631,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       </div>
       <header class="topbar" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
         <button class="brand" type="button" onClick={() => navigate("chat")} aria-label="Open session">
-          <Seal class="brand-seal" state="asserted" label="Airship mark" detail="Airship edge runtime" size={25} compact />
+          <span class="brand-mark" aria-hidden="true"><Icon name="airship" size={25} /></span>
           <span class="brand-name">Airship</span>
           <span class="edition">edge runtime</span>
         </button>
@@ -11616,21 +8658,11 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           <span class="topbar-destination" aria-hidden="true">{destinationLabel(view) ?? "Airship"}</span>
           <div class="topbar-runtime-state" role="group" aria-label="Runtime state">
           <TabPresenceNote />
-          {/* One chip, every width, every connection state. The four axis pills
-              (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
-              were two components rendering one fact at two sizes; the sheet they
-              both open still renders all four axes verbatim. */}
-          <TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />
           </div>
         </div>
         <div class="topbar-actions">
-          {/* The `e2ee` axis used to render its own action pill here on desktop
-              and a second one inside the guidance band 130px below it, while a
-              phone got a third, differently-worded one. This is the one button:
-              same verb at every width, and the only brass object above the fold,
-              because connecting a provider is the only thing a disconnected user
-              has to do. Its visible text and its accessible name are the same
-              string, so the shipped `exact: true` selector reads what is drawn. */}
+          {/* One provider-connect action at every width. Its visible text and
+              accessible name are identical. */}
           {!inferenceConnected ? (
             <button class="topbar-connect-action" type="button" onClick={() => navigate("access")}>Connect a model</button>
           ) : null}
@@ -11658,9 +8690,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           </button>
           <button class="icon-button" type="button" aria-label="Open Preferences" onClick={() => requestDeferredOverlay("Preferences")}>
             <Icon name="settings" />
-          </button>
-          <button class="icon-button" type="button" aria-label="Open proof" onClick={() => openSessionProof()}>
-            <Icon name="proof" />
           </button>
         </div>
       </header>
@@ -11694,7 +8723,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         busy={busy}
         activity={[+busy, `${busy ? "1 active" : "Ready"} · ${railDurableEventCount} events`]}
         unreadTurnCount={unreadTurnCount}
-        hasReceipt={Boolean(lastReceipt)}
         conversations={recentProfileConversations}
         activeConversationId={sessionId ?? ""}
         {...(quarantinedSession ? { unresumableConversationId: quarantinedSession.sessionId } : {})}
@@ -11715,32 +8743,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
       <main
         ref={mainRegion}
         tabIndex={-1}
-        class={view === "chat"
-          ? lastReceipt && claimRailOpen ? "main chat-layout" : "main chat-layout no-inspector"
-          : "main route-layout"}
+        class={view === "chat" ? "main chat-layout no-inspector" : "main route-layout"}
         inert={platformOverlayOpen}
         aria-hidden={platformOverlayOpen || undefined}
       >
         {view === "chat" ? (
           <>
             <section class="chat-stage" aria-label="Agent session" data-scrolled={stageScrolled ? "true" : undefined}>
-              {/*
-                * The engine line is retired from the transcript.
-                *
-                * It read "ENGINE: PRIME (PINNED BY JOURNAL EVIDENCE — FORK THE
-                * SESSION TO SWITCH)" in uppercase mono above every
-                * conversation, permanently, on a product that now has exactly
-                * one engine for every new thread. A banner that says the same
-                * true thing on every screen forever is not information; it is
-                * furniture, and it was sitting in the two centimetres directly
-                * above the conversation's own title.
-                *
-                * Nothing is hidden. `getAgentRuntimeStatus` is still the
-                * single authority, the seal is still journaled, and the Proof
-                * route still reads both — so a person asking which engine ran
-                * a turn gets an answer from the evidence rather than from a
-                * caption. The component and its tests stay for that surface.
-                */}
+              {/* The retired engine banner repeated a page-wide constant above
+                  every thread. Per-turn provider and model facts remain in Run
+                  details, and session pins remain in All conversations. */}
               <SessionBar
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}
@@ -11768,55 +8780,31 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                 formatTime={formatConversationTime}
                 onOpenAllConversations={() => navigate("sessions")}
                 renameRequest={renameRequest}
-                model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" || standbyExternalModels.length > 0 ? (
+                model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding || standbyExternalModels.length > 0 ? (
                   <ModelControl
-                    active={activeChutesConnection ? {
-                      providerLabel: "Chutes",
-                      modelId: visibleSessionEffectiveModel ?? connection.model,
-                      boundaryLabel: e2eeBoundaryLabel,
-                    } : activeExternalConnection ? {
+                    active={activeExternalConnection ? {
                       providerLabel: activeExternalConnection.pin.provider.label,
                       modelId: activeExternalConnection.pin.model.id,
-                      boundaryLabel: providerBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary),
                     } : pinnedExternalRoute ? {
                       providerLabel: pinnedExternalRoute.pin.provider.label,
                       modelId: pinnedExternalRoute.pin.model.id,
-                      boundaryLabel: "Disconnected · read-only pin",
-                    } : activeInferenceBinding?.providerId === "chutes" ? {
-                      providerLabel: "Chutes",
+                    } : activeInferenceBinding ? {
+                      providerLabel: activeInferenceBinding.providerLabel,
                       modelId: activeInferenceBinding.modelId,
-                      boundaryLabel: "Disconnected · read-only pin",
                     } : undefined}
                     providerLabel={activeExternalConnection?.pin.provider.label ?? standbyExternalProviderLabel}
-                    models={activeChutesConnection
-                      ? sortModels(availableModels, "popularity").map((model) => ({
+                    models={activeExternalConnection
+                      ? activeExternalConnection.models.map((model) => ({
                           id: model.id,
-                          label: compactModelLabel(model.id),
+                          label: model.label,
+                          detail: externalModelCapabilityDetail(model),
                         }))
-                      : activeExternalConnection
-                        ? activeExternalConnection.models.map((model) => ({
-                            id: model.id,
-                            label: model.label,
-                            detail: externalModelCapabilityDetail(model),
-                          }))
-                        : standbyExternalModels}
+                      : standbyExternalModels}
                     busy={busy}
                     switching={modelSwitching}
-                    inPlace={visibleChutesThread}
-                    onSelect={activeChutesConnection
-                      ? switchChutesModel
-                      : activeExternalConnection
-                        ? switchExternalModel
-                        : selectStandbyExternalModel}
+                    inPlace={Boolean(activeExternalConnection && activeSessionRecord)}
+                    onSelect={activeExternalConnection ? switchExternalModel : selectStandbyExternalModel}
                     onOpenConnection={() => navigate("access")}
-                    picker={activeChutesConnection && ModelPickerControl ? (control) => (
-                      <ModelPickerControl
-                        models={availableModels}
-                        value={visibleSessionEffectiveModel ?? connection.model}
-                        disabled={control.disabled}
-                        onSelect={control.select}
-                      />
-                    ) : undefined}
                   />
                 ) : <DemoModelChip onConnect={() => navigate("access")} />}
               />
@@ -11936,12 +8924,9 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                     key={entry.key}
                     ref={(element) => windowedTranscript.observeElement(entry.key, entry.revision, element)}
                   >
-                    {entry.item.marker ? <TranscriptMarker marker={entry.item.marker} onOpenProof={openReceiptProof} /> : <MessageCard
+                    {entry.item.marker ? <TranscriptMarker marker={entry.item.marker} /> : <MessageCard
                       message={entry.item}
                       capabilityTier={activeSessionRecord?.manifest.capabilityTier}
-                      onProof={() => entry.item.receipt && openReceiptProof(entry.item.receipt)}
-                      onAttestations={() => entry.item.receipt ? openReceiptAttestation(entry.item.receipt) : openAttestationEvidence()}
-                      attestation={describeMessageAttestation(entry.item.receipt, attestationRecords, attestationFailure, attestationNow)}
                       onCopy={async () => {
                         if (!navigator.clipboard) throw new Error("Clipboard access is unavailable in this browser context.");
                         await navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content);
@@ -12117,7 +9102,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                     </div>
                   ) : null}
                   {attachments.length ? <div class="composer-attachments" role="group" aria-label="Pending attachments">
-                    {attachments.map((attachment) => <span key={attachment.id}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <Icon name="file" size={14} />}<span>{attachment.name}</span><small>{imageInputCapability === "supported" ? "encrypted vision ready" : "vision model required"}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => { if (attachment.previewUrl) { URL.revokeObjectURL(attachment.previewUrl); attachmentPreviewUrls.current.delete(attachment.previewUrl); } setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}>×</button></span>)}
+                    {attachments.map((attachment) => <span key={attachment.id}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <Icon name="file" size={14} />}<span>{attachment.name}</span><small>{imageInputCapability === "supported" ? "image ready" : "vision model required"}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => { if (attachment.previewUrl) { URL.revokeObjectURL(attachment.previewUrl); attachmentPreviewUrls.current.delete(attachment.previewUrl); } setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}>×</button></span>)}
                   </div> : null}
                   <div class="composer-input-row">
                     <textarea
@@ -12222,20 +9207,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                     <div class="composer-footer">
                       <div class="composer-tools">
                         <label class="composer-attach"><input type="file" aria-label="Attach image" accept="image/*" multiple onChange={(event) => { addComposerFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} /><Icon name="plus" size={14} /><span>Attach image</span></label>
-                        {/*
-                          The credential posture is not in the box any more.
-                          "Key in memory" sat inside the control a person types
-                          their message into — a standing caveat where a caret
-                          is, on the surface that has least room for one. The
-                          claim did not shrink: it is a row of the runtime
-                          chip's sheet now (`conversationFacts`), in full, with
-                          its route, beside the model it is a credential for.
-
-                          Its second job stays here, because it was never a
-                          posture job: the Send refusal that a `title` cannot
-                          deliver to a thumb is stated below the composer, as a
-                          status line that appears when the refusal does.
-                        */}
                         <MenuSelect
                           // One durable journal event beside the manifest pin:
                           // the mode changes in flight on the same thread and
@@ -12247,7 +9218,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                           disabled={modelSwitching || vaultProviderSwitching || localDeviceBusy}
                           options={[
                             { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
-                            { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
+                            { value: "auto-approve", label: "Auto Approve", description: "Allow registered writes; ask before execute, network, or identity effects. No review inference." },
                             // "Inside the bounded browser workspace" was true of
                             // the write effects and false of the network ones,
                             // which reach any HTTPS origin that grants CORS.
@@ -12297,7 +9268,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                               // The disabled state that reads as a bug unless it
                               // is named: attachments pending, nothing typed.
                               : attachmentsAwaitText
-                                ? composerAttachmentNeedsText(composerRequestEncrypted)
+                                ? composerAttachmentNeedsText()
                                 : composerUsesDemo
                                   ? "Deterministic local demo response. Connect a model for real inference."
                                   : undefined}
@@ -12311,7 +9282,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                     already exists for things the composer has to say right now.
                     Present only while Send is actually refusing, which is the
                     difference between a caveat and a caption. */}
-                {attachmentsAwaitText ? <p class="composer-notice" role="status">{composerAttachmentNeedsText(composerRequestEncrypted)}</p> : null}
+                {attachmentsAwaitText ? <p class="composer-notice" role="status">{composerAttachmentNeedsText()}</p> : null}
                 {/*
                   Offline is a state the composer must state at rest — remote
                   inference is paused and nothing the reader types will go
@@ -12327,39 +9298,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
                 {!online ? <p class="connectivity-inline-reason" role="status">{OFFLINE_INLINE_REASON}</p> : null}
               </div>
             </section>
-              {/*
-                Density-gated, like every other evidence surface on this route.
-                The collapsed rail is a 44px band under the composer that read
-                "Asserted, not verified · This turn was recorded and asserted.
-                No named authority verified a claim. · 8 turn claims" on every
-                healthy turn of every conversation — including the local demo.
-                And `composeClaimStack` caps a receipt-carried claim at
-                `partial`, so that sentence is not a state a reader can improve
-                by doing anything: it is the permanent resting text of a working
-                product, phrased as a shortfall.
-                The per-message proof chips have been gated on `proof` since
-                they landed and are off at the default density; this was the one
-                evidence surface that ignored the setting. The claim stack is
-                unchanged and still one press away from the Proof route, where
-                someone looking for it will look.
-              */}
-              {lastReceipt && ProofInspector && densityAllows("proof", appDensity) ? <aside class={claimRailOpen ? "inspector" : "inspector inspector--summary"}><ProofInspector
-              receipt={lastReceipt}
-              endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
-              now={attestationNow}
-              compact
-              collapsed={!claimRailOpen}
-              onExpand={() => setClaimRailOpen((open) => !open)}
-              acquisitionFailure={inspectorAcquisitionFailure}
-              onOpenAttestations={() => openAttestationEvidence()}
-            /></aside>
-              /* Rendering nothing here was the silent half of the same defect:
-                 a receipt existed, the rail that inspects it did not load, and
-                 the transcript simply had no claim column — indistinguishable
-                 from a turn that produced no claims at all. */
-              : lastReceipt && proofInspectorError ? <aside class="inspector inspector--summary">
-                <RouteFailure inline title="the claim stack" message={proofInspectorError} onRetry={retryDeferredChunk} />
-              </aside> : null}
           </>
         ) : null}
         {view === "sessions" ? sessionLibrary && SessionsScreen ? (
@@ -12378,7 +9316,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             onForked={activateForkedSession}
             onRenamed={adoptLibraryRename}
             onDeleted={adoptLibraryDelete}
-            onOpenProof={openSessionProof}
             durability={sessionDurability}
             quarantine={quarantinedSession}
             focusSessionId={sessionsFocusId}
@@ -12629,127 +9566,16 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             ) : null}
           </div>
         ) : null}
-        {view === "billing" ? BillingScreen ? (
-          <BillingScreen
-            accountReadable={isChutesConnected(connection)}
-            credentialKind={connection.kind === "chutes-oauth" ? "oauth" : connection.kind === "chutes-api-key" ? "api-key" : undefined}
-            credentialRevision={credentialRevision}
-            invocationTelemetry={invocationTelemetry}
+        {view === "access" ? ProviderConnectionsScreen ? (
+          <ProviderConnectionsScreen
             online={online}
-            providerInventory={billingProviderInventory}
-            loadSnapshot={loadBillingSnapshot}
-            onOpenAccess={() => navigate("access")}
-          />
-        ) : billingViewError ? <RouteFailure title="Account" message={billingViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Account" /> : null}
-        {view === "proof" ? ProofScreen ? (
-          <ProofScreen
-            key={`${profileId}:${proofTargetId ?? "no-session"}`}
-            receipt={proofReceipt}
-            eventCount={proofScoped ? eventCount : sessionRevision}
-            sessionId={proofTargetId}
-            requestedReceiptId={effectiveProofSelection?.receiptId}
-            requestedTurnId={effectiveProofSelection?.turnId}
-            onReturnToTurn={returnToTurn}
-            loadAudit={loadSessionAudit}
-            section={proofSection}
-            onSectionChange={(section) => {
-              setProofSection(section);
-              navigate("proof", proofHash(effectiveProofSelection, section));
-            }}
-            summarizeReceipt={receiptSummary}
-            acquisitionFailure={proofAcquisitionFailure}
-            renderInspector={(onOpenAttestations) => ProofInspector ? <ProofInspector
-              receipt={proofReceipt}
-              endpointRecord={proofReceipt ? proofEndpointRecords.find((record) => attestationRecordMatchesReceipt(record, proofReceipt)) : undefined}
-              now={attestationNow}
-              acquisitionFailure={proofAcquisitionFailure}
-              onOpenAttestations={onOpenAttestations}
-            /> : proofInspectorError ? <RouteFailure inline title="the claim stack" message={proofInspectorError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the claim stack" />}
-            evidenceLedger={AttestationsScreen ? <AttestationsScreen
-              endpointRecords={proofEndpointRecords}
-              receipts={proofLedgerReceipts}
-              selectedRecordId={ledgerSelectedRecordId}
-              onSelectRecord={selectEndpointEvidenceRecord}
-              acquisitionNotice={!proofScoped
-                ? PROOF_UNSCOPED_EVIDENCE_NOTICE
-                : !online
-                  ? OFFLINE_INLINE_REASON
-                  : automaticEvidenceAcquisitionNotice
-                    ?? endpointEvidenceDurabilityNotice
-                    ?? (attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined)}
-              onOpenConnection={!chutesConnected ? () => navigate("access") : undefined}
-              // Refresh acquires evidence for the ACTIVE conversation. Offered
-              // from an unscoped route it would file conversation A's fetch
-              // under conversation B's page.
-              onRefresh={proofScoped && online && chutesConnected ? refreshAttestation : undefined}
-              onCancel={() => attestationClient.current?.cancel()}
-              embedded
-            /> : attestationsViewError ? <RouteFailure inline title="attestation evidence" message={attestationsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading attestation evidence" />}
-            endpointEvidenceRecords={proofEndpointRecords}
-          />
-        ) : proofViewError ? <RouteFailure title="Proof" message={proofViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Proof" /> : null}
-        {view === "access" ? AccessScreen ? (
-          <AccessScreen
-            connection={connection}
-            online={online}
+            activeBinding={activeInferenceBinding}
             reconnectIntent={accessReconnectIntent}
-            chutesReconnectExact={chutesReconnectExact}
             onAbandonReconnect={abandonReconnectRequest}
-            connectionActive={Boolean(activeChutesConnection)}
-            onUseConnection={isChutesConnected(connection) && (!accessReconnectIntent || chutesReconnectExact)
-              ? async () => {
-                  await switchChutesModel(
-                    accessReconnectIntent?.lane === "chutes"
-                      ? accessReconnectIntent.model
-                      : connection.model,
-                  );
-                }
-              : undefined}
-            onConnect={({ connection: nextConnection, transport, model, models, credential }) =>
-              connectChutes(transport, model, models, credential, nextConnection)}
-            onDisconnect={disconnectChutes}
-            models={availableModels}
-            onSelectModel={accessReconnectIntent ? undefined : switchChutesModel}
-            onInvocationTelemetry={setInvocationTelemetry}
-            oauthNotice={oauthCallbackStatus ? {
-              tone: oauthCallbackStatus.kind === "error"
-                ? "error"
-                : oauthCallbackStatus.kind === "verified"
-                  ? "neutral"
-                  : "warning",
-              message: oauthCallbackStatus.message,
-            /* A returning redirect outranks it: that status is about this
-               attempt, this one about the next. Second, because a missing
-               registration is only ever the reason the sign-in lane is inert. */
-            } : oauthRegistrationError ? { tone: "error", message: oauthRegistrationError } : undefined}
-            oauthDiagnostic={activeOAuthRegistration ? {
-              homepageUrl: activeOAuthRegistration.registration.homepageUrl,
-              callbackUrl: activeOAuthRegistration.registration.redirectUris[0] ?? "Unavailable",
-              scopes: activeOAuthRegistration.registration.scopes,
-              exchangeMode: activeOAuthRegistration.exchangeMode,
-              configurationError: activeOAuthRegistration.registration.configurationError,
-              onRun: startOAuthSignIn,
-            } : undefined}
-            oauthBootstrap={{
-              revision: oauthBootstrapRevision,
-              readCredential: readPendingOAuthCredential,
-              getBearerToken: currentOAuthBearer,
-            }}
-            observeExtensionBridge={observeExtensionBridge}
-            connectedProviderIds={connectedInferenceProviderIds}
-            onCheckLocalProviders={checkLocalModelServers}
-            additionalProviders={ProviderConnectionsScreen ? (
-              <ProviderConnectionsScreen
-                online={online}
-                activeBinding={activeInferenceBinding}
-                reconnectIntent={accessReconnectIntent}
-                onAbandonReconnect={abandonReconnectRequest}
-                onActivate={activateExternalInference}
-                onDisconnect={disconnectExternalInference}
-              />
-            ) : providerFabricError ? <RouteFailure inline title="the provider fabric" message={providerFabricError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading cloud and local provider fabric" />}
+            onActivate={activateExternalInference}
+            onDisconnect={disconnectExternalInference}
           />
-        ) : accessViewError ? <RouteFailure title="Connection" message={accessViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Connection" /> : null}
+        ) : providerFabricError ? <RouteFailure title="Providers" message={providerFabricError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Providers" /> : null}
       </main>
       </ViewErrorBoundary>
 
@@ -12758,8 +9584,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
         moreOpen={mobileMoreOpen}
         chromeInert={platformOverlayOpen}
         chatPending={unreadTurnCount}
-        proofPending={Boolean(lastReceipt)}
-        attestationPending={attestationRecords.length + (attestationFailure ? 1 : 0)}
         onNavigate={navigatePrimary}
         onOpenMore={() => setMobileMoreOpen(true)}
         onCloseMore={() => setMobileMoreOpen(false)}
@@ -12880,7 +9704,6 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
           if (openProfileManager(profileId)) requestDeferredOverlay();
         },
       }} /> : null}
-      <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} conversationFacts={conversationFacts} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       {pendingModelSwitch && ConfirmDialogComp ? (
         <ConfirmDialogComp.ConfirmDialog
           title={`Switch this conversation to ${pendingModelSwitch.modelLabel}?`}
@@ -12914,7 +9737,7 @@ const conversationFacts: readonly ClaimRow[] = Object.freeze([
             <span class="pulse-dot" aria-hidden="true" />
             <div>
               <strong>Opening {profileCockpitTransition.name}</strong>
-              <small>Binding this Profile&rsquo;s conversation, workspace views, terminal sessions, memory, and Proof selection.</small>
+              <small>Binding this Profile&rsquo;s conversation, workspace, terminal sessions, memory, skills, and provider route.</small>
             </div>
           </section>
         </div>
@@ -12992,13 +9815,6 @@ async function createProfileSessionManifest(
     browserCapabilities: browserCapabilityPromptEntries(browserReport),
     inferenceDirectory: runtime.inferenceDirectory?.(),
   });
-  if (!postureSatisfies(runtime.transport.posture, pin.minimumPosture)) {
-    // The raw union members used to be interpolated straight into this
-    // sentence, so a person who picked "Encrypted" was refused with
-    // "encrypted-unattested" and given no remedy. `postureFloorRefusal` reads
-    // the label dictionaries the editor's own select is spelled from.
-    throw new Error(postureFloorRefusal(runtime.transport.posture, pin.minimumPosture));
-  }
   // A pinned binding names a storage authority the person typed, so it is
   // compared against the storage ID rather than the Profile-suffixed view.
   if (pin.workspaceBinding.kind === "workspace-id" && pin.workspaceBinding.workspaceId !== runtime.storageId) {
@@ -13022,7 +9838,7 @@ async function createProfileSessionManifest(
   const { primeToolDefinitions } = await import("../prime/runtime/tool-surface");
   const manifest = await createSessionManifest({
     systemPrompt: pin.systemPrompt,
-    providerId: runtime.transport.id,
+    providerId: runtime.inferenceBinding?.providerId ?? runtime.transport.id,
     model: runtime.model,
     ...(runtime.inferenceBinding ? { inferenceBinding: runtime.inferenceBinding } : {}),
     /*
@@ -13060,7 +9876,6 @@ async function createProfileSessionManifest(
       workspaceBinding: pin.workspaceBinding,
       memoryScope: pin.memoryScope,
       approvalMode: pin.approvalMode,
-      minimumPosture: pin.minimumPosture,
     },
   });
   if (manifest.systemPromptDigest !== pin.systemPromptDigest) {
@@ -13106,22 +9921,13 @@ async function compatibleProfileSession(
   );
 }
 
+type ModelSwitchOutcome = "in-place" | "confirming-compression" | void;
+
 /**
  * What this conversation is using right now, answered from the journal's own
- * usage records. The last `inference.usage` event of a request names the
- * prompt the transport actually saw, so it is the honest comparison for "the
- * chosen model's window is smaller than the thread's current use". Only the
- * tail is scanned — usage events land on every request, so the most recent
- * one is never far from the head. No usage record means nothing measurable
- * has happened yet, and the gate stays silent instead of guessing.
+ * usage records. No usage record means nothing measurable, so the compression
+ * gate stays silent instead of guessing.
  */
-/**
- * How a chosen Chutes model actually landed, so every surface states the
- * outcome truthfully: in place on this thread, as a new pinned conversation,
- * or paused behind the compression gate.
- */
-type ChutesModelSwitchOutcome = "in-place" | "forked" | "confirming-compression" | void;
-
 async function recentSessionUseTokens(journal: EventJournal, session: SessionRecord): Promise<number | undefined> {
   const events = await journal.readEvents(session.id, Math.max(0, session.headSequence - 400));
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -13133,35 +9939,6 @@ async function recentSessionUseTokens(journal: EventJournal, session: SessionRec
     const input = typeof payload?.inputTokens === "number" ? payload.inputTokens : 0;
     const output = typeof payload?.outputTokens === "number" ? payload.outputTokens : 0;
     if (input + output > 0) return input + output;
-  }
-  return undefined;
-}
-
-async function contextPolicyForModel(model: AirshipModel): Promise<SessionManifest["contextPolicy"] | undefined> {
-  const contextWindowTokens = model.contextTokens ?? model.maxModelTokens;
-  if (contextWindowTokens === undefined) return undefined;
-  const { createSessionContextPolicy } = await import("../core/context-policy");
-  if (model.contextTokens !== undefined) {
-    return createSessionContextPolicy({
-      contextWindowTokens,
-      source: { kind: "provider-catalog", field: "contextTokens" },
-      summarizer: {
-        mode: "inference-transport",
-        adapterId: "airship/inference-transport-summary-v1",
-        onFailure: "extractive-fallback",
-      },
-    });
-  }
-  if (model.maxModelTokens !== undefined) {
-    return createSessionContextPolicy({
-      contextWindowTokens,
-      source: { kind: "provider-catalog", field: "maxModelTokens" },
-      summarizer: {
-        mode: "inference-transport",
-        adapterId: "airship/inference-transport-summary-v1",
-        onFailure: "extractive-fallback",
-      },
-    });
   }
   return undefined;
 }
@@ -13186,12 +9963,14 @@ function coreInferenceBinding(
   route: ActivatedInferenceRoute,
 ): NonNullable<SessionManifest["inferenceBinding"]> {
   return Object.freeze({
-    version: 1,
+    version: 2,
     connectionId: route.pin.connection.id,
     connectionGeneration: route.pin.connection.generation,
     providerId: route.pin.provider.id,
     providerLabel: route.pin.provider.label,
     providerRevision: route.pin.provider.revision,
+    transportId: route.transport.id,
+    protocol: route.pin.provider.protocol,
     authMethod: route.pin.connection.authKind === "oauth-public-pkce"
       ? "oauth-pkce"
       : route.pin.connection.authKind,
@@ -13284,84 +10063,12 @@ function providerModelCapability(
   return model.capabilities[capability]?.state ?? "unknown";
 }
 
-/**
- * The one sentence a ready encrypted session states about its proof gate.
- *
- * Connecting said "…required on every turn" / "…recorded after completed
- * turns"; switching model said "…required on next turn" / "…recorded after the
- * next completed turn". Four spellings of two facts, and the pairs are not
- * different claims: a gate that fires on every turn fires on the next one.
- * Stated once, in the form that covers both moments.
- */
-function encryptedSessionReadyStatus(posture: SecurityPosture): string {
-  return posture === "encrypted-attested"
-    ? "Encrypted session ready · endpoint proof required on every turn"
-    : "Encrypted session ready · endpoint evidence recorded after completed turns";
-}
-
-/*
- * The boundary label is `activeConnectionProofLabel`, and only that.
- *
- * This file carried a second copy which still said "E2EE · evidence recorded"
- * for an unattested connection — a phrase that reads as a verdict about the
- * turn ("evidence was recorded") when the fact it states is about the *policy*:
- * this connection has no proof gate. The shared function says "E2EE · no proof
- * gate", so the topbar axis, the session status chip and the model card now
- * quote one string. `model-control` is already a static import of this module,
- * so the shared reader costs no startup bytes and the duplicate is deleted
- * rather than re-synchronised.
- */
-
 function combinedInferenceAvailability(
   providerSnapshot: InferenceAvailabilitySnapshot,
-  chutes: ChutesAvailabilityAuthority | undefined,
   activeBinding: SessionManifest["inferenceBinding"],
 ): InferenceAvailabilitySnapshot {
-  const connections: InferenceAvailabilityConnection[] = [...providerSnapshot.connections];
-  if (chutes) {
-    const models: InferenceAvailabilityConnection["models"] = Object.freeze(
-      chutes.models.slice(0, 48).map((model) => {
-        const supportedCapabilities: InferenceAvailabilityConnection["models"][number]["supportedCapabilities"] = Object.freeze([
-          "text-input",
-          "text-output",
-          ...(modelInputModalityCapability(model, "image") === "supported" ? ["image-input" as const] : []),
-          ...(model.features.includes("tools") ? ["tool-calling" as const] : []),
-          ...(model.features.includes("reasoning") ? ["reasoning" as const] : []),
-          ...(model.features.includes("structured_outputs") ? ["structured-output" as const] : []),
-        ]);
-        return Object.freeze({
-          id: model.id,
-          label: model.id,
-          availability: "available" as const,
-          supportedCapabilities,
-        });
-      }),
-    );
-    connections.push(Object.freeze({
-      id: chutes.connectionId,
-      providerId: "chutes",
-      providerLabel: "Chutes",
-      connectionLabel: chutes.connection.kind === "chutes-oauth"
-        ? "Chutes sign-in"
-        : "Chutes API key",
-      authKind: chutes.connection.kind === "chutes-oauth"
-        ? "oauth-public-pkce"
-        : "api-key",
-      health: "ready",
-      canInvoke: true,
-      availableCapabilities: Object.freeze([
-        "invoke",
-        "models:list",
-        "identity:read",
-        "billing:read",
-        "usage:read",
-      ] as const),
-      models,
-      omittedModels: Math.max(0, chutes.models.length - models.length),
-    }));
-  }
   const activeConnectionId = activeBinding?.connectionId;
-  const ordered = connections
+  const ordered = [...providerSnapshot.connections]
     .filter((connection, index, values) =>
       values.findIndex((candidate) => candidate.id === connection.id) === index
     )
@@ -13371,25 +10078,24 @@ function combinedInferenceAvailability(
       || left.id.localeCompare(right.id)
     );
   const bounded = Object.freeze(ordered.slice(0, 16));
+  const projectedActive = providerSnapshot.activeSession;
   const activeSession = activeBinding
-    ? Object.freeze({
-        providerId: activeBinding.providerId,
-        connectionId: activeBinding.connectionId,
-        modelId: activeBinding.modelId,
-        immutable: true as const,
-        resolution: activeBinding.providerId === "chutes"
-          ? chutes
-            && chutes.connectionId === activeBinding.connectionId
-            && chutes.generation === activeBinding.connectionGeneration
-            && chutes.models.some((model) => model.id === activeBinding.modelId)
-              ? "ready" as const
-              : "connection-missing" as const
-          : providerSnapshot.activeSession?.resolution ?? "connection-missing" as const,
-      })
-    : providerSnapshot.activeSession;
+    ? projectedActive
+      && projectedActive.providerId === activeBinding.providerId
+      && projectedActive.connectionId === activeBinding.connectionId
+      && projectedActive.modelId === activeBinding.modelId
+        ? projectedActive
+        : Object.freeze({
+            providerId: activeBinding.providerId,
+            connectionId: activeBinding.connectionId,
+            modelId: activeBinding.modelId,
+            immutable: true as const,
+            resolution: "connection-missing" as const,
+          })
+    : projectedActive;
   return Object.freeze({
     version: 1,
-    capturedAt: new Date().toISOString(),
+    capturedAt: providerSnapshot.capturedAt,
     connections: bounded,
     omittedConnections: providerSnapshot.omittedConnections + Math.max(0, ordered.length - bounded.length),
     ...(activeSession ? { activeSession } : {}),
@@ -13576,8 +10282,19 @@ function inferenceDirectoryFromAvailability(
   });
 }
 
+function runtimeForSessionRecord(runtime: Runtime, session: SessionRecord): Runtime {
+  const model = effectiveSessionModel(session);
+  return {
+    ...runtime,
+    model,
+    ...(runtime.inferenceBinding
+      ? { inferenceBinding: Object.freeze({ ...runtime.inferenceBinding, modelId: model }) }
+      : { inferenceBinding: undefined }),
+  };
+}
+
 export function activeSessionRuntime(
-  runtime: Runtime,
+  runtime: SessionRuntimeAuthority,
   authoritySession: SessionRecord,
   routeSession: SessionRecord = authoritySession,
 ): ActiveSessionRuntime {
@@ -13592,7 +10309,7 @@ export function activeSessionRuntime(
 }
 
 function sessionManifestRuntime(
-  runtime: Runtime,
+  runtime: SessionRuntimeAuthority,
   manifest: SessionManifest,
   model: string = runtime.model,
 ): ActiveSessionRuntime {
@@ -13601,7 +10318,7 @@ function sessionManifestRuntime(
     ? Object.freeze({ ...runtime.inferenceBinding, modelId: model })
     : undefined;
   return Object.freeze({
-    providerId: runtime.transport.id,
+    providerId: runtime.inferenceBinding?.providerId ?? runtime.transport.id,
     model,
     ...(inferenceBinding ? { inferenceBinding } : {}),
     posture: runtime.transport.posture,
@@ -13616,7 +10333,7 @@ function sessionManifestRuntime(
         resolutionDigest: profile.resolutionDigest,
         // The governing boundaries travel with the runtime side of the
         // comparison, so `decideSessionResume` can refuse a changed workspace,
-        // memory scope, approval policy or proof floor without having to refuse
+        // memory scope or approval policy without having to refuse
         // every cosmetic revision along with them.
         ...(profile.version === 2 ? {
           workspaceBinding: profile.workspaceBinding.kind === "workspace-id"
@@ -13624,7 +10341,6 @@ function sessionManifestRuntime(
             : "active-workspace",
           memoryScope: enforcedMemoryScope(profile.memoryScope),
           approvalMode: profile.approvalMode,
-          minimumPosture: profile.minimumPosture,
         } : {}),
       }),
     } : {}),
@@ -13752,13 +10468,6 @@ function replaceProfile(catalog: ProfileCatalog, revision: ProfileRevision): Pro
 
 function managedProfiles(catalog: ProfileCatalog): readonly ProfileRevision[] {
   return managedProfileRevisions(catalog);
-}
-
-function postureSatisfies(actual: InferenceTransport["posture"], minimum: ProfileRevision["minimumPosture"]): boolean {
-  if (minimum === "local") return true;
-  if (minimum === "plaintext-remote") return actual !== "local";
-  if (minimum === "encrypted-unattested") return actual === "encrypted-unattested" || actual === "encrypted-attested";
-  return actual === "encrypted-attested";
 }
 
 /**
@@ -13933,21 +10642,6 @@ function boundedTranscriptContent(value: string, maximum = 64 * 1024): string {
   return `${value.slice(0, end)}\n\n[Local display shortened; the journaled tool result is larger.]`;
 }
 
-const CLAIM_RAIL_STORAGE_KEY = "airship.claim-rail.v1";
-
-/**
- * The claim stack's resting shape, remembered.
- *
- * Summary is the default because the measured harm was in the other direction:
- * a first-time reader met a cryptographic stack they had not asked for. A
- * reader who opens it has demonstrated the altitude, and re-collapsing it on
- * every reload would be the product forgetting something it was told.
- */
-function readClaimRailPreference(): boolean {
-  try { return localStorage.getItem(CLAIM_RAIL_STORAGE_KEY) === "open"; }
-  catch { return false; }
-}
-
 function boundedSessionPresentationEvents(
   events: readonly DurableEvent[],
   maximum = 20_000,
@@ -13997,20 +10691,11 @@ function compactModelLabel(modelId: string): string {
   return leaf.length > 25 ? `${leaf.slice(0, 22)}…` : leaf;
 }
 
-/**
- * Capability words for a route the shared picker cannot serve.
- *
- * `compactModelCapabilityDetail` stood here — a second capability formatter,
- * for the Chutes route, printing "Vision · Tools · 4.2k req/h" where Connection
- * printed "Vision"/"Tools" and put demand in its own column. The Chutes route
- * opens the shared picker now, so the only surface left without an
- * `AirshipModel` is an external provider, and it reads the same nouns from
- * `MODEL_CAPABILITY_WORDS` instead of coining its own.
- */
+/** One capability vocabulary for every cloud and local provider route. */
 function externalModelCapabilityDetail(model: InferenceModelDescriptor): string | undefined {
   const labels: string[] = [];
-  if (providerModelCapability(model, "image-input") === "supported") labels.push(MODEL_CAPABILITY_WORDS.vision);
-  if (providerModelCapability(model, "tool-calling") === "supported") labels.push(MODEL_CAPABILITY_WORDS.tools);
+  if (providerModelCapability(model, "image-input") === "supported") labels.push("Vision");
+  if (providerModelCapability(model, "tool-calling") === "supported") labels.push("Tools");
   if (providerModelCapability(model, "embeddings") === "supported") labels.push("Embeddings");
   if (providerModelCapability(model, "text-input") === "unknown" || providerModelCapability(model, "text-output") === "unknown") {
     labels.push("Chat capability unconfirmed");
@@ -14035,151 +10720,6 @@ function chatModelCapable(model: Pick<InferenceModelDescriptor, "capabilities">)
   return !embeddingOnly
     && textInput !== "unsupported"
     && textOutput !== "unsupported";
-}
-
-function conversationTitleFromPrompt(prompt: string): string {
-  const normalized = prompt.normalize("NFKC").replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/\s+/gu, " ").trim();
-  const maximum = 64;
-  if (normalized.length <= maximum) return normalized;
-  return `${normalized.slice(0, maximum - 1).trimEnd()}…`;
-}
-
-const CONVERSATION_NAMING_PROMPT =
-  "You name conversations. Reply with a title of at most six words for the message that follows. "
-  + "Describe what it is about. No quotation marks, no trailing punctuation, no preamble.";
-/**
- * How much of a naming answer is kept, well under `session-audit`'s 4 KiB bound.
- *
- * A title is at most 64 characters; anything past this is already an essay the
- * record exists only to account for. Keeping the whole of an unbounded stream
- * would let one bad answer make the naming record permanently unauditable.
- */
-const MAX_CONVERSATION_NAMING_ANSWER = 1_024;
-
-/** What the naming inference produced, including what it cost and what proves it. */
-type ConversationNaming = Readonly<{
-  /**
-   * Absent when the request completed but its answer is not a usable name.
-   *
-   * That outcome is a *result*, not a failure: the request was made, billed and
-   * attested, and only the rename is skipped. Collapsing it into `undefined`
-   * alongside a network failure is what left a completed paid call recorded
-   * nowhere — the same defect one layer down from the one this whole path fixes.
-   */
-  title?: string;
-  /** The provider's exact answer, so the receipt's response digest is checkable. */
-  answer: string;
-  usage?: Readonly<{ inputTokens?: number; outputTokens?: number }>;
-  receipt?: ConversationReceipt;
-}>;
-
-/**
- * Ask the active model to name a new conversation.
- *
- * A truncated first prompt is not a name — "Map the browser workspace bound…"
- * is just the message restated. A title should say what the conversation is
- * about, which is an inference, so it is asked of the model already answering.
- *
- * Deliberately best-effort. The conversation is titled from the local heuristic
- * first, so it is never nameless and the turn never waits on this; this only
- * ever improves that title, and any failure, abort, or unusable answer leaves
- * the heuristic in place. Returning `undefined` is an ordinary outcome.
- *
- * `undefined` means "no request is known to have happened" — it threw, it was
- * aborted, or the stream produced nothing at all. It does not mean "no title":
- * a request that came back with a refusal or an essay returns a record with no
- * `title`, because it was billed either way and the caller has to say so.
- *
- * It is issued against the conversation's own identity. It used to invent a
- * `naming-<uuid>` session id, which meant the one thing a receipt exists to do
- * — bind a request to the conversation that made it — was impossible, and the
- * usage and receipt the transport handed back were dropped on the floor. The
- * caller journals them; this returns them.
- */
-export async function conversationTitleFromModel(
-  // Only the two fields it actually uses, so this can be exercised against a
-  // transport alone rather than against a whole storage/journal/profile runtime.
-  runtime: Pick<Runtime, "transport" | "model">,
-  prompt: string,
-  identity: Readonly<{ sessionId: string; turnId: string; operationId: string }>,
-  signal: AbortSignal,
-): Promise<ConversationNaming | undefined> {
-  try {
-    const messages = [{ role: "user" as const, content: conversationTitleFromPrompt(prompt) }];
-    const events = runtime.transport.stream({
-      requestId: identity.operationId,
-      sessionId: identity.sessionId,
-      turnId: identity.turnId,
-      model: runtime.model,
-      systemPrompt: CONVERSATION_NAMING_PROMPT,
-      messages,
-      tools: [],
-      idempotencyKey: identity.operationId,
-    }, signal);
-    let text = "";
-    let usage: ConversationNaming["usage"];
-    let receipt: ConversationReceipt | undefined;
-    for await (const event of events) {
-      // Clamped as it accumulates, not after: a single delta can be arbitrarily
-      // large, the audit bounds a naming record's answer at 4 KiB, and the
-      // response digest below is taken over exactly this string — so what the
-      // journal stores stays recomputable from the journal rather than from a
-      // longer answer nobody kept. The stream is abandoned here anyway.
-      if (event.type === "text-delta") text = `${text}${event.text}`.slice(0, MAX_CONVERSATION_NAMING_ANSWER);
-      if (event.type === "usage") usage = { inputTokens: event.inputTokens, outputTokens: event.outputTokens };
-      if (event.type === "completed") receipt = event.receipt;
-      // A naming call that starts producing an essay is not naming anything.
-      if (text.length > 240 || event.type === "completed") break;
-    }
-    // Nothing observable came back, so there is no request to attest to. Any
-    // one of these three is evidence the provider was reached and charged.
-    if (!text && !usage && !receipt) return undefined;
-    const title = usableConversationTitle(text);
-    return Object.freeze({
-      ...(title ? { title } : {}),
-      answer: text,
-      ...(usage && (usage.inputTokens !== undefined || usage.outputTokens !== undefined) ? { usage } : {}),
-      // Normalized exactly as a turn receipt is, and bound to the request that
-      // was actually made: the prompt is this constant plus the journaled first
-      // message, and the answer is stored beside it, so the two digests can be
-      // recomputed from the record rather than taken on trust.
-      ...(receipt
-        ? {
-            receipt: finalizeProviderReceipt(
-              receipt,
-              runtime.transport.id,
-              await sha256(stableStringify({
-                model: runtime.model,
-                systemPrompt: CONVERSATION_NAMING_PROMPT,
-                messages,
-                tools: [],
-                idempotencyKey: identity.operationId,
-              } as unknown as JsonValue)),
-              await sha256(text),
-            ),
-          }
-        : {}),
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-/** Reduce a model answer to a title, or reject it. */
-export function usableConversationTitle(answer: string): string | undefined {
-  const normalized = answer
-    .normalize("NFKC")
-    .replace(/[\u0000-\u001f\u007f]/gu, " ")
-    // Models like to wrap a title in quotes and end it with a full stop.
-    .replace(/^\s*["\u2018\u2019\u201c\u201d'`]+|["\u2018\u2019\u201c\u201d'`]+\s*$/gu, "")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .replace(/[.,;:]+$/u, "")
-    .trim();
-  if (!normalized || normalized.length > 64) return undefined;
-  // A refusal or a preamble is longer than any title worth keeping.
-  if (normalized.split(" ").length > 8) return undefined;
-  return normalized;
 }
 
 async function waitForOperationRelease(
@@ -14229,8 +10769,8 @@ function BootScreen({ status, failure, onReload }: Readonly<{
 }>) {
   return (
     <main class="boot-screen" data-state={failure ? "failed" : "checking"}>
-      <Seal
-        class="boot-seal"
+      <StatusMark
+        class="boot-mark"
         state={failure ? "failed" : "checking"}
         acting={!failure}
         label={failure ? "Local kernel did not start" : "Preparing Airship"}
@@ -14304,156 +10844,6 @@ export function pinnedSkillListing(input: Readonly<{
   ].join("\n");
 }
 
-function receiptSealState(receipt?: ConversationReceipt): SealState {
-  if (!receipt) return "none";
-  if (Object.values(receipt.claims).some((claim) => claim.status === "failed" || claim.status === "expired")) return "failed";
-  if (receipt.posture === "local") return "none";
-  if (receipt.posture === "plaintext-remote") return "attention";
-  if (receipt.posture === "encrypted-unattested") return "asserted";
-  return receipt.claims.endpointKey.status === "verified" ? "verified" : "attention";
-}
-
-/**
- * One description of endpoint evidence, in one vocabulary, at two scopes.
- *
- * `describeAttestationSeal` and `describeMessageAttestation` were separate
- * functions with the same five branches and different words for each of them:
- * one turn could carry "Separate evidence collected" in the session bar and
- * "Separate evidence only" under the answer, or the acquisition reason
- * ("Evidence unavailable") in one place and the canonical verdict word
- * ("Evidence not pulled") in the other. They are one function now, so the two
- * bands cannot drift; `scope` selects only the branches that genuinely differ,
- * which is the one where a live session has a *next* turn and a settled receipt
- * does not.
- *
- * Nothing merged here lost a clause. Where the two versions phrased the same
- * fact differently, the surviving detail is the union of both sentences.
- */
-function describeEndpointEvidence(args: {
-  scope: "session" | "turn";
-  /** Session scope only. A settled receipt has no "is a provider connected now". */
-  connected?: boolean;
-  proofPolicy?: "record" | "strict";
-  receipt?: ConversationReceipt;
-  records: readonly ChutesEndpointEvidenceRecord[];
-  failure?: AttestationAcquisitionFailure;
-  now: number;
-}): { state: SealState; label: string; detail: string } {
-  if (args.receipt?.claims.endpointKey.status === "verified") {
-    return {
-      state: "verified",
-      label: "Endpoint verified",
-      detail: "This receipt contains an independently verified endpoint-key claim. Model and conversation claims remain independently scoped.",
-    };
-  }
-  const historicalRecord = args.receipt
-    ? args.records.find((candidate) => attestationRecordMatchesReceipt(candidate, args.receipt!))
-    : undefined;
-  const record = historicalRecord && isDisplayFreshAttestation(historicalRecord, args.now)
-    ? historicalRecord
-    : undefined;
-  if (historicalRecord && !record) {
-    return {
-      state: "stale",
-      label: "Evidence refresh due",
-      detail: "The separate endpoint evidence record is beyond its browser display-freshness window. Refresh before relying on its local key or policy comparison.",
-    };
-  }
-  if (record?.verdict === "rejected") {
-    return {
-      state: "failed",
-      label: "Evidence rejected",
-      detail: "Current endpoint evidence failed a local binding or published-policy comparison. It did not alter the conversation receipt.",
-    };
-  }
-  if (record) {
-    if (!recordLocallyBindsReceipt(record, args.receipt)) {
-      return {
-        state: "attention",
-        label: "Separate evidence collected",
-        detail: "A current endpoint record exists, but it did not establish both the local challenge and endpoint-key bindings for this immutable turn receipt.",
-      };
-    }
-    return {
-      state: "asserted",
-      label: "Local key match",
-      detail: "A separate current endpoint record locally matched the challenge and discovered key. It does not upgrade this immutable turn receipt; Intel DCAP, NVIDIA authenticity, and conversation binding remain independently scoped.",
-    };
-  }
-  if (args.failure && (!args.receipt || attestationFailureAppliesToReceipt(args.failure, args.receipt))) {
-    return {
-      state: TURN_EVIDENCE_COPY["evidence-blocked"].seal,
-      // The canonical word, not the acquisition reason. The reason used to be
-      // the label here and the label was "Evidence unavailable" while the chip
-      // under the same turn's answer read "Evidence not pulled" — one failure,
-      // two headlines. The reason is not lost: it leads the sentence below,
-      // verbatim from `attestationFailureLabel()`.
-      label: TURN_EVIDENCE_COPY["evidence-blocked"].chip,
-      detail: `${args.failure.label}. ${TURN_EVIDENCE_COPY["evidence-blocked"].line} Endpoint evidence was not accepted. This provider/acquisition state is not a TEE verdict.`,
-    };
-  }
-  // The only genuinely scope-dependent branch: a live session has a next turn
-  // its policy can speak about, and a settled receipt does not.
-  if (args.scope === "turn") {
-    // "Secure hardware evidence pending" is a retired name: it promised an
-    // arrival nothing is waiting for. The fact it carried — that no endpoint
-    // TEE evidence was accepted — leads the sentence below, unchanged.
-    //
-    // The rung now follows the receipt, which is the rule the whole ladder is
-    // built on. `describeMessageAttestation` returns undefined without one, so
-    // in this build the first arm is the live one, and it lands on exactly the
-    // rung `turnEvidenceVerdict` reaches for a settled receipt with no verified
-    // claim. The two reducers agree instead of describing one turn twice.
-    return args.receipt
-      ? {
-        state: "asserted",
-        label: TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT,
-        detail: "Airship has not accepted endpoint TEE evidence for this receipt. The receipt records what the provider stated about this turn; nothing independent checked it.",
-      }
-      : {
-        state: "none",
-        label: TRUST_LABEL_MESSAGE_NO_EVIDENCE,
-        detail: "Airship has not accepted endpoint TEE evidence for this turn, and no receipt records a claim about it.",
-      };
-  }
-  /*
-   * A proof *policy* is not a verdict, so neither arm below may stand on the
-   * `asserted` rung.
-   *
-   * Both arms are reached with `args.receipt`, `args.records` and
-   * `args.failure` all empty: the only inputs are whether a provider is
-   * connected and what the user asked Airship to do on the *next* turn. A
-   * setting about future turns is nobody's statement about this session, and
-   * `trust-label-contract.ts` names the consequence — "an assertion nobody made
-   * is not a weak assertion, it is an absence". `none` is the rung an absence
-   * stands on, it is what the disconnected arm eight lines below already
-   * returns, and it can only under-claim.
-   *
-   * The labels and the forward-tense sentences are unchanged; the record arm's
-   * sentence gains the emptiness clause the strict arm always carried, so the
-   * grey glyph and the forward-tense words cannot read as contradicting.
-   */
-  return args.connected
-    ? args.proofPolicy === "strict"
-      ? {
-        state: "none",
-        label: "Proof required next turn",
-        detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
-      }
-      : {
-        state: "none",
-        label: "Evidence checked per turn",
-        detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference. No turn receipt currently establishes a hardware claim.",
-      }
-    : {
-      state: "none",
-      // Plain language leads and the acronym follows. "Demo provider" was also
-      // simply untrue — there is no demo provider; nothing is connected.
-      label: "Secure hardware not checked",
-      detail: "No inference provider is connected, so no TEE evidence has been requested for this session.",
-    };
-}
-
 export type SessionDurability = Readonly<{
   state: DurabilityState;
   detail: string;
@@ -14503,193 +10893,8 @@ export function describeSessionDurability(input: Readonly<{
   return Object.freeze({
     state: "ephemeral" as const,
     detail: input.vaultContractReady
-      ? "The cloud object-store contract is verified, but this active runtime has not adopted it; this session remains in page memory."
+      ? "The cloud object-store checks passed, but this active runtime has not adopted it; this session remains in page memory."
       : "This session journal exists only in page memory. Nothing is synced.",
-  });
-}
-
-/** The conversation-scoped reading, for the session bar's attestation claim. */
-export function describeAttestationSeal(args: {
-  connected: boolean;
-  proofPolicy?: "record" | "strict";
-  receipt?: ConversationReceipt;
-  records: readonly ChutesEndpointEvidenceRecord[];
-  failure?: AttestationAcquisitionFailure;
-  now: number;
-}): { state: SealState; label: string; detail: string } {
-  return describeEndpointEvidence({ ...args, scope: "session" });
-}
-
-/** The turn-scoped reading, for the evidence chip under one answer. */
-function describeMessageAttestation(
-  receipt: ConversationReceipt | undefined,
-  records: readonly ChutesEndpointEvidenceRecord[],
-  failure?: AttestationAcquisitionFailure,
-  now = Date.now(),
-): MessageAttestation | undefined {
-  if (!receipt || !isChutesReceiptProvider(receipt.provider)) return undefined;
-  return Object.freeze(describeEndpointEvidence({ scope: "turn", receipt, records, failure, now }));
-}
-
-export function evidenceAcquisitionNotice(
-  snapshot: EvidenceAcquisitionQueueSnapshot | undefined,
-  receiptId: string | undefined,
-  persistenceFaulted = false,
-): string | undefined {
-  if (!snapshot || !receiptId) return undefined;
-  const task = snapshot.tasks.find((candidate) => candidate.request.receiptId === receiptId);
-  if (!task || task.status === "succeeded") return undefined;
-  // A checkpoint fault halts queue scheduling, so any sentence here that
-  // promises an upcoming retry would be lying while the fault stands.
-  if (persistenceFaulted) {
-    return "Evidence checkpointing failed. Automatic acquisition is paused until the queue snapshot commits again; the receipt remains unchanged.";
-  }
-  if (task.status === "pending") return "Automatic endpoint-evidence acquisition is queued for this completed turn.";
-  if (task.status === "running") return `Automatic endpoint-evidence acquisition is running (attempt ${String(task.attempt)}).`;
-  if (task.status === "retry") return `${task.failure.message}. Automatic acquisition will retry without changing the receipt.`;
-  if (task.status === "failed") return `${task.failure.message}. Automatic acquisition reached a terminal outcome; the receipt remains unchanged.`;
-  return task.reason === "scope-released"
-    ? "Automatic endpoint-evidence acquisition stopped when the Chutes connection was released. The receipt remains unchanged."
-    : "Automatic endpoint-evidence acquisition was cancelled. The receipt remains unchanged.";
-}
-
-/**
- * Asks a parked acquisition queue to retry the checkpoint that parked it.
- *
- * The queue's `schedule()` refuses to arm while a persistence fault stands, so
- * an explicit `wake()` is the only exit — which makes *what drives it* the whole
- * guarantee behind "acquisition is paused until the queue snapshot commits
- * again". It is a standalone function, taking nothing but the controller,
- * because the version this replaces was driven from the attestation-freshness
- * tick: that effect requires attestation records to exist, and the fault is
- * reachable on the very first acquisition of a conversation that has none. No
- * presentation state may be able to gate the recovery, so none is offered.
- *
- * Returns whether a wake was attempted, so the recovery is assertable directly
- * rather than inferred from the shape of an effect.
- */
-export function wakeFaultedEvidenceAcquisitionQueue(
-  queue: Pick<EvidenceAcquisitionQueueController, "fault" | "wake"> | undefined,
-): boolean {
-  if (!queue?.fault()) return false;
-  void queue.wake().catch(() => {
-    // Still faulted: the acquisition notice keeps naming the checkpoint failure
-    // until a commit succeeds, and the caller arms the next attempt.
-  });
-  return true;
-}
-
-function isChutesReceiptProvider(provider: string): boolean {
-  return provider === "chutes" || provider === "chutes-e2ee-v1";
-}
-
-function attestationSnapshotError(snapshot: ChutesEndpointAttestationSnapshot): MountedAttestationError {
-  const unavailable = snapshot.unavailable;
-  return new MountedAttestationError(
-    normalizeAttestationErrorCode(unavailable?.code),
-    unavailable?.message ?? "Attestation evidence inspection failed closed.",
-    {
-      retryable: unavailable?.retryable ?? false,
-      ...(unavailable?.status === undefined ? {} : { status: unavailable.status }),
-    },
-  );
-}
-
-function normalizeAttestationErrorCode(value: string | undefined): AttestationEvidenceClientErrorCode {
-  switch (value) {
-    case "invalid-input":
-    case "network":
-    case "cross-origin-unreadable":
-    case "timeout":
-    case "unauthorized":
-    case "forbidden":
-    case "http":
-    case "invalid-content-type":
-    case "response-too-large":
-    case "invalid-json":
-    case "invalid-response":
-    case "subject-not-found":
-    case "evidence-unavailable":
-      return value;
-    default:
-      return "network";
-  }
-}
-
-function attestationFailureLabel(code: AttestationEvidenceClientErrorCode): string {
-  if (code === "cross-origin-unreadable") return "Evidence path unreadable";
-  if (code === "unauthorized" || code === "forbidden") return "Evidence access denied";
-  if (code === "subject-not-found" || code === "evidence-unavailable") return "Evidence unavailable";
-  if (code === "invalid-content-type" || code === "invalid-json" || code === "invalid-response" || code === "response-too-large") {
-    return "Evidence rejected";
-  }
-  return "Evidence pull unavailable";
-}
-
-function attestationRecordMatchesReceipt(
-  record: ChutesEndpointEvidenceRecord,
-  receipt: ConversationReceipt,
-): boolean {
-  const endpointKeyDigest = (record.subject as typeof record.subject & { e2ePublicKeyDigest?: string }).e2ePublicKeyDigest;
-  return Boolean(
-    receipt.instanceId &&
-    receipt.bindings.endpointKeyDigest &&
-    endpointKeyDigest &&
-    record.subject.instanceId === receipt.instanceId &&
-    endpointKeyDigest === receipt.bindings.endpointKeyDigest,
-  );
-}
-
-function recordLocallyBindsReceipt(
-  record: ChutesEndpointEvidenceRecord,
-  receipt: ConversationReceipt | undefined,
-): boolean {
-  return Boolean(
-    receipt &&
-    attestationRecordMatchesReceipt(record, receipt) &&
-    record.verdict === "evidence-only" &&
-    record.binding.state === "matched" &&
-    record.claims.nonceFreshness.state === "matched" &&
-    record.claims.endpointKey.state === "matched",
-  );
-}
-
-function attestationFailureAppliesToReceipt(
-  failure: AttestationAcquisitionFailure,
-  receipt: ConversationReceipt,
-): boolean {
-  if (failure.scope === "connection") return true;
-  if (failure.scope === "receipt") return failure.receiptId === receipt.receiptId;
-  if (!receipt.instanceId || failure.instanceId !== receipt.instanceId) return false;
-  return !failure.endpointKeyDigest || failure.endpointKeyDigest === receipt.bindings.endpointKeyDigest;
-}
-
-function isDisplayFreshAttestation(record: ChutesEndpointEvidenceRecord, now: number): boolean {
-  const freshUntil = Date.parse(record.acquisition.cacheFreshUntil);
-  return Number.isFinite(freshUntil) && freshUntil > now;
-}
-
-function endpointEvidenceForPersistence(record: ChutesEndpointEvidenceRecord): ChutesEndpointEvidenceRecord {
-  return Object.freeze({
-    ...record,
-    acquisition: Object.freeze({
-      ...record.acquisition,
-      requestUrl: querylessProviderUrl(record.acquisition.requestUrl),
-    }),
-    warnings: Object.freeze([...record.warnings]),
-  });
-}
-
-function endpointEvidenceWithDurabilityWarning(
-  record: ChutesEndpointEvidenceRecord,
-  reason: string,
-): ChutesEndpointEvidenceRecord {
-  return Object.freeze({
-    ...record,
-    warnings: Object.freeze([
-      ...record.warnings.filter((warning) => warning !== reason),
-      reason,
-    ]),
   });
 }
 
@@ -14741,30 +10946,9 @@ function localProbeCause(error: unknown): string {
   return clean.length > 200 ? `${clean.slice(0, 197)}…` : clean;
 }
 
-function querylessProviderUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    // Preserve an invalid provider value for the strict persistence validator
-    // to reject. Manufacturing a plausible replacement URL would hide source
-    // corruption and weaken the independent-verification record.
-    return value;
-  }
-}
-
-type MessageAttestation = Readonly<{
-  state: SealState;
-  label: string;
-  detail: string;
-}>;
-
 function MessageCard({
   message,
   capabilityTier,
-  onProof,
-  onAttestations,
-  attestation,
   onCopy,
   onRetry,
   onResend,
@@ -14776,9 +10960,6 @@ function MessageCard({
 }: {
   message: UiMessage;
   capabilityTier?: SessionManifest["capabilityTier"];
-  onProof: () => void;
-  onAttestations: () => void;
-  attestation?: MessageAttestation;
   onCopy: () => Promise<void>;
   onRetry: () => void;
   /** Present only on a failed turn whose prompt this page still holds. */
@@ -14794,12 +10975,10 @@ function MessageCard({
   /*
    * The Profile's density decides which of this card's *explanatory* extras
    * mount at all. The model chip, the capability pill, the disposition line
-   * and the evidence row are tags of commentary, telemetry and proof — never
-   * the work itself, so minimal spends nothing on them while the journal and
-   * the attestations route keep everything.
+   * and the run row are commentary and trace labels — never the work itself,
+   * so minimal spends nothing on them while the journal keeps the turn.
    */
   const density = usePresentationDensity();
-
   async function copyMessage(): Promise<void> {
     setCopyFailure(undefined);
     try {
@@ -14823,12 +11002,10 @@ function MessageCard({
       aria-label={`${message.role === "user" ? "Your" : "Airship"} message${message.error ? " — failed turn" : ""}`}
       data-message-role={message.role}
       {...(message.error ? { "data-turn-failed": "true" } : {})}
-      /* The address Proof opens with carries a turn id, and nothing on this
-         side could be found by it — which is why "Inspect evidence →" was a
-         one-way door. The receipt is where a rendered card learns its turn
-         identity; a row without one (a local command, a marker) simply has no
-         attribute, which is why `focusTranscriptTurn` reports "not-rendered"
-         rather than pretending it landed. */
+      /* The trace address carries a turn id, and the rendered receipt is where
+         this card learns it. A row without one (a local command, a marker)
+         simply has no attribute, which is why `focusTranscriptTurn` reports
+         "not-rendered" rather than pretending it landed. */
       {...(message.receipt?.turnId ? { "data-turn-id": message.receipt.turnId } : {})}
       data-transcript-card
     >
@@ -14908,58 +11085,7 @@ function MessageCard({
             </span>
           </div>
         ) : null}
-        {message.receipt && densityAllows("proof", density) ? (
-          <div class="message-evidence-chips">
-            {/*
-              * Which model produced this answer, on the answer.
-              *
-              * The receipt carried `model` all along and exactly one surface
-              * rendered it — the Proof inspector, one navigation away. On the
-              * transcript an answer said only "Airship", so a reader comparing
-              * two turns had no way to see that a different model wrote them.
-              *
-              * Read from `message.receipt.model`, never from the active binding:
-              * the binding is whatever is pinned *now*, and using it would
-              * relabel every historical answer whenever someone switched models.
-              * `model` is optional on the receipt, so an answer without one shows
-              * nothing rather than the word "unknown".
-              *
-              * It belongs in this row and not beside the role word. When this
-              * chip was placed, `.message-label` overflowed its column by 30px
-              * at 320px and a fourth chip would have been weight on something
-              * already broken; that row now wraps and truncates instead, so the
-              * original reason has been repaired. The reason that outlives it is
-              * the one that mattered anyway: this row is receipt-gated, which is
-              * precisely the condition `model` needs.
-              */}
-            {message.receipt.model ? (
-              <span class="message-model" title={`This answer was produced by ${message.receipt.model}.`}>
-                {message.receipt.model}
-              </span>
-            ) : null}
-            <button class="receipt-chip" type="button" onClick={onProof}>
-              <Seal
-                state={receiptSealState(message.receipt)}
-                origin={message.receipt.posture === "local" ? "local" : "remote"}
-                label={message.receipt.posture === "local" ? "Final response · local receipt" : "Final response · encrypted receipt"}
-                detail={receiptSummary(message.receipt)}
-                size={14}
-                compact
-              />
-              <span>{message.receipt.receiptId.slice(-8)}</span>
-            </button>
-            {attestation ? (
-              <button
-                class={`attestation-chip ${attestation.state}`}
-                type="button"
-                title={attestation.detail}
-                onClick={onAttestations}
-              >
-                <Seal state={attestation.state} label={attestation.label} detail={attestation.detail} size={14} compact />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        {message.receipt ? <RunDetails receipt={message.receipt} /> : null}
         {copyFailure ? <p class="message-copy-failure" role="alert">{copyFailure}</p> : null}
         {/* Pointer devices get a reserved footer toolbar that fades on
             hover/focus; touch devices get the disclosure below. This is
@@ -14977,7 +11103,7 @@ function MessageCard({
                 but cannot contaminate the retry branch's provider context.
 
                 The sentence is `FORK_RETRY_TOOLTIP`, not a literal: as a
-                literal it drifted until it claimed the prior answer's sealed
+                literal it drifted until it claimed the prior answer's
                 ancestor context IS carried into the branch, while the constant
                 that every post-click branch headline is written beside says it
                 is not. Two opposite claims about one click. */}
@@ -15215,13 +11341,7 @@ function ProfileManagerView({
                 {/* The catalog clamps a long name to three lines so one profile
                     cannot set the height of the whole row; the title is how the
                     rest of it is recovered without selecting the card. */}
-                <span><strong title={profile.name}>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
-                    the revision strip beside it. It used to be typed out here with a
-                    comment claiming `profiles-governance` was not in the startup
-                    chunk — which was false: `chat/message-parts-view` imports
-                    `PROFILE_APPROVAL_LABELS` from it, so the module was already
-                    there and the duplicate bought nothing but a way to drift. */}
-                <PostureChip posture={profile.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
+                <span><strong title={profile.name}>{profile.name}</strong><small>{profile.description}</small></span>
                 {profile.profileId === activeProfileId ? <em>active</em> : null}
               </button>
             ))}
@@ -15324,16 +11444,16 @@ function ProfileManagerView({
                 {/*
                   The Profile's presentation density: how much chatter the app
                   renders around the work. Minimal keeps the work, the tools,
-                  and the answer; Balanced restores proof pills, counters, and
-                  suggestions where they are relevant; Instrumented adds every
-                  digest, receipt Seam, and diagnostic to the surface. It is
-                  display-only — the same work runs, the same evidence lands —
+                  and the answer; Balanced restores run metadata, counters,
+                  and suggestions where they are relevant; Instrumented adds
+                  every digest, receipt, and diagnostic to the surface. It is
+                  display-only — the same work runs, the same records land —
                   and it saves with the profile revision, Profile-local beside
                   the global Preferences.
                 */}
                 <label><span>Presentation</span><MenuSelect ariaLabel="Profile presentation density" value={draft.density} options={[
                   { value: "minimal", label: "Minimal", description: "The work and the answer; everything else one action away" },
-                  { value: "balanced", label: "Balanced", description: "Proof, counters, and suggestions where they are relevant" },
+                  { value: "balanced", label: "Balanced", description: "Run metadata, counters, and suggestions where they are relevant" },
                   { value: "instrumented", label: "Instrumented", description: "Every digest, receipt, and diagnostic on the surface" },
                 ]} onChange={(density) => setDraft({ ...draft, density: density as ProfileEditorDraft["density"] })} /></label>
                 {/*
@@ -15346,32 +11466,7 @@ function ProfileManagerView({
                   { value: "collapsed", label: "Summary", description: "A headline line; the full reasoning opens on demand" },
                   { value: "expanded", label: "Show by default", description: "The full provider-exposed reasoning starts open" },
                 ]} onChange={(reasoningVisibility) => setDraft({ ...draft, reasoningVisibility: reasoningVisibility as ProfileEditorDraft["reasoningVisibility"] })} /></label>
-                <label><span>Minimum proof</span><MenuSelect ariaLabel="Profile minimum proof posture" value={draft.minimumPosture} options={[
-                  { value: "local", label: "Local", description: "No remote inference proof is required" },
-                  { value: "plaintext-remote", label: "Remote", description: "Permit any connected remote runtime" },
-                  { value: "encrypted-unattested", label: "Encrypted", description: "Require encrypted remote inference" },
-                  /*
-                   * Offered, and honest about being unreachable in this build.
-                   *
-                   * Nothing can produce an `encrypted-attested` posture while
-                   * strict endpoint proof is unavailable, so choosing it here
-                   * used to commit a profile that could never start a
-                   * conversation — while the Connection route, a thousand lines
-                   * away, spent a whole disclosure saying strict fail-closed is
-                   * unavailable. Two surfaces, opposite answers, and the
-                   * overclaiming one silently bricked the profile.
-                   *
-                   * Disabled rather than deleted: the capability is real and
-                   * half-built, the reason is the verifier's own words, and the
-                   * option returns by itself the day `available` flips.
-                   */
-                  {
-                    value: "encrypted-attested",
-                    label: "Attested",
-                    description: strictProofCapability.available ? "Require verified endpoint evidence" : strictProofCapability.reason,
-                    disabled: !strictProofCapability.available,
-                  },
-                ]} onChange={(minimumPosture) => setDraft({ ...draft, minimumPosture: minimumPosture as SecurityPosture })} /></label>
+
                 {draft.workspaceBinding === "workspace-id" ? <label><span>Workspace ID</span><input value={draft.workspaceId} maxLength={512} placeholder="vault+gdrive://…" onInput={(event) => setDraft({ ...draft, workspaceId: event.currentTarget.value })} /></label> : null}
               </div>
               <p class="profile-boundary-note">{PROFILE_BOUNDARY_NOTE}</p>
@@ -15383,7 +11478,6 @@ function ProfileManagerView({
                   hover recovery anywhere. The `title` is the same recovery the
                   terminal's shell path already uses for the same reason. */}
               <span title={`${selected.providerId} · ${selected.model}`}><small>Runtime</small>{selected.providerId} · {selected.model}</span>
-              <span><PostureChip posture={selected.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
               <span><small>Skills resolved</small>{effectiveSkillIds(selected, catalog).length}</span>
               <span><small>Parent</small>{selected.parentRevision?.slice(-8) ?? "origin"}</span>
             </div>
@@ -15467,14 +11561,9 @@ function RouteBar({ routeId, eyebrow, title, description, headingId }: {
   );
 }
 
-/* `EmptyState` moved to `./empty-state`. It was declared here, styled in
-   `routes.css`, and rendered by nothing — a private helper inside 11k lines
-   that no route could import, which is why ten routes drew their own
-   "nothing here yet" at four different heights instead. */
-
 function humanStatus(value: string): string {
   if (value === "thinking") return "Thinking";
-  if (value === "complete") return "Sealing receipt";
+  if (value === "complete") return "Finalizing run details";
   return value.replace(/^running /u, "Running ");
 }
 
@@ -15500,7 +11589,6 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
     approvalMode: silo.approvalMode,
     webEgress: resolveProfileWebEgress(profile),
     webBodies: resolveProfileWebBodies(profile),
-    minimumPosture: profile.minimumPosture,
     reasoningVisibility: parseReasoningVisibility(profile.presentation?.reasoningVisibility),
     density: parsePresentationDensity(profile.presentation?.density),
   };
@@ -15527,13 +11615,6 @@ function skillDecisionsFor(profile: ProfileRevision, catalog: ProfileCatalog): r
     skills: catalog.skills,
     globalSkills: catalog.globalSkills,
   });
-}
-
-function receiptSummary(receipt: ConversationReceipt): string {
-  if (receipt.posture === "local") return "Client request and response digests were recorded locally. No external signer or hardware identity was verified.";
-  if (receipt.posture === "encrypted-unattested") return "Encrypted request and response bindings were recorded, but the endpoint's hardware identity was not independently verified.";
-  if (receipt.posture === "encrypted-attested") return "The receipt includes encrypted conversation bindings and endpoint evidence; expand each claim to inspect exactly what its verifier checked.";
-  return "A remote conversation receipt was recorded without an encrypted transport claim.";
 }
 
 function readViewHash(): View {

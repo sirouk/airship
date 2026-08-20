@@ -11,19 +11,17 @@ import type { InferenceRequest, InferenceTransport } from "./contracts";
  *
  * Two independent bounds decide what "transient" means, and both fail closed.
  *
- * **The failure has to name itself.** All three transport families already do:
- * `ProviderTransportError` carries `code` plus an HTTP `status`,
- * `LocalProviderError` carries the same pair under `diagnostic`, and
- * `ChutesTransportError` carries the same pair spelled in its own
- * SCREAMING_SNAKE vocabulary. This module reads that shape structurally rather
- * than importing any of those classes, because
+ * **The failure has to name itself.** Both transport families already do:
+ * `ProviderTransportError` carries `code` plus an HTTP `status`, and
+ * `LocalProviderError` carries the same pair under `diagnostic`. This module
+ * reads that shape structurally rather than importing either class, because
  * `src/core` must not depend on `src/inference` — and because a transport that
  * declines to name its failure then gets no retry at all, which is the right
  * default for an error nobody has classified. `inference-retry.test.ts` builds
- * all three real error classes and asserts they are read correctly, so the
+ * both real error classes and asserts they are read correctly, so the
  * structural read is checked against the real thing rather than assumed — and
  * so a family whose spellings this module has never heard of cannot go on
- * silently getting no retry at all, which is what happened to Chutes.
+ * silently getting no retry at all.
  *
  * **The attempt must not have been observed.** Once a single event has been
  * yielded downstream, the consumer has accumulated text or a tool call, and
@@ -90,24 +88,14 @@ const RETRYABLE_TRANSPORT_CODES: ReadonlySet<string> = new Set([
   // attempts inside the first couple of seconds before the same diagnostic
   // surfaces — the price the cloud lane has always paid for the same guess.
   "cors-or-private-network-access",
-  // The same three carriage failures as the Chutes transport spells them. Its
-  // `TIMEOUT` is deliberately absent: it is the 300s whole-request lifetime
-  // (`transport.ts` `RequestLifetime`), not a socket that went quiet, so
-  // redelivering it would hold the turn for a quarter of an hour before the
-  // person is told anything — the observed-attempt bound does not shorten a
-  // lifetime that has already expired once.
-  "NETWORK_ERROR",
-  "STREAM_TRUNCATED",
-  "STREAM_STALLED",
 ]);
 
 /**
- * The two spellings of "the provider answered with an HTTP status", which is
- * the one code whose retryability is decided by the status rather than by the
- * code alone. `ChutesTransportError` names it `HTTP_ERROR`; an `HTTP_ERROR`
- * raised before any request went out carries no status and stays terminal.
+ * "The provider answered with an HTTP status" — the one code whose
+ * retryability is decided by the status rather than by the code alone. An
+ * `http` raised without a status stays terminal.
  */
-const HTTP_FAILURE_CODES: ReadonlySet<string> = new Set(["http", "HTTP_ERROR"]);
+const HTTP_FAILURE_CODES: ReadonlySet<string> = new Set(["http"]);
 
 export function withInferenceRetry(
   transport: InferenceTransport,

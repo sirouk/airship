@@ -22,8 +22,7 @@ const VIEWPORTS = [
 
 const ROUTES = [
   "#chat", "#sessions", "#workspace", "#editor", "#terminal", "#memory",
-  "#context", "#profiles", "#capabilities", "#skills", "#vault", "#account",
-  "#proof", "#connection",
+  "#context", "#profiles", "#capabilities", "#skills", "#vault", "#connection",
 ];
 
 async function main() {

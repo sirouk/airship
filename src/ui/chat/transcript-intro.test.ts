@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   TRANSCRIPT_INTRO_CAPABILITY_LINE,
   TRANSCRIPT_INTRO_DEMO_LINE,
@@ -52,5 +53,21 @@ describe("the guidance band's copy", () => {
     expect(TRANSCRIPT_SEED_BODY).toContain("workspace, editor, terminal and browser-owned Git");
     expect(TRANSCRIPT_SEED_BODY).toContain("no account");
     expect(TRANSCRIPT_SEED_BODY).toContain("deterministic local demo");
+  });
+});
+
+const transcriptIntroSource = readFileSync(new URL("./transcript-intro.tsx", import.meta.url), "utf8");
+
+describe("TranscriptMarker", () => {
+  it("keeps durable marker facts on screen with no extra action", () => {
+    expect(transcriptIntroSource).toContain('aria-label={`Session record. ${marker.detail}`}');
+    expect(transcriptIntroSource).toContain('class="transcript-marker__detail"');
+    expect(transcriptIntroSource).toContain('Read the ${String(marker.carriedContext.length)} carried');
+    expect(transcriptIntroSource).toContain('message.role === "user" ? "You" : message.role === "assistant" ? "Airship" : message.role');
+    expect(transcriptIntroSource).toContain('Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…');
+    expect(transcriptIntroSource).toContain('data-presentable={marker.presentable ? "true" : "false"}');
+    for (const retired of ["ConversationReceipt", ["onOpen", "P", "roof"].join(""), ["Open p", "roof"].join(""), ["transcript-marker__p", "roof"].join("")]) {
+      expect(transcriptIntroSource).not.toContain(retired);
+    }
   });
 });

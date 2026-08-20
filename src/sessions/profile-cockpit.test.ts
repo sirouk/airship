@@ -7,6 +7,8 @@ import { MemoryJournalBackend } from "../core/memory-journal";
 import { auditSessionHistory } from "../core/session-audit";
 import {
   PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
+  forkActivationManifestMatches,
+  inferenceBindingsMatch,
   ProfileActiveConversationConflictError,
   profileManifestResumeMismatches,
   profileOwnedSessions,
@@ -41,7 +43,6 @@ async function manifest(systemPrompt: string, overrides: Partial<SessionManifest
       workspaceBinding: { kind: "active-workspace" },
       memoryScope: "profile",
       approvalMode: "ask-first",
-      minimumPosture: "local",
     },
   });
   return { ...base, ...overrides } as SessionManifest;
@@ -69,6 +70,132 @@ describe("profile cockpit resume matching", () => {
     expect(actual.systemPromptDigest).not.toBe(expected.systemPromptDigest);
     expect(actual.profile?.resolutionDigest).not.toBe(expected.profile?.resolutionDigest);
     expect(resumableProfileManifestMatches(actual, expected)).toBe(true);
+  });
+
+  it("requires exact protocol and transport identity for v2 inference bindings", () => {
+    const base = {
+      connectionId: "connection-1",
+      connectionGeneration: 1,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-1",
+      boundAt: "2026-01-01T00:00:00.000Z",
+    };
+    const actual = {
+      ...base,
+      version: 2 as const,
+      transportId: "chutes-openai-compatible-v1",
+      protocol: "openai-compatible" as const,
+    };
+    expect(inferenceBindingsMatch(actual, { ...actual })).toBe(true);
+    expect(inferenceBindingsMatch(actual, { ...actual, transportId: "other-transport" })).toBe(false);
+    expect(inferenceBindingsMatch(actual, { ...actual, protocol: "openai-responses" })).toBe(false);
+    // A v2 durable pin cannot be satisfied by a downgraded live binding.
+    expect(inferenceBindingsMatch(actual, { ...base, version: 1 })).toBe(false);
+    // Historical v1 pins may resume on the same upgraded v2 live authority.
+    expect(inferenceBindingsMatch({ ...base, version: 1 }, actual)).toBe(true);
+  });
+
+  it("admits fork-boundary model/context projection but no route-authority drift", async () => {
+    const binding = {
+      version: 2 as const,
+      connectionId: "chutes-main",
+      connectionGeneration: 2,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      transportId: "chutes-openai-compatible-v1",
+      protocol: "openai-compatible" as const,
+      modelId: "model-a",
+      boundAt: "2026-01-01T00:00:00.000Z",
+    };
+    const authority = await manifest("Pinned prompt", {
+      providerId: binding.providerId,
+      model: binding.modelId,
+      inferenceBinding: binding,
+    });
+    const beforeChange = { ...authority };
+    const afterChange = {
+      ...authority,
+      model: "model-b",
+      inferenceBinding: { ...binding, modelId: "model-b" },
+      contextPolicy: undefined,
+    } as SessionManifest;
+
+    expect(forkActivationManifestMatches(beforeChange, authority)).toBe(true);
+    expect(forkActivationManifestMatches(afterChange, authority)).toBe(true);
+    expect(forkActivationManifestMatches({
+      ...afterChange,
+      inferenceBinding: { ...binding, modelId: "model-b", transportId: "other-transport" },
+    }, authority)).toBe(false);
+    expect(forkActivationManifestMatches({ ...afterChange, providerId: "other-provider" }, authority)).toBe(false);
+    expect(forkActivationManifestMatches({ ...afterChange, toolManifestDigest: "sha256:drift" }, authority)).toBe(false);
+
+    const legacyAuthority = {
+      ...authority,
+      providerId: binding.transportId,
+      inferenceBinding: {
+        connectionId: binding.connectionId,
+        connectionGeneration: binding.connectionGeneration,
+        providerId: binding.providerId,
+        providerLabel: binding.providerLabel,
+        providerRevision: binding.providerRevision,
+        authMethod: binding.authMethod,
+        transportBoundary: binding.transportBoundary,
+        modelId: "model-a",
+        boundAt: binding.boundAt,
+        version: 1 as const,
+      },
+    } as SessionManifest;
+    expect(forkActivationManifestMatches({
+      ...legacyAuthority,
+      model: "model-b",
+      inferenceBinding: { ...legacyAuthority.inferenceBinding!, modelId: "model-b" },
+    }, legacyAuthority)).toBe(true);
+  });
+
+  it("resumes a realistic legacy provider-as-transport pin only through its exact v2 wire", async () => {
+    const base = {
+      connectionId: "chutes-main",
+      connectionGeneration: 2,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-1",
+      boundAt: "2026-08-20T00:00:00.000Z",
+    };
+    const actual = await manifest("Pinned prompt", {
+      providerId: "chutes-openai-compatible-v1",
+      model: base.modelId,
+      inferenceBinding: { ...base, version: 1 },
+    });
+    const expected = await manifest("Pinned prompt", {
+      providerId: base.providerId,
+      model: base.modelId,
+      inferenceBinding: {
+        ...base,
+        version: 2,
+        transportId: "chutes-openai-compatible-v1",
+        protocol: "openai-compatible",
+      },
+    });
+
+    expect(profileManifestResumeMismatches(actual, expected)).toEqual([]);
+    expect(profileManifestResumeMismatches(actual, {
+      ...expected,
+      inferenceBinding: { ...expected.inferenceBinding!, protocol: "openai-chat-completions" },
+    } as SessionManifest)).toContain("inference-binding");
+    expect(profileManifestResumeMismatches(actual, {
+      ...expected,
+      inferenceBinding: { ...expected.inferenceBinding!, transportId: "other-openai-compatible-v1" },
+    } as SessionManifest)).toContain("inference-binding");
   });
 
   it("rejects changes to stable profile, tool, and runtime pins", async () => {

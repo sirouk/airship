@@ -1,10 +1,12 @@
-import type { Api, ApiProvider } from "./types";
+import type { Api, ApiProvider, Provider, ProviderDescriptor } from "./types";
 
 /**
- * Port of prime-agent packages/ai/src/api-registry.ts. Providers register
- * lazily: the registry stores loader closures so a host only pays bundle and
- * parse cost for provider families it actually uses. `sourceId` groups
- * registrations so test providers can be withdrawn without touching others.
+ * Port of prime-agent packages/ai/src/api-registry.ts. API implementations
+ * register lazily so a host only pays bundle and parse cost for provider
+ * families it uses. Provider descriptors are small wire-default declarations;
+ * they remain eager data and are resolved independently of endpoint URLs.
+ * `sourceId` groups API registrations so test providers can be withdrawn
+ * without touching others.
  */
 
 type ProviderLoader = () => Promise<ApiProvider> | ApiProvider;
@@ -13,10 +15,29 @@ const providers = new Map<string, ApiProvider>();
 const providerSources = new Map<string, string>();
 const loaders = new Map<string, ProviderLoader>();
 const pending = new Map<string, Promise<ApiProvider>>();
+const descriptorsByApi = new Map<string, Map<string, ProviderDescriptor<Api>>>();
 
 export function registerApiProvider(provider: ApiProvider, sourceId?: string): void {
   providers.set(provider.api, provider);
   if (sourceId) providerSources.set(provider.api, sourceId);
+}
+
+/** Register provider-wide defaults for one wire protocol. Last write wins. */
+export function registerProviderDescriptor<TApi extends Api>(descriptor: ProviderDescriptor<TApi>): void {
+  const api = String(descriptor.api);
+  let descriptors = descriptorsByApi.get(api);
+  if (!descriptors) {
+    descriptors = new Map();
+    descriptorsByApi.set(api, descriptors);
+  }
+  descriptors.set(String(descriptor.provider), descriptor as ProviderDescriptor<Api>);
+}
+
+export function getProviderDescriptor<TApi extends Api>(
+  api: TApi,
+  provider: Provider,
+): ProviderDescriptor<TApi> | undefined {
+  return descriptorsByApi.get(String(api))?.get(String(provider)) as ProviderDescriptor<TApi> | undefined;
 }
 
 export function unregisterApiProviders(sourceId: string): void {

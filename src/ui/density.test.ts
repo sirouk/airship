@@ -24,14 +24,14 @@ describe("presentation density authority", () => {
     expect(parsePresentationDensity("loud")).toBe("minimal");
   });
 
-  it("retires commentary, telemetry, proof echo, suggestion, chatter, and raw detail at minimal", () => {
-    for (const tag of ["telemetry", "proof", "suggestion", "commentary", "chatter", "raw"] as const) {
+  it("retires commentary, telemetry, suggestion, chatter, and raw detail at minimal", () => {
+    for (const tag of ["telemetry", "suggestion", "commentary", "chatter", "raw"] as const) {
       expect(densityAllows(tag, "minimal")).toBe(false);
     }
   });
 
   it("keeps raw detail instrumented-only; balanced renders the relevant surface", () => {
-    for (const tag of ["telemetry", "proof", "suggestion", "commentary", "chatter"] as const) {
+    for (const tag of ["telemetry", "suggestion", "commentary", "chatter"] as const) {
       expect(densityAllows(tag, "balanced")).toBe(true);
       expect(densityAllows(tag, "instrumented")).toBe(true);
     }

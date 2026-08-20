@@ -8,6 +8,7 @@ import {
 } from "../inference/local";
 import type { InferenceModelDescriptor } from "../inference/providers";
 import {
+  customProviderErrorRoute,
   modelOptionDescription,
   providerBoundaryLabel,
   providerConnectionCountLabel,
@@ -19,20 +20,27 @@ import {
 const source = await readFile(new URL("./provider-connections-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./provider-connections-view.css", import.meta.url), "utf8");
 const declarations = styles.replace(/\/\*[\s\S]*?\*\//gu, "");
+const customProviderCardSource = source.slice(
+  source.indexOf("function OpenAiCompatibleProviderCard"),
+  source.indexOf("function CloudProviderCard"),
+);
 
 describe("provider connection presentation", () => {
-  it("leaves Chutes and companion return requests to the surfaces that own them", () => {
+  it("handles Chutes through the same provider-fabric return path as other providers", () => {
     const intent = {
-      lane: "codex",
+      providerId: "chutes",
       method: "api-key",
-      model: "gpt-return",
-      connectionId: "conn-1",
+      model: "deepseek",
+      connectionId: "chutes-1",
       connectionGeneration: 1,
       returnSessionId: "session-1",
     } as const;
     expect(providerFabricReconnectIntent(intent)).toBe(intent);
-    expect(providerFabricReconnectIntent({ ...intent, lane: "chutes" })).toBeUndefined();
-    expect(providerFabricReconnectIntent({ ...intent, lane: "companion" })).toBeUndefined();
+    expect(providerFabricReconnectIntent({ ...intent, providerId: "openai", connectionId: "openai-1" })).toEqual({
+      ...intent,
+      providerId: "openai",
+      connectionId: "openai-1",
+    });
   });
 
   it("pluralizes the connected count without ambiguous shorthand", () => {
@@ -50,21 +58,20 @@ describe("provider connection presentation", () => {
     });
     expect(supportedModelCapabilityLabels(model)).toEqual(["Vision", "Tools"]);
     expect(modelOptionDescription(model)).toBe(
-      "Provider directory · available · Vision · Tools",
+      "Provider catalog · available · Vision · Tools",
     );
   });
 
   it("does not infer capabilities from a model name", () => {
     const model = fixtureModel({}, "definitely-vision-reasoning-model");
     expect(supportedModelCapabilityLabels(model)).toEqual([]);
-    expect(modelOptionDescription(model)).toContain("no capabilities confirmed by source evidence");
+    expect(modelOptionDescription(model)).toContain("capabilities not reported");
   });
 
   it("names transport boundaries without promoting them to proof", () => {
-    expect(providerBoundaryLabel("e2ee-attestable")).toContain("evidence evaluated separately");
     expect(providerBoundaryLabel("provider-tls")).toBe("Provider TLS · browser direct");
     expect(providerBoundaryLabel("loopback-local")).toBe("This machine · loopback");
-    expect(providerBoundaryLabel("e2ee-attestable")).not.toMatch(/\bverified\b/iu);
+    expect(providerBoundaryLabel("provider-tls")).not.toMatch(/\bverified\b/iu);
   });
 
   it("redacts credential-shaped material and bounds raw provider failures", () => {
@@ -79,6 +86,51 @@ describe("provider connection presentation", () => {
     expect(message.length).toBeLessThanOrEqual(320);
     expect(safeProviderErrorMessage(new Error("network"), false)).toContain("Offline");
   });
+
+  it("routes each local custom-provider refusal to its owning field", () => {
+    expect(customProviderErrorRoute(new TypeError("Provider name is invalid."))).toEqual({
+      field: "providerName",
+      alertSummary: false,
+    });
+    expect(customProviderErrorRoute(new TypeError("Provider base URL must use HTTPS."))).toEqual({
+      field: "baseUrl",
+      alertSummary: false,
+    });
+    expect(customProviderErrorRoute(new TypeError("Provider models URL must not contain a query."))).toEqual({
+      field: "modelsUrl",
+      alertSummary: false,
+    });
+    expect(customProviderErrorRoute(new TypeError("The API-key header name is invalid."))).toEqual({
+      field: "apiKeyHeader",
+      alertSummary: false,
+    });
+    expect(customProviderErrorRoute(new TypeError("The API-key format is invalid."))).toEqual({
+      field: "apiKeyScheme",
+      alertSummary: false,
+    });
+    expect(customProviderErrorRoute(new TypeError("Inference API key is invalid."))).toEqual({
+      field: "apiKey",
+      alertSummary: false,
+    });
+  });
+
+  it("keeps network and unmatched custom-provider refusals in an alert summary", () => {
+    const network = Object.assign(new Error("Gateway could not be reached from this browser."), {
+      code: "network-or-cors",
+    });
+    expect(customProviderErrorRoute(network)).toEqual({ field: "baseUrl", alertSummary: true });
+    expect(customProviderErrorRoute(network, { modelsUrl: "https://catalog.example/models" })).toEqual({
+      field: "modelsUrl",
+      alertSummary: true,
+    });
+    expect(customProviderErrorRoute(Object.assign(new Error("Gateway rejected the request with HTTP 401."), {
+      code: "http",
+      status: 401,
+    }))).toEqual({ field: "apiKey", alertSummary: true });
+    expect(customProviderErrorRoute(new Error("Web Crypto SHA-256 is unavailable."))).toEqual({
+      alertSummary: true,
+    });
+  });
 });
 
 describe("provider connection component contract", () => {
@@ -88,8 +140,47 @@ describe("provider connection component contract", () => {
     expect(source).toContain("onConnect(key).then((succeeded)");
     expect(source).toContain("if (!succeeded)");
     expect(source.indexOf("if (!succeeded)")).toBeLessThan(source.indexOf('keyInput.current.value = ""'));
-    expect(source).not.toContain("setApiKey");
+    expect(source).not.toMatch(/const \[apiKey,\s*setApiKey\]/u);
     expect(source).not.toContain("value={apiKey}");
+  });
+
+  it("offers a provider-neutral OpenAI-compatible endpoint form without storing the key in component state", () => {
+    expect(source).toContain("<OpenAiCompatibleProviderCard");
+    expect(source).toContain("browserInferenceFabric.connectOpenAiCompatible");
+    expect(source).toContain("API base URL · HTTPS");
+    expect(source).toContain("Model catalog URL · optional");
+    expect(source).toContain("API-key header");
+    expect(source).toContain('apiKeyScheme: rawKey ? "raw" : "bearer"');
+    expect(source).not.toMatch(/useState\([^)]*(?:apiKey|credential)/iu);
+    expect(source).toContain("access is checked on the first turn");
+    expect(source).toContain("Saved conversations retain the provider ID, model, and old connection generation, but never the URL or key");
+  });
+
+  it("submits the custom endpoint as an accessible form and focuses only the implicated field", () => {
+    expect(customProviderCardSource).toContain("<form");
+    expect(customProviderCardSource).toContain("onSubmit={(event) => {");
+    expect(customProviderCardSource).toContain("event.preventDefault()");
+    expect(customProviderCardSource).toContain('type="submit"');
+    expect(customProviderCardSource).not.toContain("onClick={() =>");
+    expect(customProviderCardSource).toContain("aria-labelledby={titleId}");
+    for (const field of [
+      "providerName",
+      "baseUrl",
+      "modelsUrl",
+      "apiKeyHeader",
+      "apiKeyScheme",
+      "apiKey",
+    ]) {
+      expect(customProviderCardSource).toContain(`aria-invalid={connectionErrorField === "${field}" ? "true" : undefined}`);
+    }
+    expect(customProviderCardSource).toContain('aria-describedby={connectionErrorField === "providerName" ? errorId : undefined}');
+    expect(customProviderCardSource).toContain("advancedSettings.current.open = true");
+    expect(customProviderCardSource).toContain("requestAnimationFrame(() => target?.focus())");
+    expect(customProviderCardSource).toContain('case "apiKey": target = keyInput.current; break;');
+    expect(customProviderCardSource).not.toContain(": keyInput.current;");
+    expect(customProviderCardSource).toContain('role={connectionErrorAlert ? "alert" : undefined}');
+    expect(customProviderCardSource).not.toContain("keyInput.current?.focus()");
+    expect(customProviderCardSource).not.toMatch(/<input[^>]+name=/u);
   });
 
   it("keeps a failed cloud credential and its recovery message in the provider card", () => {
@@ -101,26 +192,19 @@ describe("provider connection component contract", () => {
     expect(source).toContain("aria-describedby={connectionError ? errorId : undefined}");
   });
 
-  it("derives OAuth and API-key warnings from the provider registry", () => {
-    expect(source).toContain("provider.oauth.detail");
+  it("derives the API-key warning from the provider registry without advertising a dead OAuth path", () => {
     expect(source).toContain("apiKeyMethod.warning");
+    expect(source).not.toContain("provider.oauth.detail");
+    expect(source).not.toContain('provider.oauth.state === "configured-public-pkce"');
     expect(source).not.toContain("const CLOUD =");
   });
 
-  it("says the configured grant is not wired into this build, beside the measurement that says it could be", () => {
-    /*
-     * OpenAI's `oauth.detail` reports a measured, product-owner-approved public
-     * PKCE client whose token endpoint answers `access-control-allow-origin: *`
-     * — all true, and all about the provider rather than about Airship. Nothing
-     * in the product calls `connectOAuth`, so the card printed a paragraph
-     * explaining that sign-in completes in the page while offering no control to
-     * do it and while the Connect route said the opposite. The build fact is
-     * added; the measured sentence is not edited, because a descriptor is the
-     * one source both surfaces read.
-     */
-    expect(source).toContain('provider.oauth.state === "configured-public-pkce"');
-    expect(source).toContain("This route connects API keys only — no account sign-in is wired into this build for {provider.label}.");
-    expect(source).toContain("provider.oauth.detail");
+  it("states the only sign-in path this build actually wires", () => {
+    expect(source).toContain("Why a page-memory API key?");
+    expect(source).toContain("No account sign-in flow is wired into this build for {provider.label}.");
+    expect(source).toContain("keeps it only in this page, and sends it directly to the provider when needed");
+    expect(source).not.toContain("reviewed public-PKCE client");
+    expect(source).not.toContain("connectOAuth");
   });
 
   it("requires confirmation for the active route and protects an exact return pin even when inactive", () => {

@@ -34,6 +34,15 @@ For the reproducible local Docker+Caddy path, use the checked-in helpers:
    args in root deployment templates should not be the basis of new docs or new
    operational policy.
 
+The Prime JavaScript kernel is the one scoped CSP exception. Its content-hashed
+worker response must receive the exact worker policy from the built `_headers`,
+Caddy's disjoint matcher, or the controlling service worker. Do not append that
+policy beside the page policy: browsers enforce both, so the page policy would
+still block the REPL. Do not add `unsafe-eval` to the document policy. A
+headerless host must let the service worker claim and reload the page before the
+kernel becomes available; the host preflight fails closed rather than starting
+an unrestricted worker.
+
 ## Values you should expect to configure
 
 - `AIRSHIP_PUBLIC_BASE_PATH`

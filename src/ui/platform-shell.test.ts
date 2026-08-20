@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, localLabEnabledInBuild, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, STOCK_VAULT_BACKENDS, VAULT_BACKENDS, vaultBackendUnavailableReason, vaultBackendsForSelector, savePreferenceOverrides } from "./platform-shell";
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
@@ -29,13 +29,21 @@ describe("platform shell contracts", () => {
     expect(resolveDefaultVaultBackend(undefined)).toBe("ephemeral");
     expect(resolveDefaultVaultBackend(undefined, undefined)).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("google-drive", "malformed")).toBe("ephemeral");
-    expect(resolveDefaultVaultBackend("local-lab", undefined)).toBe("local-lab");
+    expect(resolveDefaultVaultBackend("local-lab", undefined, false, { hostname: "localhost" })).toBe("ephemeral");
+    expect(resolveDefaultVaultBackend("local-lab", undefined, true, { hostname: "localhost" })).toBe("local-lab");
+    expect(resolveDefaultVaultBackend("local-lab", undefined, true, { hostname: "airship.example" })).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("unexpected", configuredClientId)).toBe("google-drive");
     expect(resolveDefaultVaultBackend("unexpected", undefined)).toBe("ephemeral");
   });
 
-  it("offers the starting page-memory mode before durable providers", () => {
-    expect(VAULT_BACKENDS.slice(0, 2)).toEqual(["ephemeral", "local-device"]);
+  it("requires the exact host-composition flag and keeps stock values separate", () => {
+    expect(localLabEnabledInBuild("1")).toBe(true);
+    for (const value of [undefined, "", "0", "true", "yes", " 1 "]) {
+      expect(localLabEnabledInBuild(value), value ?? "undefined").toBe(false);
+    }
+    expect(STOCK_VAULT_BACKENDS).toEqual(["ephemeral", "local-device", "google-drive"]);
+    expect(VAULT_BACKENDS).toEqual([...STOCK_VAULT_BACKENDS, "local-lab"]);
+    expect(VAULT_BACKENDS.join(" ")).not.toMatch(/walrus/iu);
   });
 
   it("makes every canonical and nested destination plus preferences reachable", () => {
@@ -46,17 +54,14 @@ describe("platform shell contracts", () => {
   });
 
   it("keeps global service navigation in the primary rail", () => {
-    const source = shellSource();
-    expect(source).not.toContain("TrustHubTabs");
-    expect(source).not.toContain("TRUST_TABS");
     expect(CANONICAL_DESTINATIONS.find((destination) => destination.id === "vault")?.scope).toBe("global");
     expect(CANONICAL_DESTINATIONS.find((destination) => destination.id === "access")?.scope).toBe("global");
   });
 
   it("filters across labels, hashes, group, and keywords", () => {
     const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
-    expect(filterPaletteEntries(entries, "conn").map((entry) => entry.label)).toContain("Connection");
-    expect(filterPaletteEntries(entries, "#account").map((entry) => entry.label)).toContain("Account");
+    expect(filterPaletteEntries(entries, "conn").map((entry) => entry.label)).toContain("Providers");
+    expect(filterPaletteEntries(entries, "#connection").map((entry) => entry.label)).toContain("Providers");
     expect(filterPaletteEntries(entries, "paper").map((entry) => entry.label)).toContain("Preferences");
   });
 
@@ -183,7 +188,7 @@ describe("platform shell contracts", () => {
      */
     const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
     expect(entries.find((entry) => entry.id === "view:chat")?.description).toMatch(/ · g c$/u);
-    expect(entries.find((entry) => entry.id === "view:proof")?.description).toMatch(/ · g t$/u);
+    expect(entries.find((entry) => entry.id === "view:terminal")?.description).toMatch(/ · g t$/u);
 
     // Every bound chord has a printed home. `x: "context"` had none at all —
     // #context is excluded from CanonicalDestinationId, so it appeared in no
@@ -210,12 +215,13 @@ describe("platform shell contracts", () => {
     expect(fullAccess).not.toContain("network boundaries");
     expect(fullAccess).toContain("any HTTPS origin");
 
-    // Auto Approve is a provider round-trip per effectful action, and the
-    // action body — script, command, URL — is exactly what is sent.
+    // Auto Approve is a deterministic middle tier, not a circular model
+    // authorization or a hidden paid inference.
     const autoApprove = approvalModeDescription("auto-approve");
-    expect(autoApprove).not.toContain("only bounded metadata");
-    expect(autoApprove).toContain("sent to your active provider");
-    expect(autoApprove).toContain("script, command or URL");
+    expect(autoApprove).toContain("write effects run automatically");
+    expect(autoApprove).toContain("Execute, network, and identity effects still ask");
+    expect(autoApprove).toContain("no separate inference request");
+    expect(autoApprove).not.toContain("active provider");
   });
 
   it("applies only global personality and layout overrides", () => {
@@ -256,57 +262,40 @@ describe("platform shell contracts", () => {
     expect(dialog).toContain("not touched");
   });
 
-  it("downgrades a stale Drive preference to the configured available default", () => {
+  it("migrates unavailable persisted backends to an available default", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
     const staleDrive = JSON.stringify({ ...DEFAULT_PREFERENCES, vaultBackend: "google-drive" });
-    const storage = { getItem: () => staleDrive };
-    expect(loadPreferenceOverrides(storage, {
+    expect(loadPreferenceOverrides({ getItem: () => staleDrive }, {
       googleClientId: undefined,
       defaultVaultBackend: "local-device",
     }).vaultBackend).toBe("local-device");
-    expect(loadPreferenceOverrides(storage, {
-      googleClientId: undefined,
-      defaultVaultBackend: "local-lab",
-    }).vaultBackend).toBe("local-lab");
-    expect(loadPreferenceOverrides(storage, {
+    expect(loadPreferenceOverrides({ getItem: () => staleDrive }, {
       googleClientId: configuredClientId,
       defaultVaultBackend: "local-device",
     }).vaultBackend).toBe("google-drive");
-  });
 
-  it("picks the weakest trust axis without changing its claim", () => {
-    const axes = [
-      { id: "local", scope: "tab", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
-      { id: "attestation", scope: "conversation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
-    ] as const;
-    expect(worstTrustAxis(axes)).toBe(axes[1]);
-  });
-
-  /*
-   * The scope partition is what stops one fact being printed in two bands. It
-   * is asserted here rather than only in the topbar because the split has to
-   * survive an axis being added: an untagged axis is a compile error, and a
-   * mis-tagged one shows up as a band claiming something it does not own.
-   */
-  it("partitions axes by the band that owns them", () => {
-    const axes = [
-      { id: "local", scope: "tab", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
-      { id: "vault", scope: "tab", label: "No vault adopted", state: "none", detail: "No cloud vault is configured.", view: "vault" },
-      { id: "e2ee", scope: "conversation", label: "Connect a model", state: "none", detail: "Nothing connected.", view: "access" },
-      { id: "attestation", scope: "conversation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
-    ] as const;
-
-    expect(trustAxesInScope(axes, "tab").map((axis) => axis.id)).toEqual(["local", "vault"]);
-    expect(trustAxesInScope(axes, "conversation").map((axis) => axis.id)).toEqual(["e2ee", "attestation"]);
-    // Every axis lands in exactly one band; none is orphaned by the partition.
-    expect(trustAxesInScope(axes, "tab").length + trustAxesInScope(axes, "conversation").length).toBe(axes.length);
-    expect(TRUST_SCOPE_BANDS.conversation.restingHome).toContain("session bar");
-    expect(TRUST_SCOPE_BANDS.tab.restingHome).toContain("topbar");
+    const staleLocalLab = JSON.stringify({ ...DEFAULT_PREFERENCES, vaultBackend: "local-lab" });
+    const storage = { getItem: () => staleLocalLab };
+    expect(loadPreferenceOverrides(storage, {
+      defaultVaultBackend: "local-device",
+      localLabEnabled: false,
+      location: { hostname: "localhost" },
+    }).vaultBackend).toBe("local-device");
+    expect(loadPreferenceOverrides(storage, {
+      defaultVaultBackend: "local-device",
+      localLabEnabled: true,
+      location: { hostname: "localhost" },
+    }).vaultBackend).toBe("local-lab");
+    expect(loadPreferenceOverrides(storage, {
+      defaultVaultBackend: "local-device",
+      localLabEnabled: true,
+      location: { hostname: "airship.example" },
+    }).vaultBackend).toBe("local-device");
   });
 
   it("maps g chords to high-traffic destinations and ignores incomplete chords", () => {
     expect(navigationJumpForChord("g", "c")).toBe("chat");
-    expect(navigationJumpForChord("g", "T")).toBe("proof");
+    expect(navigationJumpForChord("g", "T")).toBe("terminal");
     expect(navigationJumpForChord(undefined, "c")).toBeUndefined();
     expect(navigationJumpForChord("g", "q")).toBeUndefined();
   });
@@ -366,40 +355,45 @@ describe("the Durability row states a destination and its state, never one as th
     }
   });
 
-  it("offers every destination and greys the ones this deployment cannot reach", () => {
-    // The availability predicate used to gate *loading* a persisted value and
-    // nothing else, so the row happily offered Drive on a build with no client
-    // ID and the MinIO lab on a public origin — choices the shell then had to
-    // quietly correct behind the user.
+  it("offers exactly the storage destinations this build can open", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
-    const remote = durabilityOptions({ selected: "local-device", adoption: undefined, location: { hostname: "airship.example" } });
-    expect(remote.map((option) => option.value)).toEqual([...VAULT_BACKENDS]);
-    expect(remote.find((option) => option.value === "google-drive")).toMatchObject({ disabled: true });
-    expect(remote.find((option) => option.value === "local-lab")).toMatchObject({ disabled: true });
-    expect(remote.find((option) => option.value === "local-lab")?.description).toMatch(/loopback/iu);
-    expect(remote.find((option) => option.value === "google-drive")?.description).toMatch(/client ID/iu);
-    for (const reachable of ["local-device", "ephemeral"] as const) {
-      expect(remote.find((option) => option.value === reachable)?.disabled).toBeUndefined();
-    }
+    const values = (input: Parameters<typeof vaultBackendsForSelector>[0]) =>
+      durabilityOptions({ selected: "local-device", adoption: undefined, ...input }).map((option) => option.value);
 
-    // The lab origin the e2e vault-adoption journey runs on, and every loopback
-    // spelling `isLoopbackAirshipLocation` accepts in `app.tsx`.
+    expect(values({ location: { hostname: "airship.example" }, localLabEnabled: false }))
+      .toEqual(["ephemeral", "local-device"]);
+    expect(values({ location: { hostname: "localhost" }, localLabEnabled: false }))
+      .toEqual(["ephemeral", "local-device"]);
+    expect(values({ googleClientId: configuredClientId, location: { hostname: "airship.example" }, localLabEnabled: false }))
+      .toEqual(["ephemeral", "local-device", "google-drive"]);
+
     for (const hostname of ["localhost", "127.0.0.1", "::1", "[::1]"] as const) {
-      const loopback = durabilityOptions({ selected: "local-device", adoption: undefined, location: { hostname } });
-      expect(loopback.find((option) => option.value === "local-lab")?.disabled, hostname).toBeUndefined();
+      const availability = { location: { hostname }, localLabEnabled: true };
+      expect(values(availability), hostname).toEqual(["ephemeral", "local-device", "local-lab"]);
+      expect(values(availability), hostname).toEqual([...vaultBackendsForSelector(availability)]);
     }
+    expect(values({ location: { hostname: "airship.example" }, localLabEnabled: true }))
+      .toEqual(["ephemeral", "local-device"]);
+  });
 
-    const deployable = durabilityOptions({ selected: "local-device", adoption: undefined, googleClientId: configuredClientId, location: { hostname: "airship.example" } });
-    expect(deployable.find((option) => option.value === "google-drive")?.disabled).toBeUndefined();
-
-    // No location supplied is "not asked", not "unreachable": a stored choice
-    // must never be rewritten by the absence of a question.
-    const unasked = durabilityOptions({ selected: "local-lab", adoption: undefined });
-    expect(unasked.find((option) => option.value === "local-lab")?.disabled).toBeUndefined();
+  it("keeps explicit refusals for historical selections without advertising them", () => {
+    const historicalDrive = durabilityOptions({
+      selected: "google-drive",
+      adoption: "not-connected",
+      location: { hostname: "localhost" },
+      localLabEnabled: false,
+    });
+    expect(historicalDrive.map((option) => option.value)).toEqual(["ephemeral", "local-device"]);
+    expect(vaultBackendUnavailableReason("google-drive", undefined, { hostname: "localhost" }, false))
+      .toMatch(/no Google OAuth client ID/iu);
+    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, false))
+      .toMatch(/host-composed local MinIO lab/iu);
+    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }, true))
+      .toMatch(/exact loopback origin/iu);
   });
 
   it("keeps the destination's consequence as its description while it is reachable", () => {
-    const options = durabilityOptions({ selected: "local-device", adoption: "connected", vaultAdopted: true, location: { hostname: "localhost" } });
+    const options = durabilityOptions({ selected: "local-device", adoption: "connected", vaultAdopted: true, localLabEnabled: true, location: { hostname: "localhost" } });
     expect(options.find((option) => option.value === "local-device")).toEqual({
       value: "local-device",
       label: "This device · connected",
@@ -672,47 +666,10 @@ describe("the Preferences dialog keeps a way out on screen", () => {
     expect(/if \(!open\) return;\n\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*setScrolled\(false\);/u.test(source)).toBe(true);
   });
 
-  it("leaves the Trust sheet's header alone, which shares the layout rule but not the scroll box", () => {
-    // `.preferences-dialog > header, .trust-sheet > header` share one flex rule,
-    // so a substring check would match that rule and prove nothing; only the
-    // dialog is the scrolling element, so only the dialog sticks.
-    expect(/\.trust-sheet > header \{[^}]*position: sticky/u.test(overlayStyles())).toBe(false);
-    expect(/\.trust-sheet[^{]*\{[^}]*scroll-padding-block-start/u.test(overlayStyles())).toBe(false);
-  });
 });
 
 describe("modal focus and key ownership", () => {
   const dialog = () => shellSource();
-
-  /** The body of `TrustPostureSheet`, from its declaration to the next top-level symbol. */
-  const trustSheetSource = () => {
-    const source = dialog();
-    const start = source.indexOf("export function TrustPostureSheet");
-    return source.slice(start, source.indexOf("type ViewBoundaryProps", start));
-  };
-
-  it("restores the focus Runtime trust took, the same way its sibling modals do", () => {
-    /*
-     * "The same way" now means the same code, which is what it should always
-     * have meant.
-     *
-     * The sheet kept a private capture/restore: `document.activeElement` at
-     * open, focused again at close. That has no guard for the active element
-     * being `<body>` — which it is whenever the chip is opened by pointer — so
-     * closing "restored" focus to the body and the chip measured as `inactive`
-     * immediately after being dismissed. `useOpenerRestore` is what the other
-     * overlays use: it ignores `<body>`, ignores anything inside an overlay,
-     * and remembers the last element focused outside one.
-     */
-    const sheet = trustSheetSource();
-    expect(sheet).toContain("useOpenerRestore(open);");
-    expect(sheet, "a private copy is how this drifted the first time")
-      .not.toContain("restore.current");
-    // And the siblings must be on the same hook, or "the same way" is a claim
-    // about two implementations again.
-    const overlays = readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8");
-    expect([...overlays.matchAll(/useOpenerRestore\(open\);/gu)]).toHaveLength(2);
-  });
 
   it("does not close Preferences over an Escape a control inside it already handled", () => {
     // `MenuSelect`'s open listbox preventDefaults its own Escape to close only

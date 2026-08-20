@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { BrowserGitClient } from "../git/client";
 import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
-import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilityStatusMark, type DurabilityState } from "./durability-indicator";
 import { trapFocus } from "./focus-trap";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import type { SourcesImportRequest } from "./sources-view";
 import { WORKBENCH_SHARED_SURFACE_NOTE, workbenchIdentity } from "./workbench-model";
 import { WorkspaceView, workspaceWorkbenchScope } from "./workspace-view";
@@ -222,7 +222,7 @@ export function EditorView(props: EditorViewProps) {
  */
 function WorkbenchDurabilityChip({ state, detail }: Readonly<{ state: DurabilityState; detail: string }>) {
   const label = durabilityLabel(state);
-  const seal: SealState = durabilitySeal(state);
+  const mark: StatusMarkState = durabilityStatusMark(state);
   return (
     // `role="status"` is kept from the retired pill: adopting a vault while
     // this route is open is a state change that has to be announced.
@@ -231,7 +231,7 @@ function WorkbenchDurabilityChip({ state, detail }: Readonly<{ state: Durability
         class="workbench-durability__popover"
         label={`Workspace durability. ${label}. ${detail}`}
         heading="Workspace durability"
-        trigger={<Seal state={seal} density="chip" label={label} />}
+        trigger={<StatusMark state={mark} density="chip" label={label} />}
       >
         <p class="workbench-durability__detail">{detail}</p>
         <p class="workbench-durability__detail">

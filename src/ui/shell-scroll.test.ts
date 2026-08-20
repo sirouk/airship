@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
  * 1px tall — resolved against the initial containing block instead of against
  * the pane that contains them, and a box positioned against the ICB is a box
  * `overflow: auto` on that pane has no standing to clip. They landed at their
- * static positions in the document (a `span.seal__label` reading "Journal
+ * static positions in the document (a `span.status-mark__label` reading "Journal
  * structure passed" at y=1140.6 in a 568px viewport) and `scrollHeight` grew to
  * hold them.
  *

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Context, Model } from "../index";
+import type { Context, Model } from "../types";
 import { streamAnthropic } from "./anthropic";
 import {
   collectEvents,

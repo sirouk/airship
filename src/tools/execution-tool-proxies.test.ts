@@ -28,11 +28,10 @@ describe("lazy execution tool proxies", () => {
     });
     expect(JSON.parse(result.content)).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "python-pyodide" }),
-      expect.objectContaining({ id: "wasix", state: "unavailable" }),
     ]));
   });
 
-  it("approval-binds only exact workspace-file calls and does not advertise unpromoted WASIX", () => {
+  it("approval-binds only exact workspace-file calls and advertises only installable runtimes", () => {
     const registry = new ToolRegistry();
     registerLazyExecutionTools(registry);
     const definition = registry.get("execute_workspace_program")!.definition;
@@ -49,8 +48,6 @@ describe("lazy execution tool proxies", () => {
       "text_editor",
     ]);
     expect(schema.properties.calls.items.properties.tool.enum).not.toContain("execute_workspace_program");
-    expect(registry.get("execute_wasix_shell")).toBeUndefined();
-
     const installSchema = registry.get("install_execution_runtime")!.definition.inputSchema as {
       properties: { runtime: { enum: string[] } };
     };

@@ -1,4 +1,3 @@
-import type { SecurityPosture } from "../core/contracts";
 import type { ProfileMemoryScope } from "../profiles/domain";
 
 /**
@@ -6,12 +5,9 @@ import type { ProfileMemoryScope } from "../profiles/domain";
  *
  * The profile editor is four `<details>` disclosures, and collapsed it reveals
  * "419 characters", "Foundry" and "profile memory · Ask First". A person cannot
- * answer "what does this profile change?" without opening all four. Worse, one
- * field had three renderings under two names inside 400px — the catalog card
- * said *Minimum posture*, the select said *Minimum proof*, and the revision
- * strip said *Minimum proof* again 60px below the select — and the boundary
- * summary printed the raw enum `profile memory` while the select inside it
- * printed the friendly `This profile`.
+ * answer "what does this profile change?" without opening all four. Worse, the
+ * boundary summary printed the raw enum `profile memory` while the select
+ * inside it printed the friendly `This profile`.
  *
  * This module is the single answer to "what is this value called, and what does
  * it read as". Every label here is the label the *editor* uses, so a value has
@@ -23,7 +19,6 @@ export type ProfileGovernanceCellKey =
   | "theme"
   | "memory"
   | "approvals"
-  | "proof"
   | "skills";
 
 export type ProfileGovernanceCell = Readonly<{
@@ -70,33 +65,18 @@ export const PROFILE_APPROVAL_LABELS = Object.freeze({
   "full-access": "Full Access",
 } as const);
 
-/** The minimum-proof names, taken verbatim from the select that sets them. */
-export const PROFILE_POSTURE_LABELS: Readonly<Record<SecurityPosture, string>> = Object.freeze({
-  local: "Local",
-  "plaintext-remote": "Remote",
-  "encrypted-unattested": "Encrypted",
-  "encrypted-attested": "Attested",
-});
-
-/** The one name this field has, on the card, in the strip and in the editor. */
-export const PROFILE_POSTURE_FIELD_LABEL = "Minimum proof";
-
 /**
- * The boundary note, with the false direction removed and one noun for one
- * thing.
+ * The boundary note, with one noun for one thing.
  *
- * It read "including the minimum proof posture below" while the select it
- * pointed at was above it. The clause said nothing the sentence needed, so the
- * fix is a deletion rather than a re-aim.
- *
- * It then named the same object twice in two adjacent sentences — "copied into
- * each new session. Existing conversations keep their original pin." — inside
- * the one module that exists so a value has one name at rest and the same name
- * while you change it. docs/CANON.md makes the split explicit: a Conversation is
- * the user-facing thread under Chat, a Session is the immutable runtime
- * identity (manifest, journal, receipt chain). What this sentence describes is
- * the thread a person starts, so it says conversation both times; "session"
- * survives here only where receipts and pins are the subject.
+ * It used to name the same object twice in two adjacent sentences — "copied
+ * into each new session. Existing conversations keep their original pin." —
+ * inside the one module that exists so a value has one name at rest and the
+ * same name while you change it. docs/CANON.md makes the split explicit: a
+ * Conversation is the user-facing thread under Chat, a Session is the
+ * immutable runtime identity (manifest, journal, receipt chain). What this
+ * sentence describes is the thread a person starts, so it says conversation
+ * both times; "session" survives here only where receipts and pins are the
+ * subject.
  */
 export const PROFILE_BOUNDARY_NOTE =
   "These settings are copied into each new conversation. Existing conversations keep their original pin.";
@@ -106,16 +86,15 @@ export type ProfileGovernanceInput = Readonly<{
   themeName: string;
   memoryScope: keyof typeof PROFILE_MEMORY_SCOPE_LABELS;
   approvalMode: keyof typeof PROFILE_APPROVAL_LABELS;
-  minimumPosture: SecurityPosture;
   skillCount: number;
 }>;
 
 /**
- * The six things a profile governs, each legible with zero clicks.
+ * The five things a profile governs, each legible with zero clicks.
  *
  * Order is the order a person asks about them: what it says, what it looks
- * like, what it remembers, what it may do without asking, what it refuses to
- * run on, and what tools it resolves.
+ * like, what it remembers, what it may do without asking, and what tools it
+ * resolves.
  */
 export function profileGovernanceCells(input: ProfileGovernanceInput): readonly ProfileGovernanceCell[] {
   return Object.freeze([
@@ -144,12 +123,6 @@ export function profileGovernanceCells(input: ProfileGovernanceInput): readonly 
       label: "Approvals",
       value: PROFILE_APPROVAL_LABELS[input.approvalMode],
       detail: "Choose what this profile may do before it asks.",
-    }),
-    Object.freeze({
-      key: "proof",
-      label: PROFILE_POSTURE_FIELD_LABEL,
-      value: PROFILE_POSTURE_LABELS[input.minimumPosture],
-      detail: "Choose the weakest runtime posture this profile will start on.",
     }),
     Object.freeze({
       key: "skills",

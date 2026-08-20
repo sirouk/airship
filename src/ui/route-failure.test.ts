@@ -1,10 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { FORK_RETRY_TOOLTIP } from "./chat/fork-notice";
-import { postureFloorRefusal } from "./posture-floor";
-import { PROFILE_POSTURE_FIELD_LABEL, PROFILE_POSTURE_LABELS } from "./profiles-governance";
 import { ROUTE_FAILURE_RELOAD_LABEL, ROUTE_FAILURE_RELOAD_REASON, routeRetryLabel } from "./route-failure";
-import { postureLabel } from "./trust-language";
 
 const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 const routeFailure = await readFile(new URL("./route-failure.tsx", import.meta.url), "utf8");
@@ -15,19 +12,10 @@ const DEFERRED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["Editor", "editorViewError"],
   ["Terminal", "terminalViewError"],
   ["Memory", "memoryViewError"],
-  ["Skills", "skillsViewError"],
   ["Capabilities", "capabilitiesViewError"],
+  ["Skills", "skillsViewError"],
   ["Vault", "vaultViewError"],
-  ["Account", "billingViewError"],
-  ["Proof", "proofViewError"],
-  ["Connection", "accessViewError"],
-];
-
-/** Slots that load on their own chunk *inside* a route that already rendered. */
-const DEFERRED_SLOTS: ReadonlyArray<readonly [string, string]> = [
-  ["the claim stack", "proofInspectorError"],
-  ["the provider fabric", "providerFabricError"],
-  ["attestation evidence", "attestationsViewError"],
+  ["Providers", "providerFabricError"],
 ];
 
 describe("a failed route chunk is a stated fact with a way out", () => {
@@ -42,30 +30,12 @@ describe("a failed route chunk is a stated fact with a way out", () => {
     expect(app).not.toMatch(/<section class="(?:work-view )?panel" role="alert">/u);
   });
 
-  it("states the failure inside the slot that failed, rather than in a branch the route cannot reach", () => {
-    for (const [title, state] of DEFERRED_SLOTS) {
-      expect(app, `${title} states its own failure`)
-        .toContain(`<RouteFailure inline title="${title}" message={${state}} onRetry={retryDeferredChunk} />`);
-    }
-    // `accessViewError` renders only where `AccessScreen` is absent, so the
-    // provider-fabric and OAuth-registration loaders writing to it were dead
-    // writes: unreachable the moment the Connection route loaded.
-    expect([...app.matchAll(/setAccessViewError\("/gu)]).toHaveLength(1);
-    expect(app).toContain('setProviderFabricError("The provider fabric could not be loaded.');
-    expect(app).toContain('setOAuthRegistrationError("Chutes OAuth registration metadata could not be loaded');
-    expect(app).toContain("oauthRegistrationError ? { tone: \"error\", message: oauthRegistrationError } : undefined");
-  });
-
   it("re-enters the loaders, because the loaders are keyed on state a user cannot change", () => {
     expect(app).toContain("function retryDeferredChunk()");
     for (const dependency of [
-      "AttestationsScreen, deferredChunkAttempt]",
-      "ProofInspector, deferredChunkAttempt]",
-      "ProofScreen, deferredChunkAttempt]",
-      "VaultScreen, deferredChunkAttempt]",
-      "LocalDeviceVaultSetupScreen, deferredChunkAttempt]",
-      "AccessScreen, BillingScreen, deferredChunkAttempt]",
-      "activeOAuthRegistration, deferredChunkAttempt]",
+      "SessionsScreen, VaultScreen, deferredChunkAttempt]",
+      "GoogleDriveSetupScreen, LocalLabSetupScreen, deferredChunkAttempt]",
+      "preferences.vaultBackend, LocalDeviceVaultSetupScreen, deferredChunkAttempt]",
       "ProviderConnectionsScreen, deferredChunkAttempt]",
       "EditorScreen, deferredChunkAttempt]",
       "TerminalScreen, deferredChunkAttempt]",
@@ -120,21 +90,6 @@ describe("All conversations reports its own chunk failure", () => {
   });
 });
 
-describe("the claim stack says when it did not load", () => {
-  it("no longer claims #proof reports a chunk #proof does not own", () => {
-    expect(app).not.toMatch(/which reports its own load failure/u);
-    expect(app).toContain('setProofInspectorError("The claim stack could not be loaded. No receipt, evidence, or journal state changed.")');
-  });
-
-  it("states the same fact in the chat rail instead of rendering nothing", () => {
-    // Matched on the element rather than on one spelling of its class list:
-    // the rail's class became conditional when the claim stack learned to open
-    // collapsed, and a literal slice silently stopped finding the rail at all.
-    const rail = app.slice(app.search(/<aside class=(?:"inspector|\{)/u));
-    expect(rail.slice(0, rail.indexOf("{view === \"sessions\""))).toContain("proofInspectorError");
-  });
-});
-
 describe("Retry's branch warning reaches a touch device", () => {
   it("carries the constant that owns the sentence, not a literal that drifted from it", () => {
     // The literal it replaces said the sealed ancestor context IS carried into
@@ -153,29 +108,5 @@ describe("Retry's branch warning reaches a touch device", () => {
     // sibling the same group exposes.
     expect(disclosure).toContain(">Retry</button>");
     expect(disclosure).toContain("aria-describedby={`retry-branch-note-${message.id}`}");
-  });
-});
-
-describe("a profile's minimum proof is refused in the words it was set in", () => {
-  const POSTURES = ["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"] as const;
-
-  it("never prints a raw union member, and always names a way out", () => {
-    for (const runtime of POSTURES) {
-      for (const floor of POSTURES) {
-        const message = postureFloorRefusal(runtime, floor);
-        for (const raw of POSTURES) {
-          expect(message, `${runtime}/${floor} keeps ${raw} internal`).not.toContain(raw);
-        }
-        expect(message).toContain(postureLabel(runtime));
-        expect(message).toContain(PROFILE_POSTURE_LABELS[floor]);
-        expect(message).toContain(PROFILE_POSTURE_FIELD_LABEL);
-        expect(message).toMatch(/Connect a provider that meets it, or lower/u);
-      }
-    }
-  });
-
-  it("is built from the dictionaries, not a third spelling at the throw site", () => {
-    expect(app).toContain("postureFloorRefusal(runtime.transport.posture, pin.minimumPosture)");
-    expect(app).not.toContain("minimum posture");
   });
 });

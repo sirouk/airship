@@ -3,8 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
 import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
-import { Seal, type SealState } from "./seal";
-import { trapFocus } from "./focus-trap";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
@@ -24,7 +23,7 @@ export type PaletteEntry = Readonly<{
   label: string;
   description: string;
   keywords?: readonly string[];
-  group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences" | "Actions";
+  group: "Navigate" | "Commands" | "Sessions" | "Setup" | "Preferences" | "Actions";
   /**
    * Set for entries the runtime has declared unavailable right now. The row
    * stays listed with its reason as the description — the same contract
@@ -85,7 +84,7 @@ export function buildPaletteEntries(args: Readonly<{
       label: destination.label,
       description: `${destination.group} · ${scopeLabel(destination.scope)}${chordSuffix(destination.id)}`,
       keywords: [destination.id, destination.hash, destination.group, destination.scope],
-      group: destination.group === "Trust" ? "Trust" : "Navigate",
+      group: destination.group === "Setup" ? "Setup" : "Navigate",
       run: () => args.navigate(destination.id),
     }));
     /*
@@ -109,7 +108,7 @@ export function buildPaletteEntries(args: Readonly<{
       label: nested.label,
       description: `${destination.label} · ${scopeLabel(nested.scope)}${chordSuffix(nested.id)}`,
       keywords: [nested.id, nested.hash, destination.label],
-      group: destination.group === "Trust" ? "Trust" : "Navigate",
+      group: destination.group === "Setup" ? "Setup" : "Navigate",
       run: () => args.navigate(nested.id),
     }));
   }
@@ -265,7 +264,7 @@ export function useGlobalPaletteShortcut(toggle: () => void): void {
 }
 
 export const NAVIGATION_JUMPS: Readonly<Record<string, NavigationView>> = Object.freeze({
-  c: "chat", s: "sessions", w: "workspace", m: "memory", x: "context", p: "profiles", t: "proof", n: "access",
+  c: "chat", s: "sessions", w: "workspace", m: "memory", x: "context", p: "profiles", t: "terminal", n: "access",
 });
 
 export function navigationJumpForChord(prefix: string | undefined, key: string): NavigationView | undefined {
@@ -425,24 +424,43 @@ export type PreferenceOverrides = Readonly<{
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
+/** Exact opt-in for the host-composed loopback storage lab. */
+export function localLabEnabledInBuild(value: string | undefined): boolean {
+  return value === "1";
+}
+
+const BUILD_LOCAL_LAB_ENABLED = localLabEnabledInBuild(
+  import.meta.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB as string | undefined,
+);
+
+export type VaultBackendSelectorAvailability = Readonly<{
+  googleClientId?: string | null;
+  localLabEnabled?: boolean;
+  location?: Pick<Location, "hostname">;
+}>;
+
+function browserVaultLocation(): Pick<Location, "hostname"> | undefined {
+  return typeof window === "undefined" ? undefined : window.location;
+}
+
 /**
- * Whether this deployment can actually reach a destination.
+ * Whether this deployment can actually open a destination.
  *
- * `location` is optional and its absence means "not asked": the persisted-value
- * sanitizer deliberately calls without it, because a stored choice must not be
- * silently rewritten by a deployment change. The render path passes it, so the
- * row can grey a destination and say why instead of deleting it.
+ * Local MinIO is not a stock backend. It needs both the exact build-time host
+ * composition opt-in and an exact loopback page origin. Missing either fact is
+ * a refusal, including during persisted-value migration.
  */
 function availableVaultBackend(
   value: unknown,
   googleClientId?: string | null,
   location?: Pick<Location, "hostname">,
+  localLabEnabled = BUILD_LOCAL_LAB_ENABLED,
 ): VaultBackend | undefined {
   if (value === "google-drive") {
     return isDeployableGoogleOAuthClientId(googleClientId) ? value : undefined;
   }
   if (value === "local-lab") {
-    return location && !isLoopbackVaultOrigin(location) ? undefined : value;
+    return localLabEnabled && location && isLoopbackVaultOrigin(location) ? value : undefined;
   }
   return value === "local-device" || value === "ephemeral" ? value : undefined;
 }
@@ -463,8 +481,10 @@ function isLoopbackVaultOrigin(location: Pick<Location, "hostname">): boolean {
 export function resolveDefaultVaultBackend(
   value: string | undefined,
   googleClientId?: string | null,
+  localLabEnabled = BUILD_LOCAL_LAB_ENABLED,
+  location: Pick<Location, "hostname"> | undefined = browserVaultLocation(),
 ): PreferenceOverrides["vaultBackend"] {
-  return availableVaultBackend(value, googleClientId)
+  return availableVaultBackend(value, googleClientId, location, localLabEnabled)
     ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "ephemeral");
 }
 
@@ -513,13 +533,34 @@ const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, c
   ephemeral: Object.freeze(["Ephemeral content", "Your writing dies with the tab. One line per conversation stays, so a return can tell you."] as const),
 });
 
-/** Every destination, starting with the page-memory choice a new tab uses. */
-export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
+/** Stock destinations, in the exact order both product selectors render. */
+export const STOCK_VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
   "ephemeral",
   "local-device",
   "google-drive",
+] as const);
+
+/** Recognized persisted values. `local-lab` is host-composed, not stock. */
+export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
+  ...STOCK_VAULT_BACKENDS,
   "local-lab",
 ] as const);
+
+/** The destinations this build and page origin may advertise in a selector. */
+export function vaultBackendsForSelector(
+  input: VaultBackendSelectorAvailability = {},
+): readonly VaultBackend[] {
+  const location = input.location ?? browserVaultLocation();
+  const localLabEnabled = input.localLabEnabled ?? BUILD_LOCAL_LAB_ENABLED;
+  const stock = STOCK_VAULT_BACKENDS.filter((backend) =>
+    availableVaultBackend(backend, input.googleClientId, location, localLabEnabled));
+  return Object.freeze([
+    ...stock,
+    ...(availableVaultBackend("local-lab", input.googleClientId, location, localLabEnabled)
+      ? ["local-lab" as const]
+      : []),
+  ]);
+}
 
 /**
  * Whether the selected destination is actually holding anything.
@@ -553,19 +594,11 @@ export type DurabilityOption = Readonly<{
 }>;
 
 /**
- * Every destination, with the unreachable ones greyed and explained.
+ * Settings uses the same filtered destination set as Vault.
  *
- * Availability used to be a validation step applied to *persisted input* only,
- * while the option list was derived from the presentation table — which
- * describes what each destination is, not whether this deployment can reach
- * it. So the row offered Google Drive on a build with no client ID and the
- * MinIO lab on a public origin, and choosing either produced a preference the
- * shell then had to quietly correct.
- *
- * The list is not filtered: dropping a row would rewrite the control's contents
- * on a deployment change, so a person who had chosen a destination would find
- * their selection gone with nothing said. Greyed, with the reason as the
- * option's own description, states the same fact and keeps the choice legible.
+ * Unconfigured Drive and non-composed local MinIO remain recognizable values so
+ * a historical selection can get an explicit refusal. They are not options in
+ * the chooser and therefore are not advertised as disabled product rungs.
  */
 export function durabilityOptions(input: Readonly<{
   selected: VaultBackend;
@@ -573,31 +606,32 @@ export function durabilityOptions(input: Readonly<{
   /** Absent means the host reported no vault state; see `durabilityOptionLabel`. */
   vaultAdopted?: boolean;
   googleClientId?: string | null;
+  localLabEnabled?: boolean;
   location?: Pick<Location, "hostname">;
 }>): readonly DurabilityOption[] {
-  return Object.freeze(VAULT_BACKENDS.map((backend) => {
-    const reason = vaultBackendUnavailableReason(backend, input.googleClientId, input.location);
+  return Object.freeze(vaultBackendsForSelector(input).map((backend) => {
     const adoption = backend === input.selected
       ? input.adoption
       : input.vaultAdopted === undefined ? undefined : "not-connected";
     return Object.freeze({
       value: backend,
       label: durabilityOptionLabel(backend, adoption),
-      description: reason ?? DURABILITY[backend][1],
-      ...(reason ? { disabled: true } : {}),
+      description: DURABILITY[backend][1],
     });
   }));
 }
 
-/** Why this deployment cannot reach a destination, in the words the row prints. */
+/** Why this deployment cannot reach a historical or requested destination. */
 export function vaultBackendUnavailableReason(
   backend: VaultBackend,
   googleClientId?: string | null,
-  location?: Pick<Location, "hostname">,
+  location: Pick<Location, "hostname"> | undefined = browserVaultLocation(),
+  localLabEnabled = BUILD_LOCAL_LAB_ENABLED,
 ): string | undefined {
-  if (availableVaultBackend(backend, googleClientId, location)) return undefined;
+  if (availableVaultBackend(backend, googleClientId, location, localLabEnabled)) return undefined;
   if (backend === "google-drive") return "Unavailable: this build has no Google OAuth client ID, so Drive authorization cannot be opened.";
-  return "Unavailable: the baked MinIO lab is reachable only from a loopback origin. Configure an S3-compatible provider in Vault instead.";
+  if (!localLabEnabled) return "Unavailable: this build does not include the host-composed local MinIO lab.";
+  return "Unavailable: the local MinIO lab is reachable only from an exact loopback origin.";
 }
 
 export function durabilityRowNote(adoption: DurabilityAdoption): string {
@@ -618,6 +652,8 @@ export function loadPreferenceOverrides(
   availability: Readonly<{
     googleClientId?: string | null;
     defaultVaultBackend?: VaultBackend;
+    localLabEnabled?: boolean;
+    location?: Pick<Location, "hostname">;
   }> = {},
 ): PreferenceOverrides {
   if (!storage) return DEFAULT_PREFERENCES;
@@ -627,9 +663,13 @@ export function loadPreferenceOverrides(
     const googleClientId = "googleClientId" in availability
       ? availability.googleClientId
       : import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const localLabEnabled = availability.localLabEnabled ?? BUILD_LOCAL_LAB_ENABLED;
+    const location = availability.location ?? browserVaultLocation();
     const availableDefault = resolveDefaultVaultBackend(
       availability.defaultVaultBackend ?? DEFAULT_PREFERENCES.vaultBackend,
       googleClientId,
+      localLabEnabled,
+      location,
     );
     return Object.freeze({
       mode: value.mode === "light" ? "light" : "dark",
@@ -637,7 +677,7 @@ export function loadPreferenceOverrides(
       density: value.density === "compact" ? "compact" : "comfortable",
       corners: value.corners === "square" || value.corners === "rounded" ? value.corners : "subtle",
       bodyFont: value.bodyFont === "system-serif" ? "system-serif" : "system-sans",
-      vaultBackend: availableVaultBackend(value.vaultBackend, googleClientId) ?? availableDefault,
+      vaultBackend: availableVaultBackend(value.vaultBackend, googleClientId, location, localLabEnabled) ?? availableDefault,
       approvalMode: value.approvalMode === "auto-approve" || value.approvalMode === "full-access" ? value.approvalMode : "ask-first",
       transcriptOperations: parseTranscriptOperationsMode(value.transcriptOperations),
     });
@@ -723,173 +763,32 @@ export function approvalModeLabel(mode: ApprovalMode): string {
 }
 
 export function approvalModeDescription(mode: ApprovalMode): string {
-  if (mode === "auto-approve") return "Each effectful action's parameters, including any script, command or URL, are sent to your active provider in a separate tool-free inference that must return a valid safe verdict; file-content payloads are withheld, unsafe actions are denied, and indeterminate reviews fall back to asking you.";
+  if (mode === "auto-approve") return "Registered write effects run automatically inside their declared browser tool boundary. Execute, network, and identity effects still ask you. This mode makes no separate inference request.";
   if (mode === "full-access") return "Actions run without prompts, through the same explicit browser tools and schemas: workspace writes stay path-confined, but network and identity effects may contact any HTTPS origin that permits it, with no prompt.";
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
 
 /**
- * Which band owns a claim, and therefore which band may state it as text.
- *
- * `tab` — true of this browser tab regardless of which conversation is open:
- * where the kernel runs, whether a vault backend has been adopted, whether the
- * page is online. `conversation` — true only of the open conversation: its
- * connection posture and the endpoint evidence collected under it.
- *
- * The distinction is not decorative. All four axes used to render in the topbar
- * as four pills, so a turn whose endpoint evidence could not be fetched printed
- * "Evidence unavailable" in the topbar *and* "Evidence unavailable · this
- * session" in the session bar 40px below it — one fact, two bands, two
- * sentences. Tagging the scope lets the topbar speak for the tab and reference
- * the conversation band for the rest, without any axis ceasing to exist.
+ * One claim, rendered in full: status mark, verbatim label, verbatim sentence, and the
+ * route that owns the record.
  */
-export type TrustAxisScope = "tab" | "conversation";
-
-export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView; scope: TrustAxisScope }>;
-
-/**
- * Where a scope's claims are stated at rest, named so a reference can say it.
- *
- * A collapse that does not say what it contains is a burial, so every surface
- * that stops printing a claim points at the band that still does.
- */
-export const TRUST_SCOPE_BANDS: Readonly<Record<TrustAxisScope, Readonly<{ heading: string; restingHome: string }>>> = Object.freeze({
-  tab: Object.freeze({
-    heading: "This browser tab",
-    restingHome: "Stated at rest in the topbar chip.",
-  }),
-  conversation: Object.freeze({
-    heading: "This conversation",
-    restingHome: "Stated at rest in the session bar, on the conversation these claims belong to.",
-  }),
-});
-
-export function trustAxesInScope(axes: readonly TrustAxis[], scope: TrustAxisScope): readonly TrustAxis[] {
-  return axes.filter((axis) => axis.scope === scope);
-}
-
-const TRUST_STATE_SEVERITY: Readonly<Record<SealState, number>> = Object.freeze({
-  failed: 7, attention: 6, stale: 5, asserted: 4, none: 3, checking: 2, verified: 1,
-});
-
-/** Returns the weakest independently-scoped claim without merging its semantics. */
-export function worstTrustAxis(axes: readonly TrustAxis[]): TrustAxis | undefined {
-  return axes.reduce<TrustAxis | undefined>((worst, candidate) =>
-    !worst || TRUST_STATE_SEVERITY[candidate.state] > TRUST_STATE_SEVERITY[worst.state] ? candidate : worst,
-  undefined);
-}
-
-/**
- * One claim, rendered in full: seal, verbatim label, verbatim sentence, and the
- * route that owns the record. This is the body of every level-1 disclosure in
- * the product — the runtime trust sheet and the chat session-status popover
- * render the same rows from different scopes, so a claim reads identically
- * wherever the user reaches it.
- */
-export type ClaimRow = Readonly<{
+export type DetailRow = Readonly<{
   id: string;
-  state: SealState;
+  state: StatusMarkState;
   label: string;
   detail: string;
   /** Absent only for a claim with no route of its own; the row then states it without a target. */
   action?: Readonly<{ label: string; onSelect(): void }>;
 }>;
 
-export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
-  return <div class="claim-rows">{rows.map((row) => {
-    const body = <><Seal state={row.state} label={row.label} detail={row.detail} /><small>{row.detail}</small>{row.action ? <span aria-hidden="true">→</span> : null}</>;
+export function DetailRows({ rows }: Readonly<{ rows: readonly DetailRow[] }>) {
+  return <div class="detail-rows">{rows.map((row) => {
+    const body = <><StatusMark state={row.state} label={row.label} detail={row.detail} /><small>{row.detail}</small>{row.action ? <span aria-hidden="true">→</span> : null}</>;
     return row.action
       ? <button key={row.id} type="button" onClick={row.action.onSelect}>{body}</button>
       : <p key={row.id}>{body}</p>;
   })}</div>;
-}
-
-export function TrustPostureSheet({ open, axes, conversationFacts = [], onClose, onNavigate }: Readonly<{
-  open: boolean;
-  axes: readonly TrustAxis[];
-  /**
-   * Facts about the open conversation that are not posture axes: which model
-   * this thread is bound to and what the encrypted-inference statement says,
-   * what holds the credential, and which Skill set was pinned when the prompt
-   * was composed.
-   *
-   * They arrive as finished `ClaimRow`s rather than as axes on purpose. The
-   * topbar chip's count stands for the independently-scoped posture claims and
-   * has to keep meaning exactly that; these are the facts the phone's session
-   * bar used to spend a 44px slot each on, and the composer a permanent line.
-   * Rendering them in the conversation group is what makes that collapse a move
-   * rather than a deletion — the group's own heading says whose facts they are,
-   * and the sheet is one tap from the chip that is always on screen.
-   */
-  conversationFacts?: readonly ClaimRow[];
-  onClose(): void;
-  onNavigate(view: NavigationView): void;
-}>) {
-  const dialog = useRef<HTMLDivElement>(null);
-  /*
-   * The same capture/restore contract `CommandPalette` and `PreferencesDialog`
-   * keep: a modal that takes focus on open owes it back on close. Without it,
-   * dismissing the sheet dropped keyboard focus on `<body>` and the reader who
-   * opened it from the topbar chip lost their place entirely.
-   *
-   * It kept a private copy of that contract, and the copy was the weaker one:
-   * it captured `document.activeElement` at open and focused it again at close,
-   * with no guard for `document.activeElement` being `<body>` — which it is
-   * whenever the chip is opened by pointer. Closing then "restored" focus to
-   * the body, measured as the chip reading `inactive` right after being
-   * dismissed. `useOpenerRestore` is the version the other overlays use: it
-   * ignores `<body>`, ignores anything inside an overlay, and remembers the
-   * last element focused outside one. Third time a private copy of a shared
-   * fix has been found in this pass, after the bottom-bar floor and the return
-   * ledger's storage accessor.
-   */
-  useOpenerRestore(open);
-  useEffect(() => {
-    if (!open) return;
-    const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
-    return () => cancelAnimationFrame(frame);
-  }, [open]);
-  if (!open) return null;
-  /*
-   * Grouped by scope, not merged. Every axis still renders its own row with its
-   * own verbatim label, sentence and destination — the devil's advocate pass
-   * rejected replacing the four-axis posture with a claim count, and this sheet
-   * is where the independent-axis property is guaranteed. The headings are the
-   * only addition, and they exist because the topbar chip now speaks for two of
-   * these axes and defers to the session bar for the other two: a reader who
-   * follows the deferral has to be able to see which group they arrived at.
-   */
-  const groups = (["tab", "conversation"] as const)
-    .map((scope) => ({
-      scope,
-      band: TRUST_SCOPE_BANDS[scope],
-      axisRows: trustAxesInScope(axes, scope).map((axis) => Object.freeze({
-        id: axis.id,
-        state: axis.state,
-        label: axis.label,
-        detail: axis.detail,
-        action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }),
-      })),
-      /*
-       * The conversation's own facts follow its posture claims and are kept in
-       * their own block, never merged into the axis list.
-       *
-       * The topbar chip states its own cost — "4 runtime claims" — and that
-       * number may not drift from what the sheet renders behind it. An axis is
-       * a claim about whether something can be trusted; a fact is a claim about
-       * what is currently true. Mixing them would have made the chip's count
-       * wrong in the only place a reader can check it.
-       */
-      factRows: scope === "conversation" ? conversationFacts.map((fact) => Object.freeze({
-        ...fact,
-        action: fact.action
-          ? Object.freeze({ label: fact.action.label, onSelect: () => { onClose(); fact.action!.onSelect(); } })
-          : undefined,
-      })) : [],
-    }))
-    .filter((group) => group.axisRows.length + group.factRows.length > 0);
-  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><div class="trust-sheet__axes"><ClaimRows rows={group.axisRows} /></div>{group.factRows.length ? <div class="trust-sheet__facts"><ClaimRows rows={group.factRows} /></div> : null}</section>)}</div></div>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };
@@ -900,7 +799,7 @@ export class ViewErrorBoundary extends Component<ViewBoundaryProps, ViewBoundary
   componentDidCatch(error: Error): void { console.error(`Airship ${this.props.name} view failed safely.`, error); }
   render() {
     if (!this.state.error) return this.props.children;
-    return <section class="view-error panel" role="alert"><Seal state="failed" label="View unavailable" detail={`${this.props.name} failed to render`} /><h1>{this.props.name} could not be displayed</h1><p>Your session and workspace were not changed. Recover to Chat and continue from a working surface.</p><button type="button" onClick={() => { this.setState({ error: undefined }); this.props.onRecover(); }}>Recover to Chat</button><details><summary>Technical details</summary><code>{this.state.error.message.slice(0, 500)}</code></details></section>;
+    return <section class="view-error panel" role="alert"><StatusMark state="failed" label="View unavailable" detail={`${this.props.name} failed to render`} /><h1>{this.props.name} could not be displayed</h1><p>Your session and workspace were not changed. Recover to Chat and continue from a working surface.</p><button type="button" onClick={() => { this.setState({ error: undefined }); this.props.onRecover(); }}>Recover to Chat</button><details><summary>Technical details</summary><code>{this.state.error.message.slice(0, 500)}</code></details></section>;
   }
 }
 
@@ -924,7 +823,7 @@ export function unloadWouldLoseWork(input: Readonly<{
   busy: boolean;
   /** Durable events in the open conversation. */
   eventCount: number;
-  /** The runtime writes through verified encrypted adapters. */
+  /** The runtime writes through configured encrypted adapters. */
   vaultAdopted: boolean;
   /** Airship is performing this navigation itself; see `useBeforeUnloadGuard`. */
   reloading?: boolean;
@@ -1096,7 +995,7 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
        * The first static-host takeover must establish COOP/COEP, but never
        * interrupt work a person has already started.
        *
-       * "Started" used to mean a trusted input gesture, and that fence was too
+       * "Started" used to mean a real input gesture, and that fence was too
        * narrow — J151. A conversation is minted before anyone types, and under
        * page memory it does not cross a reload, so the takeover could discard
        * a whole turn that had been rendered and reported complete. The gesture
@@ -1137,7 +1036,7 @@ export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateRead
  * to what was typed, and this must not reorder it.
  */
 const PALETTE_RECALL_RANK: Readonly<Record<PaletteEntry["group"], number>> = Object.freeze({
-  Sessions: 0, Actions: 1, Navigate: 2, Trust: 2, Preferences: 3, Commands: 4,
+  Sessions: 0, Actions: 1, Navigate: 2, Setup: 2, Preferences: 3, Commands: 4,
 });
 
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {

@@ -32,7 +32,7 @@ import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
 import { Icon } from "./icons";
 import { MenuSelect, moveMenuSelection, type MenuSelectOption } from "./menu-select";
-import { Seal } from "./seal";
+import { StatusMark } from "./status-mark";
 // One conflict predicate for every staging surface: the Advanced controls
 // exclude conflicted paths from bulk staging (`isConflicted`) and the
 // workbench rail must never be able to send what that panel refused.
@@ -346,7 +346,7 @@ function ProfileScopedWorkspaceView({
   const rowLabelBaseId = useId();
   // Both tab strips in the rail switch the same region, so they name the same
   // panel; the document strip names the editor's. Each panel is named by an
-  // `sr-only` heading inside it, which is the pattern `proof-view` already uses
+  // `sr-only` heading inside it, which is the same accessible-heading pattern used by other routes
   // and the one the portability audit checks: a tabpanel must be labelled by an
   // element that exists, not by a second string that can drift from the tab.
   const panelBaseId = useId();
@@ -1897,7 +1897,7 @@ function ProfileScopedWorkspaceView({
         is not the status of an action the reader just took.
       */}
       {lostWorkMessage ? <div class="notice workbench-lost-work" data-state="attention" role="alert">
-        <Seal state="attention" density="dot" size={16} label="Work did not survive the reload" />
+        <StatusMark state="attention" density="dot" size={16} label="Work did not survive the reload" />
         <p>{lostWorkMessage}</p>
         <button type="button" onClick={() => {
           dismissWorkspaceLoss(browserSessionStorage(), witnessScope);
@@ -2148,12 +2148,11 @@ function ProfileScopedWorkspaceView({
               <span>Reading bounded UTF-8 text from this workspace. Binary and oversized files are skipped.</span>
             </div> : null}
             {/*
-              `.workbench-empty` and not the shared `EmptyState`: this is the
-              same recipe the editor pane on this very route already draws, and
-              it is the only one of the four in the product that flex-fills
-              rather than reserving 330px — which is what a 15%-wide rail on a
-              short viewport can afford. Migrating the whole route to the shared
-              recipe means deleting the loser rules in workspace-view.css.
+              `.workbench-empty` and not the shared `.empty-state` recipe: this
+              is the same layout the editor pane on this route already draws,
+              and it flex-fills rather than reserving 330px — what a 15%-wide
+              rail on a short viewport can afford. The distinct layout is a
+              measured space decision rather than a second component API.
             */}
             {emptyFilterCopy ? <div class="workbench-empty">
               <Icon name="workspace" size={28} />
@@ -2275,7 +2274,7 @@ function ProfileScopedWorkspaceView({
               below 760px are on a phone for the first time.
             */}
             <div class="editor-strip">
-              <Seal class="editor-strip__verdict" state={verdict.state} density="chip" label={verdict.word} detail={verdict.detail} />
+              <StatusMark class="editor-strip__verdict" state={verdict.state} density="chip" label={verdict.word} detail={verdict.detail} />
               <span class="editor-strip__path" title={buffer.path}>{buffer.path.replace("/workspace/", "")}</span>
               <span class="editor-strip__meta">
                 <span title={`Revision ${buffer.revision} — every save is compare-and-swapped against this exact revision.`}>rev {buffer.revision.slice(0, 7)}</span>
@@ -2379,7 +2378,7 @@ function ProfileScopedWorkspaceView({
         </main>
       </div>
       {notice ? <div class={`notice workbench-notice ${notice.kind}`} data-state={workbenchNoticeState(notice.kind)} role={notice.kind === "error" ? "alert" : "status"}>
-        <Seal state={workbenchNoticeState(notice.kind)} density="dot" size={16} acting={notice.kind === "progress"} />
+        <StatusMark state={workbenchNoticeState(notice.kind)} density="dot" size={16} acting={notice.kind === "progress"} />
         <p>{notice.message}</p>
         {notice.kind === "progress" ? null : <button type="button" aria-label="Dismiss this message" onClick={() => setNotice(undefined)}>Dismiss</button>}
       </div> : null}
@@ -2579,7 +2578,7 @@ function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, 
   const state = buffer?.loading || !buffer ? "checking" : buffer.error ? "failed" : "verified";
   const stateLabel = buffer?.loading || !buffer ? "Reading patch" : buffer.error ? "Unavailable" : "Read-only diff";
   const stateDetail = buffer?.error ?? (document.source === "status"
-    ? `Verified against worktree version ${document.worktreeVersion}.`
+    ? `Matches worktree version ${document.worktreeVersion}.`
     : `Read from commit object ${document.revision}.`);
   const revealPaths = workbenchDiffRevealPaths(document, buffer?.files);
   const diffIcon = document.source === "status"
@@ -2598,7 +2597,7 @@ function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, 
             : "This commit records no bounded file patch."}
         /></div>}
     <div class="editor-strip">
-      <Seal class="editor-strip__verdict" state={state} density="chip" label={stateLabel} detail={stateDetail} acting={state === "checking"} />
+      <StatusMark class="editor-strip__verdict" state={state} density="chip" label={stateLabel} detail={stateDetail} acting={state === "checking"} />
       <span class="editor-strip__path" title={path}>{path}</span>
       <span class="editor-strip__meta">
         <span>{document.source === "status" ? `${document.scope} · snapshot ${document.worktreeVersion.slice(0, 12)}` : `object ${document.revision.slice(0, 12)}`}</span>
@@ -2900,7 +2899,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
     <div class="scm-bar">
       <MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} />
       <button class="scm-bar__action" type="button" aria-label="Refresh" aria-busy={loading ? "true" : undefined} title={loading ? "Refreshing…" : "Refresh repositories, status and history"} onClick={refresh} disabled={loading}><Icon name="refresh" size={16} /></button>
-      {onOpenRepositoryManager ? <button class="scm-bar__action" type="button" aria-label="Advanced source controls" title="Import, trust posture, branch checkout, worktrees, remote operations, full status selection, tags, and detailed history" onClick={onOpenRepositoryManager}><Icon name="settings" size={16} /></button> : null}
+      {onOpenRepositoryManager ? <button class="scm-bar__action" type="button" aria-label="Advanced source controls" title="Import, repository setup, branch checkout, worktrees, remote operations, full status selection, tags, and detailed history" onClick={onOpenRepositoryManager}><Icon name="settings" size={16} /></button> : null}
     </div>
     {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={selectWorktree} /></label> : null}
     {/*
@@ -3118,7 +3117,7 @@ const DEFAULT_AUTHOR: GitAuthor = { name: "Local Airship User", email: "airship@
  * `/workspace/.airship/**` does not merely create an invisible file — it
  * corrupts the evidence-acquisition queue, the endpoint-evidence store or the
  * browser-Git repository catalog that Airship later reads back as its own
- * state, and the failure surfaces much later as unrecoverable proof.
+ * state, and the failure surfaces much later as an unrecoverable record gap.
  *
  * The reserved namespace is the *root* `.airship` tree plus a `.git` segment at
  * any depth. A repository that legitimately carries its own nested `.airship`

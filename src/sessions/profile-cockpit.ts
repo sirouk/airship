@@ -1,5 +1,10 @@
 import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
+import {
+  historicalInferenceBindingMayUpgrade,
+  inferenceBindingsMatch,
+} from "../core/inference-binding";
+export { inferenceBindingsMatch } from "../core/inference-binding";
 import { enforcedMemoryScope } from "../profiles/domain";
 import { JournalConflictError, type DurableEvent, type EventJournal, type JournalHead, type SessionRecord } from "../core/journal";
 
@@ -296,7 +301,7 @@ export function profileActiveConversationPointer(
  * They may change the composed prompt used for a *new* session without making
  * an existing conversation incompatible: an existing conversation continues
  * with its own immutable `systemPrompt`. Stable profile, tool, inference,
- * workspace, posture, and context-policy pins must still match exactly.
+ * workspace, security-posture, and context-policy pins must still match exactly.
  */
 export function resumableProfileManifestMatches(
   actual: SessionManifest,
@@ -305,13 +310,68 @@ export function resumableProfileManifestMatches(
   return profileManifestResumeMismatches(actual, expected).length === 0;
 }
 
+/**
+ * A library fork may project only the journal-derived model and compression
+ * policy at its selected boundary. Every live route, Profile, tool, prompt,
+ * workspace, and protocol fact must still match the authority that requested
+ * activation. Lineage/creation time are necessarily new and are audited by
+ * the fork library itself.
+ */
+export function forkActivationManifestMatches(
+  fork: SessionManifest,
+  authority: SessionManifest,
+): boolean {
+  return fork.protocolVersion === authority.protocolVersion
+    && fork.providerId === authority.providerId
+    && fork.systemPromptDigest === authority.systemPromptDigest
+    && fork.toolManifestDigest === authority.toolManifestDigest
+    && fork.workspaceId === authority.workspaceId
+    && fork.capabilityTier === authority.capabilityTier
+    && fork.securityPosture === authority.securityPosture
+    && (fork.turnContext ?? "disabled") === (authority.turnContext ?? "disabled")
+    && profileBindingsMatch(fork.profile, authority.profile)
+    && inferenceRouteExceptModelMatches(fork.inferenceBinding, authority.inferenceBinding)
+    && (fork.inferenceBinding?.modelId ?? fork.model) === fork.model;
+}
+
+function inferenceRouteExceptModelMatches(
+  actual: SessionManifest["inferenceBinding"],
+  expected: SessionManifest["inferenceBinding"],
+): boolean {
+  if (!actual || !expected) return actual === expected;
+  if (
+    actual.version !== expected.version
+    || actual.connectionId !== expected.connectionId
+    || actual.connectionGeneration !== expected.connectionGeneration
+    || actual.providerId !== expected.providerId
+    || actual.providerLabel !== expected.providerLabel
+    || actual.providerRevision !== expected.providerRevision
+    || actual.authMethod !== expected.authMethod
+    || actual.transportBoundary !== expected.transportBoundary
+    || actual.boundAt !== expected.boundAt
+  ) return false;
+  return actual.version === 1 || (
+    expected.version === 2
+    && actual.transportId === expected.transportId
+    && actual.protocol === expected.protocol
+  );
+}
+
 /** Credential-free mismatch codes suitable for diagnostics and tests. */
 export function profileManifestResumeMismatches(
   actual: SessionManifest,
   expected: SessionManifest,
 ): readonly string[] {
   const mismatches: string[] = [];
-  if (actual.providerId !== expected.providerId) mismatches.push("provider");
+  const historicalBinding = actual.inferenceBinding?.version === 1;
+  const historicalUpgrade = historicalInferenceBindingMayUpgrade(actual, expected.inferenceBinding);
+  const inferenceBindingMatches = historicalBinding
+    ? historicalUpgrade
+    : inferenceBindingsMatch(actual.inferenceBinding, expected.inferenceBinding);
+  const providerMatches = historicalBinding
+    ? historicalUpgrade && actual.inferenceBinding?.providerId === expected.providerId
+    : actual.providerId === expected.providerId;
+  if (!providerMatches) mismatches.push("provider");
   if (actual.model !== expected.model) mismatches.push("model");
   if (actual.workspaceId !== expected.workspaceId) mismatches.push("workspace");
   if (!browserCapabilityTiersMatch(actual.capabilityTier, expected.capabilityTier)) mismatches.push("capability-tier");
@@ -319,7 +379,7 @@ export function profileManifestResumeMismatches(
   if ((actual.turnContext ?? "disabled") !== (expected.turnContext ?? "disabled")) mismatches.push("turn-context");
   if (!contextPoliciesMatch(actual.contextPolicy, expected.contextPolicy)) mismatches.push("context-policy");
   if (actual.toolManifestDigest !== expected.toolManifestDigest) mismatches.push("tool-manifest");
-  if (!inferenceBindingsMatch(actual.inferenceBinding, expected.inferenceBinding)) mismatches.push("inference-binding");
+  if (!inferenceBindingMatches) mismatches.push("inference-binding");
   if (!profileBindingsMatch(actual.profile, expected.profile)) mismatches.push("profile-binding");
   return Object.freeze(mismatches);
 }
@@ -361,8 +421,7 @@ function profileBindingsMatch(
      * pins that enforce the same boundary are the same boundary.
      */
     && enforcedMemoryScope(actual.memoryScope) === enforcedMemoryScope(expected.memoryScope)
-    && actual.approvalMode === expected.approvalMode
-    && actual.minimumPosture === expected.minimumPosture;
+    && actual.approvalMode === expected.approvalMode;
 }
 
 function browserCapabilityTiersMatch(
@@ -373,31 +432,6 @@ function browserCapabilityTiersMatch(
   const actualIsBrowser = actual === "web-baseline" || actual === "web-enhanced";
   const expectedIsBrowser = expected === "web-baseline" || expected === "web-enhanced";
   return actualIsBrowser && expectedIsBrowser;
-}
-
-/**
- * Whether two manifests name the same inference authority, field by field.
- *
- * Exported because `app.tsx` had carried a verbatim nine-field copy of this to
- * gate its external-inference preflight. Nine fields compared in two places is
- * nine chances for the preflight to consider a binding "the same" that this
- * resume check considers different — the failure mode being a conversation the
- * cockpit refuses to resume and the composer happily sends on.
- */
-export function inferenceBindingsMatch(
-  actual: SessionManifest["inferenceBinding"],
-  expected: SessionManifest["inferenceBinding"],
-): boolean {
-  if (!actual || !expected) return actual === expected;
-  return actual.version === expected.version
-    && actual.connectionId === expected.connectionId
-    && actual.connectionGeneration === expected.connectionGeneration
-    && actual.providerId === expected.providerId
-    && actual.providerLabel === expected.providerLabel
-    && actual.providerRevision === expected.providerRevision
-    && actual.authMethod === expected.authMethod
-    && actual.transportBoundary === expected.transportBoundary
-    && actual.modelId === expected.modelId;
 }
 
 function contextPoliciesMatch(

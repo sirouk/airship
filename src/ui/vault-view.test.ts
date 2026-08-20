@@ -2,15 +2,17 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
 import {
+  LOCAL_LAB_PROVIDER_PROFILE,
   PROVIDER_FACT_ROWS,
-  PROVIDER_PROFILES,
+  STOCK_PROVIDER_PROFILES,
   VAULT_RELEASE_ACTION_LABEL,
   attachedCount,
   attachedRows,
   attachedSummary,
   googleDriveAvailableInBuild,
+  providerProfilesForSelector,
   readinessTally,
-  sealForState,
+  statusMarkForState,
   vaultPhaseLabel,
   vaultReleaseNote,
   vaultState,
@@ -18,6 +20,11 @@ import {
 import { resolveDefaultVaultBackend } from "./platform-shell";
 import type { VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
+
+const ALL_PROVIDER_PROFILES = Object.freeze([
+  ...STOCK_PROVIDER_PROFILES,
+  LOCAL_LAB_PROVIDER_PROFILE,
+]);
 
 const disconnected = { phase: "disconnected", message: "No cloud vault is configured." } as unknown as VaultSnapshot;
 
@@ -52,9 +59,9 @@ describe("vault state honesty", () => {
     // The shipped defect this guards: a green "Contract verified" while the
     // workspace and journal were still page memory.
     expect(notAdopted).toBe("verified");
-    expect(sealForState(notAdopted)).toBe("attention");
+    expect(statusMarkForState(notAdopted)).toBe("attention");
     expect(adopted).toBe("adopted");
-    expect(sealForState(adopted)).toBe("verified");
+    expect(statusMarkForState(adopted)).toBe("verified");
   });
 
   it("treats ephemeral as a chosen mode rather than a failure", () => {
@@ -63,8 +70,8 @@ describe("vault state honesty", () => {
     });
 
     expect(state).toBe("ephemeral");
-    expect(sealForState(state)).toBe("none");
-    expect(sealForState(state)).not.toBe("failed");
+    expect(statusMarkForState(state)).toBe("none");
+    expect(statusMarkForState(state)).not.toBe("failed");
   });
 
   it("keeps a degraded probe a failure and a running probe a check", () => {
@@ -75,8 +82,8 @@ describe("vault state honesty", () => {
       phase: "probing", localDevice: false, localDeviceOpened: false, ephemeral: false, runtimeAdopted: false,
     });
 
-    expect(sealForState(blocked)).toBe("failed");
-    expect(sealForState(probing)).toBe("checking");
+    expect(statusMarkForState(blocked)).toBe("failed");
+    expect(statusMarkForState(probing)).toBe("checking");
   });
 
   it("does not call a local device opened until its status exists", () => {
@@ -108,8 +115,8 @@ describe("route bar phase label", () => {
   });
 
   it("never lets a passed contract report itself as an adopted runtime", () => {
-    expect(label({ state: "verified", phase: "ready" })).toBe("Contract verified · not adopted");
-    expect(sealForState("verified")).not.toBe("verified");
+    expect(label({ state: "verified", phase: "ready" })).toBe("Checks passed · not active");
+    expect(statusMarkForState("verified")).not.toBe("verified");
   });
 
   it("stops calling a Vault that was never created 'Disconnected'", () => {
@@ -122,7 +129,7 @@ describe("route bar phase label", () => {
   it("carries a probing and a blocked phase through in the coordinator's own word", () => {
     expect(label({ state: "probing", phase: "probing", phaseLabel: "Testing" })).toBe("Testing");
     expect(label({ state: "blocked", phase: "degraded", phaseLabel: "Not ready" })).toBe("Not ready");
-    expect(sealForState("blocked")).toBe("failed");
+    expect(statusMarkForState("blocked")).toBe("failed");
   });
 });
 
@@ -217,7 +224,7 @@ describe("readiness tally", () => {
       conditionalCreate: "verified", compareAndSwap: "verified", exactRange: "verified", prefixList: "verified",
       readAfterWrite: "verified", encryptedJournal: "verified", encryptedWorkspace: "verified",
       dataSynchronization: "not-evaluated",
-    })).toBe("7 of 8 checks verified · 1 not evaluated");
+    })).toBe("7 of 8 checks passed · 1 not evaluated");
   });
 
   it("drops the trailing clause only when nothing was skipped", () => {
@@ -225,35 +232,53 @@ describe("readiness tally", () => {
       conditionalCreate: "verified", compareAndSwap: "verified", exactRange: "verified", prefixList: "verified",
       readAfterWrite: "verified", encryptedJournal: "verified", encryptedWorkspace: "verified",
       dataSynchronization: "verified" as "not-evaluated",
-    })).toBe("8 of 8 checks verified");
+    })).toBe("8 of 8 checks passed");
   });
 });
 
 describe("provider comparison", () => {
   it("answers the same six questions for every provider so the columns line up", () => {
-    for (const profile of PROVIDER_PROFILES) {
+    for (const profile of ALL_PROVIDER_PROFILES) {
       for (const [key] of PROVIDER_FACT_ROWS) {
         expect(profile.facts[key], `${profile.title}/${key}`).toBeTruthy();
       }
     }
-    expect(PROVIDER_PROFILES).toHaveLength(4);
+    expect(ALL_PROVIDER_PROFILES).toHaveLength(4);
   });
 
-  it("keeps the four shipped option descriptions verbatim", () => {
-    expect(PROVIDER_PROFILES.map((profile) => profile.description)).toEqual([
+  it("keeps stock profiles separate from the optional host-composed lab", () => {
+    expect(STOCK_PROVIDER_PROFILES.map((profile) => profile.id)).toEqual([
+      "ephemeral",
+      "local-device",
+      "google-drive",
+    ]);
+    expect(STOCK_PROVIDER_PROFILES.map((profile) => profile.description)).toEqual([
       "Page memory only; nothing synced",
       "Encrypted, offline, and persistent in this browser profile",
       "Your encrypted cross-device Airship workspace folder",
-      // Was "Advanced provider or local development lab". The only S3
-      // configuration this build can construct is the loopback lab, so the
-      // option no longer offers an "advanced provider" it cannot open.
-      "Loopback development lab",
     ]);
+    expect(LOCAL_LAB_PROVIDER_PROFILE).toMatchObject({
+      id: "local-lab",
+      description: "Loopback development lab",
+    });
   });
 
-  it("puts the starting Ephemeral option before Local Device", () => {
-    expect(PROVIDER_PROFILES.slice(0, 2).map((profile) => profile.id))
-      .toEqual(["ephemeral", "local-device"]);
+  it("offers only configured stock providers, plus the explicitly composed loopback lab", () => {
+    const loopback = { hostname: "localhost" };
+    const publicOrigin = { hostname: "airship.example" };
+    const googleClientId = "123456789012-airship.apps.googleusercontent.com";
+    const ids = (input: Parameters<typeof providerProfilesForSelector>[0]) =>
+      providerProfilesForSelector(input).map((profile) => profile.id);
+
+    expect(ids({ location: loopback, localLabEnabled: false })).toEqual(["ephemeral", "local-device"]);
+    expect(ids({ location: loopback, localLabEnabled: false, googleClientId })).toEqual([
+      "ephemeral", "local-device", "google-drive",
+    ]);
+    expect(ids({ location: loopback, localLabEnabled: true })).toEqual([
+      "ephemeral", "local-device", "local-lab",
+    ]);
+    expect(ids({ location: publicOrigin, localLabEnabled: true })).toEqual(["ephemeral", "local-device"]);
+    expect(ids({ location: loopback, localLabEnabled: false }).join(" ")).not.toMatch(/s3|minio|walrus/iu);
   });
 
   it("promises cross-device reach for the one provider that can deliver it", () => {
@@ -261,13 +286,13 @@ describe("provider comparison", () => {
     // "local-development"`, which validation confines to a loopback endpoint,
     // so the S3 rung answering "Reaches other devices: Yes" was a promise no
     // shippable configuration keeps.
-    const reaching = PROVIDER_PROFILES.filter((profile) => profile.facts.reach === "Yes");
+    const reaching = ALL_PROVIDER_PROFILES.filter((profile) => profile.facts.reach === "Yes");
 
     expect(reaching.map((profile) => profile.id)).toEqual(["google-drive"]);
   });
 
   it("describes the S3 rung as the loopback lab it can actually open", () => {
-    const lab = PROVIDER_PROFILES.find((profile) => profile.id === "local-lab");
+    const lab = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "local-lab");
 
     expect(lab?.facts.reach.startsWith("No")).toBe(true);
     // "your bucket" claimed durability in storage the person controls off this
@@ -357,7 +382,7 @@ describe("provider comparison", () => {
   });
 
   it("states plainly that the ephemeral option keeps nothing", () => {
-    const ephemeral = PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
+    const ephemeral = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
 
     expect(ephemeral?.facts.survives).toBe("No · released with the page");
     expect(ephemeral?.facts.keep).toBe("Nothing to keep");
@@ -365,7 +390,7 @@ describe("provider comparison", () => {
   });
 
   it("keeps the Drive honesty claim in the sentence read at the moment of choice", () => {
-    const drive = PROVIDER_PROFILES.find((profile) => profile.id === "google-drive");
+    const drive = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "google-drive");
 
     expect(drive?.note).toContain("Google never receives the workspace key.");
   });
@@ -380,7 +405,7 @@ describe("provider comparison", () => {
      * authenticate this Local Device Vault." The ciphertext is in the profile's
      * own storage, so both artifacts are required or neither works.
      */
-    const local = PROVIDER_PROFILES.find((profile) => profile.id === "local-device");
+    const local = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "local-device");
     expect(local?.facts.lose).toBe("Browser eviction · clearing site data");
     expect(local?.facts.keep).toContain("encrypted backup file");
     expect(local?.facts.keep).toContain("the key alone cannot rebuild an evicted store");
@@ -388,7 +413,7 @@ describe("provider comparison", () => {
     // The cloud rows are untouched on purpose: their ciphertext survives the
     // browser profile, so there the key really is the whole of what you keep.
     for (const id of ["google-drive", "local-lab"] as const) {
-      expect(PROVIDER_PROFILES.find((profile) => profile.id === id)?.facts.keep, id)
+      expect(ALL_PROVIDER_PROFILES.find((profile) => profile.id === id)?.facts.keep, id)
         .toBe("A recovery key");
     }
   });
@@ -401,7 +426,7 @@ describe("provider comparison", () => {
      * promise about content, so the row states the exception rather than the
      * module quietly making the row false.
      */
-    const ephemeral = PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
+    const ephemeral = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
     expect(ephemeral?.note).toContain(EPHEMERAL_RETENTION_DISCLOSURE);
     expect(ephemeral?.note).toContain("closing the page releases it");
   });
@@ -507,7 +532,7 @@ describe("releasing the Vault is one act with one name", () => {
     // The label promises a page copy; only the sentence can answer "and what
     // about the encrypted copy I already have at the provider?".
     expect(VAULT_RELEASE_ACTION_LABEL).toContain("Switch to ephemeral");
-    for (const profile of PROVIDER_PROFILES) {
+    for (const profile of ALL_PROVIDER_PROFILES) {
       const note = vaultReleaseNote(profile.id);
       expect(note, `${profile.id} states what happens to this page`).toContain("keeps working in memory");
       expect(note).not.toMatch(/disconnect/iu);

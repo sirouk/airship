@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "./contracts";
 import { createSessionManifest, runTurn } from "./agent";
-import { EventJournal, effectiveSessionModel } from "./journal";
+import { EventJournal, JournalConflictError, effectiveSessionModel } from "./journal";
 import { MemoryJournalBackend } from "./memory-journal";
 import { auditSessionHistory } from "./session-audit";
 import { assessSessionHistory, decideSessionResume, extractSessionPins } from "../sessions/domain";
@@ -17,6 +17,48 @@ class CapturingTransport implements InferenceTransport {
     this.requests.push(structuredClone(request));
     yield { type: "text-delta", text: `Reply from ${request.model}.` };
     yield { type: "completed", finishReason: "stop" };
+  }
+}
+
+class FirstRequestHeldTransport extends CapturingTransport {
+  private enteredFirst!: () => void;
+  private releaseFirst!: () => void;
+  readonly firstEntered = new Promise<void>((resolve) => { this.enteredFirst = resolve; });
+  private readonly firstRelease = new Promise<void>((resolve) => { this.releaseFirst = resolve; });
+
+  release(): void {
+    this.releaseFirst();
+  }
+
+  override async *stream(request: InferenceRequest): AsyncIterable<InferenceEvent> {
+    this.requests.push(structuredClone(request));
+    if (this.requests.length === 1) {
+      this.enteredFirst();
+      await this.firstRelease;
+    }
+    yield { type: "text-delta", text: `Reply from ${request.model}.` };
+    yield { type: "completed", finishReason: "stop" };
+  }
+}
+
+class PreAdmissionStallingJournal extends EventJournal {
+  private stall = true;
+  private entered!: () => void;
+  private releaseRead!: () => void;
+  readonly preflightReadEntered = new Promise<void>((resolve) => { this.entered = resolve; });
+  private readonly resumeRead = new Promise<void>((resolve) => { this.releaseRead = resolve; });
+
+  releasePreflight(): void {
+    this.releaseRead();
+  }
+
+  override async readEvents(sessionId: string, afterSequence = 0, signal?: AbortSignal) {
+    if (this.stall) {
+      this.stall = false;
+      this.entered();
+      await this.resumeRead;
+    }
+    return super.readEvents(sessionId, afterSequence, signal);
   }
 }
 
@@ -101,5 +143,97 @@ describe("a model switch lands on its own thread and mints honest digests throug
     // verdict rather than silently failing — the conversation destinations
     // stay honest about which model a continuation would call.
     expect(decideSessionResume(pins, acceptance, { ...runtime, model: "original/model-a" }).action).toBe("fork-required");
+  });
+
+  it("keeps an admitted turn on model A when model B is selected for the next turn", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const transport = new FirstRequestHeldTransport();
+    const tools = new ToolRegistry();
+    const manifest = await createSessionManifest({
+      systemPrompt: "test thread",
+      providerId: transport.id,
+      model: "model-a",
+      tools: tools.definitions(),
+      workspaceId: "memory://mid-turn-model-switch",
+    });
+    const session = await journal.createSession("Thread", manifest);
+
+    const first = runTurn({
+      sessionId: session.id,
+      content: "First question",
+      transport,
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    });
+    await transport.firstEntered;
+    await journal.setSessionModel(session.id, "model-b");
+    transport.release();
+    await first;
+
+    await runTurn({
+      sessionId: session.id,
+      content: "Second question",
+      transport,
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    });
+
+    const record = (await journal.getSession(session.id))!;
+    const events = await journal.readEvents(session.id);
+    expect(transport.requests.map((request) => request.model)).toEqual(["model-a", "model-b"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "session.created",
+      "turn.requested",
+      "inference.started",
+      "session.model-changed",
+      "assistant.completed",
+      "turn.completed",
+      "turn.requested",
+      "inference.started",
+      "assistant.completed",
+      "turn.completed",
+    ]);
+    expect(events.filter((event) => event.type === "assistant.completed").map((event) =>
+      (event.payload as { receipt: { model: string } }).receipt.model
+    )).toEqual(["model-a", "model-b"]);
+    expect((await auditSessionHistory({ session: record, events })).status).toBe("verified");
+  });
+
+  it("refuses stale preflight instead of rebasing a turn over a model change", async () => {
+    const journal = new PreAdmissionStallingJournal(new MemoryJournalBackend());
+    const transport = new CapturingTransport();
+    const tools = new ToolRegistry();
+    const manifest = await createSessionManifest({
+      systemPrompt: "test thread",
+      providerId: transport.id,
+      model: "model-a",
+      tools: tools.definitions(),
+      workspaceId: "memory://pre-admission-model-switch",
+    });
+    const session = await journal.createSession("Thread", manifest);
+
+    const staleTurn = runTurn({
+      sessionId: session.id,
+      content: "Must not start",
+      transport,
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    });
+    await journal.preflightReadEntered;
+    await journal.setSessionModel(session.id, "model-b");
+    journal.releasePreflight();
+
+    await expect(staleTurn).rejects.toBeInstanceOf(JournalConflictError);
+    expect(transport.requests).toEqual([]);
+    expect((await journal.readEvents(session.id)).map((event) => event.type)).toEqual([
+      "session.created",
+      "session.model-changed",
+    ]);
   });
 });

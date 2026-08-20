@@ -215,7 +215,7 @@ function clampTerminalDockState(state: TerminalDockState, availableHeight?: numb
     // There is no honest upper bound without a measured parent. The 720px
     // fallback answered that absence with a guess, and every selection-driven
     // update — which travels with no height argument — round-tripped a dock
-    // taller than 720px back down to the guess. Trust the stored height here;
+    // taller than 720px back down to the guess. Use the stored height here;
     // the dock re-clamps against the real parent before it renders anything.
     height: availableHeight === undefined ? storedTerminalDockHeight(state.height) : terminalDockHeight(state.height, availableHeight),
     ...(boundedSessionId(state.selectedSessionId) ? { selectedSessionId: state.selectedSessionId } : {}),

@@ -21,10 +21,10 @@ describe("turn recovery", () => {
       turnRecoverySummary(false, mapRequestFailure(input).kind);
 
     expect(causeFor({ online: true, status: 500 })).toBe("Provider failed — partial response kept.");
-    expect(causeFor({ online: true, code: "ATTESTATION_FAILED", status: 403 })).toBe("Provider failed — partial response kept.");
-    expect(causeFor({ online: true, code: "NONCE_REJECTED", status: 403 })).toBe("Provider failed — partial response kept.");
+    expect(causeFor({ online: true, code: "INVALID_RESPONSE", status: 400 })).toBe("Provider failed — partial response kept.");
+    expect(causeFor({ online: true, code: "NETWORK_TIMEOUT" })).toBe("Provider unreachable — partial response kept.");
     expect(causeFor({ online: true, status: 429 })).toBe("Rate limit reached — partial response kept.");
-    expect(causeFor({ online: true, status: 402 })).toBe("Out of credit — partial response kept.");
+    expect(causeFor({ online: true, status: 402 })).toBe("Provider usage limit — partial response kept.");
     expect(causeFor({ online: true, status: 401 })).toBe("Access rejected — partial response kept.");
     expect(causeFor({ online: false })).toBe("Connection lost — partial response kept.");
   });

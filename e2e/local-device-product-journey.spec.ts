@@ -31,7 +31,7 @@ test.describe("Local Device Vault product journey", () => {
     const recovery = setup.getByLabel("One-time Local Device recovery key");
     await expect(recovery).toHaveText(/^airship-wrk-v1\.[A-Za-z0-9_-]{43}$/u);
     // The acknowledgement is disabled until the key has actually been saved:
-    // a person may no longer claim to have kept a one-time key they never
+    // a person may no longer confirm custody of a one-time key they never
     // looked at. "By hand" needs no clipboard permission.
     await setup.getByRole("button", { name: "I wrote it down by hand" }).click();
     await setup.getByRole("checkbox", {
@@ -42,7 +42,7 @@ test.describe("Local Device Vault product journey", () => {
 
     await expect(setup.getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Local Device · encrypted and offline")).toBeVisible();
-    await expectTabTrustAxis(page, /^Local Device Vault active/u);
+    await expectLocalDeviceVaultReady(page);
 
     const downloadPromise = page.waitForEvent("download");
     // Renamed with the recovery kit: the control names the file it produces.
@@ -61,6 +61,7 @@ test.describe("Local Device Vault product journey", () => {
     await page.reload();
     await expect(setup.getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Local Device · encrypted and offline")).toBeVisible();
+    await expectLocalDeviceVaultReady(page);
   });
 
   test("keeps the complete Vault controls usable at a phone viewport", async ({ page }, testInfo) => {
@@ -69,39 +70,24 @@ test.describe("Local Device Vault product journey", () => {
 
     await expect(page.getByRole("heading", { name: "Vault", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Local Device Vault" })).toBeVisible();
+    const phase = page.locator(".vault-view__phase .status-mark");
+    await expect(phase).toHaveAttribute("data-state", "attention");
+    await expect(phase).toHaveAccessibleName("Not set up yet");
     await expect(page.getByRole("button", { name: "Create new" })).toBeVisible();
     await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
   });
 });
 
-/**
- * AMENDED: the four trust axes are no longer four topbar buttons.
- *
- * The topbar carries one chip whose accessible name states the weakest claim
- * true of this browser tab and counts every axis behind it, and each axis keeps
- * its own verbatim label, sentence and destination as a row in the sheet that
- * chip opens (`topbar.tsx:30`, `platform-shell.tsx:454`). No claim was deleted,
- * so this follows the disclosure rather than dropping the assertion — and it is
- * strictly stronger than the button check it replaces: it additionally proves
- * the chip is honest about how many claims it stands in front of, that the
- * sheet actually opens, and that the axis is filed under the browser-tab band
- * rather than silently rescoped to the conversation.
- */
-async function expectTabTrustAxis(page: import("@playwright/test").Page, label: RegExp): Promise<void> {
-  const chip = page.getByRole("button", { name: /^Runtime trust for this browser tab\./u });
-  /*
-   * "4 axes." became "4 runtime claims. 2 of them are scoped to this
-   * conversation and are stated in the session bar." — the noun a person can
-   * act on instead of the one the code uses, and it now says which of them
-   * belong to the conversation rather than to the tab. Asserted as the count
-   * and its noun, so the sentence around it can keep improving.
-   */
-  await expect(chip).toHaveAccessibleName(/\s\d+ runtime claims\./u);
-  await chip.click();
-  const sheet = page.getByRole("dialog", { name: "Runtime trust" });
-  await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole("region", { name: "This browser tab" }).getByRole("button", { name: label }))
-    .toBeVisible();
-  await sheet.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(sheet).toBeHidden();
+/** The Vault route owns the current Local Device activation state. */
+async function expectLocalDeviceVaultReady(page: import("@playwright/test").Page): Promise<void> {
+  const phase = page.locator(".vault-view__phase .status-mark");
+  await expect(phase).toHaveAttribute("data-state", "verified", { timeout: 20_000 });
+  await expect(phase).toHaveAccessibleName("Encrypted device Vault ready");
+
+  const state = page.locator(".vault-view__state");
+  await expect(state).toHaveAttribute("data-state", "adopted", { timeout: 20_000 });
+  const stateMark = state.locator(":scope > .status-mark");
+  await expect(stateMark).toHaveAttribute("data-state", "verified");
+  await expect(stateMark).toHaveAccessibleName("Ready");
+  await expect(state.locator(".vault-view__state-copy")).toContainText("Local Device · encrypted and offline");
 }

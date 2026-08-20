@@ -1,10 +1,9 @@
 /**
- * Prime session event vocabulary alongside the airship turn protocol.
- * These are journaled evidence records for machinery airship has no turn
- * vocabulary for: kernel jobs, harness records, subagent
- * admission/terminal, agent messages, goals, compaction notices. They sit
- * beside the transcript — never inside the canonical provider history —
- * so the transcript audit stays byte-clean.
+ * Prime session event vocabulary alongside the Airship turn protocol.
+ * These are journal records for machinery Airship has no turn vocabulary for:
+ * runtime selection, kernel jobs, harness records, subagent admission/terminal,
+ * agent messages, goals, and compaction notices. They sit beside the transcript
+ * and never enter canonical provider history.
  */
 
 import type { JsonValue } from "../../core/contracts";
@@ -12,13 +11,11 @@ import type { EventDraft } from "../../core/journal";
 
 export const PRIME_EVENT_TYPES = Object.freeze({
   /*
-   * The first prime turn's durable statement that this session runs prime.
-   * `runPrimeTurn` wrote this string inline while this vocabulary did not name
-   * it, so the one prime record every prime session is guaranteed to carry was
-   * the one record no shared list knew about — which is how it reached
-   * `session-audit.ts` as an unknown type.
+   * The current marker written before a fresh journal's first Prime turn.
+   * The former event name remains accepted only by read-side compatibility
+   * code and is intentionally absent from this write vocabulary.
    */
-  sessionRuntimeSeal: "prime.session.runtime.seal",
+  sessionRuntimeSelected: "prime.session.runtime.selected",
   harnessRefined: "prime.harness.refined",
   kernelJobStarted: "prime.kernel.job.started",
   kernelJobCompleted: "prime.kernel.job.completed",

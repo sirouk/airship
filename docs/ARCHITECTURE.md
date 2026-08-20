@@ -18,7 +18,8 @@ This document describes the current simplified runtime shape. See
 |   |-- model override + concurrency control          |
 |   |                                                 |
 |   +--> Inference fabric --> remote providers / loopback models
-|   +--> Vault/storage --> OPFS / IndexedDB / Drive / S3 / Walrus
+|   +--> Vault/storage --> OPFS / IndexedDB / Drive
+|        +--> host adapters --> S3; optional immutable blobs --> Walrus
 |   +--> Workspace -----> files, editor, Git, terminal
 |   +--> Execution -----> JS workers / WASI / Pyodide / optional packs
 |   +--> Extension -----> optional fixed-host relay or acceleration
@@ -60,8 +61,9 @@ Airship separates the working set from durable storage authority.
 
 - **Ephemeral mode** keeps state in page memory only.
 - **Local Device** uses encrypted OPFS/IndexedDB.
-- **Google Drive**, **S3-compatible storage**, and **Walrus** receive
-  ciphertext only.
+- **Google Drive** receives ciphertext through the stock configured flow.
+- The host-composed **S3-compatible** adapter and optional immutable **Walrus**
+  transport also accept ciphertext, but are not stock selectable Vaults.
 
 Mutable heads and immutable encrypted objects are distinct concerns. Durable
 storage success does not imply any stronger inference claim.
@@ -77,6 +79,16 @@ capability-gated.
 PRIME is the default engine for recursive agent work. It provides a persistent
 kernel, subagents, and explicit tool and budget controls inside the browser
 runtime.
+
+Model-written JavaScript runs in one dedicated, content-hashed same-origin
+worker. The document CSP never grants `unsafe-eval`; only that worker response
+gets the minimal policy required for its REPL, while network, nested-worker, and
+dynamic-import sources remain closed. A controlling service worker applies the
+same response policy on headerless static hosts. The controller lives in a
+private closure, removes ambient storage and communication channels before a
+cell runs, authenticates each generation with a random capability, and treats
+host-side frame, job, sequence, call, and payload validation as authoritative.
+A policy mismatch fails before the worker is constructed.
 
 ## Turn lifecycle
 

@@ -84,15 +84,10 @@ export function normalizeProvider(raw: InferenceProviderDescriptor): InferencePr
   const id = identifier(raw.id, "Provider ID");
   const label = boundedText(raw.label, "Provider label", 128);
   const boundary = raw.transportBoundary;
-  if (
-    boundary !== "e2ee-attestable"
-    && boundary !== "provider-tls"
-    && boundary !== "loopback-local"
-  ) {
+  if (boundary !== "provider-tls" && boundary !== "loopback-local") {
     throw new TypeError("The inference transport boundary is invalid.");
   }
   const protocols = new Set([
-    "chutes-e2ee-v1",
     "openai-responses",
     "openai-chat-completions",
     "anthropic-messages",

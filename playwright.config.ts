@@ -2,10 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  // These contracts own isolated servers, provider configuration, device
-  // names, and (for Chutes) credential-recording policy. Running them again
-  // under the generic matrix would exercise a different environment rather
-  // than add coverage. Their dedicated package scripts remain release gates.
+  // These contracts own isolated servers, provider/storage configuration, and
+  // device names. Running them again under the generic matrix would exercise
+  // a different environment rather than add coverage. Their dedicated package
+  // scripts remain release gates.
   testIgnore: [
     "google-drive-vault.spec.ts",
     "master-browser-acceptance.spec.ts",
@@ -52,31 +52,30 @@ export default defineConfig({
     trace: "retain-on-failure",
     video: "retain-on-failure",
   },
-  webServer: {
-    // The main matrix deliberately carries no client ID: `vault-provider-switch`
-    // asserts that a provider that cannot be opened cannot be chosen (the
-    // "unavailable here" selectability contract), which is only testable where
-    // the Google surface has no registration. Every dedicated config that does
-    // exercise a Google flow (master, google-drive, portability) sets its own
-    // synthetic registration in its own env, on its own port.
-    //
-    // `npm run check:browser` runs the two geometry specs through this same
-    // config, so a local `npm run check` will adopt whatever is already on 4173
-    // rather than cold-booting a second Vite. That is deliberate and safe for
-    // those two specifically: they assert overflow and touch-target geometry,
-    // which no provider registration can make true or false. It is *not* safe
-    // in general — a lab-owned Vite always sets `VITE_GOOGLE_CLIENT_ID`, which
-    // is exactly how `vault-provider-switch` came to fail on a premise the
-    // harness had broken — so the check runs a named pair of files, never the
-    // whole suite.
-    command: "npm run dev",
-    url: "http://127.0.0.1:4173",
-    reuseExistingServer: true,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      // The complete matrix exercises the host-composed local lab. Provision
+      // MinIO first with `npm run lab:storage`; this server owns only the exact
+      // feature-flagged UI and carries no synthetic Google registration.
+      command: "VITE_AIRSHIP_ENABLE_LOCAL_LAB=1 npm run dev",
+      url: "http://127.0.0.1:4173",
+      reuseExistingServer: true,
+      timeout: 30_000,
+    },
+    {
+      // One acceptance case must observe a genuinely unconfigured build. A
+      // lab-enabled bundle cannot prove absence of its own host-composed S3
+      // option, so that case runs alone against a second exact build.
+      command: "VITE_AIRSHIP_ENABLE_LOCAL_LAB=0 VITE_GOOGLE_CLIENT_ID= npx vite --host 127.0.0.1 --port 4174 --strictPort",
+      url: "http://127.0.0.1:4174",
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+  ],
   projects: [
     {
       name: "desktop-chromium",
+      grepInvert: /@unconfigured/u,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 1000 },
@@ -84,7 +83,17 @@ export default defineConfig({
     },
     {
       name: "mobile-chromium",
+      grepInvert: /@unconfigured/u,
       use: { ...devices["iPhone 13"], browserName: "chromium" },
+    },
+    {
+      name: "unconfigured-desktop-chromium",
+      grep: /@unconfigured/u,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: "http://127.0.0.1:4174",
+        viewport: { width: 1440, height: 1000 },
+      },
     },
   ],
 });

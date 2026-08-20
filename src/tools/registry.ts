@@ -291,7 +291,7 @@ function toolContextSnapshot(context: ToolContext): ToolContext {
     capabilityTier !== "web-baseline" &&
     capabilityTier !== "web-enhanced" &&
     capabilityTier !== "native" &&
-    capabilityTier !== "remote-confidential"
+    capabilityTier !== "remote-heavy"
   ) throw new TypeError("Tool context capability tier is invalid.");
   if (onOutput !== undefined && typeof onOutput !== "function") {
     throw new TypeError("Tool context output callback is invalid.");

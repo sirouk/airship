@@ -7,7 +7,7 @@ import { sha256, stableStringify } from "../core/hash";
 import { EventJournal, type SessionRecord } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { auditSessionHistory } from "../core/session-audit";
-import { createLocalReceipt } from "../receipts/types";
+import { createLocalReceipt } from "../core/conversation-receipt";
 import {
   assessSessionHistory,
   decideSessionResume,
@@ -20,6 +20,7 @@ import { PREFERENCE_TAIL_DEPTH, SessionForkConflictError, SessionLibrary, Unknow
 import { SessionsView } from "../ui/sessions-view";
 
 const DIGEST = `sha256:${"A".repeat(43)}`;
+const remoteHeavyCapabilityTier: SessionManifest["capabilityTier"] = "remote-heavy";
 const readTool: ToolDefinition = {
   name: "read_file",
   description: "Read one workspace file",
@@ -34,13 +35,14 @@ describe("browser-native session domain", () => {
 
   it("sorts, searches, and filters bounded session summaries without exposing prompts", async () => {
     const records = [
-      record("s-2", "Incident review", await manifest({ providerId: "chutes", model: "model-b" }), "2026-07-18T03:00:00.000Z"),
+      record("s-2", "Incident review", await manifest({ providerId: "chutes", model: "model-b", capabilityTier: remoteHeavyCapabilityTier }), "2026-07-18T03:00:00.000Z"),
       record("s-1", "Build release", await manifest({ providerId: "demo", model: "model-a" }), "2026-07-18T01:00:00.000Z"),
       record("s-3", "Research notes", await manifest({ providerId: "chutes", model: "model-a" }), "2026-07-18T02:00:00.000Z"),
     ];
 
     const newest = querySessionRecords(records, { sort: "updated-desc" });
     expect(newest.items.map((item) => item.id)).toEqual(["s-2", "s-3", "s-1"]);
+    expect(newest.items[0]?.capabilityTier).toBe("remote-heavy");
     expect(newest.items[0]).not.toHaveProperty("systemPrompt");
     expect(newest.facets).toEqual({ providers: ["chutes", "demo"], models: ["model-a", "model-b"], profiles: [] });
 
@@ -210,6 +212,76 @@ describe("browser-native session domain", () => {
     // as an event it chose not to render rather than pretending it is absent.
     expect(transcript.messages.map((message) => message.content)).toEqual(["first request"]);
     expect(Object.isFrozen(transcript.receipts[0])).toBe(true);
+  });
+
+
+  it("rejects malformed tool-call receipts and omits undeclared receipt fields from the public chain", async () => {
+    const fixture = createJournal();
+    const session = await fixture.journal.createSession("Receipt guards", await manifest());
+    const malformedReceipt = {
+      ...createLocalReceipt({
+        sessionId: session.id,
+        turnId: "turn-1",
+        provider: "demo",
+        model: "model-a",
+        requestDigest: DIGEST,
+        responseDigest: DIGEST,
+        now: "2026-07-18T00:01:10.000Z",
+      }),
+      toolCalls: [{ id: "call-1", name: 7 }],
+    };
+    const noisyReceipt = {
+      ...createLocalReceipt({
+        sessionId: session.id,
+        turnId: "turn-2",
+        provider: "demo",
+        model: "model-a",
+        requestDigest: DIGEST,
+        responseDigest: DIGEST,
+        now: "2026-07-18T00:01:11.000Z",
+      }),
+      timings: { totalMs: 5 },
+      toolCalls: [{ id: "call-2", name: "read_file", extra: "drop-me" }],
+      extra: { nested: "drop-me" },
+    };
+    await fixture.journal.append(session.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "first request" } },
+      {
+        type: "assistant.completed",
+        turnId: "turn-1",
+        operationId: "op-1",
+        payload: {
+          message: { role: "assistant", content: "first response" },
+          receipt: malformedReceipt as unknown as JsonValue,
+        },
+      },
+      { type: "turn.completed", turnId: "turn-1", payload: { receiptId: malformedReceipt.receiptId } },
+      { type: "turn.requested", turnId: "turn-2", payload: { content: "second request" } },
+      {
+        type: "assistant.completed",
+        turnId: "turn-2",
+        operationId: "op-2",
+        payload: {
+          message: { role: "assistant", content: "second response" },
+          receipt: noisyReceipt as unknown as JsonValue,
+        },
+      },
+      { type: "turn.completed", turnId: "turn-2", payload: { receiptId: noisyReceipt.receiptId } },
+    ]);
+
+    const transcript = materializeSessionMessages(await fixture.journal.readEvents(session.id), {}, session.id);
+    const assistantMessages = transcript.messages.filter((message) => message.role === "assistant");
+    expect(assistantMessages[0]?.receipt).toBeUndefined();
+    expect(assistantMessages[1]?.receipt).toMatchObject({
+      receiptId: noisyReceipt.receiptId,
+      timings: { totalMs: 5 },
+      toolCalls: [{ id: "call-2", name: "read_file" }],
+    });
+    expect(transcript.receipts.map((receipt) => receipt.receiptId)).toEqual([noisyReceipt.receiptId]);
+    const recovered = transcript.receipts[0] as Record<string, unknown>;
+    expect(recovered.extra).toBeUndefined();
+    const recoveredToolCall = (transcript.receipts[0]?.toolCalls?.[0] ?? {}) as Record<string, unknown>;
+    expect(recoveredToolCall.extra).toBeUndefined();
   });
 
   it("keeps transcript, model pin, receipt chain, and lifecycle isolated across session switches", async () => {
@@ -393,14 +465,14 @@ describe("browser-native session domain", () => {
         type: "inference.started",
         turnId: "turn-1",
         operationId: "op-1",
-        payload: { posture: "encrypted-unattested" },
+        payload: { posture: "plaintext-remote" },
       },
       { type: "turn.failed", turnId: "turn-1", payload: { error: "test stop" } },
     ]);
     const session = (await fixture.journal.getSession(created.id))!;
     const pins = extractSessionPins(session, await fixture.journal.readEvents(session.id));
 
-    expect(pins.posture).toMatchObject({ basis: "event-observation", value: "encrypted-unattested", mixed: false });
+    expect(pins.posture).toMatchObject({ basis: "event-observation", value: "plaintext-remote", mixed: false });
     expect(pins.profile).toMatchObject({ profileId: "profile-1", themeDigest: DIGEST, resolutionDigest: DIGEST });
     expect(Object.isFrozen(pins)).toBe(true);
     expect(Object.isFrozen(pins.profile?.skills)).toBe(true);
@@ -409,7 +481,7 @@ describe("browser-native session domain", () => {
   it("allows resume only for an exact runtime binding and requires a fork for meaningful drift", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Compatible", await manifest({
-      securityPosture: "encrypted-attested",
+      securityPosture: "local",
       profile: profileBinding(),
     }));
     const session = (await fixture.journal.getSession(created.id))!;
@@ -483,7 +555,6 @@ describe("browser-native session domain", () => {
       { approvalMode: "full-access" },
       { memoryScope: "session" },
       { workspaceBinding: "workspace-id:other" },
-      { minimumPosture: "encrypted-unattested" as const },
     ]) {
       const moved = decideSessionResume(pins, health, {
         ...runtime,
@@ -553,24 +624,70 @@ describe("browser-native session domain", () => {
       .toBe("The most recent turn has no durable terminal event; fork before continuing.");
   });
 
+  it("admits a v1 provider-as-transport session only through its exact known v2 route", async () => {
+    const base = {
+      connectionId: "chutes-primary",
+      connectionGeneration: 3,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-a",
+      boundAt: "2026-07-18T00:00:00.000Z",
+    };
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Historical route", await manifest({
+      providerId: "chutes-openai-compatible-v1",
+      model: base.modelId,
+      inferenceBinding: { ...base, version: 1 },
+      securityPosture: "plaintext-remote",
+    }));
+    const session = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const pins = extractSessionPins(session, events);
+    const health = assessSessionHistory(session, events);
+    const current = {
+      ...activeRuntime(session.manifest),
+      providerId: base.providerId,
+      inferenceBinding: {
+        ...base,
+        version: 2 as const,
+        transportId: "chutes-openai-compatible-v1",
+        protocol: "openai-compatible" as const,
+      },
+    };
+
+    expect(decideSessionResume(pins, health, current).action).toBe("resume");
+    const drifted = decideSessionResume(pins, health, {
+      ...current,
+      inferenceBinding: { ...current.inferenceBinding, protocol: "openai-chat-completions" },
+    });
+    expect(drifted.action).toBe("fork-required");
+    expect(drifted.reasons.map((reason) => reason.code)).toContain("INFERENCE_CONNECTION_MISMATCH");
+  });
+
   it("treats a durable same-thread model change as the thread's current route", async () => {
     const binding = {
-      version: 1 as const,
+      version: 2 as const,
       connectionId: "chutes-primary",
       connectionGeneration: 3,
       providerId: "chutes",
       providerLabel: "Chutes",
       providerRevision: 1,
       authMethod: "oauth-pkce" as const,
-      transportBoundary: "e2ee-attestable" as const,
+      transportBoundary: "provider-tls" as const,
+      transportId: "chutes-openai-compatible-v1",
+      protocol: "openai-compatible" as const,
       modelId: "model-a",
       boundAt: "2026-07-18T00:00:00.000Z",
     };
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Changed in place", await manifest({
+      providerId: "chutes",
       model: "model-a",
       inferenceBinding: binding,
-      securityPosture: "encrypted-attested",
+      securityPosture: "plaintext-remote",
     }));
     const changed = await fixture.journal.setSessionModel(created.id, "model-b");
     const events = await fixture.journal.readEvents(changed.id);
@@ -620,11 +737,11 @@ describe("browser-native session domain", () => {
     const health = assessSessionHistory(session, events);
     const runtime = activeRuntime(session.manifest);
 
-    expect(decideSessionResume(pins, health, runtime).action).toBe("resume");
+    expect(decideSessionResume(pins, health, runtime).action).toBe("fork-required");
     expect(decideSessionResume(pins, health, {
       ...runtime,
       inferenceBinding: { ...binding, boundAt: "2026-07-18T01:00:00.000Z" },
-    }).action).toBe("resume");
+    }).action).toBe("fork-required");
     const replacements = [
       { ...binding, connectionId: "openai-replacement" },
       { ...binding, connectionGeneration: 4 },
@@ -708,7 +825,7 @@ describe("SessionLibrary", () => {
     await fixture.journal.append(created.id, [{ type: "turn.requested", turnId: "open", payload: { content: "unfinished" } }]);
     const source = (await fixture.journal.getSession(created.id))!;
     const sourceEvents = await fixture.journal.readEvents(source.id);
-    const replacement = await manifest({ model: "next-model", securityPosture: "encrypted-attested" });
+    const replacement = await manifest({ model: "next-model", securityPosture: "plaintext-remote" });
     const library = new SessionLibrary(fixture.journal, { now: () => "2026-07-18T10:30:00.000Z" });
 
     const result = await library.fork(source.id, {
@@ -814,6 +931,53 @@ describe("SessionLibrary", () => {
       forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
       verifiedForkContextDigest: seed.contextDigest,
     }).some((message) => message.content === "later")).toBe(false);
+  });
+
+  it("projects model and binding authority at the selected historical fork boundary", async () => {
+    const binding = {
+      version: 2 as const,
+      connectionId: "ollama-loopback",
+      connectionGeneration: 1,
+      providerId: "ollama",
+      providerLabel: "Ollama",
+      providerRevision: 1,
+      authMethod: "local-none" as const,
+      transportBoundary: "loopback-local" as const,
+      transportId: "ollama-openai-local-v1",
+      protocol: "openai-compatible" as const,
+      modelId: "model-a",
+      boundAt: "2026-08-20T00:00:00.000Z",
+    };
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Model boundary", await manifest({
+      providerId: binding.providerId,
+      model: binding.modelId,
+      inferenceBinding: binding,
+    }));
+    const creation = (await fixture.journal.readEvents(created.id))[0]!;
+    await fixture.journal.setSessionModel(created.id, "model-b");
+    const events = await fixture.journal.readEvents(created.id);
+    const changed = events.find((event) => event.type === "session.model-changed")!;
+    const source = (await fixture.journal.getSession(created.id))!;
+    const library = new SessionLibrary(fixture.journal);
+
+    const before = await library.fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: creation.sequence, digest: creation.digest },
+    });
+    expect(before.session.manifest).toMatchObject({
+      model: "model-a",
+      inferenceBinding: { modelId: "model-a", transportId: binding.transportId },
+    });
+
+    const after = await library.fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: changed.sequence, digest: changed.digest },
+    });
+    expect(after.session.manifest).toMatchObject({
+      model: "model-b",
+      inferenceBinding: { modelId: "model-b", transportId: binding.transportId },
+    });
   });
 
   it("forks at a turn's own pre-turn boundary without inheriting that turn's prompt or answer", async () => {
@@ -1252,7 +1416,6 @@ function profileBindingV2(): NonNullable<SessionManifest["profile"]> {
     workspaceBinding: { kind: "active-workspace" },
     memoryScope: "profile",
     approvalMode: "ask-first",
-    minimumPosture: "local",
   };
 }
 
@@ -1278,7 +1441,6 @@ function activeRuntime(sessionManifest: SessionManifest): ActiveSessionRuntime {
             : "active-workspace",
           memoryScope: profile.memoryScope,
           approvalMode: profile.approvalMode,
-          minimumPosture: profile.minimumPosture,
         } : {}),
       },
     } : {}),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, Context, Model, Tool, ToolResultMessage } from "../index";
+import type { AssistantMessage, Context, Model, Tool, ToolResultMessage } from "../types";
 import { streamAnthropic, type AnthropicMessagesRequest, type AnthropicOptions } from "./anthropic";
 import { sseJson, sseResponse, stubFetch, type CapturedRequest } from "./provider.test-support";
 

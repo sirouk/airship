@@ -109,8 +109,8 @@ export function QuarantineReport({
           Airship could not replay this conversation into the current runtime. It is still in the Vault,
           and its record can be read and forked.{" "}
           {historyVerified
-            ? "Its history passed the audit — only the replay failed."
-            : "Its history was not verified."}
+            ? "Its history check passed — only the replay failed."
+            : "Its history was not checked."}
         </p>
         {/* The runtime's own words, one disclosure away rather than as the
             lead. The Atlas is blunt that handing a person a raw internal

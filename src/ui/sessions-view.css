@@ -9,35 +9,6 @@
   background: var(--ground, #101417);
 }
 
-/* The destructive dialog's optional proof cleanup is a real checkbox, not a
- * full-width text input. Keep it readable at the same 44px target height as
- * the other dialog controls. */
-.workbench-dialog .session-delete-evidence-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin: 12px 0 0;
-  color: var(--ink, #ece8de);
-  font-size: var(--fs-caption);
-  line-height: 1.45;
-}
-
-.workbench-dialog .session-delete-evidence-option input[type="checkbox"] {
-  flex: 0 0 auto;
-  width: 18px;
-  min-width: 18px;
-  height: 18px;
-  min-height: 18px;
-  margin: 2px 0 0;
-}
-
-.workbench-dialog .session-delete-evidence-note {
-  margin: 6px 0 0;
-  color: var(--ink-faint, #858d8a);
-  font-size: var(--fs-micro);
-  line-height: 1.45;
-}
-
 /*
  * The route's title, eyebrow and sentence now live in <RouteHeader>, and the
  * journal-adapter card is a chip in its status slot. What is left here is the
@@ -151,8 +122,8 @@
 /*
  * 42 is two pixels under, and two pixels is the whole rule.
  *
- * Everything the library asks a finger to do is on this list — Rename, Proof,
- * Fork, "Active conversation", Delete, Refresh, the search field — and every
+ * Everything the library asks a finger to do is on this list — Rename, Fork,
+ * "Active conversation", Delete, Refresh, the search field — and every
  * one of them measured 42px tall at 768×1024 and at 932×430 with
  * `(pointer: coarse)` true. The 46px that makes them correct lives behind
  * `@media (max-width: 560px)`, so it reaches phones and nothing else, and a
@@ -1021,11 +992,89 @@
   font-size: var(--fs-caption);
 }
 
-.session-integrity__scope small,
-.session-library-proof-scope {
+.session-integrity__scope small {
   color: var(--ink-faint, #858d8a);
   font-size: var(--fs-micro);
   line-height: 1.45;
+}
+
+.session-receipt-trace {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  min-width: 0;
+}
+
+.session-receipt-trace__heading {
+  display: grid;
+  gap: 3px;
+}
+
+.session-receipt-trace__heading strong {
+  font-size: var(--fs-caption);
+}
+
+.session-receipt-trace__heading small,
+.session-receipt-trace__empty {
+  margin: 0;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
+.session-receipt-trace__list {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-receipt-trace__list details {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+  border-radius: var(--radius-control, 7px);
+  background: var(--surface-soft, #14191c);
+}
+
+.session-receipt-trace__list summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1, 4px) var(--sp-2, 8px);
+  align-items: center;
+  min-height: 44px;
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  cursor: pointer;
+}
+
+.session-receipt-trace__list summary > span {
+  flex: 0 0 auto;
+  color: var(--ink, #ece8de);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong, 650);
+}
+
+.session-receipt-trace__list summary > code {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--ink-muted, #9fa5a3);
+  font: var(--fs-micro)/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.session-receipt-trace__list summary > small {
+  flex: 0 0 auto;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+}
+
+.session-receipt-trace__list details[open] > summary {
+  border-bottom: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+}
+
+.session-receipt-trace__list .receipt-trace {
+  padding: var(--sp-2, 8px) var(--sp-3, 12px) var(--sp-3, 12px);
 }
 
 .session-library-compatibility,
@@ -1404,14 +1453,6 @@
   text-transform: uppercase;
 }
 
-.session-library-transcript .session-library-message-receipt {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  width: fit-content;
-  color: var(--accent-bright, #dfba72);
-}
-
 .session-library-transcript .session-library-message-disposition {
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -1731,12 +1772,6 @@
     justify-content: flex-start;
   }
 
-  .session-library-proof-scope {
-    grid-column: 1 / -1;
-    justify-self: start;
-    text-align: left;
-  }
-
   .session-library-continuity {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1781,12 +1816,6 @@
 
   .session-library-detail-heading {
     align-items: flex-start;
-  }
-
-  .session-library-proof-scope {
-    grid-column: 1 / -1;
-    justify-self: start;
-    text-align: left;
   }
 
   .session-library-fork {
@@ -1973,7 +2002,7 @@
  * Every rule above this one asks how much width there is; at 932x430 the
  * scarce axis is height, and none of them fire, so the route lays itself out as
  * if it had a desktop's vertical room. Measured on that viewport: the pane's
- * whole action row — Rename, Proof, Fork, Delete — sat below the fold with
+ * whole action row — Rename, Fork, Delete — sat below the fold with
  * about 8px of each button's top corner showing above the tab band, so the four
  * verbs the route exists to offer had to be discovered by scrolling a pane that
  * looks finished.

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { MOBILE_PRIMARY_CONTROLS } from "../src/ui/navigation-model";
+import { setProfilePresentationDensity } from "./support/density";
 import { waitForShellSettled } from "./support/settled";
 
 /*
@@ -427,9 +428,9 @@ test("mobile keeps conversations out of the fixed bar and exposes the ledger thr
    * AMENDED 4 → 5, and read out of the model rather than pinned again.
    *
    * The literal was a description of one arrangement, not a contract: the band
-   * is `MOBILE_PRIMARY_CONTROLS` and it gained Memory, which the owner's mobile
-   * review asked for by name ("Memory should come before Trust"). The slot came
-   * from the shell's live-load reading, which counted execution-pack runs and
+   * is `MOBILE_PRIMARY_CONTROLS`, including the promoted Memory route and the
+   * direct Providers entry. Their slots came from the shell's live-load reading,
+   * which counted execution-pack runs and
    * therefore read `0 · Idle` on a phone from first paint to tab close.
    *
    * The claim this line actually makes is the one that matters and it is
@@ -531,12 +532,12 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   const deepLinkedIndex = page.locator("#memory-index");
   await expect.poll(() => deepLinkedIndex.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
   await expect(page.getByLabel("Context index status")).toBeVisible();
-  await expect.poll(() => page.locator("main").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  await expect.poll(() => deepLinkedIndex.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    const topbar = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect();
-    return bounds.top >= (topbar?.bottom ?? 0) - 1 && bounds.top <= (topbar?.bottom ?? 0) + 32;
-  })).toBe(true);
+  // A deep link opens Index but keeps the route heading in view. The arrival
+  // row states the destination without jumping the whole page below its title.
+  await expect.poll(() => page.locator("main").evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.locator(".memory-index-arrival")).toContainText(
+    "Opened from the Memory index destination",
+  );
 });
 
 test("Memory workspace results open the exact file in the editor", async ({ page }, testInfo) => {
@@ -715,7 +716,7 @@ test("a profile catalog larger than ten never makes the rail scroll", async ({ p
   const expectedProfiles = await cards.count();
 
   // AMENDED, and strictly stronger. The old assertion bounded the in-rail
-  // profile scroller at 310px so a large catalog could not push Trust
+  // profile scroller at 310px so a large catalog could not push global
   // navigation off-screen — it capped the symptom. The catalog is not in the
   // rail at all now, so the invariant can be stated directly: however many
   // profiles exist, the rail itself never becomes a scroll container, and
@@ -736,18 +737,69 @@ test("a profile catalog larger than ten never makes the rail scroll", async ({ p
   expect(await listbox.getByRole("option").count()).toBe(expectedProfiles);
 });
 
-test("Proof owns receipt, journal, and attestation evidence without a duplicate destination", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop unified proof information architecture");
-  await page.goto("/#proof");
-  const navigation = page.getByRole("navigation", { name: "Primary" });
-  await expect(navigation.getByRole("button", { name: "Attestations", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Receipt & journal" })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "Attestation evidence" }).click();
-  await expect(page).toHaveURL(/#proof\?section=attestations$/);
-  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
-  await page.getByRole("tab", { name: "Attestation evidence" }).press("ArrowLeft");
-  await expect(page.getByRole("tab", { name: "Receipt & journal" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Session journal integrity", level: 2 })).toBeVisible();
+test("run details stay with the turn and the journal control opens its session trace", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop run-details and session-trace contract");
+  await setProfilePresentationDensity(page, "Instrumented");
+  await page.goto("/#chat");
+  await waitForShellSettled(page);
+
+  const prompt = "Record a local run that can be inspected from its conversation.";
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await composer.fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const assistant = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  const runDetails = assistant.getByRole("button", { name: /^Run details\./u });
+  await expect(runDetails).toBeVisible();
+  await expect(runDetails).toHaveAttribute("aria-label", /Provider airship-demo\. Run urn:receipt:/u);
+  await runDetails.focus();
+  await runDetails.press("Enter");
+  const runPanel = assistant.getByRole("group", { name: "Run details" });
+  await expect(runPanel).toBeVisible();
+  await expect(runPanel.locator('[data-field="origin"]')).toContainText("Local run record");
+  await expect(runPanel.locator('[data-field="created"] time')).toHaveText(/^20\d{2}-/u);
+  await expect(runPanel.locator('[data-field="completed"] time')).toHaveText(/^20\d{2}-/u);
+  await expect(runPanel.locator('[data-field="request-digest"] code')).toHaveText(/^sha256:/u);
+  await expect(runPanel.locator('[data-field="response-digest"] code')).toHaveText(/^sha256:/u);
+  await expect(runPanel.locator(".receipt-trace__scope")).toContainText("Authenticity not proven");
+  const receiptId = await runPanel.locator('[data-field="receipt-id"] code').innerText();
+  await runPanel.getByRole("button", { name: "Done" }).click();
+
+  const openTrace = page.getByRole("button", { name: /Open conversation details\./u });
+  await openTrace.focus();
+  await openTrace.press("Enter");
+  await expect(page).toHaveURL(/#sessions$/u);
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
+  const journalAdapter = page.getByRole("button", {
+    name: /^Current journal adapter\. Ephemeral · content not saved\./u,
+  });
+  await journalAdapter.click();
+  const journalPanel = page.getByRole("group", { name: "Current journal adapter" });
+  await expect(journalPanel).toContainText("Page-memory journal; remote availability is not inferred.");
+  await expect(journalPanel).not.toContainText("Encrypted browser-managed storage on this device");
+  await journalPanel.getByRole("button", { name: "Done" }).click();
+
+  const traceToggle = page.locator(".session-integrity__row");
+  await expect(traceToggle).toBeVisible();
+  if (await traceToggle.getAttribute("aria-expanded") === "false") await traceToggle.click();
+  await expect(traceToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText("Journal structure passed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Conversation continuity" })).toContainText("Journal head");
+  await expect(traceToggle).toHaveAttribute(
+    "aria-label",
+    /Receipt assessment: Structural linkage only · digests not recomputed · authenticity not proven\./u,
+  );
+  const receiptTrace = page.getByRole("region", { name: "Receipt details" });
+  await expect(receiptTrace).toContainText("Structural linkage only · digests not recomputed · authenticity not proven");
+  await expect(receiptTrace).toContainText(receiptId);
+  await expect(receiptTrace.locator('[data-field="origin"]').first()).toContainText("Local run record");
+  await expect(receiptTrace.locator('[data-field="request-digest"] code').first()).toHaveText(/^sha256:/u);
+  await expect(receiptTrace.locator('[data-field="response-digest"] code').first()).toHaveText(/^sha256:/u);
+
+  const runtimeRecord = page.locator("details.session-library-technical");
+  await runtimeRecord.locator(":scope > summary").click();
+  await expect(page.locator("#session-transcript-title")).toHaveText("Transcript");
+  await expect(runtimeRecord.locator(".session-library-transcript")).toContainText(prompt);
 });
 
 /*

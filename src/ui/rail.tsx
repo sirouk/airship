@@ -24,8 +24,8 @@ import type { SessionActivityReport } from "../capabilities/runtime-load";
  * What it was: 232px carrying eleven destinations, a 250px scrolling
  * conversation list, a 310px scrolling profile list and a 120px profile card —
  * 785 to 943px of content inside a 501 to 701px box. It scrolled at every
- * laptop height, which meant Proof, Vault, Connection and Account were below
- * the fold on the default viewport, and it cost 20 tab stops (29 with eight
+ * laptop height, which meant Vault and provider setup were below the fold on
+ * the default viewport, and it cost 20 tab stops (29 with eight
  * conversations) to cross on the way to the composer.
  *
  * What it is: a profile-first cockpit. The active profile is the first control,
@@ -74,8 +74,6 @@ export type RailProps = Readonly<{
   /** Aggregated model-turn activity for every conversation this page owns. */
   activity?: SessionActivityReport;
   unreadTurnCount: number;
-  /** A receipt exists for the active session, so Proof has something to show. */
-  hasReceipt: boolean;
   conversations: readonly RailConversation[];
   activeConversationId: string;
   /**
@@ -281,7 +279,6 @@ export function Rail({
   busy,
   activity,
   unreadTurnCount,
-  hasReceipt,
   conversations,
   activeConversationId,
   unresumableConversationId,
@@ -676,7 +673,6 @@ export function Rail({
           {row.id === "chat" && unreadTurnCount > 0
             ? <span class="nav-turn-badge" role="img" aria-label={`${String(unreadTurnCount)} completed turn${unreadTurnCount === 1 ? "" : "s"}`}>{unreadTurnCount}</span>
             : null}
-          {row.id === "proof" && hasReceipt ? <span class="nav-proof-dot" /> : null}
         </button>
         {row.nested.length > 0 ? (
           <button

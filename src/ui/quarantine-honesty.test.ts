@@ -19,7 +19,7 @@ const sessionsView = await readFile(new URL("./sessions-view.tsx", import.meta.u
  * presentable content was a session-scoped event came back as welcome copy.
  */
 describe("quarantine and resume honesty", () => {
-  it("only claims a verified history when the audit established one", () => {
+  it("only claims a passed local history check when the audit established one", () => {
     // The flag has to be initialised false and, now, read straight off the
     // audit rather than implied by having survived a throw-gate.
     //
@@ -46,13 +46,13 @@ describe("quarantine and resume honesty", () => {
     expect(app).toMatch(/quarantined \?\?= Object\.freeze\(\{[^}]*historyVerified/su);
   });
 
-  it("never prints the intact-history sentence unconditionally", () => {
+  it("never prints the intact-history sentence without a completed local check", () => {
     // Both the heading and the body were unconditional string literals.
     expect(sessionsView).toContain("quarantine.historyVerified");
     // The full sentence, not the fragment: the fragment also appears in the
     // comment above the fix explaining what went wrong, which sits before the
     // guard and made this assertion match its own documentation.
-    const intact = "The digest chain passed its audit and every event is intact.";
+    const intact = "The local digest check passed and every event is intact.";
     const index = sessionsView.indexOf(intact);
     expect(index, "the sentence should still exist for the case where it is true").toBeGreaterThan(-1);
 

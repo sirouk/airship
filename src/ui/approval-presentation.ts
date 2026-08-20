@@ -5,7 +5,7 @@ import type { JsonValue } from "../core/contracts";
  *
  * This used to be a schema-blind key-name heuristic: it looked for `path` and
  * `content`, and it read the *absence* of the optional `expectedRevision`
- * concurrency token as proof that a file was being created. So `remove_file`
+ * concurrency token as evidence that a file was being created. So `remove_file`
  * — the one tool in the registry that destroys a file — rendered as "Create",
  * an unchecked `write_file` over an existing file rendered as "Create", and
  * every write tool whose arguments do not happen to use those key names

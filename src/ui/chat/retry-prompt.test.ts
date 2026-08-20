@@ -98,8 +98,7 @@ function withAttachment(source: RetryPromptRow): RetryPromptRow {
     name: "screenshot.png",
     mediaType: "image/png",
     sizeBytes: 4_096,
-    summary: "Included as an inline image inside the encrypted inference request.",
-    reference: "inline-e2ee",
+    summary: "Included as an inline image with this inference request.",
     status: "available",
   });
   return Object.freeze({ ...source, parts: Object.freeze([...source.parts, attachment]) });

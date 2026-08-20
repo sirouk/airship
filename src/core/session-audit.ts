@@ -9,6 +9,10 @@ import type {
   ToolDefinition,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
+import {
+  assertValidSessionInferenceBinding,
+  sessionInferenceProviderIdMatches,
+} from "./inference-binding";
 import type { DurableEvent, SessionRecord } from "./journal";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
@@ -108,30 +112,27 @@ export const KNOWN_EVENT_TYPES = new Set([
   /*
    * One thing a shell session did. Terminal lineage used to live only in the
    * manager's 64-record ring buffer, so a command that rewrote the workspace
-   * was absent from the artifact Proof audits — and an event type this set does
+   * was absent from the local history being checked — and an event type this set does
    * not name raises EVENT_TYPE_UNKNOWN, which would have made recording shell
    * work *degrade* the completeness of the journal it was recorded in.
    */
   TERMINAL_ACTIVITY_EVENT_TYPE,
   /*
-   * The prime engine's own evidence vocabulary, and the reason it has to be
-   * named here is written three comments above: an event type this set does
-   * not name raises EVENT_TYPE_UNKNOWN, which is a `completeness` finding,
-   * which makes the report `incomplete`. Prime became the default engine while
-   * this set still listed only the airship turn protocol, so *every* new
-   * conversation journaled a `prime.session.runtime.seal` the audit could not
-   * read and was quarantined from resume by its own first turn — the exact
-   * degrade-by-recording trap the terminal comment above was written to avoid.
+   * The Prime engine's own record vocabulary. An event type this set does not
+   * name raises EVENT_TYPE_UNKNOWN, which makes the report `incomplete`.
+   * Prime became the default engine while this set still listed only the
+   * Airship turn protocol, so the first runtime-selection marker made each new
+   * conversation unopenable after its first turn.
    *
    * Listed literally rather than imported: `src/prime` imports core, and core
-   * importing prime back would close a cycle. `session-audit-prime-vocabulary.test.ts`
-   * holds the two in agreement, so a new prime record cannot be added without
-   * this set learning it.
+   * importing Prime back would close a cycle. The direct vocabulary test holds
+   * the two lists in agreement.
    *
-   * Named, not interpreted. These sit beside the canonical transcript and
-   * carry no turn-protocol obligations, so the audit reads them as records it
-   * knows exist rather than records it verifies the shape of.
+   * Named, not interpreted. These records sit beside the canonical transcript
+   * and carry no turn-protocol obligations. The former runtime marker remains
+   * here only for historical journal reads; current writes use the new marker.
    */
+  "prime.session.runtime.selected",
   "prime.session.runtime.seal",
   "prime.harness.refined",
   "prime.kernel.job.started",
@@ -158,8 +159,8 @@ const TERMINAL_MAX_COMMAND_CHARS = 1_024;
 const TERMINAL_MAX_SUMMARY_CHARS = 512;
 const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const EFFECTS = new Set(["read", "write", "network", "execute", "identity"]);
-const POSTURES = new Set(["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"]);
-const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-confidential"]);
+const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-heavy"]);
+const POSTURES = new Set(["local", "plaintext-remote"]);
 /** The closed authority vocabulary of `ApprovalProvenance`; see approvalProvenanceIssue. */
 const APPROVAL_SOURCES = new Set(["automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox"]);
 const APPROVAL_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
@@ -172,7 +173,7 @@ export type SessionAuditCategory =
   | "chain"
   | "manifest"
   | "protocol"
-  | "receipt"
+  | "trace"
   | "completeness"
   | "anchor";
 
@@ -190,7 +191,7 @@ export type SessionAuditFinding = Readonly<{
 export type TrustedJournalHead = Readonly<{
   sequence: number;
   digest: string;
-  /** Human-readable origin such as an enclave receipt, transparency log, or signed export. */
+  /** Human-readable origin such as a signed export or external checkpoint. */
   source: string;
 }>;
 
@@ -224,7 +225,7 @@ export type SessionAuditReport = Readonly<{
     chain: boolean;
     manifest: boolean;
     protocol: boolean;
-    receiptBindings: boolean;
+    traceBindings: boolean;
     complete: boolean;
   }>;
   counts: Readonly<{
@@ -289,6 +290,9 @@ type ToolState = {
 
 type TurnState = {
   id: string;
+  /** Route policy admitted when turn.requested joined the durable chain. */
+  model: string;
+  contextPolicy: SessionManifest["contextPolicy"];
   step: number;
   request?: {
     content: string;
@@ -685,21 +689,37 @@ async function validateManifest(
     add({ code: "CAPABILITY_TIER_INVALID", category: "manifest", message: "Manifest capability tier is invalid." });
   }
   if (raw.securityPosture !== undefined && !POSTURES.has(String(raw.securityPosture))) {
-    add({ code: "SECURITY_POSTURE_PIN_INVALID", category: "manifest", message: "Manifest security posture pin is invalid." });
+    add({ code: "SECURITY_POSTURE_PIN_INVALID", category: "manifest", message: "Manifest inference-path pin is invalid." });
   }
   const inferenceBinding = asPlainRecord(raw.inferenceBinding);
+  let inferenceBindingShapeValid = true;
+  try {
+    assertValidSessionInferenceBinding(raw as unknown as Pick<SessionManifest, "providerId" | "model" | "inferenceBinding">);
+  } catch {
+    inferenceBindingShapeValid = false;
+  }
   if (raw.inferenceBinding !== undefined && (
+    !inferenceBindingShapeValid ||
     !inferenceBinding ||
-    inferenceBinding.version !== 1 ||
+    (inferenceBinding.version !== 1 && inferenceBinding.version !== 2) ||
+    Object.keys(inferenceBinding).length !== (inferenceBinding.version === 2 ? 12 : 10) ||
+    (inferenceBinding.version === 2 && (
+      boundedString(inferenceBinding.transportId, 256) === undefined ||
+      !["openai-responses", "openai-chat-completions", "anthropic-messages", "openai-compatible"].includes(String(inferenceBinding.protocol))
+    )) ||
     boundedString(inferenceBinding.connectionId, 256) === undefined ||
     !Number.isSafeInteger(inferenceBinding.connectionGeneration) ||
     (inferenceBinding.connectionGeneration as number) <= 0 ||
     boundedString(inferenceBinding.providerId, 256) === undefined ||
+    (inferenceBinding.version === 2 && inferenceBinding.providerId !== raw.providerId) ||
     boundedString(inferenceBinding.providerLabel, 256) === undefined ||
     !Number.isSafeInteger(inferenceBinding.providerRevision) ||
     (inferenceBinding.providerRevision as number) <= 0 ||
     !["oauth-pkce", "api-key", "local-none"].includes(String(inferenceBinding.authMethod)) ||
-    !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(inferenceBinding.transportBoundary)) ||
+    !(inferenceBinding.version === 1
+      ? ["e2ee-attestable", "provider-tls", "loopback-local"]
+      : ["provider-tls", "loopback-local"]
+    ).includes(String(inferenceBinding.transportBoundary)) ||
     boundedString(inferenceBinding.modelId, 512) === undefined ||
     inferenceBinding.modelId !== raw.model ||
     boundedString(inferenceBinding.boundAt, 128) === undefined ||
@@ -796,17 +816,16 @@ async function validateManifest(
       add({ code: "SKILL_SET_DIGEST_MISMATCH", category: "manifest", message: "Resolved skills do not match their pinned digest." });
     }
     const workspaceBinding = asPlainRecord(profile.workspaceBinding);
-    const hasSiloFields = profile.workspaceBinding !== undefined || profile.memoryScope !== undefined || profile.approvalMode !== undefined || profile.minimumPosture !== undefined;
+    const hasSiloFields = profile.workspaceBinding !== undefined || profile.memoryScope !== undefined || profile.approvalMode !== undefined;
     const validWorkspaceBinding = workspaceBinding !== undefined && (
       (workspaceBinding.kind === "active-workspace" && Object.keys(workspaceBinding).length === 1) ||
       (workspaceBinding.kind === "workspace-id" && boundedString(workspaceBinding.workspaceId, 512) !== undefined)
     );
     const validSilo = validWorkspaceBinding
       && ["session", "profile", "workspace"].includes(String(profile.memoryScope))
-      && ["ask-first", "auto-approve", "full-access"].includes(String(profile.approvalMode))
-      && POSTURES.has(String(profile.minimumPosture) as SecurityPosture);
+      && ["ask-first", "auto-approve", "full-access"].includes(String(profile.approvalMode));
     if ((profile.version === 2 && !validSilo) || (profile.version === 1 && hasSiloFields)) {
-      add({ code: "PROFILE_SILO_INVALID", category: "manifest", message: "Session profile workspace, memory, approval, or proof boundary is invalid." });
+      add({ code: "PROFILE_SILO_INVALID", category: "manifest", message: "Session profile workspace, memory, or approval boundary is invalid." });
     }
   }
 }
@@ -910,11 +929,10 @@ async function validateProtocol(
   };
 
   /*
-   * The model the thread names at this point in the walk. The session's
-   * pinned manifest is the model the thread was created under; a
-   * `session.model-changed` event supersedes it for everything after — which
-   * is the only way digests minted after an in-flight switch can still be
-   * the canonical transcript the audit replays.
+   * The model the thread offers to the next durable turn at this point in the
+   * walk. turn.requested snapshots it into TurnState. A later model change is
+   * therefore effective for the next turn without rewriting the identity of a
+   * turn that is already admitted and may still be streaming.
    */
   // The walk begins at history's first event, before any change could have
   // happened: the model that binds receipts minted from a manifest-stamped
@@ -1118,7 +1136,13 @@ async function validateProtocol(
       if (
         activeLocal || (!outsideTurn && !turnBoundPreprocessing) || !summary || !valid ||
         summary.sourceEndSequence >= event.sequence ||
-        !summaryMatchesContextPolicy(summary, session.manifest, events.slice(0, index), effectiveModel, effectiveContextPolicy)
+        !summaryMatchesContextPolicy(
+          summary,
+          session.manifest,
+          events.slice(0, index),
+          turnBoundPreprocessing && active ? active.model : effectiveModel,
+          turnBoundPreprocessing && active ? active.contextPolicy : effectiveContextPolicy,
+        )
       ) {
         add({
           ...eventLocation(event),
@@ -1258,7 +1282,7 @@ async function validateProtocol(
        *
        * The title is the *outcome*, not the evidence, so it may be absent: a
        * request that came back with a refusal or an essay was still billed and
-       * still attested, and requiring a title here would have meant the only
+       * still recorded, and requiring a title here would have meant the only
        * way to stay audit-clean was to journal nothing — which is precisely the
        * unaudited paid request this record exists to end. A titleless record
        * must therefore carry the verbatim answer instead, so it still states
@@ -1287,7 +1311,7 @@ async function validateProtocol(
           ...eventLocation(event),
           code: "CONVERSATION_NAMING_INVALID",
           category: "protocol",
-          message: "A conversation naming record must have new turn/operation IDs, a bounded model, either a bounded title or the verbatim answer it was rejected from, and any receipt must name this session and operation.",
+          message: "A conversation naming record must have new turn/operation IDs, a bounded model, either a bounded title or the verbatim answer it was rejected from, and any trace receipt must name this session and operation.",
         });
         continue;
       }
@@ -1446,7 +1470,7 @@ async function validateProtocol(
         ? await verifyLiveEnvironmentSnapshot(liveEnvironment)
         : false;
       const liveEnvironmentScopeVerified = liveEnvironment
-        ? liveEnvironmentScopeMatches(liveEnvironment, session.id, session.manifest)
+        ? liveEnvironmentScopeMatches(liveEnvironment, session.id, session.manifest, effectiveModel)
         : false;
       const contextSelection = payload?.contextSelection === undefined
         ? undefined
@@ -1491,7 +1515,13 @@ async function validateProtocol(
       }
       seenTurns.add(event.turnId);
       counts.turns += 1;
-      active = { id: event.turnId, step: -1, tools: [] };
+      active = {
+        id: event.turnId,
+        model: effectiveModel,
+        contextPolicy: effectiveContextPolicy,
+        step: -1,
+        tools: [],
+      };
       if (lastContextMessage) {
         const prior = messages[lastContextMessage.index];
         if (prior?.role === "user") messages[lastContextMessage.index] = { ...prior, content: lastContextMessage.content };
@@ -1641,8 +1671,8 @@ async function validateProtocol(
         continue;
       }
       if (
-        payload.providerId !== session.manifest.providerId ||
-        payload.model !== effectiveModel ||
+        !sessionInferenceProviderIdMatches(session.manifest, payload.providerId) ||
+        payload.model !== turn.model ||
         !POSTURES.has(String(payload.posture))
       ) {
         add({ ...eventLocation(event), code: "INFERENCE_BINDING_MISMATCH", category: "protocol", message: "Inference provider, model, or posture does not match the pinned session/runtime vocabulary." });
@@ -1663,7 +1693,7 @@ async function validateProtocol(
         add({ ...eventLocation(event), code: "INFERENCE_REQUEST_METADATA_INVALID", category: "protocol", message: "Inference idempotency key or request digest is invalid." });
       } else {
         const expectedRequestDigest = await sha256(stableStringify({
-          model: effectiveModel,
+          model: turn.model,
           systemPromptDigest: session.manifest.systemPromptDigest,
           messages: boundInferenceHistoryImages(messages),
           tools: session.manifest.tools,
@@ -1762,7 +1792,7 @@ async function validateProtocol(
         }
         const expectedResponseDigest = await sha256(message.content);
         if (expectedResponseDigest !== payload.responseDigest) {
-          add({ ...eventLocation(event), code: "RESPONSE_DIGEST_MISMATCH", category: "receipt", message: "Assistant response does not match its response digest." });
+          add({ ...eventLocation(event), code: "RESPONSE_DIGEST_MISMATCH", category: "trace", message: "Assistant response does not match its response digest." });
         }
         const receiptId = validateReceipt(
           payload.receipt,
@@ -1771,7 +1801,7 @@ async function validateProtocol(
           String(payload.responseDigest),
           event,
           add,
-          effectiveModel,
+          turn.model,
         );
         turn.finalAssistant = {
           responseDigest: String(payload.responseDigest),
@@ -2030,7 +2060,7 @@ function provenanceMatchesContextPolicy(
   effectiveModel: string = manifest.model,
 ): boolean {
   return provenance?.adapterId === adapterId &&
-    provenance.providerId === manifest.providerId &&
+    sessionInferenceProviderIdMatches(manifest, provenance.providerId) &&
     provenance.model === effectiveModel &&
     (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
 }
@@ -2063,12 +2093,11 @@ function parseToolCalls(
 }
 
 /**
- * Whose request this receipt claims to be for.
+ * Whose request this trace receipt belongs to.
  *
- * Shared with the naming inference, which produces a genuine receipt for a
- * request that is not a turn step: its digests bind a prompt this journal
- * deliberately does not carry, so identity is everything that can be checked
- * there, and it is checked identically to a turn's.
+ * A naming inference is not a turn step, so identity is the only common
+ * property the audit can check there. A final assistant event also validates
+ * request and response digests below.
  */
 function receiptIdentityMatches(
   receipt: Record<string, unknown> | undefined,
@@ -2076,18 +2105,16 @@ function receiptIdentityMatches(
   turnId: string,
   effectiveModel: string = session.manifest.model,
 ): boolean {
-  const bindings = asPlainRecord(receipt?.bindings);
   return Boolean(
     receipt
     && receipt.version === 1
     && boundedString(receipt.receiptId, 2_048)
     && receipt.sessionId === session.id
     && receipt.turnId === turnId
-    && receipt.provider === session.manifest.providerId
+    && sessionInferenceProviderIdMatches(session.manifest, receipt.provider)
     && (receipt.model === undefined || receipt.model === effectiveModel)
-    && POSTURES.has(String(receipt.posture))
-    && bindings
-    && bindings.algorithm === "SHA-256",
+    && (receipt.requestDigest === undefined || DIGEST_PATTERN.test(String(receipt.requestDigest)))
+    && (receipt.responseDigest === undefined || DIGEST_PATTERN.test(String(receipt.responseDigest))),
   );
 }
 
@@ -2101,14 +2128,13 @@ function validateReceipt(
   effectiveModel: string,
 ): string | undefined {
   const receipt = asPlainRecord(value);
-  const bindings = asPlainRecord(receipt?.bindings);
   const receiptId = boundedString(receipt?.receiptId, 2_048);
   if (!receiptIdentityMatches(receipt, session, turn.id, effectiveModel)) {
-    add({ ...eventLocation(event), code: "RECEIPT_IDENTITY_MISMATCH", category: "receipt", message: "Receipt does not match the session, turn, provider, model, or digest algorithm." });
+    add({ ...eventLocation(event), code: "RECEIPT_IDENTITY_MISMATCH", category: "trace", message: "Trace receipt does not match the session, turn, provider, model, or digest shape." });
     return receiptId;
   }
-  if (bindings?.requestDigest !== turn.inference?.requestDigest || bindings?.responseDigest !== responseDigest) {
-    add({ ...eventLocation(event), code: "RECEIPT_BINDING_MISMATCH", category: "receipt", message: "Receipt request/response bindings do not match the audited turn." });
+  if (receipt?.requestDigest !== turn.inference?.requestDigest || receipt?.responseDigest !== responseDigest) {
+    add({ ...eventLocation(event), code: "RECEIPT_BINDING_MISMATCH", category: "trace", message: "Trace receipt request/response digests do not match the audited turn." });
   }
   return receiptId;
 }
@@ -2161,7 +2187,7 @@ function finishReport(args: {
       chain: categoryPasses("chain") && categoryPasses("anchor"),
       manifest: categoryPasses("manifest"),
       protocol: categoryPasses("protocol"),
-      receiptBindings: categoryPasses("receipt"),
+      traceBindings: categoryPasses("trace"),
       complete,
     },
     counts: Object.freeze({ ...args.counts }),
@@ -2272,7 +2298,7 @@ function inspectJson(
  * carrying `approval: null` verified clean, and one claiming Full Access
  * authority inside a session pinned to ask-first verified clean too. A field no
  * side of the contract validates is not evidence — it is decoration that looks
- * like evidence, which is worse than nothing on a proof surface.
+ * like a supported record, which is worse than an explicit unknown.
  *
  * The mode is compared against whichever mode was in force at this point in
  * the chain — the manifest's pin as amended by every `session.approval-policy-

@@ -75,7 +75,7 @@
    */
   --scrim: color-mix(in srgb, var(--ground) 78%, transparent);
   /* The brand mark is not a verdict. It used to be painted with --copper, the
-     token reserved for the asserted seal, so the logo and "this claim is
+     token reserved for the asserted status mark, so the logo and "this claim is
      asserted, not verified" were the same colour in the same viewport — one
      colour saying two things. The mark is the product's material (brass, and
      it sits inside a pressable topbar button), so it tracks the accent and
@@ -102,7 +102,7 @@
   /*
    * A tab strip is a navigation band, so its height is designed rather than
    * density-driven — but it has to be designed *once*. The product shipped
-   * three answers: the shared Tabs primitive at 40px, the Trust hub strip at
+   * three answers: the shared Tabs primitive at 40px, the retired status strip at
    * 44px, and the Agent-configuration strip (the live route to Skills and
    * Capabilities) at 39px with no phone floor at all. The floor is
    * `--touch-target`, applied to every strip under a coarse pointer; this is
@@ -162,45 +162,10 @@
   --sp-7: 48px;
   --lh-tight: 1.2;
   --lh-body: 1.6;
-  /*
-   * The alias ledger: three live names per colour role, being retired to one.
-   *
-   * There was no single answer to "what do I type for the verified green".
-   * `--v-verified` / `--signal` / `--verdigris` were 112 call sites across
-   * three spellings, `--v-failed` / `--danger` / `--signal-red` another 92, and
-   * `docs/DESIGN_LANGUAGE.md` published the *alias* set as the contract — so a
-   * contributor who read the design language wrote `var(--brass)` and joined
-   * the 8-site minority while one who read this file wrote `var(--accent)` and
-   * joined the 142. Reviewing a diff, finding every use of the failed colour,
-   * or retheming all require knowing all three; miss one and a swathe of the UI
-   * keeps the old hue.
-   *
-   * The `--v-*` / `--accent` set is canonical. `--steel` is gone: its last call
-   * site (`routes.css`) now names `--truth-local`. These four survive only
-   * until their remaining sheets are rewritten — chat.css and shell.css for
-   * `--brass`/`--brass-bright`/`--verdigris`/`--signal-red`, and access,
-   * attestations, context, memory, sources, capabilities and workspace for
-   * `--signal`/`--danger`. The list may only shrink, and
-   * `token-vocabulary.test.ts` holds it to the sheets named here.
-   */
   --signal: var(--v-verified);
   --danger: var(--v-failed);
   --brass: var(--accent);
   --brass-bright: var(--accent-bright);
-  /* Stepped from #be805f for the same lightest-bed rule: the curated palettes
-     that joined the library declare raised surfaces lighter than Verdigris'
-     #1b292a — the previous lightest bed — and this is the bed that decides
-     the hex. It used to sit between 4.0 and 4.6 on the beds it lands on,
-     defended as "they
-     only paint glyphs, borders and fills" — but twenty rules across ten sheets
-     spend them on `color`, and sixteen of those land on a *word* at caption
-     size (the failed status chip, both attestation chips, both topbar posture
-     chips, the provider-health lines, the Git conflict note). A token that
-     paints words has to clear WCAG 1.4.3's 4.5:1, so the token was raised
-     rather than the sixteen labels flattened to --ink: the hue is the signal,
-     and lifting it here fixes the aliases (--danger, --signal-red) too.
-     `css-variable-contract.test.ts` now holds both tokens to AA on both
-     surfaces across every theme x mode. */
   --copper: #c78a66;
   --verdigris: var(--v-verified);
   --signal-red: var(--v-failed);
@@ -213,7 +178,7 @@
   --shadow: 0 16px 45px rgba(0, 0, 0, 0.22);
   --radius-control: 6px;
   --radius-panel: 10px;
-  /* Deliberately outside the data-corners remap below: a seal chip is round
+  /* Deliberately outside the data-corners remap below: a status mark chip is round
      because roundness is what says "chip", not because the user picked a
      corner style. Square corners must not turn a chip into a control. */
   --radius-chip: 999px;
@@ -222,20 +187,9 @@
   --v-info: #7fa8c9;
   --v-verified: #67a39a;
   --v-caution: #d9a441;
-  /* Stepped from #ce7769 against the same bed: the curated palettes moved the
-     lightest declared raised surface from Verdigris #1b292a to One Dark
-     #282d36, and the token moves before the bed ever breaches 4.5:1. Same
-     reason as --copper above: this is the colour of the word "failed" in the
-     session status chip, the error part, the claim-group header and the
-     removed-line emphasis, so 1.4.11's 3:1 was never the applicable rule for
-     it. `css-variable-contract.test.ts` holds it to AA on both beds in every
-     theme. */
   --v-failed: #d68172;
   --truth-local: #8ba0a6;
   --truth-remote: #bd6f4c;
-  /* Code tokens are a two-hue family of their own — one violet for syntax,
-     one warm neutral for literals — deliberately outside the verdict palette
-     so a keyword can never be mistaken for a proof state. */
   --tok-com: var(--ink-faint);
   --tok-kw: #b394d1;
   --tok-fn: #cbb6e2;
@@ -318,22 +272,6 @@ body {
   --radius-control: 5px;
   --radius-panel: 8px;
 }
-
-/*
- * The Body font preference, answered by both mechanisms instead of one.
- *
- * This block used to set `font-family` alone, so the preference travelled by
- * inheritance only — and the 28 rules that name `var(--font-body)` explicitly
- * (the seal labels, the Proof hero verdict, the Memory card titles, the
- * Capabilities device headings, the model-picker prices, the Vault body) each
- * opted their element back out of it. A reader who chose System serif got a
- * page in two typefaces that read as a webfont having failed to load, not as a
- * preference having been applied, and it is worse on a phone where those
- * elements are a larger share of what is on screen.
- *
- * The literal is written once and the `font-family` line references it, so the
- * two halves cannot drift apart again.
- */
 :root[data-body-font="system-serif"] {
   --font-body: Georgia, "Times New Roman", serif;
   font-family: var(--font-body);
@@ -409,31 +347,6 @@ body {
   --message-action-height: 36px;
   --lh-body: 1.68;
 }
-
-/*
- * What is left of the hand-list, and why a hand-list is the wrong shape.
- *
- * This block used to be the *entire* implementation of the Density preference:
- * fifteen selectors naming six components, all of them chat or profile. Nine of
- * the ten routes named no density token at all — `grep -c 'var(--density-'`
- * returned 0 for routes.css, sessions-view.css, workspace-view.css,
- * memory-view.css, proof-view.css, vault-view.css and terminal-view.css — so
- * Compact tightened the rail, the composer and the message column and left
- * Proof, Memory, Vault, Sessions, Workspace, Terminal, Access, Attestations and
- * Billing frozen to the pixel.
- *
- * The replacement is not a longer list here: a component rule that *names the
- * token itself* needs no entry, because `--density-control` already carries a
- * `:root` fallback. `routes.css` now does that at the shared primitives every
- * route renders — the `.route-layout` gutter, `.route-header__bar`, `.metric`,
- * and every control row — so the preference reaches ten routes without ten
- * sheets opting in.
- *
- * The entries below survive because their component rules live in sheets this
- * change did not own (`shell.css` for `.nav-item`, `chat.css` for the message
- * column, the composer, the session bar and the slash menu). Each one should
- * end up in its own component rule the same way; the list may only shrink.
- */
 :root[data-density] .nav-item { min-height: var(--density-control); }
 :root[data-density] .panel-heading { min-height: var(--density-control); padding-inline: var(--density-panel-pad); }
 :root[data-density] .profile-card { min-height: var(--density-row); padding: calc(var(--density-panel-pad) * .55); }
@@ -465,7 +378,6 @@ body {
    preference cannot also be a box that grows with what you type. The resting
    height belongs to the 44px touch row and to `fit()`. */
 :root[data-density] .composer textarea { padding-inline: var(--density-panel-pad); }
-:root[data-density] .file-list button,
 :root[data-density] .slash-command-menu button { min-height: var(--density-control); }
 
 @media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
@@ -475,34 +387,6 @@ body {
      the desktop leading pushes an ordinary answer past the fold. */
   :root[data-density="comfortable"] { --lh-body: 1.5; }
   :root[data-density="compact"] { --lh-body: 1.4; }
-
-  /*
-   * The phone's own ramp — the thing this block used to say it deliberately did
-   * not do ("the reading size itself is untouched").
-   *
-   * Measured: computed `:root` was byte-identical at 360, 430 and 1440, so a
-   * 430px phone rendered the 1440px type scale verbatim. Two consequences, both
-   * measured on this build at 430×932. `--fs-micro` resolved to 11.69px and is
-   * what carries the mobile nav labels, the composer's Enter legend and posture
-   * word, and the Proof route's eyebrow — under the 12px floor, on the device
-   * held at arm's length. And `--fs-lead` against `--fs-body` is 1.133:1, so the
-   * conversation title and the sentence beneath it are the same size: there is
-   * no hierarchy to scan, which is why the header reads as one grey mass.
-   *
-   * The three smallest rungs move up one rung each — the small end is a
-   * legibility problem, not a hierarchy one — and the three largest move apart
-   * from `--fs-body`, which is the anchor and does not move. `--fs-title` against
-   * `--fs-body` goes 1.333:1 → 1.533:1, matching the desktop heading contrast
-   * the phone never had. `--fs-hero` comes *down*: 40px of display type is a
-   * desktop luxury that costs a phone a third of its fold.
-   *
-   * Every step stays `calc(<rem> * var(--type-scale))`, in sixteenths of a rem
-   * like the base ramp at :133. Two rules this must not break, both easy to:
-   * a px literal here would freeze the text against the Type scale preference
-   * (WCAG 1.4.4, the reason recorded at :130), and bumping `--type-scale` itself
-   * would multiply *all eight* steps by a factor that then composes with the
-   * user's own `data-type-scale` — `x-large` would arrive twice.
-   */
   :root {
     --fs-micro: calc(.75rem * var(--type-scale));
     --fs-caption: calc(.8125rem * var(--type-scale));

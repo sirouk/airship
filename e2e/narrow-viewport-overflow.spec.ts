@@ -5,7 +5,7 @@ import { setProfilePresentationDensity } from "./support/density";
  * No route may scroll sideways on a phone.
  *
  * Nothing covered widths below 390px. That is the iPhone 13 viewport the mobile
- * project happens to use, and the Proof route's tab row was sitting 2px inside
+ * project happens to use, and a former route's tab row was sitting 2px inside
  * it — 375px of buttons in a 377px column — which is a coincidence of one
  * machine's font metrics rather than a layout. On the Linux runner those labels
  * measure wider and `route-adversarial-audit` reported 8px of overflow that
@@ -35,18 +35,18 @@ import { setProfilePresentationDensity } from "./support/density";
  */
 
 const ROUTES = [
-  "proof",
-  "vault",
   "chat",
-  "editor",
   "sessions",
-  "memory",
   "workspace",
+  "editor",
   "terminal",
-  "access",
-  "capabilities",
+  "memory",
   "context",
-  "billing",
+  "profiles",
+  "capabilities",
+  "skills",
+  "vault",
+  "access",
 ] as const;
 
 // The widths people actually hold, plus the responsive floor.
@@ -132,60 +132,49 @@ for (const width of PHONE_WIDTHS) {
   });
 }
 
-test("shared tab overflow and metric labels stay inside their own 320px surfaces", async ({ page }, testInfo) => {
+test("the live shared tab strip stays inside its 320px Workspace surface", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone widths are a mobile-project concern");
   await page.setViewportSize({ width: 320, height: 812 });
+  await page.goto("/#workspace");
 
-  await page.goto("/#proof");
-  const proofTabs = page.locator(".proof-surface-tabs");
-  /*
-   * This used to require the overflow chevron to be present and contained.
-   * The chevron was the symptom: `1fr 1fr` sat on the tabs ROOT, whose two
-   * children are the strip and the chevron — so the strip got half a 320px
-   * screen, "Receipt & journal" collapsed to an 8px sliver, and a permanent
-   * `⌄ 1` badge sat beside it. Halving the STRIP instead lets both tabs fit,
-   * and `tabsOutOfView` then returns empty and unmounts the chevron.
-   *
-   * So the contract is stated directly rather than through the artefact:
-   * both tabs are readable and inside the surface. The chevron is still held
-   * to containment wherever it does appear — it simply may not appear here.
-   */
-  const proofTabButtons = proofTabs.locator(".tabs__tab-button");
-  await expect(proofTabButtons).toHaveCount(2);
-  const surfaceRight = await proofTabs.evaluate((node) => node.getBoundingClientRect().right);
-  for (const index of [0, 1]) {
-    const tab = proofTabButtons.nth(index);
-    await expect(tab).toBeVisible();
-    const box = await tab.evaluate((node) => {
-      const rect = node.getBoundingClientRect();
-      return { right: rect.right, width: rect.width };
-    });
-    expect(box.right, `proof tab ${index + 1} stays inside its surface`).toBeLessThanOrEqual(surfaceRight + 1);
-    // An 8px sliver is "visible" to a locator and unreadable to a person.
-    expect(box.width, `proof tab ${index + 1} is wide enough to read`).toBeGreaterThan(60);
-  }
-  const overflowTrigger = proofTabs.locator(".tabs__overflow-trigger");
-  if (await overflowTrigger.count()) {
-    const triggerRight = await overflowTrigger.evaluate((node) => node.getBoundingClientRect().right);
-    expect(triggerRight).toBeLessThanOrEqual(surfaceRight + 1);
-  }
+  const tabs = page.locator(".workbench-mobile-switch");
+  await expect(tabs).toBeVisible();
+  const tabButtons = tabs.locator(".tabs__tab-button");
+  await expect(tabButtons).toHaveCount(3);
 
-  await page.goto("/#account");
-  await expect(page.locator(".billing-metric-strip")).toBeVisible();
-  const metricGeometry = await page.locator(".billing-metric-strip .metric-strip__cell").evaluateAll((cells) => cells.reduce((result, cell) => {
-    const edge = cell.getBoundingClientRect().right;
-    const label = cell.querySelector<HTMLElement>(".metric-strip__label");
-    if (!label) return result;
-    const name = label.textContent?.trim() ?? "unnamed metric";
-    if (label.getBoundingClientRect().right > edge + 1) result.spills.push(name);
-    if (name === "Subscription") {
-      const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
-      result.subscriptionLines = Math.round(label.getBoundingClientRect().height / lineHeight);
-    }
-    return result;
-  }, { spills: [] as string[], subscriptionLines: 0 }));
-  expect(metricGeometry.spills).toEqual([]);
-  expect(metricGeometry.subscriptionLines).toBe(1);
+  const geometry = await tabs.evaluate((root) => {
+    const surface = root.getBoundingClientRect();
+    const strip = root.querySelector<HTMLElement>(".tabs__strip");
+    const trigger = root.querySelector<HTMLElement>(".tabs__overflow-trigger");
+    if (!strip) return undefined;
+    return {
+      surfaceLeft: surface.left,
+      surfaceRight: surface.right,
+      stripLeft: strip.getBoundingClientRect().left,
+      stripRight: strip.getBoundingClientRect().right,
+      stripClientWidth: strip.clientWidth,
+      stripScrollWidth: strip.scrollWidth,
+      buttonWidths: [...strip.querySelectorAll<HTMLElement>(".tabs__tab-button")]
+        .map((button) => button.getBoundingClientRect().width),
+      triggerLeft: trigger?.getBoundingClientRect().left,
+      triggerRight: trigger?.getBoundingClientRect().right,
+      documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  expect(geometry).toBeDefined();
+  expect(geometry!.surfaceLeft).toBeGreaterThanOrEqual(-1);
+  expect(geometry!.surfaceRight).toBeLessThanOrEqual(321);
+  expect(geometry!.stripLeft).toBeGreaterThanOrEqual(geometry!.surfaceLeft - 1);
+  expect(geometry!.stripRight).toBeLessThanOrEqual(geometry!.surfaceRight + 1);
+  expect(geometry!.buttonWidths.every((width) => width >= 44)).toBe(true);
+  expect(geometry!.documentOverflow).toBeLessThanOrEqual(1);
+
+  // If all three labels do not fit, the shared primitive must expose its
+  // overflow control inside the same surface rather than widening the page.
+  if (geometry!.stripScrollWidth > geometry!.stripClientWidth + 1) {
+    expect(geometry!.triggerLeft).toBeGreaterThanOrEqual(geometry!.surfaceLeft - 1);
+    expect(geometry!.triggerRight).toBeLessThanOrEqual(geometry!.surfaceRight + 1);
+  }
 });
 
 /*

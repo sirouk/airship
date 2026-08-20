@@ -3,9 +3,7 @@ import {
   mapRequestFailure,
   mapUnknownRequestFailure,
   observationState,
-  TEE_EVIDENCE_FAILURE,
 } from "./request-state";
-import { claimLanguage } from "./trust-language";
 
 describe("request state mapper", () => {
   it("keeps offline, credential, provider, and transport failures distinct", () => {
@@ -20,69 +18,40 @@ describe("request state mapper", () => {
     expect(mapUnknownRequestFailure({ cause: { status: 503 } }, true)).toEqual(expect.objectContaining({ kind: "provider" }));
     expect(mapUnknownRequestFailure(new TypeError("Failed to fetch"), true)).toEqual(expect.objectContaining({ kind: "unreachable" }));
     expect(mapUnknownRequestFailure(new Error("anything"), false)).toEqual(expect.objectContaining({ kind: "offline" }));
+    expect(mapUnknownRequestFailure({ status: 403, message: "secret provider body" }, true).message).not.toContain("secret provider body");
   });
 
-  it("explains the exact protected authorization boundary", () => {
+  it("explains connection failures in provider-neutral language", () => {
     expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 403, operation: "instance-discovery" }, true)).toEqual({
       kind: "credential",
-      message: "Endpoint discovery denied. Reconnect with chutes:invoke or an API key.",
+      message: "Provider connection cannot list endpoints. Reconnect in Providers, then retry.",
     });
     expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 401, operation: "invoke" }, true)).toEqual({
       kind: "credential",
-      message: "Encrypted inference denied. Reconnect, then check account and model access.",
+      message: "Provider connection rejected this model request. Reconnect in Providers, then check model access.",
+    });
+    expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 403 }, true)).toEqual({
+      kind: "credential",
+      message: "Provider connection rejected the request. Reconnect in Providers or switch credentials.",
     });
   });
 
-  /*
-   * This is the text rendered under a failed turn in Chat. It read "TEE
-   * evidence failed. Open Proof." — three letters the build expands nowhere:
-   * grepping all of src for "trusted execution", "confidential comput" and
-   * "end-to-end encrypt" returns one hit, a label on a route this reader has
-   * not opened. `claimLanguage` already models the answer for this exact claim,
-   * a plain primary beside a technical secondary, and it is asserted here as
-   * the reference so rewording the legend fails this test rather than leaving
-   * the failure text speaking a vocabulary the product abandoned.
-   */
-  it("expands the acronym a turn dies on, in the product's own plain register", () => {
-    const plain = "Protected";
-    expect(claimLanguage("cpuTee").primary).toContain(plain);
-    expect(claimLanguage("gpuTee").primary).toContain(plain);
-    expect(TEE_EVIDENCE_FAILURE).toContain(`${plain}-runtime (TEE)`);
-    expect(TEE_EVIDENCE_FAILURE.indexOf(plain)).toBeLessThan(TEE_EVIDENCE_FAILURE.indexOf("TEE"));
-    expect(TEE_EVIDENCE_FAILURE).toContain("Open Proof.");
-    expect(mapUnknownRequestFailure({ code: "ATTESTATION_FAILED", status: 403 }, true).message)
-      .toBe(TEE_EVIDENCE_FAILURE);
-  });
-
-  it("does not misreport attestation and nonce failures as credentials", () => {
-    expect(mapUnknownRequestFailure({ code: "ATTESTATION_FAILED", status: 403 }, true).kind).toBe("provider");
-    expect(mapUnknownRequestFailure({ code: "NONCE_REJECTED", status: 403 }, true).kind).toBe("provider");
-  });
-
-  /*
-   * The two limits a person actually reaches had no branch at all: a 429 and a
-   * spent balance both landed on "Request failed. Local state was kept", which
-   * names neither cause nor remedy. The remedies are asserted, not just the
-   * kinds, because the remedy is the whole reason these two are worth telling
-   * apart — and the billing sentence must not send a working credential back to
-   * the reconnect flow.
-   */
-  it("names the rate limit and the empty balance, with the remedy each one has", () => {
+  it("keeps rate and provider usage limits distinct from credentials", () => {
     const rateLimited = mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 429, operation: "invoke" }, true);
     expect(rateLimited.kind).toBe("rate-limit");
     expect(rateLimited.message).toContain("Rate limit");
     expect(rateLimited.message).toContain("retry");
 
-    const billing = mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 402, operation: "invoke" }, true);
-    expect(billing.kind).toBe("billing");
-    expect(billing.message).toContain("credit");
-    expect(billing.message).toContain("Account");
-    expect(billing.message).not.toMatch(/reconnect|api key|sign in/iu);
+    const quota = mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 402, operation: "invoke" }, true);
+    expect(quota.kind).toBe("quota");
+    expect(quota.message).toContain("usage limit");
+    expect(quota.message).toContain("Providers");
+    expect(quota.message).not.toMatch(/reconnect|api key|sign in|account\b/iu);
   });
 
-  /* A provider that answers an exhausted balance or a throttle with 403 was told to switch API keys. */
   it("does not blame the credential for a limit the credential is not part of", () => {
-    expect(mapRequestFailure({ online: true, status: 403, code: "INSUFFICIENT_BALANCE" }).kind).toBe("billing");
+    expect(mapRequestFailure({ online: true, status: 403, code: "INSUFFICIENT_BALANCE" }).kind).toBe("quota");
+    expect(mapRequestFailure({ online: true, status: 403, code: "QUOTA_EXHAUSTED" }).kind).toBe("quota");
     expect(mapRequestFailure({ online: true, status: 403, code: "RATE_LIMITED" }).kind).toBe("rate-limit");
     expect(mapRequestFailure({ online: true, status: 403, code: "HTTP_ERROR" }).kind).toBe("credential");
   });
@@ -94,14 +63,29 @@ describe("request state mapper", () => {
     });
   });
 
-  it("maps stalled and truncated streams to actionable bounded failures", () => {
+  it("maps stalled, truncated, and remote failures to bounded generic transport messages", () => {
     expect(mapUnknownRequestFailure({ code: "STREAM_STALLED" }, true)).toEqual({
       kind: "unreachable",
-      message: "Chutes stopped streaming. The partial response was kept; retry the turn.",
+      message: "Provider connection stalled during streaming. The partial response was kept; retry the turn.",
     });
     expect(mapUnknownRequestFailure({ code: "STREAM_TRUNCATED" }, true)).toEqual({
       kind: "provider",
-      message: "Chutes returned an incomplete response. The partial response was kept; retry the turn.",
+      message: "Provider returned an incomplete response. The partial response was kept; retry the turn.",
+    });
+    expect(mapUnknownRequestFailure({ code: "INVALID_RESPONSE" }, true)).toEqual({
+      kind: "provider",
+      message: "Provider returned an incomplete response. The partial response was kept; retry the turn.",
+    });
+    expect(mapUnknownRequestFailure({ code: "NETWORK_UNREACHABLE" }, true)).toEqual({
+      kind: "unreachable",
+      message: "Provider connection unreachable. Check connectivity and retry; local state was kept.",
+    });
+  });
+
+  it("keeps model discovery provider-side when the catalog itself is unavailable", () => {
+    expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 403, operation: "model-discovery" }, true)).toEqual({
+      kind: "provider",
+      message: "Provider model list unavailable; retry later.",
     });
   });
 

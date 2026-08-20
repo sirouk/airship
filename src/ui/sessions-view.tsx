@@ -12,15 +12,16 @@ import {
   type SessionLibraryDetail,
 } from "../sessions/library";
 import { forkLibraryAnnouncement } from "./chat/fork-notice";
+import { ReceiptTraceDetails, receiptOriginLabel } from "./chat/run-details";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import "./sessions-view.css";
-import { DurabilityIndicator, durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { DurabilityIndicator, durabilityLabel, durabilityStatusMark, type DurabilityState } from "./durability-indicator";
 import { ConfirmDialog } from "./confirm-dialog";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
-import { Seal } from "./seal";
+import { StatusMark } from "./status-mark";
 import { favoriteDirectionalMove, favoriteDropMove, groupPinnedSessions } from "./session-pins";
 import {
   SESSION_OUT_OF_RESULTS_CAPTION,
@@ -70,8 +71,7 @@ export type SessionsViewProps = Readonly<{
    * palette immediately. The conversation journal owns the deletion; the
    * shell owns the other live projections.
    */
-  onDeleted?: (sessionId: string, removeEvidence: boolean) => void | Promise<void>;
-  onOpenProof?: (sessionId: string) => void;
+  onDeleted?: (sessionId: string) => void | Promise<void>;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
   /**
    * The conversation whose transcript the active runtime could not replay.
@@ -100,13 +100,15 @@ export type SessionsViewProps = Readonly<{
 }>;
 
 /** The journal-adapter sentence, chosen by the adapter that is live. */
-function journalAdapterSentence(state: DurabilityState): string {
+export function journalAdapterSentence(state: DurabilityState): string {
+  if (state === "ephemeral") return "Page-memory journal; remote availability is not inferred.";
+  if (state === "local") return "Encrypted browser-managed storage on this device; no cloud sync is implied.";
   if (state === "synced") return "Client-encrypted cloud journal; writes commit directly from this browser.";
   // Adopted but unreachable is still the encrypted cloud adapter. Calling it a
   // page-memory journal would understate what this session writes and where, in
   // the one state where a reader most needs to know which store holds it.
   if (state === "sync-paused") return "Client-encrypted cloud journal; this browser cannot reach it right now, so commits are not landing.";
-  return "Page-memory journal; remote availability is not inferred.";
+  return "Client-encrypted cloud journal; encrypted state is synchronizing from this browser.";
 }
 
 /** Stable identity, so a conversation with no branches re-renders unchanged. */
@@ -166,7 +168,6 @@ export function SessionsView({
   onForked,
   onRenamed,
   onDeleted,
-  onOpenProof,
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
   quarantine,
   focusSessionId,
@@ -206,7 +207,6 @@ export function SessionsView({
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [removeEvidence, setRemoveEvidence] = useState(false);
   const [favoriteState, setFavoriteState] = useState<Readonly<{
     profileId: string;
     favorites: readonly Readonly<{ sessionId: string; pinnedAt: string; membershipEventId: string }>[];
@@ -522,24 +522,12 @@ export function SessionsView({
       const ledger = await ledgerModule;
       const storage = ledger?.browserReturnLedgerStorage();
       if (ledger && storage) ledger.forgetReturnLedgerEntries(storage, [deletedId]);
-      let cleanupFailure: unknown;
-      try {
-        await onDeleted?.(deletedId, removeEvidence);
-      } catch (error) {
-        // The journal deletion already committed. Keep the row retired and
-        // report a truthful partial result if optional endpoint-evidence
-        // cleanup could not complete; never make a deleted conversation look
-        // present again because a secondary cache refused a write.
-        cleanupFailure = error;
-      }
+      await onDeleted?.(deletedId);
       setDeleting(false);
       setSelectedId(undefined);
       setDetail(undefined);
       setRefresh((value) => value + 1);
-      setRemoveEvidence(false);
-      setAnnouncement(cleanupFailure
-        ? `Deleted ${removed}. Its transcript and events were removed; endpoint evidence was kept because cleanup failed.`
-        : `Deleted ${removed}. Its transcript and events were removed from this journal.`);
+      setAnnouncement(`Deleted ${removed}. Its transcript and events were removed from this journal.`);
     } catch (caught) {
       setDeleting(false);
       setDetailError(errorMessage(caught));
@@ -678,13 +666,13 @@ export function SessionsView({
           /* The journal-adapter panel used to be a 52px card that `display:none`d
              itself below 1180px — the storage claim vanished on every tablet and
              phone. As a header chip it renders at every width, and its sentence
-             and its durability seal are both one gesture away instead of one
+             and its durability status mark are both one gesture away instead of one
              breakpoint away. */
           <Popover
             class="session-journal-chip"
             label={`Current journal adapter. ${durabilityLabel(durability.state)}. Opens where this journal is written and what is not inferred from it.`}
             heading="Current journal adapter"
-            trigger={<Seal state={durabilitySeal(durability.state)} label={durabilityLabel(durability.state)} density="chip" />}
+            trigger={<StatusMark state={durabilityStatusMark(durability.state)} label={durabilityLabel(durability.state)} density="chip" />}
           >
             <p class="session-journal-chip__body">{journalAdapterSentence(durability.state)}</p>
             <DurabilityIndicator state={durability.state} detail={durability.detail} />
@@ -1023,11 +1011,10 @@ export function SessionsView({
               onCommitRename={() => void renameSelected()}
               onForkTitle={setForkTitle}
               onPrepareFork={prepareFork}
-              onRequestDelete={() => { setRemoveEvidence(false); setDeleting(true); }}
+              onRequestDelete={() => setDeleting(true)}
               onCancelFork={() => setForkOpen(false)}
               onCreateFork={() => void createFork()}
               onResume={() => void resumeSelected()}
-              onOpenProof={onOpenProof ? () => onOpenProof(detail.session.id) : undefined}
               quarantine={quarantine?.sessionId === detail.session.id ? quarantine : undefined}
             />
           ) : null}
@@ -1055,17 +1042,6 @@ export function SessionsView({
             Its transcript, every recorded step and its journal entries are removed
             from {durability.state === "ephemeral" ? "this page's memory" : "this journal"}.
             Forks already made from it keep their own copies.
-          </p>
-          <label class="session-delete-evidence-option">
-            <input
-              type="checkbox"
-              checked={removeEvidence}
-              onChange={(event) => setRemoveEvidence(event.currentTarget.checked)}
-            />
-            <span>Also remove this conversation’s endpoint evidence and pending evidence checks.</span>
-          </label>
-          <p class="session-delete-evidence-note">
-            Leave this unchecked to keep its separately stored Proof evidence history.
           </p>
           <p>This cannot be undone.</p>
         </ConfirmDialog>
@@ -1100,7 +1076,6 @@ function SessionDetail({
   onCancelFork,
   onCreateFork,
   onResume,
-  onOpenProof,
   quarantine,
 }: {
   detail: SessionLibraryDetail;
@@ -1132,13 +1107,12 @@ function SessionDetail({
   onCancelFork: () => void;
   onCreateFork: () => void;
   onResume: () => void;
-  onOpenProof?: () => void;
   quarantine?: Readonly<{ sessionId: string; title: string; reason: string; historyVerified: boolean }>;
 }) {
   const compatibility = detail.compatibility;
   // Every state-mutating verb is withdrawn while the pane is out of scope.
-  // Read-only controls — Proof, the disclosures, the transcript — stay live,
-  // because the facts on this pane are real and the reader may still want them.
+  // The read-only disclosures and transcript stay live because the facts on
+  // this pane are real and the reader may still want them.
   const mutationBlocked = busy || outOfResults;
   const resumeDisabled = mutationBlocked || active || !runtimeAvailable || Boolean(quarantine) || compatibility?.action !== "resume";
   const requirement = forkRequirement(compatibility, detail.history);
@@ -1174,13 +1148,17 @@ function SessionDetail({
   const lineage = detail.pins.lineage;
   const integrity = sessionIntegrityRow({
     history: detail.history,
+    verification: detail.history.verification,
     receiptCount: detail.transcript.receipts.length,
     lifecycle: detail.transcript.lifecycle,
     messageCount: detail.transcript.messages.length,
     ...(compatibility ? { compatibility } : {}),
     ...(quarantine ? { transcriptReplayFailed: true } : {}),
   });
+  const receiptAssessment = integrity.pills.find((pill) => pill.key === "receipts")!;
+  const receiptsNewestFirst = [...detail.transcript.receipts].reverse();
   const bodyId = useId();
+  const receiptHeadingId = useId();
   const renameInput = useRef<HTMLInputElement>(null);
   // The row opens itself whenever anything disagrees, and re-opens if the
   // selection changes to a session that disagrees — collapse may only ever hide
@@ -1293,7 +1271,6 @@ function SessionDetail({
         </div>
         <div class="session-library-actions">
           <button type="button" onClick={onStartRename} disabled={mutationBlocked || renaming} aria-expanded={renaming}>Rename</button>
-          {onOpenProof ? <button type="button" onClick={onOpenProof}><Icon name="proof" size={16} />Proof</button> : null}
           <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={mutationBlocked}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
           {/* Emphasis follows what can actually be pressed. Keyed on the
               requirement rather than on which control is gold, so demoting the
@@ -1324,7 +1301,7 @@ function SessionDetail({
           aria-label={integrity.label}
           onClick={() => setExpanded((value) => !value)}
         >
-          {integrity.pills.map((pill) => <Seal key={pill.key} state={pill.state} label={pill.label} density="chip" />)}
+          {integrity.pills.map((pill) => <StatusMark key={pill.key} state={pill.state} label={pill.label} density="chip" />)}
           <span class="session-integrity__caret" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
         </button>
         <div class="session-integrity__body" id={bodyId} hidden={!expanded}>
@@ -1344,6 +1321,31 @@ function SessionDetail({
             </div>
             <div><span>Model pin</span><strong title={`${detail.pins.providerId} · ${detail.pins.model}`}>{detail.pins.model}</strong></div>
             <div><span>Journal head</span><strong>{sessionEventCount(detail.session.headSequence)}</strong></div>
+          </section>
+
+          <section class="session-receipt-trace" aria-labelledby={receiptHeadingId}>
+            <div class="session-receipt-trace__heading">
+              <strong id={receiptHeadingId}>Receipt details</strong>
+              <small>{receiptAssessment.detail}</small>
+            </div>
+            {receiptsNewestFirst.length ? (
+              <ol class="session-receipt-trace__list">
+                {receiptsNewestFirst.map((receipt, index) => (
+                  <li key={`${receipt.receiptId}:${receipt.turnId}`}>
+                    <details open={index === 0}>
+                      <summary>
+                        <span>Receipt {receiptsNewestFirst.length - index}</span>
+                        <code>{receipt.receiptId}</code>
+                        <small>{receiptOriginLabel(receipt)}</small>
+                      </summary>
+                      <ReceiptTraceDetails receipt={receipt} includeAssessmentScope={false} />
+                    </details>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p class="session-receipt-trace__empty">No receipt record is present in this bounded materialization.</p>
+            )}
           </section>
 
           {quarantine ? (
@@ -1367,12 +1369,12 @@ function SessionDetail({
              */
             <section class="session-library-compatibility unavailable" aria-labelledby="session-quarantine-title">
               <div><span id="session-quarantine-title">{quarantine.historyVerified
-                ? "History verified · transcript cannot be replayed"
+                ? "History check passed · transcript cannot be replayed"
                 : "Transcript cannot be replayed"}</span></div>
               <p>{quarantine.reason}</p>
               <p>{quarantine.historyVerified
-                ? "The digest chain passed its audit and every event is intact. This runtime could not rebuild the transcript from them, so this conversation was not resumed and the rest of the vault was adopted without it. Proof stays available here."
-                : "This runtime could not rebuild the transcript, and the digest audit did not complete, so nothing here establishes whether the stored events are intact. The conversation was not resumed and the rest of the vault was adopted without it. Proof stays available here."}</p>
+                ? "The local digest check passed and every event is intact. This runtime could not rebuild the transcript from them, so this conversation was not resumed and the rest of the vault was adopted without it."
+                : "This runtime could not rebuild the transcript, and the local digest check did not complete, so nothing here establishes whether the stored events are intact. The conversation was not resumed and the rest of the vault was adopted without it."}</p>
             </section>
           ) : null}
 
@@ -1400,10 +1402,10 @@ function SessionDetail({
             <h3 id="session-fork-title">Create a new conversation identity</h3>
             {/* This promised a blank slate, from before the seed shipped. The
                 journal is not copied — that is what `historyCopied: false`
-                means — but the branch does start with a bounded, digest-sealed
+                means — but the branch does start with a bounded, digest-recorded
                 copy of the ancestor context, which is the opposite of what the
                 reader was being told. */}
-            <p>Fork = new identity · source untouched. The branch inherits a bounded, digest-sealed copy of the ancestor context and records the source head as immutable lineage.</p>
+            <p>Fork = new identity · source untouched. The branch inherits a bounded copy of the ancestor context and records its digest and source head as lineage.</p>
             {/*
               * The route claims a fork appears only when the meaning genuinely
               * changes, and then offered `Fork to continue` with nothing on
@@ -1433,7 +1435,7 @@ function SessionDetail({
               <Icon name="warning" />
               <span>
                 <strong>The fork was refused.</strong> {forkError}{" "}
-                This conversation stays readable below, and Rename, Proof and Delete still work on it.
+                This conversation stays readable below, and Rename, Fork and Delete still work on it.
               </span>
             </div>
           ) : null}
@@ -1482,7 +1484,7 @@ function SessionDetail({
             all of the attention, and the messages — the only thing anyone
             opens a past conversation to read — were left in a 200px column
             scrolling four words to a line. Nothing is removed: this opens in
-            one press, and Proof still holds the full chain. */}
+            one press. */}
         <details class="session-library-pins-disclosure">
           <summary><span>Runtime pins</span><strong>Provider, model, workspace and manifest digests</strong></summary>
           <section class="session-library-panel" aria-labelledby="session-pins-title">
@@ -1490,7 +1492,7 @@ function SessionDetail({
           <dl class="session-library-pins">
             <div><dt>Provider</dt><dd>{detail.pins.providerId}</dd></div>
             <div><dt>Model</dt><dd>{detail.pins.model}</dd></div>
-            <div><dt>Security posture</dt><dd>{postureLabel(detail.pins.posture.value)}<small>{postureBasis(detail.pins.posture.basis)}</small></dd></div>
+            <div><dt>Inference path</dt><dd>{postureLabel(detail.pins.posture.value)}<small>{postureBasis(detail.pins.posture.basis)}</small></dd></div>
             <div><dt>Initial page tier</dt><dd>{detail.pins.capabilityTier}</dd></div>
             <div><dt>Workspace</dt><dd title={detail.pins.workspaceId}>{detail.pins.workspaceId}</dd></div>
             <div><dt>Profile</dt><dd>{detail.pins.profile?.profileId ?? "Unbound"}{detail.pins.profile ? <small>revision {shortDigest(detail.pins.profile.profileRevision)}</small> : null}</dd></div>
@@ -1563,12 +1565,12 @@ function SessionReconnectCard({ plan, reasons, disabled, onFork }: {
       <button class="session-library-reconnect__fork" type="button" onClick={onFork} disabled={disabled}>{plan.secondaryLabel}</button>
       {/* The fork's own contract, said beside the fork rather than discovered
           after pressing it. Deliberately not the design note's blanker phrase
-          for a fork: `forkSession` seals and commits a bounded
+          for a fork: `forkSession` records and commits a bounded
           ancestor-context seed, and `sessions-view.test.ts` holds the line
           against reintroducing that older, blanker claim. What a person asking
           "will forking bring my conversation" needs to know is the middle
           clause. */}
-      <small>Continue creates a new conversation on the active model. It carries a bounded, digest-sealed copy of the context — not this transcript — and leaves this one untouched.</small>
+      <small>Continue creates a new conversation on the active model. It carries a bounded copy of the context with its digest recorded — not this transcript — and leaves this one untouched.</small>
       <details class="session-library-reconnect__delta">
         <summary>{plan.disclosureLabel}</summary>
         {plan.deltas.length ? (
@@ -1614,8 +1616,9 @@ function Digest({ label, value }: { label: string; value: string }) {
     <div>
       <span>{label}</span>
       <code title={value}>{shortDigest(value)}</code>
-      {/* A digest is the one value on this pane a person retypes into a proof
-          comparison, and it was only ever available as a hover tooltip. */}
+      {/* A digest is one value on this pane a person may need to retype into a
+          local audit or integrity check, and it was only ever available as a
+          hover tooltip. */}
       <button
         class="session-library-copy"
         type="button"

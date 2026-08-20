@@ -25,24 +25,6 @@
  * internal panels and rhythm, never a second page edge. Keeping the gutter on
  * `.main` also makes lazy route fallbacks and their loaded views line up.
  */
-/*
- * The gutter is the one measurement every route has in common, so it is where
- * the Density preference has to land.
- *
- * Density used to reach fifteen hand-listed selectors — the rail, the composer,
- * the message column, the profile cards — and nine of the ten routes named no
- * density token anywhere. A reader on a 13" laptop switched to Compact, watched
- * chat tighten, and found Proof, Memory, Vault, Sessions, Workspace, Terminal,
- * Access, Attestations and Billing unmoved to the pixel. Every route renders
- * inside `.route-layout` (app.tsx writes it for all ten), so scaling the clamp
- * by `--density-panel-pad` answers the preference on all of them at once
- * instead of asking ten sheets to opt in.
- *
- * The multipliers are chosen so `comfortable` — the shipped default — lands
- * within a pixel of the 24px/26px this rule has always produced at a desktop
- * width (24.65/26.01), so nothing moves for a reader who never touched the
- * preference. Compact is what actually moves: 15.95/16.83.
- */
 .route-layout {
   --route-gutter-block: clamp(var(--density-panel-pad), 2vw, calc(var(--density-panel-pad) * 1.45));
   --route-gutter-inline-start: clamp(calc(var(--density-panel-pad) * .82), 2.25vw, calc(var(--density-panel-pad) * 1.53));
@@ -53,54 +35,6 @@
     calc(var(--route-gutter-block) + 18px)
     var(--route-gutter-inline-start);
 }
-
-/*
- * The route scroller's own edges, faded rather than guillotined.
- *
- * `.route-layout` is `.main`, and `.main` is one `overflow: auto` scroller
- * whose box is bounded above by the topbar and below by the mobile navigation
- * band. A scroller ends its content on a hard pixel line, so at a short
- * viewport every resting scroll position terminates some row in the middle of
- * its letterforms: measured at landscape-932 on #capabilities with all
- * boundaries open, 11 of 13 resting stops cut at least one text leaf, and at
- * scrollTop 0 — the state a reader actually arrives in — both "Live
- * page-memory probe" and the amber performance-schedule pill are sliced
- * through their midline by the tab bar. #skills with the editor open is 8 of
- * 12. A half-drawn glyph reads as a broken layout, not as "there is more".
- *
- * This is the `data-scroll-edges` recipe `.primary-nav` has carried since the
- * rail could overflow (shell.css), applied to the only other scroller in the
- * shell. It is measured, never assumed: `useScrollEdges` writes the attribute
- * from the live overflow, so a route that fits keeps a hard edge and nothing
- * is asserted about content that is not there.
- *
- * The `:has()` guard is what makes it safe here, and it is the difference
- * between this scroller and the rail. A mask is a group effect: it applies to
- * the element's whole painted subtree, including `position: fixed`
- * descendants, which is exactly the capture `.main`'s own `position: relative`
- * comment took care to avoid. Popovers open *inside* `main` and in sheet mode
- * are `position: fixed` against the viewport — measured at phone-320, the
- * proof claim-stack sheet is `main`'s descendant and its box runs to y=568
- * while `main`'s own bottom is y=512, so an unguarded mask would not soften
- * that sheet's last line, it would erase it. While a sheet is open the reader
- * is not reading the scroller behind it, so the fade has nothing to say and
- * stands down for as long as the panel is up.
- *
- * Both overlay primitives, because this product has two and they became the
- * same shape in the same campaign. `MenuSelect` earned the bottom-sheet
- * contract — header, scrim, `position: fixed` — after the popover did, and its
- * panels open inside `main` on the routes that carry settings. Measured at
- * phone-320 with the mask live: nine open listboxes on #profiles, #skills and
- * #vault are `main`'s descendants and overhang its bottom edge by 56px each,
- * so the guard that named only `.popover` was erasing the last 56px of a
- * control the reader had just opened — the band holding `Done` and the
- * home-indicator inset. A guard against a group effect has to name every
- * group, and a second overlay is not a special case of the first.
- *
- * `aria-expanded` on the trigger rather than a state attribute on the panel,
- * because that is the marker `MenuSelect` already publishes; asking the DOM
- * for something it does not write would be a guard that silently never fires.
- */
 .route-layout[data-scroll-edges="start"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px); }
 .route-layout[data-scroll-edges="end"] { --route-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%); }
 .route-layout[data-scroll-edges="both"] { --route-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
@@ -178,76 +112,6 @@
   text-transform: uppercase;
 }
 
-.workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(190px, 0.72fr) minmax(300px, 1.7fr) minmax(190px, 0.72fr);
-  min-height: 490px;
-}
-
-.workspace-grid > .panel {
-  border-radius: 0;
-}
-
-.workspace-grid > .panel:first-child {
-  border-radius: var(--radius-panel) 0 0 var(--radius-panel);
-}
-
-.workspace-grid > .panel:last-child {
-  border-radius: 0 var(--radius-panel) var(--radius-panel) 0;
-}
-
-.workspace-grid > .panel + .panel {
-  border-left: 0;
-}
-
-.file-list {
-  padding: 6px;
-}
-
-.file-list button {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 6px;
-  align-items: center;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  color: var(--ink-muted);
-  background: transparent;
-  cursor: pointer;
-  font-size: var(--fs-micro);
-  text-align: left;
-}
-
-.file-list button span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-list button small {
-  color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, monospace;
-}
-
-.file-list button:hover,
-.file-list button.active {
-  color: var(--ink);
-  background: rgba(193, 154, 88, 0.07);
-}
-
-.editor-panel pre {
-  min-height: 420px;
-  margin: 0;
-  padding: 17px;
-  overflow: auto;
-  color: #cbd0ca;
-  font: var(--fs-caption)/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap;
-}
-
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -275,192 +139,6 @@
   line-height: 1.55;
 }
 
-.proof-surface-tabs {
-  display: flex;
-  gap: 3px;
-  width: fit-content;
-  max-width: 100%;
-  /*
-   * `max-width: 100%` does not bind without this.
-   *
-   * At the 390px phone width this control held 375px of buttons in a 377px
-   * column. Two pixels of slack is not a layout, it is a coincidence of one
-   * machine's fonts: on the Linux runner the same two labels measure wider,
-   * `Attestation evidence` left the screen, and `route-adversarial-audit`
-   * reported 8px of horizontal overflow on the Proof route — a failure that
-   * would not reproduce on macOS and so read for two runs as inherited flake.
-   *
-   * A flex item defaults to `min-width: auto`, so this row refused to shrink
-   * below its own min-content and simply reported a box wider than its column
-   * while its children painted outside it. Measured: with wider labels the row
-   * grew to 390px inside a 377px column. Allowing it to shrink is what makes
-   * the cap mean anything, and `.tabs` already knows what to do with a narrow
-   * row — it has an overflow trigger for exactly this.
-   *
-   * `flex-wrap: wrap` was tried here first and is deliberately absent. It did
-   * contain the overflow, but a lone item on a wrapped line no longer stretches
-   * to the line height, so the overflow trigger rendered 44×40 and
-   * `touch-target-floor` caught it under the 44px floor on the attestations
-   * surface. Letting the component's own overflow handling do the work costs no
-   * touch target.
-   */
-  min-width: 0;
-  margin: 0 0 14px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-soft);
-}
-
-.proof-surface-tabs button {
-  min-height: 36px;
-  padding: 0 var(--sp-3);
-  border: 0;
-  border-radius: calc(var(--radius-control) - 2px);
-  color: var(--ink-muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.proof-surface-tabs button[aria-selected="true"] {
-  color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-.proof-surface-panel { min-width: 0; }
-
-@media (max-width: 760px) {
-  /*
-   * A phone-width fix for this strip was first written as `1fr 1fr`, and it was
-   * written on the wrong box.
-   *
-   * This class sits on the `.tabs` root, whose two children are the scrolling
-   * strip and the `⌄ n` overflow control — so the halving gave the strip half a
-   * 320px screen and the chevron the other half. Both labels still laid out at
-   * their nowrap widths inside that half, the strip scrolled the selected one
-   * into view, and `Receipt & journal` rendered as an 8px sliver of glyph beside
-   * a permanent overflow badge: a two-item switcher reading as a rendering
-   * fault, on the one route whose content is meaningless without knowing which
-   * view you are in.
-   *
-   * Moving the halving down to the strip fixed 320px and then charged every
-   * width up to 760 for it: two equal tracks are two equal tracks whether or not
-   * the labels need cutting, so at 430px — where both labels had always fitted
-   * whole — `Attestation evidence` was ellipsised to `Attestation evide…` while
-   * `Receipt & journal` sat in a half it did not fill. An equal split is the
-   * right answer only at the widths where there is nothing to split fairly.
-   *
-   * The `flex: 1 1 auto` written next was meant to be that answer and was not.
-   * Applied to both the tab and the button it wraps, it reproduced the halving
-   * it replaced: measured on the shipped build, the active tab is 141px of a
-   * 286px strip at 320, 176px of 356px at 390 and 196px of 396px at 430 — one
-   * pixel-exact half at every width, which is what a zero basis grows to, not
-   * what a content basis shrinks from. So 430 kept paying: `Receipt & journal`
-   * needs 175px and was handed 196, while `Attestation evidence` needs 207px,
-   * was handed the same 196, and lost its last five characters. The strip has
-   * 396px and the pair wants 386 — the cut was manufactured by the split, not
-   * required by the width.
-   *
-   * Scoping that growth to ≤400px removed 430's cut and sent the bill to 390,
-   * because an even split is only fair while both tabs are equally worth
-   * reading, and they never are. The strip is the viewport less 34px of gutter,
-   * border and padding — measured 286px at 320, 356 at 390, 396 at 430 — and
-   * the pair wants 386 (175 for `Receipt & journal`, 207 for `Attestation
-   * evidence`, 4 of gap). At 390 the split handed the selected tab 176 of 356
-   * and it fitted its 175px label by one pixel on one machine's fonts; below
-   * 400 the split proper handed it 161 and `Receipt & journal` rendered as
-   * `Receipt & jou…` while it was the tab being read. The same split cut
-   * `Attestation evidence` at both 320 and 390 whenever *it* was the selected
-   * one, which the 390 frame had been showing since before either wave.
-   *
-   * A tab that cannot say its own name while it is the one you are looking at
-   * is the worst outcome available here, and it is the only truncation with no
-   * way out: there is no gesture that reveals it, because you are already on
-   * it. So the shortfall was charged to the tab you are not reading — the
-   * selected tab did not shrink, the other absorbed all of it and ellipsised,
-   * and that cut is self-healing, since tapping it makes it the selected tab
-   * and hands the cut back. That reasoning is sound and it still overshot,
-   * because it was costed in only one of the two directions it applies to.
-   *
-   * The note it shipped with recorded 320 as "the other tab holds 107px", which
-   * is what is left of a 286px strip after `Receipt & journal` takes its 175.
-   * Select the other tab and the subtraction changes: `Attestation evidence`
-   * needs 207, the remainder is 286 − 207 − 4 = 75px, and the strip rendered
-   * `Rec…`. Three characters is not a label a reader recognises and chooses, it
-   * is a stub — the rule was measured in the state where it was cheap and
-   * shipped in the state where it was not.
-   *
-   * So the trade is withdrawn rather than re-balanced. Its whole premise was
-   * that someone must absorb an unavoidable cut, and the cut is avoidable: at
-   * 320 there is no split of 286px that seats 386px of *nowrap* label, but the
-   * pair only wants 386px of line because the button forbids a second one.
-   * `white-space: normal` lifts that, both tabs then shrink normally in
-   * proportion to their content, and both stay whole:
-   *
-   *   320  strip 286, deficit 100 → `Receipt & journal` 129px, `Attestation
-   *        evidence` 153px. Each wraps to two lines. Neither is cut.
-   *   390  strip 356, deficit 30 → 161px and 191px. Both wrap, both whole,
-   *        recovering the ~one character 390 used to lose.
-   *   430  strip 396 for a pair wanting 386. No shrink, no wrap, one line each
-   *        — byte-identical to the build before this rule, which is what keeps
-   *        430's earlier repair intact rather than re-paying for it.
-   *
-   * THE COST, and it is vertical and it is inside the strip. Two lines at
-   * `--fs-lead`/1.2 is ~40.5px against the 44px touch floor these buttons
-   * already hold, so a wrapped label almost fits the box it is in for free —
-   * and "almost" is how the popover header ended up with 2px between a glyph
-   * and a border. The `padding-block` below declares that air rather than
-   * borrowing it, making the button ~48.5px where it wraps: the strip grows
-   * about 4.5px at 320 and 390, and nothing at 430 and above, where no wrap
-   * occurs and the padding stays inside the 44px floor. That height comes out
-   * of the panel below, which scrolls. Nothing horizontal moves at any width —
-   * this control is `width: 100%` inside this query and `fit-content` above it,
-   * both untouched — and the query does not reach landscape-932 at all, so the
-   * viewport with no height to spare pays none of it.
-   *
-   * `min-width: 0` on the tab and its button is gone with the ellipsis it
-   * existed to enable. Restoring the flex default — `min-width: auto`, the
-   * min-content floor — is what keeps the wrap from ever becoming a clip: a tab
-   * cannot be shrunk below its longest word (~126px for `Attestation`, ~89px
-   * for `Receipt`; 219px for the pair against 286px of strip, and that margin
-   * only widens as labels wrap further). Should a large enough `--type-scale`
-   * exceed it, the strip overflows into `.tabs`'s own `⌄ n` control, which
-   * lists every tab with its full label — the component's designed fallback,
-   * and the one the block above already defers to.
-   *
-   * `flex-wrap: wrap` on the *strip* remains deliberately absent, for the
-   * reason recorded on that block: a lone item on a wrapped line stops
-   * stretching to the line height and the overflow trigger drops under the 44px
-   * touch floor. Wrapping text inside a button is a different thing and touches
-   * neither the strip's line count nor the trigger's height.
-   */
-  .proof-surface-tabs { width: 100%; }
-
-  .proof-surface-tabs .tabs__strip { flex: 1 1 auto; }
-
-  .proof-surface-tabs .tabs__tab-button {
-    /* The base rule sets `font: … /1 …`, and two lines set solid at a unitless
-       1 collide. The leading is restated here beside the wrap that makes it
-       matter rather than left to be discovered. */
-    white-space: normal;
-    line-height: 1.2;
-    padding-block: var(--sp-1);
-  }
-
-  .proof-surface-tabs button { min-height: var(--touch-target); }
-}
-
-.proof-overview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-  margin-bottom: 14px;
-}
-
-/* The metric card is shared by Proof, Memory and Billing, so its 14px literal
-   was three routes' worth of padding that the Density preference could not
-   reach. */
 .metric {
   display: flex;
   flex-direction: column;
@@ -535,345 +213,13 @@
 .compact-callout > summary svg { color: var(--v-verified); }
 .compact-callout > p { margin: 0; padding: 0 var(--sp-3) var(--sp-3) 39px; }
 
-.proof-overview {
-  grid-template-columns: 1.5fr 0.75fr 0.75fr;
-}
-
 /* The verdict is no longer an 11px caption under an 84px glyph in a dead
    column: the hero density puts the word at title size beside a 28px mark and
    promotes the receipt summary from a `title` attribute to a visible line. The
    column the glyph used to reserve is what pays for it. */
-.proof-hero {
-  display: grid;
-  gap: var(--sp-3);
-  align-content: start;
-  padding: var(--sp-4);
-}
-
-.proof-hero-claims,
-.proof-hero-claims > .popover__trigger {
-  display: flex;
-  min-width: 0;
-  align-self: stretch;
-}
-
-.proof-hero-seal {
-  min-width: 0;
-  text-align: left;
-}
-
-.proof-hero h2 {
-  font-size: var(--fs-lead);
-}
-
-.proof-hero p {
-  margin: var(--sp-1) 0 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
-}
-
-.claim-popover-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--sp-1) var(--sp-2);
-  padding-bottom: var(--sp-2);
-  border-bottom: 1px solid var(--line);
-}
-
-.claim-popover-row > strong {
-  color: var(--ink);
-  font-weight: var(--fw-strong);
-}
-
-.claim-popover-row > dl {
-  display: grid;
-  grid-column: 2;
-  gap: 2px;
-  margin: 0;
-}
-
-.claim-popover-row > dl > div {
-  display: grid;
-  grid-template-columns: 9ch minmax(0, 1fr);
-  gap: var(--sp-2);
-}
-
-.claim-popover-row dt {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-}
 
 /* Digests and ISO timestamps are rung L3: bounded, never allowed to widen the
    panel they sit in. */
-.claim-popover-row dd {
-  margin: 0;
-  overflow: hidden;
-  color: var(--ink-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.proof-hero-claims__evidence {
-  margin: 0;
-  color: var(--ink-muted);
-}
-
-.proof-overview + .proof-inspector {
-  padding: var(--sp-4);
-}
-
-.proof-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-  align-items: center;
-  margin-top: var(--sp-3);
-}
-
-.proof-actions .small-button {
-  min-height: 36px;
-  cursor: pointer;
-}
-
-.proof-actions > span {
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-}
-
-.proof-export-boundary {
-  max-width: 760px;
-  margin: var(--sp-2) 0 0;
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  line-height: 1.55;
-}
-
-.journal-audit {
-  margin-top: 14px;
-  padding: var(--sp-4);
-  overflow: hidden;
-}
-
-.journal-audit.verified {
-  border-color: rgba(103, 163, 154, 0.28);
-}
-
-.journal-audit.incomplete {
-  border-color: rgba(193, 154, 88, 0.34);
-}
-
-.journal-audit.invalid {
-  border-color: rgba(202, 92, 80, 0.42);
-}
-
-.journal-audit-heading {
-  display: flex;
-  gap: var(--sp-4);
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.journal-audit-heading h2 {
-  margin-top: var(--sp-1);
-  font-size: var(--fs-lead);
-}
-
-.audit-state {
-  flex: 0 0 auto;
-}
-
-/* Colour only — the box is the shared chip recipe. The literal lighter red this
-   rule carried is retired: it existed because --v-failed measured 4.24:1 on a
-   raised surface, and the one state that reports an integrity failure is the
-   last place to accept sub-AA body text. The token itself now clears 4.5:1 on
-   every bed in every theme, so the state can name the verdict token again. */
-.audit-state.verified {
-  color: var(--v-verified);
-}
-
-.audit-state.incomplete {
-  color: var(--v-caution);
-}
-
-.audit-state.invalid {
-  color: var(--v-failed);
-}
-
-.audit-boundary {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 9px;
-  align-items: start;
-  margin-top: 14px;
-  padding: 11px;
-  border: 1px solid rgba(193, 154, 88, 0.18);
-  border-radius: 6px;
-  color: var(--accent-bright);
-  background: rgba(193, 154, 88, 0.035);
-}
-
-.audit-boundary p {
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-  line-height: 1.6;
-}
-
-.audit-boundary strong {
-  color: var(--ink);
-}
-
-.audit-boundary code {
-  color: var(--accent-bright);
-  font-size: var(--fs-micro);
-}
-
-.audit-check-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: var(--sp-3);
-}
-
-.audit-check-grid > div {
-  display: grid;
-  grid-template-columns: minmax(64px, auto) minmax(0, 1fr);
-  gap: 2px 6px;
-  align-items: center;
-  min-height: 54px;
-  padding: var(--sp-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.1);
-}
-
-.audit-check-grid > div > .seal {
-  grid-row: 1 / 3;
-  align-self: center;
-  font-size: var(--fs-micro);
-}
-
-.audit-check-grid .pass > .seal {
-  color: var(--v-verified);
-}
-
-.audit-check-grid .fail > .seal {
-  color: var(--v-failed);
-}
-
-.audit-check-grid strong {
-  color: var(--ink);
-  font-size: var(--fs-micro);
-}
-
-.audit-check-grid small {
-  color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, monospace;
-}
-
-.audit-commitment {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: var(--sp-3) 0 0;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.audit-commitment > div {
-  min-width: 0;
-  padding: 9px;
-  border-bottom: 1px solid var(--line);
-}
-
-.audit-commitment > div:nth-child(odd) {
-  border-right: 1px solid var(--line);
-}
-
-.audit-commitment > div:nth-last-child(-n + 2) {
-  border-bottom: 0;
-}
-
-.audit-commitment dt {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-}
-
-.audit-commitment dd {
-  margin: 5px 0 0;
-  overflow: hidden;
-  color: var(--ink-muted);
-  font: var(--fs-micro) ui-monospace, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.audit-findings {
-  margin-top: var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.audit-findings summary {
-  padding: 10px;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-  cursor: pointer;
-}
-
-.audit-findings > div {
-  max-height: 260px;
-  overflow: auto;
-  border-top: 1px solid var(--line);
-}
-
-.audit-findings article {
-  display: grid;
-  grid-template-columns: 48px 150px minmax(0, 1fr);
-  gap: var(--sp-2);
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.audit-findings article:last-child {
-  border-bottom: 0;
-}
-
-.audit-findings article > span,
-.audit-findings article > strong {
-  font: var(--fs-micro) ui-monospace, monospace;
-}
-
-.audit-findings article > span {
-  color: var(--ink-faint);
-  text-transform: uppercase;
-}
-
-.audit-findings article[data-severity="error"] > span {
-  color: #e4877e;
-}
-
-.audit-findings article > strong {
-  color: var(--ink-muted);
-}
-
-.audit-findings article > p {
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-  line-height: 1.45;
-}
-
-.audit-clean,
-.audit-loading {
-  margin: var(--sp-3) 0 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-}
 
 .boot-screen {
   display: grid;
@@ -970,10 +316,6 @@
 .profile-card small {
   display: block;
 }
-
-.profile-card .posture-chip { margin-top: 7px; }
-.profile-card .posture-chip > small { margin: 0 0 2px; }
-.profile-card .posture-chip .seal__label { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /*
  * A profile name is whatever its author typed, and nothing upstream clips it.
@@ -1246,48 +588,6 @@
 .theme-option strong {
   font-size: var(--fs-micro);
 }
-
-/* The card is the size of the sentence that tells the themes apart.
- *
- * Each card carries a swatch and two of these: `theme.description`, which is
- * the only place the card says what the theme IS ("Curated · warm cocoa
- * surfaces with a soft mauve accent"), and the presentation summary, which
- * names the typography and layout activation will change and that a 32×43
- * swatch cannot show. Both were clamped to two lines here and to one below
- * 861px, and neither number survives contact with the width the card gets.
- *
- * Measured on the shipped build. At 1024 the library is three columns of 123px
- * and a caption at that width is three lines: 26 of the 27 captions on the
- * route read clientHeight 32 against scrollHeight 47, one 32 against 63, every
- * one cut at the end of line two — no ellipsis reaches the reader's eye as an
- * invitation when the cut lands mid-phrase in the middle of a card. At 768 the
- * library is a single column and the clamp dropped to one line, so a full-width
- * 307px card showed 16px of 32: "Curated · warm cocoa surfaces with a", and the
- * rest of the sentence was not anywhere on the route. The three phone widths
- * showed the same single line, 17 of 34, across 26 captions.
- *
- * That is the proof the clamp was arbitrary rather than a budget: it clipped
- * hardest at 768, where the card is at its WIDEST and there is the most room to
- * simply print the sentence. There is no height budget here to defend — the
- * library is a `repeat(3, minmax(0,1fr))` grid inside a disclosure inside a
- * route `main` already scrolls, and the cards are `min-height:67px` with
- * `align-items:center`, so a third line costs 15px of a scroll the reader is
- * taking anyway. Nor is a scroll affordance the answer: a two-line sentence
- * inside its own 32px scroller would read worse than the ellipsis it replaced.
- *
- * So the cap goes and the caption wraps. `display:-webkit-box` stays because
- * that box is what lays the caption out and unwinding it would be a second,
- * unrelated change to how the card flows; the clamp is what was doing the
- * hiding, and `overflow` goes back to visible so this element cannot clip in
- * silence again. Re-measured at all eight device classes: no caption on the
- * route is short of its own content.
- *
- * `.profile-prompt-preview` above is deliberately NOT part of this: it clamps a
- * system prompt to two lines and measured 35px of 123, but it is the summary OF
- * a disclosure — `[open]` withdraws it, the full prompt is in the textarea
- * underneath, and the summary carries a `›`. A cap that hides content with no
- * way to reach it is a defect; a cap that summarises content with the way to
- * the rest attached to it is a summary. */
 .theme-option small {
   display: -webkit-box;
   margin-top: var(--sp-1);
@@ -1341,16 +641,6 @@
 .revision-strip > span + span {
   border-left: 1px solid var(--line);
 }
-
-/*
- * The label needs a clipping recipe of its own. `text-overflow` is not
- * inherited, and the cell's ellipsis governs only the cell's own inline
- * content, so this block-level label was left to the cell's `overflow: hidden`
- * — a hard cut mid-letter, which reads as a shorter word rather than as a
- * truncated one. "MINIMUM PROOF" became "MINIMUM PROO", a label naming a
- * posture nobody can look up. The track sizing above should now leave every
- * label its full width; this is what happens on the day it does not.
- */
 .revision-strip small {
   display: block;
   margin-bottom: 5px;
@@ -1360,12 +650,10 @@
   text-transform: uppercase;
 }
 
-/* Layout for the scope label above the chip; the chip is the <Seal>. The old
+/* Layout for the scope label above the chip; the chip is the <StatusMark>. The old
    `color: var(--ink)` override is gone — it flattened all four postures to one
    ink and made the chip the only status in the product that did not say which
    state it was in. */
-.posture-chip { display: grid; gap: var(--sp-1); min-width: 0; justify-items: start; }
-.posture-chip > small { color: var(--ink-faint); font-size: var(--fs-micro); }
 
 /*
  * Three named tracks could not say how many actions this row has.
@@ -1427,22 +715,6 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
-
-/*
- * The strip shares the measure of the route it heads — 1160px, the same literal
- * `.route-layout > *` above writes and the same one `.proof-surface-panel--prose`
- * re-enters one level down. This is not a new number; it is the repo's only
- * measure, applied to a control that had quietly kept a second one.
- *
- * Measured at wide-1920 before the change: the segmented `Profiles / Skills /
- * Capabilities` strip ran x=416..1736 (1320px) while the cards it heads ran
- * x=496..1656 (1160px). Both were centred on x=1076, so the strip overhung the
- * column it names by exactly 80px on each side and every eyebrow, H1 and card
- * beneath it started 80px inside the control above it. At desktop-1440 the two
- * already agreed (258..1414 for both) because `min(…, 100%)` bottomed out on
- * the gutter box — which is why this only ever broke at 1920, and why the
- * screenshot diff for the whole sweep showed nothing here at any other width.
- */
 .profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1160px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
 /*
  * The one indicator of which of the three hub pages you are on, held against
@@ -1532,8 +804,6 @@
 .profile-hub-scope > span { color: var(--ink-faint); font: var(--fs-micro)/1 var(--font-mono); text-transform: uppercase; }
 /* The contract line sits directly under the strip and must not out-run it:
    same measure, same reason as `.profile-hub-tabs` above. */
-.profile-scope-contract { display: flex; gap: 10px; width: min(1160px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
-.profile-scope-contract strong { flex: 0 0 auto; color: var(--ink); }
 
 .profile-archive-zone {
   display: grid;
@@ -1601,28 +871,6 @@
 .skills-toolbar > .skills-toolbar-status.failure {
   color: var(--v-failed);
 }
-
-/*
- * What is left on the page after a skill has been destroyed.
- *
- * The removal confirmation used to be an unclassed paragraph inheriting the
- * route's body ink — 17px at `--ink`, the same type as ordinary prose, on a
- * transparent ground with no border and no padding, sitting in the gap between
- * the card grid and the Conversation boundary callout. Measured at
- * desktop-1440 it was a 1156px-wide line reading "Audit probe removed." with
- * nothing around it, which is how a page renders text it has no opinion about.
- * The one sentence recording an irreversible act should not be the one piece of
- * type on the route that was never given a box.
- *
- * The recipe is `.attestations-alert`'s, because that is already this product's
- * word for "a status you may need to come back and read": bordered, inset,
- * caption-sized, with a glyph carrying the kind of event so the meaning is not
- * left to the sentence alone. Neutral `--line`/`--surface-soft` rather than a
- * danger colour — the destruction already happened and succeeded, and painting
- * a completed action in alarm ink is how alarm ink stops being read. `justify-
- * self: start` keeps it the width of its own sentence: a chip stretched across
- * a 1160px measure is a banner, and a banner is what the toast already was.
- */
 .skills-action-status {
   display: flex;
   gap: var(--sp-2);
@@ -1858,10 +1106,6 @@
 .memory-view {
   width: min(1320px, 100%);
 }
-
-.memory-mode-tabs { display: inline-grid; grid-template-columns: repeat(3, minmax(90px, auto)); gap: 3px; margin-bottom: 14px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.memory-mode-tabs button { min-height: 36px; border: 0; background: transparent; }
-.memory-mode-tabs button[aria-selected="true"] { color: var(--ground); background: var(--accent-bright); }
 .memory-federated { display: grid; gap: 14px; }
 .memory-federated > header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .65fr); gap: 18px; align-items: end; padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
 .memory-federated h2 { margin: var(--sp-1) 0; font-size: var(--fs-lead); }
@@ -1878,7 +1122,6 @@
 .memory-result-lane article { padding: 11px var(--sp-3); border-bottom: 1px solid var(--line); }
 .memory-result-lane article strong { font-size: var(--fs-caption); }
 .memory-result-lane article p { margin-top: 5px; overflow-wrap: anywhere; }
-.memory-lane-empty { padding: 18px var(--sp-3); }
 
 .memory-metrics {
   display: grid;
@@ -2110,495 +1353,8 @@
   white-space: nowrap;
 }
 
-/*
- * Account is a reading surface, so it takes the reading measure — the same
- * 1160px every other prose route takes, not a third opinion about it.
- *
- * Measured at wide-1920 before the change: `.billing-view` ran x=446..1706
- * (1260px) while Vault ran 496..1656 and Sessions ran 496..1656 (1160px each),
- * from the same shell, in the same frame class. Three sibling routes on three
- * measures — 1160, 1260 and the tab strip's 1320 — is what the judges kept
- * describing one route at a time as "wastes the width it asked for": a reader
- * moving Account → Vault watched the column jump 50px on each side for no
- * reason either page could state. At desktop-1440 all three already collapsed
- * onto 1156 (the gutter box), so this too was only ever visible past 1400.
- */
-.billing-view {
-  width: min(1160px, 100%);
-}
-
-.billing-toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  align-items: center;
-  min-height: 64px;
-  margin-bottom: var(--sp-3);
-  padding: 10px 13px;
-}
-
-.billing-toolbar > div {
-  display: flex;
-  gap: var(--sp-2);
-  align-items: center;
-}
-
-.billing-toolbar > div:first-child {
-  display: grid;
-  gap: 5px;
-}
-
-.billing-toolbar small {
-  color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.billing-toolbar .small-button {
-  min-height: 36px;
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.billing-toolbar .small-button.is-disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
 .app-shell[data-connectivity="offline"] .pulse-dot {
   background: var(--v-caution);
-}
-
-.app-shell[data-connectivity="offline"] .topbar-posture-chip {
-  border-color: color-mix(in srgb, var(--v-caution) 45%, var(--line-control));
-}
-
-.account-state {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-}
-
-.account-state > span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ink-faint);
-}
-
-.account-state.ready {
-  color: var(--v-verified);
-}
-
-.account-state.ready > span {
-  background: var(--v-verified);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--v-verified) 55%, transparent);
-}
-
-.billing-gate {
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  gap: 15px;
-  align-items: center;
-  margin-bottom: var(--sp-3);
-  padding: var(--sp-4);
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
-  background: color-mix(in srgb, var(--surface) 94%, var(--accent) 6%);
-}
-
-.billing-gate-mark {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  border-radius: 50%;
-  color: var(--accent-bright);
-}
-
-.billing-gate h2 {
-  margin: 6px 0 0;
-  font: 500 var(--fs-title) Georgia, serif;
-}
-
-.billing-gate p {
-  margin: 7px 0 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-  line-height: 1.55;
-}
-
-.billing-gate code {
-  color: var(--accent-bright);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.billing-gate-action {
-  min-height: 40px;
-  margin-top: var(--sp-3);
-  padding: 0 var(--sp-4);
-}
-
-.billing-gate-preview {
-  margin-top: 10px;
-  color: var(--ink-muted);
-  font-size: var(--fs-caption);
-}
-
-.billing-gate-preview summary {
-  display: flex;
-  align-items: center;
-  width: fit-content;
-  min-height: var(--density-control);
-  cursor: pointer;
-  color: var(--ink);
-  font-weight: 650;
-}
-
-.billing-gate-preview p { margin-top: 6px; }
-
-.billing-alert {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 9px;
-  margin-bottom: var(--sp-3);
-  padding: 11px var(--sp-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-radius: var(--radius-panel);
-  color: var(--accent-bright);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
-  font-size: var(--fs-micro);
-}
-
-.billing-alert.error {
-  color: var(--v-failed);
-  border-color: color-mix(in srgb, var(--v-failed) 30%, transparent);
-  background: color-mix(in srgb, var(--v-failed) 5%, transparent);
-}
-
-.billing-alert strong,
-.billing-alert span {
-  display: block;
-}
-
-.funding-required { grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; }
-.funding-required .small-button { white-space: nowrap; text-decoration: none; }
-
-.billing-alert span {
-  margin-top: var(--sp-1);
-  color: var(--ink-muted);
-}
-
-.billing-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
-  margin-bottom: var(--sp-3);
-}
-
-.billing-metric {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  min-height: 125px;
-  padding: 14px;
-}
-
-.billing-metric > span {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
-}
-
-.billing-metric strong {
-  align-self: end;
-  margin-top: 18px;
-  color: var(--ink);
-  font: 500 var(--fs-title) Georgia, serif;
-}
-
-.billing-metric small {
-  margin-top: 5px;
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  line-height: 1.4;
-}
-
-.billing-metric.good {
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--v-verified) 55%, transparent);
-}
-
-.billing-metric.warning {
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent-bright) 62%, transparent);
-}
-
-.billing-metric.danger {
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--v-failed) 65%, transparent);
-}
-
-.runway-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
-  margin-bottom: var(--sp-3);
-}
-
-.runway-card {
-  min-height: 205px;
-  padding: 15px;
-}
-
-.runway-card h2 {
-  margin: 7px 0 0;
-  font: 500 var(--fs-lead) Georgia, serif;
-}
-
-.runway-value {
-  display: flex;
-  gap: 7px;
-  align-items: baseline;
-  margin-top: 25px;
-}
-
-.runway-value strong {
-  color: var(--ink);
-  font: 500 var(--fs-title) Georgia, serif;
-}
-
-.runway-value span {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-}
-
-.runway-track {
-  display: block;
-  height: 6px;
-  margin-top: 13px;
-  overflow: hidden;
-  border-radius: var(--radius-chip);
-  background: color-mix(in srgb, var(--ink-faint) 16%, transparent);
-}
-
-.runway-track > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--v-verified), var(--accent-bright));
-}
-
-.runway-card.warning .runway-track > span {
-  background: var(--accent-bright);
-}
-
-.runway-card.danger .runway-track > span {
-  background: var(--v-failed);
-}
-
-.runway-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  margin-top: 9px;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.runway-card > p {
-  margin: 13px 0 0;
-  color: var(--v-failed);
-  font-size: var(--fs-micro);
-  line-height: 1.45;
-}
-
-.runway-empty {
-  display: grid;
-  place-items: center;
-  min-height: 112px;
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  text-align: center;
-}
-
-.live-telemetry dl {
-  display: grid;
-  gap: 7px;
-  margin: 20px 0 0;
-}
-
-.live-telemetry dl div {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line);
-}
-
-.live-telemetry dl div:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-
-.live-telemetry dt,
-.live-telemetry dd {
-  margin: 0;
-  font-size: var(--fs-micro);
-}
-
-.live-telemetry dt {
-  color: var(--ink-faint);
-}
-
-.live-telemetry dd {
-  color: var(--ink-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-align: right;
-}
-
-.billing-detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.55fr);
-  gap: var(--sp-3);
-  align-items: start;
-}
-
-.usage-panel,
-.quota-panel {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.usage-bars {
-  display: flex;
-  gap: 2px;
-  align-items: end;
-  height: 165px;
-  margin: 14px 14px 7px;
-  padding: 14px var(--sp-2) 0;
-  overflow: hidden;
-  border-bottom: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 3%, transparent));
-}
-
-.usage-bars > span {
-  flex: 1 1 3px;
-  min-width: 2px;
-  max-width: 12px;
-  border-radius: 2px 2px 0 0;
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
-  opacity: 0.82;
-}
-
-.usage-ledger {
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-.usage-ledger-head,
-.usage-ledger-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(70px, 0.55fr));
-  gap: 10px;
-  align-items: center;
-  min-height: 38px;
-  padding: 5px 13px;
-}
-
-.usage-ledger-head {
-  min-height: 32px;
-  color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-transform: uppercase;
-}
-
-.usage-ledger-row {
-  border-top: 1px solid var(--line);
-  color: var(--ink-muted);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.usage-ledger-row strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.quota-list {
-  display: grid;
-}
-
-.quota-list > div {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 43px;
-  padding: 6px var(--sp-3);
-  border-bottom: 1px solid var(--line);
-}
-
-.quota-list span {
-  overflow: hidden;
-  color: var(--ink-muted);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quota-list strong {
-  color: var(--v-verified);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.billing-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 210px;
-  padding: 22px;
-  color: var(--ink-faint);
-  text-align: center;
-}
-
-.billing-empty.compact {
-  min-height: 165px;
-}
-
-.billing-empty svg {
-  margin-bottom: 11px;
-  color: var(--accent);
-}
-
-.billing-empty strong {
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-}
-
-.billing-empty p {
-  max-width: 410px;
-  margin: 6px 0 0;
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  line-height: 1.5;
-}
-
-.quota-note {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 7px;
-  margin: 0 11px 11px;
-  padding: 9px;
-  border: 1px solid color-mix(in srgb, var(--v-verified) 18%, transparent);
-  border-radius: var(--radius-control);
-  color: var(--v-verified);
-  background: color-mix(in srgb, var(--v-verified) 3%, transparent);
-}
-
-.quota-note p {
-  margin: 0;
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  line-height: 1.5;
 }
 
 .primary-link {
@@ -2915,29 +1671,9 @@
      action. Measured at 834px: centre 256px → 32px, chip 201px → 18px. */
   .topbar { grid-template-columns: auto minmax(160px, 1fr) minmax(0, auto); }
   .edition { display: none; }
-  .topbar-posture-chip { flex: 0 1 auto; }
 
   .chat-layout {
     grid-template-columns: minmax(0, 1fr) 270px;
-  }
-
-  .workspace-grid {
-    grid-template-columns: minmax(170px, 0.7fr) minmax(300px, 1.5fr);
-  }
-
-  .workspace-grid > .panel.changes-panel {
-    grid-column: 1 / -1;
-    margin-top: 10px;
-    border-left: 1px solid var(--line-strong);
-    border-radius: var(--radius-panel);
-  }
-
-  .workspace-grid > .panel:nth-child(2) {
-    border-radius: 0 var(--radius-panel) var(--radius-panel) 0;
-  }
-
-  .changes-panel .empty-state {
-    min-height: 150px;
   }
 
   .memory-shell {
@@ -2948,14 +1684,6 @@
     min-height: 190px;
   }
 
-  .billing-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .runway-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .memory-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2963,12 +1691,6 @@
   .memory-federated > header,
   .memory-result-lanes { grid-template-columns: 1fr; }
   .memory-result-lane > div { max-height: 280px; }
-  .memory-mode-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
-
-  .live-telemetry {
-    grid-column: 1 / -1;
-    min-height: 170px;
-  }
 }
 
 @media (max-width: 860px) {
@@ -3006,34 +1728,8 @@
     min-width: 220px;
   }
 
-  /*
-   * The claim stack is a row here, not a column — reorganized, not removed.
-   *
-   * It used to be `display: none` below this breakpoint, which is how a phone
-   * came to show the confident "N events" chip with nothing on the page
-   * qualifying it (J127). `.chat-layout` is already one column at this width,
-   * so the aside is simply the next row: one line at rest, and a bounded,
-   * scrollable panel when the reader opens it. The cap keeps the transcript
-   * and composer on screen — an expanded stack must not become a takeover.
-   */
-  .inspector {
-    max-height: 45vh;
-  }
-
   .chat-stage {
     border-right: 0;
-  }
-
-  .billing-detail-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .runway-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .live-telemetry {
-    grid-column: auto;
   }
 
   .management-layout {
@@ -3219,11 +1915,6 @@
     padding: 0 var(--sp-2);
   }
 
-  .topbar-posture-chip {
-    max-width: 100%;
-    min-height: var(--touch-target);
-  }
-
   /*
    * The peer-tab note, at a width that has no room for its sentence.
    *
@@ -3254,96 +1945,6 @@
   }
 
   .tab-presence-note__count { display: inline; }
-
-  .topbar-posture-chip .seal__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  /*
-   * Past the point where an ellipsis still leaves a word, the claim steps
-   * behind its own seal.
-   *
-   * The rule above buys the label room by clipping it, and that trade stops
-   * paying: measured at 320px the chip rendered a state ring, the single
-   * character `B` and an ellipsis — `Browser / Edge runtime` reduced to one
-   * letter, with the count already clipped out below to pay for it. A legible
-   * glyph is worth more than a legible fragment, and the fragment is exactly
-   * the defect `topbar.tsx` says the band collapse exists to remove.
-   *
-   * Clipped out of the layout, never removed: the ring keeps the state colour,
-   * the chip keeps its whole 44px target, and the claim itself is still in the
-   * button's accessible name and rendered verbatim in the sheet a tap opens.
-   *
-   * 360px, not the 400px this first shipped at. The session bar's chips yield
-   * at 400 and borrowing that tier looked tidy, but it was measured against the
-   * wrong screen: at 390 the chip reads `Browser / Ed…`, which is truncated and
-   * still names the runtime, and clipping it there traded a legible label for
-   * no label at all. Thirteen route audits reported that loss independently —
-   * the sweep's most-agreed regression, against a defect that only exists at
-   * 320. One width for "this phone has run out of room for words" is right; it
-   * is just not the same width the session bar uses, because these labels are
-   * not the same length.
-   *
-   * A tier chosen from a label's width is only as stable as the chip's width,
-   * and this one has already been measured twice for that reason. Between those
-   * two measurements the rail reserved 22px for its collapse grip; `.topbar`
-   * shares `--rail-width`, so the brand track grew with it and the chip lost
-   * 13px at every touch width, which is how 390 came to read `Browser / E…` —
-   * a word cut after one letter — under a tier written on the promise that 390
-   * would read `Browser / Ed…`. The reserve is gone (shell.css pays for that
-   * grip in overhang now), and the number is re-derived against the restored
-   * chip rather than assumed to have survived: in this block the label's box is
-   * the viewport less 307px, `Browser` sets 48px of ink, and the sheet keeps a
-   * word only while the box holds that ink plus 5px. 53px of box is 360px of
-   * viewport — so 360 is not a round number here, it is the exact width at
-   * which the first word stops fitting, and the rule clips at and below it.
-   *
-   * Which means: anything that takes width off this topbar again invalidates
-   * this tier. Re-measure it, do not re-borrow it.
-   */
-  @media (max-width: 360px) {
-    .topbar-posture-chip .seal__label {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    /*
-     * Taking the words out took the width with them. The paragraph above says
-     * the chip "keeps its whole 44px target", and without this it did not: the
-     * ring plus the button's own padding measured 34x44, which
-     * `touch-target-floor` caught on every route at once — the product's own
-     * 44px law, doing exactly what it is for. The floor is restored explicitly
-     * rather than left to whatever the glyph happens to measure.
-     */
-    .topbar-posture-chip {
-      min-width: var(--touch-target);
-      justify-content: center;
-    }
-  }
-
-  /*
-   * The claim gets the width; the count keeps only its accessible name.
-   *
-   * This chip's own contract is that a truncated claim is worse than a
-   * disclosed one, and at 390px the count was spending most of a 137px chip so
-   * that the weakest claim rendered as "N…". Measured on the durability alarm
-   * the Atlas found invisible on a phone (J003): "Not saved · Vault not set up"
-   * drawn as one letter. The count is still in `aria-label`, still rendered in
-   * full in the sheet this chip opens, and the chip is still the same target —
-   * it is the label that a person actually has to read at this width.
-   */
-  .topbar-posture-chip__count {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
 
   .topbar-connect-action {
     min-height: var(--touch-target);
@@ -3451,14 +2052,6 @@
     color: var(--ground);
     background: var(--v-caution);
     font: 700 var(--fs-micro)/1 var(--font-mono);
-  }
-
-  .mobile-nav__badge--presence {
-    min-width: 7px;
-    width: 7px;
-    height: 7px;
-    padding: 0;
-    border-radius: 50%;
   }
 
   .mobile-sheet-scrim {
@@ -3842,9 +2435,9 @@
   /*
    * Shed order on a 430px bar.
    *
-   * §5.1 sheds the model label last, but the status chip renders a `dot` seal
+   * §5.1 sheds the model label last, but the status chip renders a `dot` status mark
    * whose plain word is the *adjacent* label P2 requires — clipping it would
-   * leave a glyph and a number standing for a trust claim. So the demo chip
+   * leave a glyph and a number standing for a status claim. So the demo chip
    * yields first here — but only its qualifier.
    *
    * It used to yield the whole label, on the reasoning that "the brass glyph
@@ -3914,7 +2507,7 @@
    *
    * The five fixed chips are 44px because a finger needs them to be. The status
    * chip is the one member whose width is text, so it is the one that yields:
-   * it keeps its 44px height and its seal, ellipsises its word, and still
+   * it keeps its 44px height and its status mark, ellipsises its word, and still
    * states the whole claim in its accessible name and in the popover it opens —
    * the ladder every other chip on this bar already uses. Halving the gap pays
    * the rest.
@@ -3924,11 +2517,11 @@
    * 400px and 640px, where there is room to pay for it.
    */
   /*
-   * The verdict steps behind its seal before the row steps behind chrome.
+   * The verdict steps behind its status mark before the row steps behind chrome.
    *
    * With the indicators on one line, the status chip's word is the widest
    * single text in the header. Past ~480px (or the width any landscape phone
-   * has at 500px tall) both secondary texts clip: the seal dot keeps the
+   * has at 500px tall) both secondary texts clip: the status mark dot keeps the
    * state colour — the one thing a reader scans the bar for — and the
    * complete claim stays exactly where the rest of this design already put
    * it, in the chip's accessible name and the popover a tap opens. Two words
@@ -3959,7 +2552,7 @@
 
     .session-bar__chips > .session-status-popover .session-status-chip {
       /* Not 0: the word and count are shed at this width, and a glyph-plus-
-         seal trigger with no floor renders 16×44 — a control a thumb cannot
+         status mark trigger with no floor renders 16×44 — a control a thumb cannot
          find. The popover carries everything the texts ever said. */
       min-width: var(--touch-target);
     }
@@ -4099,13 +2692,6 @@
     grid-column: 1 / -1;
     justify-self: start;
   }
-
-  /* The footer is its own 44px touch row on a phone. This is where
-     `.composer-tools span:nth-child(2) { display: none }` used to live — the
-     rule that rendered the credential posture at 0×0px on the device most
-     likely to be borrowed. The posture is not in this row at all now: it is a
-     claim row in the runtime chip's sheet, visible on every device rather than
-     hidden on one, and the two controls that remain here are both targets. */
   .composer-footer {
     min-height: var(--touch-target);
   }
@@ -4228,115 +2814,8 @@
     padding-bottom: 20px;
   }
 
-  .workspace-grid {
-    display: block;
-  }
-
-  .workspace-grid > .panel,
-  .workspace-grid > .panel:first-child,
-  .workspace-grid > .panel:nth-child(2) {
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-panel);
-  }
-
-  .editor-panel {
-    margin-top: 10px;
-  }
-
-  .changes-panel {
-    margin-top: 10px;
-  }
-
-  .editor-panel pre {
-    min-height: 260px;
-  }
-
-  .proof-overview,
-  .billing-metrics {
-    grid-template-columns: 1fr;
-  }
-
   .metric {
     min-height: 90px;
-  }
-
-  .proof-hero {
-    grid-template-columns: 76px 1fr;
-  }
-
-  .journal-audit-heading {
-    display: grid;
-  }
-
-  .audit-state {
-    justify-self: start;
-  }
-
-  .audit-check-grid,
-  .audit-commitment {
-    grid-template-columns: 1fr;
-  }
-
-  .audit-commitment > div,
-  .audit-commitment > div:nth-child(odd),
-  .audit-commitment > div:nth-last-child(-n + 2) {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .audit-commitment > div:last-child {
-    border-bottom: 0;
-  }
-
-  .audit-findings article {
-    grid-template-columns: 48px minmax(0, 1fr);
-  }
-
-  .audit-findings article > p {
-    grid-column: 1 / -1;
-  }
-
-  .billing-toolbar {
-    display: grid;
-  }
-
-  .billing-toolbar > div:last-child {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .billing-toolbar .small-button {
-    justify-content: center;
-    min-height: var(--touch-target);
-  }
-
-  .billing-gate {
-    grid-template-columns: 42px minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .billing-gate-mark {
-    width: 40px;
-    height: 40px;
-  }
-
-  .billing-metric {
-    min-height: 112px;
-  }
-
-  .runway-foot {
-    display: grid;
-  }
-
-  .usage-bars {
-    height: 135px;
-    margin-inline: var(--sp-2);
-  }
-
-  .usage-ledger-head,
-  .usage-ledger-row {
-    grid-template-columns: minmax(125px, 1.3fr) repeat(2, minmax(60px, 0.5fr));
-    padding-inline: 9px;
   }
 
   /* The Tokens column used to be `display: none` at this width — a fact the
@@ -4345,22 +2824,6 @@
      four values survive: the token total takes its own labelled sub-line,
      which is the restacking `vault-view.css` already does for the provider
      matrix. */
-  .usage-ledger-head > :nth-child(4),
-  .usage-ledger-row > :nth-child(4) {
-    grid-area: 1 / 3;
-  }
-
-  .usage-ledger-head > :nth-child(3),
-  .usage-ledger-row > :nth-child(3) {
-    grid-area: 2 / 1 / 3 / -1;
-    color: var(--ink-muted);
-    font-size: var(--fs-micro);
-  }
-
-  .usage-ledger-row > :nth-child(3)::before {
-    content: "Tokens ";
-    color: var(--ink-faint);
-  }
 
   .topbar,
   .composer-wrap {
@@ -4376,10 +2839,7 @@
   }
 
   .small-button,
-  .receipt-chip,
-  .attestation-chip,
-  .file-list button,
-  .claim-row summary {
+.receipt-chip {
     min-height: var(--touch-target);
   }
 
@@ -4438,13 +2898,6 @@
     padding: var(--sp-3) 14px calc(var(--sp-3) + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
     background: var(--surface-raised);
-  }
-
-  .funding-required { grid-template-columns: 24px minmax(0, 1fr); }
-  .funding-required .small-button { grid-column: 1 / -1; width: 100%; justify-content: center; }
-
-  .receipt-metadata {
-    grid-template-columns: 1fr;
   }
 
   .management-layout,
@@ -4527,7 +2980,6 @@
      */
     .profile-hub-tabs > button { padding-inline: var(--sp-2); }
   }
-  .profile-scope-contract { display: grid; width: 100%; }
 
   .profile-editor {
     margin-top: 10px;
@@ -4572,8 +3024,6 @@
     -webkit-line-clamp: 3;
     line-clamp: 3;
   }
-
-  .profile-card .posture-chip { display: none; }
 
   .theme-manager > div:first-child {
     display: grid;
@@ -4798,15 +3248,13 @@
 
 /*
  * ─────────────────────────────────────────────────────────────────────────
- * The route primitives: <RouteHeader>, <Tabs>, <MetricStrip>.
+ * The route primitives: <RouteHeader> and <Tabs>.
  *
  * Appended at the end of the barrel's last sheet on purpose. Nothing above
- * selects `.route-header`, `.route-title`, `.tabs` or `.metric-strip`, so no
- * selector crosses this boundary and the "order is the cascade" rule at the
- * head of `styles.css` is not put at risk. The blocks each routes adopt them
- * from — the nine tab families, `.metric` — are retired by their own route
- * packages, so both live here for one release. The legacy page slab itself is
- * now retired: ten routes, one header.
+ * selects `.route-header`, `.route-title` or `.tabs`, so no selector crosses
+ * this boundary and the "order is the cascade" rule at the head of
+ * `styles.css` is not put at risk. The legacy route-specific tab families and
+ * page slab are retired: one shared tab grammar and one route header remain.
  * ─────────────────────────────────────────────────────────────────────────
  */
 
@@ -4848,27 +3296,6 @@
   padding: 0 var(--sp-6) var(--sp-3);
   border-bottom: 0;
 }
-
-/*
- * WHY this exists: `.route-layout` at the head of this sheet already applied
- * the one outer content gutter, and the rule there is that a feature view
- * "never [owns] a second page edge". A route bar mounted straight into the
- * shell was doing exactly that — 26px of shell gutter plus the primitive's own
- * 32px — so `<RouteHeader>` routes (`#sessions`, `#terminal`, `#memory`,
- * `#proof`, `#account`) started their title 58px in while the legacy-slab
- * routes (`#profiles`, `#vault`, `#capabilities`, `#skills`) and the editor
- * route started at 26px. Two heading primitives disagreeing about where a page
- * begins is visible on every route change; `route-adversarial-audit.spec.ts`
- * is what measures it.
- *
- * The `> * >` chain is load-bearing: it matches the route's own bar and only
- * that. A `<RouteHeader>` nested inside a panel — `.git-sources-header` in the
- * editor's Sources pane — is not a page edge and keeps the primitive's inset.
- * The one exception is a panel that already pads itself: the advanced
- * source-controls sheet gives `.git-sources` a 16px inline gutter of its own,
- * so `sources-view.css` zeroes this inset there rather than let the primitive
- * stack a second edge on the first.
- */
 .route-layout > * > .route-header {
   padding-inline: 0;
 }
@@ -5031,7 +3458,7 @@
    * That still holds, and the ⓘ is not one of these. A chip is a fact the
    * header is reporting; the ⓘ is the heading's own disclosure — its accessible
    * name is literally "About <title>" — so it belongs to the title's line in a
-   * way a durability seal does not. It is grouped with the heading in
+   * way a durability status mark does not. It is grouped with the heading in
    * `.route-header__title-line` above, which is why it no longer competes for
    * this row and no longer wraps to a line of its own.
    */
@@ -5172,7 +3599,7 @@
  *
  * `.profile-hub-tabs` — the live Agent-configuration strip, the only route a
  * phone has to Skills and Capabilities — was the one strip in the product with
- * no floor at all: 39px at every width, beside a Trust hub strip that took 44px
+ * no floor at all: 39px at every width, beside a retired status strip that took 44px
  * inside the identical phone query. It is listed here rather than given a
  * fourth number of its own, so the next strip inherits the answer instead of
  * having to remember it.
@@ -5205,49 +3632,6 @@
   .profile-boundary-grid .menu-select-trigger {
     min-height: var(--touch-target);
   }
-
-  /*
-   * Four route controls that the block above could not reach, because the
-   * selector — not the query — was what they were losing to.
-   *
-   * Each one already has a correct 44px rule; every one of those rules is
-   * keyed on a viewport width. `.proof-surface-tabs button` is floored inside
-   * the `max-width: 760px` query, and the other three inside the compact-shell
-   * pair. (Both at-rules are named without their at-sign on purpose.
-   * `token-vocabulary.test.ts` reads this block back with a regex whose body
-   * character class excludes the at-sign, so writing one inside this block
-   * does not merely empty the capture and drop the strip-height claim — that
-   * pattern is a lazy alternation of a negated class with a newline, applied
-   * to a 5,000-line sheet, and it backtracks catastrophically the moment it
-   * cannot match, so the suite hangs rather than fails. Measured: a single
-   * at-sign in this comment took `vitest run src/ui/` from a minute to never
-   * finishing, with no failure printed to say why.)
-   * A tablet at 768x1024 and a landscape phone at 932x430 are coarse and
-   * wider than all of them, so on the built tree with `(pointer: coarse)` true
-   * they measured: the proof route's tab strip 167.2x36 and 198.1x36 at 768
-   * (174.8/207.5 at 932); "Save new revision" 116.7x40 and "Switch to this
-   * profile" 190x40; "Remove profile" 361.5x40 — the one irreversible action
-   * on Profiles; "New conversation with this set" 186.9x38 and "New skill"
-   * 220x38.
-   *
-   * Written out at the same specificity as the design height each overrides,
-   * rather than folded into the shorter selectors above, because that is the
-   * whole reason the existing floors miss. `tokens.css` floors `.small-button`
-   * product-wide at (0,1,0) under this exact query and three of these are
-   * `.small-button`s that still rendered 38 and 40, since `.skills-toolbar
-   * .small-button` and `.profile-archive-zone .danger` are (0,2,0) and outrank
-   * it wherever it is written. `.proof-surface-tabs button` is (0,1,1) and
-   * outranks the `.tabs__tab-button` floor listed above for the same reason.
-   * A floor that has to win on source order alone is a floor that stops
-   * winning the next time a route adds a class — these win on specificity, and
-   * on being last.
-   *
-   * The corresponding note is the one `.profile-archive-zone .danger` already
-   * carries inside the compact-shell block: "the floor is a token, and the
-   * fine-pointer height is not". That was right, and it was written into a
-   * width query.
-   */
-  .proof-surface-tabs button,
   .profile-actions .small-button,
   .profile-actions .primary-link,
   .profile-archive-zone .danger,
@@ -5344,9 +3728,6 @@
 }
 
 .tabs__overflow {
-  /* The wrapper reserves the same width as its trigger. Without a flex floor,
-     the wrapper collapsed to its `⌄ 1` text while the 44px touch target painted
-     3px off a 320px Workspace and 12px into Proof's outer gutter. */
   flex: 0 0 var(--touch-target);
   margin-left: auto;
 }
@@ -5416,115 +3797,4 @@
 .tabs__overflow-item > small {
   color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
-}
-
-/*
- * ── <MetricStrip> ───────────────────────────────────────────────────────
- * One label grammar, one value grammar, one caption grammar. The caption slot
- * is where a provenance sentence lives, so it wraps: a number whose source is
- * ellipsised has lost the part that made it checkable.
- */
-.metric-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 0;
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-}
-
-.metric-strip__cell {
-  display: grid;
-  gap: var(--sp-1);
-  align-content: start;
-  min-width: 0;
-  padding: var(--sp-3) var(--sp-4);
-}
-
-.metric-strip__cell + .metric-strip__cell {
-  border-left: 1px solid var(--line);
-}
-
-.metric-strip__label {
-  min-width: 0;
-  margin: 0;
-  color: var(--ink-muted);
-  font: var(--fs-micro)/1.3 var(--font-mono);
-  letter-spacing: 0.11em;
-  overflow-wrap: anywhere;
-  text-transform: uppercase;
-}
-
-.metric-strip__value {
-  display: grid;
-  gap: var(--sp-1);
-  justify-items: start;
-  margin: 0;
-  min-width: 0;
-}
-
-/*
- * Inter, not the display serif. Georgia's default figures are oldstyle and
- * proportional, so the serif cannot deliver the column alignment that was the
- * only reason to put a serif on a number (conflict 9).
- */
-.metric-strip__quantity {
-  color: var(--ink);
-  font: var(--fw-strong) var(--fs-title)/1.2 var(--font-body);
-  font-variant-numeric: tabular-nums;
-}
-
-.metric-strip__caption {
-  color: var(--ink-faint);
-  font-size: var(--fs-caption);
-  line-height: 1.4;
-}
-
-@media (max-width: 640px) {
-  /*
-   * Four cells in a phone column would be four 100px columns of clipped
-   * provenance. Two per row keeps every caption readable, and the hairline
-   * follows the cells rather than staying where the desktop put it.
-   */
-  .metric-strip {
-    grid-auto-flow: row;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .metric-strip__cell + .metric-strip__cell {
-    border-left: 0;
-  }
-
-  .metric-strip__cell:nth-child(2n) {
-    border-left: 1px solid var(--line);
-  }
-
-  .metric-strip__cell:nth-child(n + 3) {
-    border-top: 1px solid var(--line);
-  }
-
-  /*
-   * A two-column grid holding an odd number of cells leaves the last row half
-   * empty, and rules drawn per cell then stop where the cells stop.
-   *
-   * Account renders five. Measured at phone-430: "Live headroom" sat alone in
-   * row 3, so the rule closing the CHARGED/TOKENS row was painted only under
-   * column 1 (x 39..215 of a 39..391 strip), the TOKENS cell above it got no
-   * bottom edge at all, and the column divider carried down by cells 2 and 4
-   * terminated in mid-air at y=619. It reads as a table that stopped being
-   * drawn, not as a merged cell — and the reader has no way to tell those two
-   * apart, which is the actual cost: an unfinished rule under a spend figure
-   * invites the question of whether the figure is unfinished too.
-   *
-   * The tail cell spans the row instead. Stated as `last-child:nth-child(odd)`
-   * rather than as `:nth-child(5)` because the strip is a shared primitive and
-   * the count is the caller's business: four cells (Billing) are untouched, and
-   * three, five or seven all close correctly without this sheet being told how
-   * many arrived. `:nth-child(2n)` cannot match an odd cell, so the spanning
-   * cell keeps no left rule and its `border-top` now runs the full width.
-   */
-  .metric-strip__cell:last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
 }

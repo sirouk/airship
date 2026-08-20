@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { streamSimple } from "../ai/stream";
 import { createAssistantMessageEventStream } from "../ai/event-stream";
 import type { AssistantMessage, Model, Usage } from "../ai/types";
 import {
@@ -26,15 +27,17 @@ import type {
   ToolContext,
   ToolExecutionResult,
 } from "../../core/contracts";
-import type { ConversationReceipt } from "../../receipts/types";
+import type { ConversationReceipt } from "../../core/conversation-receipt";
 import { createSessionContextPolicy } from "../../core/context-policy";
 import { sha256, stableStringify } from "../../core/hash";
 import { EventJournal } from "../../core/journal";
 import type { DurableEvent } from "../../core/journal";
 import { createSessionManifest } from "../../core/session-manifest";
 import { MemoryJournalBackend } from "../../core/memory-journal";
+import { auditSessionHistory } from "../../core/session-audit";
 import { allowAllForTests, ToolRegistry } from "../../tools/registry";
 import { PrimeKernelHost } from "../kernel/kernel-host";
+import { KernelToolBridge } from "../kernel/tool-bridge";
 import type { KernelWorkerLike } from "../kernel/kernel-host";
 import { createPrimeExecuteCodeTool } from "../tools/kernel-tool";
 import { PrimeAgentSession } from "./session";
@@ -126,6 +129,7 @@ function makeSession(
     registry: fixture.registry,
     approvalPolicy: allowAllForTests,
     model: fixture.model,
+    ...(options.transport || options.streamFn ? {} : { streamFn: streamSimple }),
     ...options,
   });
 }
@@ -143,7 +147,7 @@ type ScriptedKernelWorker = KernelWorkerLike & {
   emit(message: unknown): void;
 };
 
-function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
+function makeKernelBridgeWorker(bridgeTool = "echo_stub"): { worker: ScriptedKernelWorker } {
   const listeners = {
     message: [] as ((event: { data?: unknown }) => void)[],
     error: [] as ((event: { message?: string }) => void)[],
@@ -162,7 +166,7 @@ function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
         worker.emit({
           type: "bridge-request",
           jobId: data.job.jobId,
-          call: { jobId: data.job.jobId, seq: 0, tool: "echo_stub", arguments: {} },
+          call: { jobId: data.job.jobId, seq: 0, tool: bridgeTool, arguments: {} },
         });
         return;
       }
@@ -207,6 +211,20 @@ function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
 }
 
 describe("PrimeAgentSession", () => {
+  it("refuses a forged attached manifest before writing Prime custody", async () => {
+    const fixture = await makeFixture();
+    const forged = {
+      ...fixture.manifest,
+      systemPrompt: "forged prompt",
+    };
+    const session = makeSession(fixture, { manifest: forged });
+    const before = await fixture.journal.readEvents(fixture.sessionId);
+
+    await expect(session.prompt("must not write")).rejects.toThrow(/differs from the durable session authority/u);
+    expect(await fixture.journal.readEvents(fixture.sessionId)).toEqual(before);
+    expect(before.some((event) => event.type.startsWith("prime."))).toBe(false);
+  });
+
   it("t1: reproduces core/agent.ts requestDigests from journal replay for every step", async () => {
     const lookup = makeStubTool("lookup", "read", async () => ({ content: "lookup says hi" }));
     const fixture = await makeFixture({ tools: [lookup] });
@@ -262,6 +280,38 @@ describe("PrimeAgentSession", () => {
     const finalized = eventsOfType(result.events, "turn.completed");
     expect(finalized).toHaveLength(1);
     expect(payloadRecord(finalized[0]!).receiptId).toBe(result.receipt!.receiptId);
+  });
+
+  it("records the trace receipt on the final assistant event and passes session audit", async () => {
+    const fixture = await makeFixture();
+    fixture.registration.setResponses([fauxAssistantMessage("audited answer")]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("answer and seal it");
+    expect(result.outcome).toBe("completed");
+    if (result.outcome !== "completed") throw new Error("expected completion");
+
+    const assistantCompleted = eventsOfType(result.events, "assistant.completed");
+    expect(assistantCompleted).toHaveLength(1);
+    const assistantPayload = payloadRecord(assistantCompleted[0]!);
+    expect(assistantPayload.receipt).toEqual(result.receipt);
+    expect((assistantPayload.receipt as Record<string, unknown>).requestDigest).toBe(result.receipt!.requestDigest);
+    expect((assistantPayload.receipt as Record<string, unknown>).responseDigest).toBe(result.receipt!.responseDigest);
+
+    const sessionRecord = (await fixture.journal.getSession(fixture.sessionId))!;
+    const report = await auditSessionHistory(
+      { session: sessionRecord, events: result.events },
+      {
+        checkedAt: "2026-08-20T00:00:00.000Z",
+        trustedHead: {
+          sequence: sessionRecord.headSequence,
+          digest: sessionRecord.headDigest,
+          source: "prime session authority test",
+        },
+      },
+    );
+    expect(report.status).toBe("verified");
+    expect(report.checks.traceBindings).toBe(true);
+    expect(report.findings).toEqual([]);
   });
 
   it("t2: denial journal shape matches core/agent.ts; repeated denials stop the turn at five", async () => {
@@ -664,6 +714,35 @@ describe("PrimeAgentSession", () => {
     expect(result.text ?? "").toContain("kernel finished");
   });
 
+  it("refuses recursive execute_code before registry review or execution", async () => {
+    const fixture = await makeFixture();
+    const bridge = new KernelToolBridge({
+      registry: fixture.registry,
+      approvalPolicy: allowAllForTests,
+      journal: fixture.journal,
+      sessionId: fixture.sessionId,
+      turnId: () => "turn-recursive-kernel",
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.call({
+      jobId: "job-recursive-kernel",
+      seq: 0,
+      tool: "execute_code",
+      arguments: { code: "return 'nested';" },
+    });
+    expect(result).toMatchObject({
+      seq: 0,
+      ok: false,
+      error: expect.stringContaining("cannot invoke execute_code recursively"),
+    });
+    const events = await fixture.journal.readEvents(fixture.sessionId);
+    const failed = eventsOfType(events, "prime.kernel.tool.failed");
+    expect(failed).toHaveLength(1);
+    expect(payloadRecord(failed[0]!).name).toBe("execute_code");
+    expect(eventsOfType(events, "prime.kernel.tool.approved")).toHaveLength(0);
+  });
+
   it("t7: prompt during an active turn refuses with the serialization error; queued steer lands as next turn", { timeout: 120_000 }, async () => {
     const fixture = await makeFixture({});
     fixture.registration.setResponses([
@@ -760,8 +839,8 @@ describe("PrimeAgentSession", () => {
     const receipt = result.receipt!;
     const started = eventsOfType(result.events, "inference.started");
     const lastStarted = started.at(-1)!;
-    expect(receipt.bindings.requestDigest).toBe(payloadRecord(lastStarted).requestDigest);
-    expect(receipt.bindings.responseDigest).toBe(await sha256("saw the image"));
+    expect(receipt.requestDigest).toBe(payloadRecord(lastStarted).requestDigest);
+    expect(receipt.responseDigest).toBe(await sha256("saw the image"));
     expect(receipt.sessionId).toBe(fixture.sessionId);
     expect(receipt.turnId).toBe(result.turnId);
     expect(receipt.provider).toBe(fixture.manifest.providerId);
@@ -803,8 +882,8 @@ describe("PrimeAgentSession", () => {
     const transport: InferenceTransport = {
       id: "faux",
       posture: "local",
-      // Mirrors src/inference/chutes/transport.ts: the receipt is minted from
-      // the identity the request arrived carrying, so a request addressed to a
+      // Mirrors a receipt-minting transport: the receipt is minted from the
+      // identity the request arrived carrying, so a request addressed to a
       // turn that does not exist mints a receipt the audit cannot match.
       async *stream(request) {
         requests.push(structuredClone(request));
@@ -832,6 +911,88 @@ describe("PrimeAgentSession", () => {
       .map((event) => payloadRecord(event).idempotencyKey);
     expect(requests.map((request) => request.idempotencyKey)).toEqual(journaledKeys);
     expect(journaledKeys[0]).toBe(`${fixture.sessionId}:${result.turnId}:0`);
+  });
+
+
+  it("fails a provider receipt for a foreign turn without journaling a successful terminal", async () => {
+    const fixture = await makeFixture();
+    const transport: InferenceTransport = {
+      id: "faux",
+      posture: "local",
+      async *stream() {
+        yield { type: "text-delta" as const, text: "must not complete" };
+        yield {
+          type: "completed" as const,
+          finishReason: "stop" as const,
+          receipt: {
+            ...blankReceipt(),
+            origin: "provider" as const,
+            sessionId: "other-session",
+            turnId: "other-turn",
+            model: "other-model",
+          },
+        };
+      },
+    };
+    const session = makeSession(fixture, { transport });
+    const result = await session.prompt("hi");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toMatch(/identity does not match the active turn/u);
+    expect(eventsOfType(result.events, "assistant.completed")).toHaveLength(0);
+    expect(eventsOfType(result.events, "turn.completed")).toHaveLength(0);
+    expect(eventsOfType(result.events, "turn.failed")).toHaveLength(1);
+    const record = (await fixture.journal.getSession(fixture.sessionId))!;
+    const report = await auditSessionHistory({ session: record, events: result.events });
+    expect(report.status).toBe("incomplete");
+    expect(report.findings.some((finding) => finding.code === "RECEIPT_IDENTITY_MISMATCH")).toBe(false);
+  });
+
+  it("clears a tool-step receipt before the next provider call when the final step has none", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "tool output" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    const requests: InferenceRequest[] = [];
+    const toolStepReceiptId = "urn:airship:receipt:tool-step";
+    const transport: InferenceTransport = {
+      id: "faux",
+      posture: "local",
+      async *stream(request) {
+        requests.push(structuredClone(request));
+        if (requests.length === 1) {
+          yield {
+            type: "tool-call",
+            call: { id: "call-1", name: "lookup", arguments: { value: "x" } },
+          };
+          yield {
+            type: "completed",
+            finishReason: "tool-calls",
+            receipt: {
+              ...blankReceipt(),
+              receiptId: toolStepReceiptId,
+              sessionId: request.sessionId,
+              turnId: request.turnId,
+              provider: "tool-step-provider",
+            },
+          };
+          return;
+        }
+        yield { type: "text-delta", text: "final answer" };
+        yield { type: "completed", finishReason: "stop" };
+      },
+    };
+    const session = makeSession(fixture, { transport });
+    const result = await session.prompt("hi");
+    expect(result.outcome).toBe("completed");
+    expect(requests).toHaveLength(2);
+
+    const inferenceStarts = eventsOfType(result.events, "inference.started");
+    const finalAssistant = eventsOfType(result.events, "assistant.completed").at(-1)!;
+    const finalReceipt = payloadRecord(finalAssistant).receipt as Record<string, unknown>;
+    expect(result.receipt?.receiptId).not.toBe(toolStepReceiptId);
+    expect(finalReceipt.receiptId).toBe(result.receipt?.receiptId);
+    expect(finalReceipt.receiptId).not.toBe(toolStepReceiptId);
+    expect(finalReceipt.requestDigest).toBe(payloadRecord(inferenceStarts[1]!).requestDigest);
+    expect(result.receipt?.requestDigest).toBe(payloadRecord(inferenceStarts[1]!).requestDigest);
   });
 
   it("addresses each turn to the model the session record names now, not the manifest's", async () => {
@@ -913,30 +1074,17 @@ describe("PrimeAgentSession", () => {
   });
 });
 
-/** A receipt carrying no claims: only its identity fields matter to these tests. */
+/** A trace-only receipt: only identity and digests matter to these tests. */
 function blankReceipt(): ConversationReceipt {
-  const claim = { status: "unavailable" as const, summary: "not applicable" };
   return {
     version: 1,
+    origin: "local",
+    attestation: "none",
     receiptId: "urn:airship:receipt:prime-session-test",
     sessionId: "unbound",
     turnId: "unbound",
     createdAt: "2026-01-01T00:00:00.000Z",
-    proofLevel: "local",
-    posture: "local",
     provider: "unbound",
-    claims: {
-      encryption: claim,
-      freshness: claim,
-      cpuTee: claim,
-      gpuTee: claim,
-      endpointKey: claim,
-      model: claim,
-      conversation: claim,
-      payment: claim,
-    },
-    bindings: { algorithm: "SHA-256" },
-    verifications: [],
   };
 }
 

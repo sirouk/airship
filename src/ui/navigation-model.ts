@@ -12,15 +12,13 @@ export type NavigationView =
   | "capabilities"
   | "skills"
   | "vault"
-  | "billing"
-  | "proof"
   | "access";
 
-export type CanonicalDestinationId = Exclude<NavigationView, "sessions" | "editor" | "terminal" | "context" | "capabilities" | "skills" | "billing">;
-export type NestedDestinationId = Extract<NavigationView, "sessions" | "editor" | "terminal" | "capabilities" | "skills" | "billing">;
-export type NavigationGroup = "Work" | "Agent" | "Trust";
+export type CanonicalDestinationId = Exclude<NavigationView, "sessions" | "editor" | "terminal" | "context" | "capabilities" | "skills">;
+export type NestedDestinationId = Extract<NavigationView, "sessions" | "editor" | "terminal" | "capabilities" | "skills">;
+export type NavigationGroup = "Work" | "Agent" | "Setup";
 export type NavigationScope = "session" | "workspace" | "profile" | "global";
-export type MobilePrimaryControlId = "chat" | "workspace" | "memory" | "trust" | "more";
+export type MobilePrimaryControlId = "chat" | "workspace" | "memory" | "providers" | "more";
 export type NavigationHash =
   | "#chat"
   | "#sessions"
@@ -33,8 +31,6 @@ export type NavigationHash =
   | "#capabilities"
   | "#skills"
   | "#vault"
-  | "#account"
-  | "#proof"
   | "#connection";
 
 export type NestedDestination = Readonly<{
@@ -110,8 +106,6 @@ const VIEW_HASHES: Readonly<Record<NavigationView, NavigationHash>> = Object.fre
   capabilities: "#capabilities",
   skills: "#skills",
   vault: "#vault",
-  billing: "#account",
-  proof: "#proof",
   access: "#connection",
 });
 
@@ -138,14 +132,11 @@ export const CANONICAL_DESTINATIONS: readonly CanonicalDestination[] = Object.fr
     nestedDestination("skills", "Skills", "profile"),
     nestedDestination("capabilities", "Capabilities", "profile"),
   ]),
-  destination("proof", "Proof", "Trust", "session"),
-  destination("vault", "Vault", "Trust", "global"),
-  destination("access", "Connection", "Trust", "global", [
-    nestedDestination("billing", "Account", "global"),
-  ]),
+  destination("vault", "Vault", "Setup", "global"),
+  destination("access", "Providers", "Setup", "global"),
 ]);
 
-export type RailSectionId = "work" | "receipts";
+export type RailSectionId = "work" | "global";
 
 /**
  * A nested row carries an icon of its own.
@@ -182,17 +173,16 @@ export type RailSection = Readonly<{
  */
 const RAIL_ICONS: Readonly<Partial<Record<NavigationView, IconName>>> = Object.freeze({
   chat: "chat", workspace: "workspace", editor: "file", terminal: "terminal", memory: "memory",
-  proof: "proof", vault: "cloud", access: "access", billing: "billing", profiles: "profiles",
+  vault: "cloud", access: "access", profiles: "profiles",
 });
 
 /**
  * The rail, as a person files it rather than as the code is arranged.
  *
- * `WORK` / `AGENT` / `TRUST` were three group labels over 3 / 1 / 3 rows. The
+ * `WORK` / `AGENT` / `SETUP` were three group labels over 3 / 1 / 2 rows. The
  * first had nothing above it to be disambiguated from; the second was a group
  * of exactly one whose children duplicated the pinned profile card; and the
- * third asked for the one word Airship's posture is that it does not need —
- * this product shows receipts instead of requesting trust.
+ * third simply names the two global setup surfaces.
  *
  * Two destinations moved *out* of the rail without leaving the product, and
  * both gained room by doing it: `All conversations` is the last row of the
@@ -201,9 +191,6 @@ const RAIL_ICONS: Readonly<Partial<Record<NavigationView, IconName>>> = Object.f
  * pinned profile row. Both remain in the command palette, both keep their
  * hash, and neither is behind a removed destination.
  *
- * `Account` is un-nested here. It was drawn as a child of the provider
- * connector, which made it invisible at 1440x900 with the parent collapsed; it
- * is a destination in its own right, not a sub-page of a connection method.
  */
 const RAIL_LAYOUT: readonly Readonly<{
   id: RailSectionId;
@@ -216,16 +203,14 @@ const RAIL_LAYOUT: readonly Readonly<{
       Object.freeze({ id: "chat" as const }),
       Object.freeze({ id: "workspace" as const, nested: Object.freeze(["editor", "terminal"] as const) }),
       Object.freeze({ id: "memory" as const }),
-      Object.freeze({ id: "proof" as const }),
     ]),
   }),
   Object.freeze({
-    id: "receipts",
+    id: "global",
     label: "Global",
     rows: Object.freeze([
       Object.freeze({ id: "vault" as const }),
       Object.freeze({ id: "access" as const }),
-      Object.freeze({ id: "billing" as const }),
     ]),
   }),
 ]);
@@ -284,22 +269,16 @@ export function railTraversal(expanded: Readonly<Record<string, boolean>>): read
 }
 
 /**
- * The phone's band, in the order the owner reads it.
- *
- * Memory comes before Trust, and it is a primary control rather than a row in
- * the More sheet: it is the second-most-opened destination on a phone and it
- * was two taps away behind an overflow glyph while a live-load reading — a
- * count of execution-pack runs, which is zero on every phone that has not
- * activated one — held the band's leading track. That reading is not deleted;
- * it rides the desktop rail and expands on #capabilities, which is where the
- * rest of its report already lives. What it stopped doing is occupying a fifth
- * of the most constrained screen in the product to say `0 · Idle` forever.
+ * The phone's band, in the order the owner reads it. Memory is a primary
+ * control because it is the second-most-opened destination on a phone; the
+ * fourth track opens the provider surface, which is where a phone goes to
+ * connect or change a model.
  */
 export const MOBILE_PRIMARY_CONTROLS: readonly MobilePrimaryControl[] = Object.freeze([
   Object.freeze({ id: "chat", label: "Chat", kind: "route", view: "chat" }),
   Object.freeze({ id: "workspace", label: "Workspace", kind: "route", view: "workspace" }),
   Object.freeze({ id: "memory", label: "Memory", kind: "route", view: "memory" }),
-  Object.freeze({ id: "trust", label: "Trust", kind: "route", view: "proof" }),
+  Object.freeze({ id: "providers", label: "Providers", kind: "route", view: "access" }),
   Object.freeze({ id: "more", label: "More", kind: "overlay", overlay: "more" }),
 ]);
 
@@ -317,8 +296,8 @@ export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
   /*
    * Kept, even though Memory is a primary control now.
    *
-   * Chat, Workspace and Proof are not repeated here, so the consistent thing
-   * would be to drop this row — but the sheet is the product's full index of
+   * Chat and Workspace are not repeated here, so the consistent thing would be
+   * to drop this row — but the sheet is the product's full index of
    * destinations on a phone, `airship-shell.spec.ts` reaches #memory through
    * it, and a person who learned the route lives behind More does not benefit
    * from having it taken away on the release that promotes it. The two entries
@@ -330,8 +309,7 @@ export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
   moreRoute("skills", "Skills", "Reusable instructions across profiles", "profiles"),
   moreRoute("capabilities", "Capabilities", "Detected device and runtime support", "profiles"),
   moreRoute("vault", "Vault", "Where your work is stored"),
-  moreRoute("access", "Connection", "Model providers and credentials"),
-  moreRoute("billing", "Account", "Chutes balance and usage", "access"),
+  moreRoute("access", "Providers", "Model providers and credentials"),
   SETTINGS_OVERLAY_ENTRY,
 ]);
 
@@ -339,7 +317,6 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   chat: "chat",
   sessions: "chat",
   workspace: "workspace",
-  proof: "trust",
   editor: "workspace",
   terminal: "workspace",
   memory: "memory",
@@ -349,21 +326,9 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   profiles: "more",
   capabilities: "more",
   skills: "more",
-  /*
-   * The three global routes belong to More, not to Trust. Trust's destination
-   * is #proof, which does not contain Vault, Connection or Account and offers
-   * no way back to any of them; `PARENT_BY_VIEW` below gives each of the three
-   * its own canonical parent rather than `proof`; and all three are rows in
-   * `MOBILE_MORE_ENTRIES`, which marks itself current when you stand on one. So
-   * a phone on #account lit Trust in gold under an <h1> reading "Account" while
-   * More — the control that actually holds the route, and the one its sibling
-   * global routes light — read inactive. The description a current control
-   * carries still names the route, so nothing is lost by moving the highlight
-   * to the control that can be followed back.
-   */
+  // Vault stays in More; the provider surface owns the band's fourth track.
   vault: "more",
-  billing: "more",
-  access: "more",
+  access: "providers",
 });
 
 const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> = Object.freeze({
@@ -377,10 +342,8 @@ const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> =
   profiles: "profiles",
   capabilities: "profiles",
   skills: "profiles",
-  proof: "proof",
   vault: "vault",
   access: "access",
-  billing: "access",
 });
 
 export function mobilePrimaryControlForView(view: NavigationView): MobilePrimaryControlId {
@@ -409,12 +372,9 @@ const UNFILED_VIEW_LABELS: Readonly<Partial<Record<NavigationView, string>>> = O
  *
  * The rail, the command palette and the mobile More sheet all read the table
  * above; two `<RouteHeader>` titles did not, and both renamed the destination
- * on arrival. `#connection` was "Connection" in every navigation surface and
- * "Connect models" once you were standing on it; `#account` was "Account"
- * against a page headed "Account standing". A first-time user taps a word and
- * has to land on a screen that contains it, so a heading reads its name from
- * here and its extra words move to the eyebrow, which is the rung that exists
- * for them.
+ * on arrival. A first-time user taps a word and has to land on a screen that
+ * contains it, so a heading reads its name from here and its extra words move
+ * to the eyebrow, which is the rung that exists for them.
  */
 export function destinationLabel(view: NavigationView): string {
   const label = filedDestination(view)?.label ?? UNFILED_VIEW_LABELS[view];
@@ -428,16 +388,11 @@ export function navigationHashForView(view: NavigationView): NavigationHash {
 
 export function navigationViewFromHash(hash: string): NavigationView {
   const candidate = hash.replace(/^#/u, "").split(/[/?]/u, 1)[0];
-  if (candidate === "connection") return "access";
-  if (candidate === "account") return "billing";
-  // Preserve already-shipped deep links while emitting only label-aligned hashes.
-  if (candidate === "access") return "access";
-  if (candidate === "billing") return "billing";
+  if (candidate === "connection" || candidate === "access") return "access";
   // Sources shipped as a standalone route before source control moved into
   // the Workspace Editor. Keep old bookmarks useful without retaining a
   // second destination or a split-brain workbench.
   if (candidate === "sources") return "editor";
-  if (candidate === "attestations") return "proof";
   return navigationViews.has(candidate as NavigationView) ? candidate as NavigationView : "chat";
 }
 

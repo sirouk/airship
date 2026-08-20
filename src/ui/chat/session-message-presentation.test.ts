@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../../core/contracts";
 import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
-import { createLocalReceipt, type ConversationReceipt } from "../../receipts/types";
+import { createLocalReceipt, type ConversationReceipt } from "../../core/conversation-receipt";
 import { EventJournal } from "../../core/journal";
 import { MemoryJournalBackend } from "../../core/memory-journal";
 import { createSessionManifest } from "../../core/session-manifest";
@@ -993,7 +993,6 @@ async function auditProfileManifest() {
       workspaceBinding: { kind: "active-workspace" },
       memoryScope: "profile",
       approvalMode: "ask-first",
-      minimumPosture: "local",
     },
   });
 }

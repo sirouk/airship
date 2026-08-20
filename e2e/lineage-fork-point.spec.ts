@@ -33,7 +33,9 @@ test("the source conversation names the fork point of every alternate", async ({
   await expect(fork).toBeEnabled();
   await answer.hover();
   await fork.click();
-  await expect(page.locator(".composer-notice")).toContainText("True fork created at the audited boundary after this answer");
+  await expect(page.locator(".composer-notice")).toContainText(
+    /True fork created .* after this answer.*source conversation remains unchanged.*Carrying \d+ ancestor messages?; none omitted/u,
+  );
   await expect.poll(() => page.url()).not.toContain(sourceId);
 
   await page.goto("/#sessions");
@@ -59,36 +61,45 @@ test("the source conversation names the fork point of every alternate", async ({
 });
 
 /*
- * TRM-06: the shell has a row on the surface that audits this journal.
- *
- * Terminal lineage lived in the manager's own 64-record ring buffer and
- * nowhere else, so Proof could not distinguish a session where no shell ran
- * from one whose shell work was never recorded. A count of zero is a fact; the
- * absence was not. This journey does not start a WebContainer — that is the
- * live master suite's job — it asserts the row exists and reads the audit.
- *
- * The row now stands in the recorded-work ledger beside the verdict rather than
- * inside the journal disclosure: a reader asking what was recorded was reading
- * a panel that collapses itself whenever the structure passes.
+ * The removed audit route is no longer a second place that interprets a
+ * conversation. Sessions owns the bounded, local record: it states the linked
+ * receipt count, the inspected event bound, and the transcript materialized
+ * from that same session. A count is a local trace fact, not a trust verdict.
  */
-test("session journal integrity states how many shell records it audited", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop proof surface contract");
+test("Sessions states the bounded local trace record it inspected", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop Sessions trace contract");
   await page.goto("/#chat");
-  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
-  // A turn, so the session being audited has a journal to audit rather than a
-  // bare creation event.
-  await page.getByRole("combobox", { name: "Message Airship" }).fill("Record something worth auditing.");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
+  const sessionId = page.url().split("#chat/")[1]!;
+  const prompt = "Record something worth tracing locally.";
+  await page.getByRole("combobox", { name: "Message Airship" }).fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator('[data-transcript-card][data-message-role="assistant"]').last()).toBeVisible();
+  const answer = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  await expect(answer).toHaveAttribute("data-turn-id", /.+/u);
 
-  await page.goto("/#proof");
-  const ledger = page.getByLabel("Work recorded in this session’s journal");
-  await expect(ledger).toBeVisible();
-  await expect(ledger).toContainText("Shell records");
-  await expect(ledger.locator("div").filter({ hasText: "Shell records" }).locator("dd")).toHaveText(/^\d+$/u);
-  // The journal panel keeps the facts about the check itself.
-  const journal = page.locator(".proof-journal");
-  const summary = journal.locator("summary.proof-journal__row");
-  if (await journal.evaluate((element) => !(element as HTMLDetailsElement).open)) await summary.click();
-  await expect(journal.locator(".audit-commitment")).toContainText("Journal events");
+  // Hash navigation keeps the page-memory authority alive while opening the
+  // current replacement for the removed audit route.
+  await page.evaluate(() => { window.location.hash = "sessions"; });
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
+  const row = page.locator(`.session-library-row[data-session-id="${sessionId}"]`);
+  await expect(row).toBeVisible();
+  await row.locator(".session-library-card").click();
+
+  const inspector = page.locator(".session-library-inspector");
+  const integrity = inspector.getByRole("button", { name: /^Session integrity\./u });
+  await expect(integrity).toHaveAccessibleName(/Structure passed.*1 receipt.*local inspection details/u);
+  if (await integrity.getAttribute("aria-expanded") !== "true") await integrity.click();
+  await expect(inspector.locator(".session-integrity__scope small"))
+    .toHaveText(/\d+ of \d+ events inspected · 1 turn/u);
+  await expect(inspector.getByRole("region", { name: "Conversation continuity" }))
+    .toContainText(/Journal head\s*\d+ events?/u);
+
+  const record = inspector.locator("details.session-library-technical");
+  await expect(record.locator(":scope > summary"))
+    .toContainText(/Manifest pins and transcript · 2 messages/u);
+  await record.locator(":scope > summary").click();
+  await expect(record.locator(".session-library-transcript")).toContainText(prompt);
+  const pins = record.locator("details.session-library-pins-disclosure");
+  await pins.locator(":scope > summary").click();
+  await expect(pins.locator(".session-library-digests")).toContainText(/Journal head · \d+/u);
 });

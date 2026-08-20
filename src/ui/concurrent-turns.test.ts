@@ -68,21 +68,25 @@ describe("turns run per conversation, not per page", () => {
     expect(app).toContain("if (sessionId) sessionLocalCommandPolicy(sessionId).replace(humanIntentModePolicy);");
   });
 
-  it("aborts every turn for a transition that invalidates every turn", async () => {
+  it("aborts every turn only when a page-wide authority becomes invalid", async () => {
     const app = await appSource();
     expect(app).toContain("function abortAllTurns(reason?: DOMException): void {");
-    // The route, the model, the credential and the workspace's durability are
-    // page-wide facts: a turn in an unwatched thread is running against them
-    // just as much as the visible one.
     for (const reason of [
       "Inference route is changing.",
-      "Inference model is changing.",
       "Inference connection was disconnected.",
-      "Remote inference credential was released.",
       "Workspace durability is changing.",
+      "Local Device Vault restore started.",
     ]) {
       expect(app).toContain(`abortAllTurns(new DOMException("${reason}", "AbortError"))`);
     }
+    // A model override is journaled on one conversation. A running turn keeps
+    // the model its request already named, so unrelated turns are not aborted.
+    const modelSwitch = app.slice(
+      app.indexOf("async function switchExternalModel"),
+      app.indexOf("async function selectStandbyExternalModel"),
+    );
+    expect(modelSwitch).toContain("commitExternalModelInPlace");
+    expect(modelSwitch).not.toContain("abortAllTurns");
   });
 
   it("stops only the conversation whose Stop was pressed", async () => {

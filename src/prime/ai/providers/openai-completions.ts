@@ -1,5 +1,6 @@
 import { getAnthropicCacheWriteCost, hasStandardAnthropicCachePricing } from "../cost";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream } from "../event-stream";
+import { getProviderDescriptor } from "../registry";
 import { sanitizeSurrogates } from "../sanitize";
 import { sseRecords } from "../sse";
 import { parseJsonWithRepair, parseStreamingJson } from "../stream-json";
@@ -230,12 +231,11 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 // ---------------------------------------------------------------------------
 
 /**
- * Detect compatibility settings from provider and baseUrl for known
- * providers. Provider takes precedence over URL-based detection since it's
- * explicitly configured. Providers not special-cased here (groq, fireworks,
- * mistral, minimax, kimi-coding, huggingface, xiaomi-token, ...) ride the
- * standard defaults plus per-model compat overrides from the model catalog —
- * that is exactly what upstream's generated catalog does for them.
+ * Detect compatibility settings from provider and baseUrl for upstream's
+ * known provider families. Provider descriptors and per-model compat metadata
+ * are applied later, so a provider-specific wire quirk does not need to become
+ * a hostname heuristic here. Providers not detected here ride the standard
+ * defaults.
  */
 function detectCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
   const provider = model.provider;
@@ -252,7 +252,6 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     baseUrl.includes("cerebras.ai") ||
     provider === "xai" ||
     baseUrl.includes("api.x.ai") ||
-    baseUrl.includes("chutes.ai") ||
     baseUrl.includes("deepseek.com") ||
     isZai ||
     isMoonshot ||
@@ -262,7 +261,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     isCloudflareAiGateway ||
     isPrimeInference;
 
-  const useMaxTokens = baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isPrimeInference;
+  const useMaxTokens = isMoonshot || isCloudflareAiGateway || isPrimeInference;
 
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
@@ -294,28 +293,56 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
   };
 }
 
-/** Resolved compat: explicit model.compat fields win over auto-detection. */
+/**
+ * Resolve compat in order of authority: model metadata, provider descriptor,
+ * then the upstream family defaults. Provider descriptors are keyed by the
+ * stable provider id, so changing only a connection URL does not change wire
+ * semantics.
+ */
 function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
   const detected = detectCompat(model);
-  if (!model.compat) return detected;
+  const providerCompat = getProviderDescriptor(model.api, model.provider)?.compat;
+  const modelCompat = model.compat;
+  if (!providerCompat && !modelCompat) return detected;
 
   return {
-    supportsStore: model.compat.supportsStore ?? detected.supportsStore,
-    supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
-    supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
-    maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
-    requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
+    supportsStore: modelCompat?.supportsStore ?? providerCompat?.supportsStore ?? detected.supportsStore,
+    supportsDeveloperRole:
+      modelCompat?.supportsDeveloperRole ?? providerCompat?.supportsDeveloperRole ?? detected.supportsDeveloperRole,
+    supportsReasoningEffort:
+      modelCompat?.supportsReasoningEffort ?? providerCompat?.supportsReasoningEffort ?? detected.supportsReasoningEffort,
+    supportsUsageInStreaming:
+      modelCompat?.supportsUsageInStreaming ??
+      providerCompat?.supportsUsageInStreaming ??
+      detected.supportsUsageInStreaming,
+    maxTokensField: modelCompat?.maxTokensField ?? providerCompat?.maxTokensField ?? detected.maxTokensField,
+    requiresToolResultName:
+      modelCompat?.requiresToolResultName ?? providerCompat?.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:
-      model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
+      modelCompat?.requiresAssistantAfterToolResult ??
+      providerCompat?.requiresAssistantAfterToolResult ??
+      detected.requiresAssistantAfterToolResult,
+    requiresThinkingAsText:
+      modelCompat?.requiresThinkingAsText ??
+      providerCompat?.requiresThinkingAsText ??
+      detected.requiresThinkingAsText,
     requiresReasoningContentOnAssistantMessages:
-      model.compat.requiresReasoningContentOnAssistantMessages ?? detected.requiresReasoningContentOnAssistantMessages,
-    thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
-    supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
-    cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
-    sendSessionAffinityHeaders: model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
-    supportsLongCacheRetention: model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
+      modelCompat?.requiresReasoningContentOnAssistantMessages ??
+      providerCompat?.requiresReasoningContentOnAssistantMessages ??
+      detected.requiresReasoningContentOnAssistantMessages,
+    thinkingFormat: modelCompat?.thinkingFormat ?? providerCompat?.thinkingFormat ?? detected.thinkingFormat,
+    supportsStrictMode:
+      modelCompat?.supportsStrictMode ?? providerCompat?.supportsStrictMode ?? detected.supportsStrictMode,
+    cacheControlFormat:
+      modelCompat?.cacheControlFormat ?? providerCompat?.cacheControlFormat ?? detected.cacheControlFormat,
+    sendSessionAffinityHeaders:
+      modelCompat?.sendSessionAffinityHeaders ??
+      providerCompat?.sendSessionAffinityHeaders ??
+      detected.sendSessionAffinityHeaders,
+    supportsLongCacheRetention:
+      modelCompat?.supportsLongCacheRetention ??
+      providerCompat?.supportsLongCacheRetention ??
+      detected.supportsLongCacheRetention,
   };
 }
 

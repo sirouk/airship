@@ -1,13 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY } from "../inference/chutes/strict-proof-capability";
 import { enforcedMemoryScope } from "../profiles/domain";
 import {
   PROFILE_APPROVAL_LABELS,
   PROFILE_BOUNDARY_NOTE,
   PROFILE_MEMORY_SCOPE_LABELS,
-  PROFILE_POSTURE_FIELD_LABEL,
-  PROFILE_POSTURE_LABELS,
   profileGovernanceCellLabel,
   profileGovernanceCells,
   type ProfileGovernanceInput,
@@ -19,29 +16,26 @@ function input(overrides: Partial<ProfileGovernanceInput> = {}): ProfileGovernan
     themeName: "Foundry",
     memoryScope: "profile",
     approvalMode: "ask-first",
-    minimumPosture: "local",
     skillCount: 3,
     ...overrides,
   };
 }
 
 describe("profileGovernanceCells", () => {
-  it("makes all six governed things legible with zero clicks", () => {
+  it("makes all five governed things legible with zero clicks", () => {
     expect(profileGovernanceCells(input()).map((cell) => `${cell.label} ${cell.value}`)).toEqual([
       "Instructions 419 ch",
       "Theme Foundry",
       "Memory This profile",
       "Approvals Ask First",
-      "Minimum proof Local",
       "Skills 3",
     ]);
   });
 
   it("never prints a raw enum where the editor prints a sentence", () => {
-    const cells = profileGovernanceCells(input({ memoryScope: "session", minimumPosture: "encrypted-attested" }));
+    const cells = profileGovernanceCells(input({ memoryScope: "session" }));
     const values = cells.map((cell) => cell.value);
     expect(values).toContain("This conversation");
-    expect(values).toContain("Attested");
     for (const value of values) expect(value).not.toMatch(/[a-z]+-[a-z]+/u);
   });
 
@@ -70,12 +64,6 @@ describe("profileGovernanceCells", () => {
       const cell = profileGovernanceCells(input({ approvalMode: mode })).find((item) => item.key === "approvals");
       expect(cell?.value).toBe(label);
     }
-  });
-
-  it("gives the minimum-proof field exactly one name", () => {
-    const cell = profileGovernanceCells(input()).find((item) => item.key === "proof");
-    expect(cell?.label).toBe(PROFILE_POSTURE_FIELD_LABEL);
-    expect(PROFILE_POSTURE_FIELD_LABEL).toBe("Minimum proof");
   });
 
   it("gives the skill count somewhere to go", () => {
@@ -164,49 +152,6 @@ describe("the editor's own labels", () => {
     expect(editorOptions("Profile approval policy")).toEqual({ ...PROFILE_APPROVAL_LABELS });
   });
 
-  it("spells the postures exactly as this module labels them", () => {
-    expect(editorOptions("Profile minimum proof posture")).toEqual({ ...PROFILE_POSTURE_LABELS });
-  });
-
-  /*
-   * A floor nothing can reach may be offered, but not sold.
-   *
-   * `encrypted-attested` needs a transport built with `attestationMode:
-   * "required"`, which only exists behind strict endpoint proof — and this
-   * build freezes that capability `available: false`. The editor still
-   * advertised "Attested — Require verified endpoint evidence" as a live
-   * choice, so picking it committed a profile that threw on every new
-   * conversation, while the Connection route told the same person in the same
-   * session that strict fail-closed is unavailable.
-   *
-   * This asserts the editor asks the shared record rather than restating an
-   * answer, which is what stops the two surfaces drifting apart again. It is
-   * deliberately written against the capability being unavailable *today*: if
-   * the verifier lands and `available` flips, this test is the thing that says
-   * the option's description must go back to describing the policy.
-   */
-  it("does not offer a proof floor this build cannot satisfy", () => {
-    expect(CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available, "strict proof became available — re-word the Attested option and this test").toBe(false);
-    const control = app.indexOf('ariaLabel="Profile minimum proof posture"');
-    const block = app.slice(control, app.indexOf("]}", app.indexOf("options={[", control)));
-    const attested = block.slice(block.indexOf('value: "encrypted-attested"'));
-    expect(attested).toContain("disabled: !strictProofCapability.available");
-    expect(attested).toContain("strictProofCapability.reason");
-    // The reason has to be the verifier's own words, not a second copy of them.
-    expect(attested).not.toContain("Independent NVIDIA GPU verification");
-  });
-
-  it("names the minimum-proof field once, in the editor, the card and the revision strip", () => {
-    // Three renderings under two names inside 400px was the original defect;
-    // this is the assertion that keeps all three spelling it the same way.
-    expect(app).toContain(`<span>${PROFILE_POSTURE_FIELD_LABEL}</span><MenuSelect ariaLabel="Profile minimum proof posture"`);
-    // Both chips read the name from this module's constant, so the three
-    // surfaces cannot be edited apart — stronger than counting two literals
-    // that happen to match today.
-    expect(app.match(/prefix=\{PROFILE_POSTURE_FIELD_LABEL\}/gu)).toHaveLength(2);
-    expect(app).not.toContain(`prefix="${PROFILE_POSTURE_FIELD_LABEL}"`);
-    expect(app).not.toContain("Minimum posture");
-  });
 });
 
 /**

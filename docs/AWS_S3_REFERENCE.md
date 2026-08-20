@@ -109,18 +109,20 @@ Access and deny non-TLS bucket requests.
 
 ## Browser boundary
 
-Use a DNS-compatible bucket without dots and virtual-host addressing so the
-deployed CSP can name the exact bucket origin rather than all of an S3 region:
+Use a DNS-compatible bucket without dots and virtual-host addressing so TLS
+names the bucket directly:
 
 ```text
-connect-src 'self'
-  https://cognito-identity.us-east-1.amazonaws.com
-  https://airship-production.s3.us-east-1.amazonaws.com
-  ...exact inference/evidence origins...
+https://cognito-identity.us-east-1.amazonaws.com
+https://airship-production.s3.us-east-1.amazonaws.com
 ```
 
-Add those exact origins to both `index.html` and `public/_headers`; the build
-security check rejects divergence and wildcard/scheme-wide connection grants.
+The stock build's reviewed `connect-src https:` grant permits these user-owned
+endpoints. The security check rejects policy drift, wildcard hosts, broad
+plaintext HTTP, and WebSocket schemes. A fixed-endpoint deployment may narrow
+`https:` to these exact origins, at the cost of runtime-selected providers and
+storage. In either form, exact CORS and IAM scope—not CSP—are the object and
+tenant authorization boundaries.
 
 Minimum bucket CORS for the current adapter:
 

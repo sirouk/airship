@@ -4,7 +4,12 @@ import {
   applyLocalDevelopmentPolicy,
   DEVELOPMENT_OPTIMIZE_ENTRIES,
   DEVELOPMENT_WATCH_IGNORES,
+  isPrimeKernelWorkerRequest,
+  PRIME_KERNEL_WORKER_ASSET_SUFFIX,
+  PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY,
+  PRIME_KERNEL_WORKER_RESPONSE_HEADERS,
   resolveAirshipModulePreloadDependencies,
+  resolveAirshipWorkerEntryFileName,
   rewriteLocalExtensionHubRequest,
 } from "./vite.config";
 
@@ -24,7 +29,7 @@ describe("local development CSP", () => {
     // matches nothing.
     const html = readFileSync("index.html", "utf8");
     expect(applyLocalDevelopmentPolicy(html)).toContain(
-      "connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 https://api.chutes.ai",
+      "connect-src 'self' http://localhost:9900 http://127.0.0.1:9900 https:",
     );
   });
 
@@ -74,5 +79,69 @@ describe("local development CSP", () => {
       hostId: "assets/index.js",
       hostType: "js",
     })).toBe(dependencies);
+  });
+});
+
+
+describe("Prime kernel worker asset", () => {
+  it("keeps the Vite content hash and a base-independent dedicated suffix", () => {
+    expect(resolveAirshipWorkerEntryFileName({ name: "prime-kernel-worker" }))
+      .toBe("assets/[hash].prime-kernel-worker.js");
+    expect(resolveAirshipWorkerEntryFileName({ name: "semantic.worker" }))
+      .toBe("assets/[name]-[hash].js");
+    expect(PRIME_KERNEL_WORKER_ASSET_SUFFIX).toBe(".prime-kernel-worker.js");
+  });
+
+  it("recognizes only the worker source route or hashed asset below the configured base", () => {
+    expect(isPrimeKernelWorkerRequest(
+      "/src/prime/kernel/prime-kernel-worker.ts?worker_file&type=module",
+      "/",
+    )).toBe(true);
+    expect(isPrimeKernelWorkerRequest(
+      "/airship/assets/AbC_123-x.prime-kernel-worker.js",
+      "/airship/",
+    )).toBe(true);
+
+    expect(isPrimeKernelWorkerRequest(
+      "/assets/AbC_123-x.prime-kernel-worker.js",
+      "/airship/",
+    )).toBe(false);
+    expect(isPrimeKernelWorkerRequest(
+      "/airship/assets/prime-kernel-worker-AbC_123.js",
+      "/airship/",
+    )).toBe(false);
+    expect(isPrimeKernelWorkerRequest(
+      "https://attacker.example/airship/assets/AbC_123.prime-kernel-worker.js",
+      "/airship/",
+    )).toBe(false);
+    expect(isPrimeKernelWorkerRequest(
+      "/src/prime/kernel/prime-kernel-worker.ts?type=module&worker_file",
+      "/",
+    )).toBe(false);
+    expect(isPrimeKernelWorkerRequest(
+      "/src/prime/kernel/prime-kernel-worker.ts?worker_file&type=module&extra=1",
+      "/",
+    )).toBe(false);
+    expect(isPrimeKernelWorkerRequest(
+      "/airship/assets/AbC_123-x.prime-kernel-worker.js?token=secret",
+      "/airship/",
+    )).toBe(false);
+  });
+
+  it("uses the exact worker-only policy and response-header set", () => {
+    expect(PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY).toBe(
+      "default-src 'none'; script-src 'unsafe-eval'; connect-src 'none'; worker-src 'none'",
+    );
+    expect(PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY).not.toContain("'self'");
+    expect(PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY).not.toContain("trusted-types");
+    expect(PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY).not.toContain("base-uri");
+    expect(PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY).not.toContain("object-src");
+    expect(PRIME_KERNEL_WORKER_RESPONSE_HEADERS).toEqual({
+      "Content-Security-Policy": PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY,
+      "Cross-Origin-Embedder-Policy": "credentialless",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      "X-Content-Type-Options": "nosniff",
+    });
+    expect(readFileSync("index.html", "utf8")).not.toContain("script-src 'self' 'unsafe-eval'");
   });
 });

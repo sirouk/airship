@@ -282,7 +282,7 @@ describe("EncryptedObjectJournalBackend", () => {
     const backend = new EncryptedObjectJournalBackend(store, key);
     let id = 0;
     const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => `id-${++id}`);
-    const session = await journal.createSession("Private title", await manifest({ capabilityTier: "remote-confidential", transportBoundary: "provider-tls" }));
+    const session = await journal.createSession("Private title", await manifest({ capabilityTier: "remote-heavy", transportBoundary: "provider-tls" }));
     await journal.append(session.id, [{ type: "message.user", payload: { content: "private prompt" } }]);
 
     const sessions = await journal.listSessions();
@@ -415,7 +415,7 @@ describe("EncryptedObjectJournalBackend", () => {
   });
 });
 
-async function manifest(options: { capabilityTier?: "web-baseline" | "web-enhanced" | "native" | "remote-confidential"; transportBoundary?: "provider-tls" | "loopback-local" } = {}) {
+async function manifest(options: { capabilityTier?: "web-baseline" | "web-enhanced" | "native" | "remote-heavy"; transportBoundary?: "provider-tls" | "loopback-local" } = {}) {
   return createSessionManifest({
     systemPrompt: "private system prompt",
     providerId: "test",

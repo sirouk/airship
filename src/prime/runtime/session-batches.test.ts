@@ -8,6 +8,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { streamSimple } from "../ai/stream";
 import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
@@ -77,6 +78,7 @@ async function fixture(tools: Tool[]): Promise<Readonly<{
     registry,
     approvalPolicy: allowAllForTests,
     model,
+    streamFn: streamSimple,
     onSignal(signal) {
       if (signal.type === "status") statuses.push(signal.status);
     },
@@ -107,12 +109,14 @@ describe("prime read-effect batching, journal evidence", () => {
     const started = Date.now();
     const result = await fix.session.prompt("run the batch");
     expect(result.outcome).toBe("completed");
-    // Settlement order is the actual concurrency witness: every start
-    // precedes every end, and ends land b(20) < c(50) < a(90).
-    expect(log).toEqual([
+    // Settlement order is the actual concurrency witness. Invocation starts
+    // may enter on adjacent microtasks in either order, but all three must
+    // start before any one ends, and ends land b(20) < c(50) < a(90).
+    const firstEnd = log.findIndex((entry) => entry.endsWith(":end"));
+    expect([...log.slice(0, firstEnd)].sort()).toEqual([
       "read_a:start", "read_b:start", "read_c:start",
-      "read_b:end", "read_c:end", "read_a:end",
     ]);
+    expect(log.slice(firstEnd)).toEqual(["read_b:end", "read_c:end", "read_a:end"]);
 
     // tool_execution_start / _end are the loop's progress vocabulary in
     // both engines, never journaled: the settlement-order proof rides the

@@ -307,17 +307,18 @@ run required for production.
 `vaultProviderRequirements(config)` is the machine-readable deployment
 contract. It returns:
 
-- exact S3 and Cognito/OIDC origins for CSP `connect-src`;
+- exact S3 and Cognito/OIDC origins for runtime validation and deployment review;
 - GET/PUT plus SigV4, conditional-write, and Range request headers for CORS;
 - ETag, length, range, modification, region, and request-ID response headers;
 - memory-only expiring credential/reset requirements; and
 - the exact per-subject list/object IAM prefix.
 
-The public static build cannot safely accept arbitrary endpoints at runtime:
-its CSP must name the exact object and credential origins in both `index.html`
-and `public/_headers`. A user-selected arbitrary S3 origin requires a packaged
-client whose policy is generated for that origin. Do not weaken this with
-`connect-src https:` or provider-wide wildcards.
+The public static build accepts user-selected HTTPS endpoints under its
+intentional `connect-src https:` grant. Configuration still validates exact
+credential-free URLs and credentials remain scoped to those configured
+endpoints. Wildcard hosts and remote plaintext origins remain prohibited. A
+fixed deployment can narrow the policy to exact object, identity, and inference
+origins when CSP-level egress isolation matters more than endpoint portability.
 
 Bucket/IAM/CORS details remain normative in
 [AWS_S3_REFERENCE.md](AWS_S3_REFERENCE.md). In particular, direct browser

@@ -18,30 +18,29 @@ async function enableLocalLabVault(page: Page): Promise<void> {
 }
 
 async function expectLocalVaultAdopted(page: Page, timeout = 20_000): Promise<void> {
-  // The phone shell keeps a live-region twin of the desktop runtime line in
-  // the DOM at every width; the title attribute lives on the desktop carrier.
+  // Desktop and phone render the same live runtime sentence in width-specific
+  // carriers.
   await expect(page.locator(".runtime-line:not(.runtime-line--phone)")).toHaveAttribute("title", /Encrypted S3 vault active/u, { timeout });
   if ((page.viewportSize()?.width ?? 1_440) <= 640) {
-    // The desktop status strip is intentionally hidden on narrow screens;
-    // the same runtime state remains exposed through its live-region contract.
     await expect(page.getByRole("status").filter({ hasText: /Encrypted S3 vault active/u }).first())
       .toContainText("Encrypted S3 vault active");
-    const sessionDetails = page.getByRole("button", { name: /Session\. Encrypted state synced\./u });
-    await expect(sessionDetails).toBeVisible();
-  } else {
-    // The four axis pills are one chip that states the weakest claim. A healthy
-    // vault is not the weakest claim, so it reads in the sheet the chip opens —
-    // where it now arrives with its full detail sentence rather than a
-    // hover-only tooltip.
-    await page.locator(".topbar-posture-chip").click();
-    const runtimeTrust = page.getByRole("dialog", { name: "Runtime trust" });
-    await expect(runtimeTrust).toContainText("Local S3 Vault active");
-    await runtimeTrust.getByRole("button", { name: "Close" }).click();
-    // The meta row is gone; durability is the session-status chip's second
-    // claim, stated in full in its accessible name and its popover.
-    await expect(page.locator(".session-status-chip"))
-      .toHaveAccessibleName(/Session\. Encrypted state synced\./u);
   }
+
+  // Session durability is a current operational detail. The shared status mark
+  // is visible at rest and the two-row panel keeps durability and lifecycle
+  // separately readable.
+  const sessionDetails = page.locator(".session-status-chip");
+  await expect(sessionDetails).toHaveAccessibleName(/Session\. Encrypted state synced\..*2 details\./u, { timeout });
+  const mark = sessionDetails.locator(".status-mark");
+  await expect(mark).toHaveAttribute("data-state", "verified");
+  await sessionDetails.click();
+  const panel = page.getByRole("group", { name: "Session status" });
+  await expect(panel).toContainText("Encrypted state synced");
+  await expect(panel.locator(".detail-rows > *")).toHaveCount(2);
+  await expect(panel.locator(".detail-rows .status-mark")).toHaveCount(2);
+  await panel.getByRole("button", { name: "Done" }).click();
+  await expect(panel).toBeHidden();
+  await expect(sessionDetails).toBeFocused();
 }
 
 for (const origin of ["http://localhost:4173", "http://127.0.0.1:4173"] as const) {
@@ -50,8 +49,8 @@ for (const origin of ["http://localhost:4173", "http://127.0.0.1:4173"] as const
     const namespace = isolatedNamespace(testInfo.project.name, origin.includes("localhost") ? "localhost" : "loopback");
     await page.goto(`${origin}/?airshipLabNamespace=${encodeURIComponent(namespace)}#chat`);
     await expectLocalVaultAdopted(page);
-    await expect(page.locator(".topbar-center").getByText("Vault ready", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Vault blocked", { exact: true })).toHaveCount(0);
+    await expect(page.locator(".topbar-destination")).toHaveText("Chat");
+    await expect(page.locator(".session-status-chip .status-mark")).toHaveAttribute("data-state", "verified");
   });
 }
 
@@ -63,13 +62,14 @@ test("durability preference moves safely between encrypted S3 and ephemeral page
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
-  // "Ephemeral content", not "Page memory only": the posture keeps one
-  // continuity line per conversation, so the old label claimed more than the
-  // product honours. See `EPHEMERAL_RETENTION_DISCLOSURE`.
   await page.getByRole("option", { name: "Ephemeral content" }).click();
   await page.getByRole("button", { name: "Done" }).click();
   await expect(page.locator(".runtime-line:not(.runtime-line--phone)")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
   await expect(page.getByText("Ephemeral mode is active.", { exact: false })).toBeVisible();
+  const ephemeralStatus = page.locator(".session-status-chip");
+  await expect(ephemeralStatus).toHaveAccessibleName(/Session\. Ephemeral · content not saved\./u);
+  await expect(ephemeralStatus.locator(".status-mark")).toHaveAttribute("data-state", "attention");
+  await expect(ephemeralStatus).toContainText("Not saved");
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
@@ -131,8 +131,8 @@ test("fresh browser contexts resume one audited Vault session without creating r
        * rail's recents row, the conversation switcher, and the message itself.
        * A bare exact-text lookup matched all four and failed strict mode, which
        * reads as "the resumed conversation is missing" when what happened is
-       * that three more surfaces started naming it correctly. The claim here is
-       * that the message came back, so this asserts the message.
+       * that three more surfaces started naming it correctly. This check is
+       * about the restored message, so it addresses the transcript row.
        */
       await expect(page.locator("[data-transcript-card]").getByText(marker, { exact: true }).first())
         .toBeVisible({ timeout: 15_000 });

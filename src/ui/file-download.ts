@@ -1,20 +1,10 @@
 /**
  * The one way bytes Airship already holds leave the browser.
  *
- * Every download in this product is the same three lines — a Blob, an object
- * URL, a synthetic anchor — and each place that had written them got the
- * revoke and the cleanup slightly differently: `proof-view` and
- * `attestations-view` had one shape, `local-device-vault-setup` a second that
- * never attached the anchor to the document (which Firefox requires) and put
- * its availability check in a third place again. Every call site in the tree
- * is now here — `proof-view`, `attestations-view`, `workspace-view` and the
- * two in `local-device-vault-setup` — so there is one revoke, one cleanup, one
- * precondition and one place to fix any of them. Naming the operation once
- * also names its bound: this hands the caller's exact bytes to the browser and
- * nothing else.
- * It never re-reads, re-encodes or truncates them, because a download that
- * quietly shipped a bounded preview would be indistinguishable from the real
- * file.
+ * Workspace exports, Local Device recovery files, and other client-only
+ * artifacts share this helper. It owns the precondition, object URL, attached
+ * anchor, cleanup, and revocation. It sends exactly the caller's bytes and
+ * never re-reads, re-encodes, or truncates them.
  */
 
 /**

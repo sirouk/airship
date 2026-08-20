@@ -30,19 +30,26 @@ Airship keeps the browser boundary honest:
   approvals, memory/context retrieval, and recursive PRIME subagents.
 - **Code and research in one place.** Airship includes a workspace editor,
   browser Git, a terminal, execution packs, and session traces you can inspect.
-- **Choose your own storage rung.** Start in ephemeral page memory. Move up to
-  encrypted Local Device storage, Google Drive, S3-compatible storage, or
-  Walrus only when you want durability.
+- **Choose when state becomes durable.** Start in ephemeral page memory. Move
+  to encrypted Local Device storage, or to Google Drive when the static build
+  has a Google OAuth client configured.
 
 ## Storage ladder
 
+The product selector ships three user-facing levels:
+
 1. **Ephemeral** — page memory only.
 2. **Local Device** — encrypted OPFS/IndexedDB on this device.
-3. **Google Drive** — client-encrypted app-scoped storage.
-4. **S3-compatible Vault** — direct browser SigV4 to your bucket.
-5. **Walrus** — immutable encrypted blobs.
+3. **Google Drive** — client-encrypted app-scoped storage in configured builds.
 
-Every durable rung stores ciphertext, not plaintext. You own the workspace keys.
+The repository also includes an S3-compatible object-store adapter, a Cognito
+short-lived credential reference, and a loopback MinIO lab. A host must compose
+and qualify that production credential path; the stock UI does not offer it as
+a connected destination. Walrus is an optional immutable encrypted-blob
+transport, not a mutable Vault or a selectable durability level.
+
+Every connected durable destination stores ciphertext, not plaintext. You own
+the workspace keys.
 
 ## Quickstart
 
@@ -67,8 +74,9 @@ Then open **Providers** and connect one of these:
 | Custom | OpenAI-compatible | your base URL |
 
 For cloud providers, paste an API key. For local providers, connect the
-loopback server. Airship keeps inference credentials in page memory and does
-not write them to storage, URLs, or logs.
+loopback server. A custom endpoint must use HTTPS and allow this page through
+CORS. Airship keeps inference credentials in page memory and does not write
+them to storage, URLs, provider descriptors, or logs.
 
 ## Honest browser boundary
 

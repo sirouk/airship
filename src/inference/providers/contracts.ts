@@ -1,9 +1,6 @@
 export const CONNECTION_CAPABILITIES = [
   "invoke",
   "models:list",
-  "identity:read",
-  "billing:read",
-  "usage:read",
 ] as const;
 
 export type ConnectionCapability = (typeof CONNECTION_CAPABILITIES)[number];
@@ -39,14 +36,12 @@ export const MAX_MODEL_CONTEXT_WINDOW_TOKENS = 100_000_000;
 export const MAX_MODEL_OUTPUT_TOKENS = 8_000_000;
 
 export type InferenceProtocol =
-  | "chutes-e2ee-v1"
   | "openai-responses"
   | "openai-chat-completions"
   | "anthropic-messages"
   | "openai-compatible";
 
 export type InferenceTransportBoundary =
-  | "e2ee-attestable"
   | "provider-tls"
   | "loopback-local";
 

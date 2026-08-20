@@ -1,5 +1,5 @@
 import { deepFreeze } from "../core/freeze";
-import type { JsonValue, SecurityPosture, ToolDefinition } from "../core/contracts";
+import type { JsonValue, ToolDefinition } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import {
   composeAirshipOperatingPrompt,
@@ -167,8 +167,8 @@ export type SkillRevision = Readonly<{
 export type GlobalSkillSettings = Readonly<Record<string, boolean>>;
 
 export type ProfileRevisionDraft = Readonly<{
-  /** Version 1 revisions remain valid historical objects. New revisions are version 2. */
-  version?: 1 | 2;
+  /** New revisions use v3. Stored v1/v2 objects are verified through their historical preimage. */
+  version?: 3;
   profileId: string;
   parentRevision?: ContentDigest;
   name: string;
@@ -176,7 +176,6 @@ export type ProfileRevisionDraft = Readonly<{
   systemPrompt: string;
   providerId: string;
   model: string;
-  minimumPosture: SecurityPosture;
   /** Profile-owned workspace boundary. Omitted only by legacy version-1 profiles. */
   workspaceBinding?: ProfileWorkspaceBinding;
   /** Profile-owned recall lane. Omitted only by legacy version-1 profiles. */
@@ -207,7 +206,7 @@ export type ProfileRevisionDraft = Readonly<{
      */
     reasoningVisibility?: "collapsed" | "expanded";
     /**
-     * How much commentary, telemetry, proof echo, suggestion, and raw detail
+     * How much commentary, run telemetry, suggestion, and raw detail
      * Preact renders. Retired surfaces are unmounted rather than hidden —
      * capability, evidence, and agent behavior never change, only the cost
      * and calm of the view. Absent means the house default: minimal.
@@ -217,8 +216,9 @@ export type ProfileRevisionDraft = Readonly<{
   createdAt: string;
 }>;
 
-export type ProfileRevision = Readonly<ProfileRevisionDraft & {
-  version: 1 | 2;
+export type ProfileRevision = Readonly<Omit<ProfileRevisionDraft, "version"> & {
+  /** v1/v2 remain readable historical objects; only v3 is minted. */
+  version: 1 | 2 | 3;
   revision: ContentDigest;
 }>;
 
@@ -250,7 +250,6 @@ export type SessionProfilePin = Readonly<{
   }>;
   providerId: string;
   model: string;
-  minimumPosture: SecurityPosture;
   workspaceBinding: ProfileWorkspaceBinding;
   memoryScope: ProfileMemoryScope;
   approvalMode: ApprovalMode;
@@ -368,11 +367,21 @@ export async function createProfileRevision(draft: ProfileRevisionDraft): Promis
   return deepFreeze({ ...payload, revision }) as ProfileRevision;
 }
 
-/** Verify a stored revision against one synchronously owned caller snapshot. */
+/**
+ * Rebuilds one stored revision through the canonical preimage of the version
+ * that wrote it. v1/v2 carried `minimumPosture`; it is preserved only so their
+ * immutable digest and ancestry remain readable. Runtime policy never reads it.
+ */
 export async function validateProfileRevision(value: ProfileRevision): Promise<ProfileRevision> {
+  /*
+   * `value` may be a mutable object revived at a persistence boundary. Own its
+   * complete graph before reading either the claimed revision or its preimage.
+   * This also turns accessors into data properties exactly once, synchronously,
+   * so validation never hashes one accessor result and reports another.
+   */
   const snapshot = snapshotCallerOwned(value);
   const expectedRevision = snapshot.revision;
-  const payload = profilePayload(snapshot);
+  const payload = profilePayload(snapshot as unknown as ProfilePayloadInput);
   const revision = await digestJson(payload);
   if (revision !== expectedRevision) {
     throw new Error(`Profile ${payload.profileId} failed its revision check.`);
@@ -565,7 +574,6 @@ export async function resolveProfileForSession(args: ProfileResolutionArgs): Pro
     theme: { themeId: snapshot.theme.themeId, digest: snapshot.theme.digest },
     providerId: snapshot.profile.providerId,
     model: snapshot.profile.model,
-    minimumPosture: snapshot.profile.minimumPosture,
     workspaceBinding: silo.workspaceBinding,
     /*
      * The STORED scope, deliberately, where the pin field above carries the
@@ -598,7 +606,6 @@ export async function resolveProfileForSession(args: ProfileResolutionArgs): Pro
     theme: { themeId: snapshot.theme.themeId, digest: snapshot.theme.digest },
     providerId: snapshot.profile.providerId,
     model: snapshot.profile.model,
-    minimumPosture: snapshot.profile.minimumPosture,
     workspaceBinding: silo.workspaceBinding,
     memoryScope: silo.memoryScope,
     approvalMode: silo.approvalMode,
@@ -664,7 +671,8 @@ async function verifyThemeManifest(theme: ThemeManifest): Promise<void> {
   const snapshot = snapshotCallerOwned(theme);
   const expectedDigest = snapshot.digest;
   const themeId = snapshot.themeId;
-  const expected = await createThemeManifest(snapshot);
+  const expectedPromise = createThemeManifest(snapshot);
+  const expected = await expectedPromise;
   if (expected.digest !== expectedDigest) throw new Error(`Theme ${themeId} failed its content-digest check.`);
 }
 
@@ -672,7 +680,8 @@ async function verifySkillRevision(skill: SkillRevision): Promise<void> {
   const snapshot = snapshotCallerOwned(skill);
   const expectedDigest = snapshot.digest;
   const skillId = snapshot.skillId;
-  const expected = await createSkillRevision(snapshot);
+  const expectedPromise = createSkillRevision(snapshot);
+  const expected = await expectedPromise;
   if (expected.digest !== expectedDigest) throw new Error(`Skill ${skillId} failed its content-digest check.`);
 }
 
@@ -727,7 +736,14 @@ function skillPayload(draft: SkillRevisionDraft): Omit<SkillRevision, "digest"> 
   };
 }
 
-function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "revision"> {
+type LegacyMinimumPosture = "local" | "plaintext-remote" | "encrypted-unattested" | "encrypted-attested";
+type ProfilePayloadInput = Omit<ProfileRevisionDraft, "version"> & Readonly<{
+  version?: 1 | 2 | 3;
+  /** Digest-only historical input. It is never copied into a v3 revision or a session pin. */
+  minimumPosture?: unknown;
+}>;
+
+function profilePayload(draft: ProfilePayloadInput): Omit<ProfileRevision, "revision"> {
   const skillEntries = Object.entries(draft.skillModes);
   if (skillEntries.length > MAX_CATALOG_SKILLS) throw new Error("Profile skill settings exceed the supported limit.");
   const skillModes: Record<string, SkillMode> = {};
@@ -736,8 +752,18 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
     skillModes[skillId] = oneOf(rawMode, ["inherit", "on", "off"] as const, `mode for ${skillId}`);
   }
   const parentRevision = draft.parentRevision ? contentDigest(draft.parentRevision, "parent profile revision") : undefined;
-  const version = draft.version ?? 2;
-  if (version !== 1 && version !== 2) throw new Error("Profile version is invalid.");
+  const version = draft.version ?? 3;
+  if (version !== 1 && version !== 2 && version !== 3) throw new Error("Profile version is invalid.");
+  if ((version === 1 || version === 2) && typeof draft.minimumPosture !== "string") {
+    throw new TypeError("Historical profile minimum posture must be a string.");
+  }
+  const legacyMinimumPosture: LegacyMinimumPosture | undefined = version === 1 || version === 2
+    ? oneOf(
+        draft.minimumPosture as string,
+        ["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"] as const,
+        "historical minimum posture",
+      )
+    : undefined;
   const base = {
     version,
     profileId: identifier(draft.profileId, "profile ID"),
@@ -746,11 +772,7 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
     systemPrompt: prompt(draft.systemPrompt, "profile system prompt"),
     providerId: identifier(draft.providerId, "provider ID"),
     model: boundedText(draft.model, "model", 256),
-    minimumPosture: oneOf(
-      draft.minimumPosture,
-      ["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"] as const,
-      "minimum posture",
-    ),
+    ...(legacyMinimumPosture === undefined ? {} : { minimumPosture: legacyMinimumPosture }),
     theme: {
       themeId: identifier(draft.theme.themeId, "theme ID"),
       digest: contentDigest(draft.theme.digest, "theme digest"),
@@ -771,14 +793,14 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
   const webEgress = draft.webEgress === undefined ? undefined : resolveProfileWebEgress(draft);
   const webBodies = draft.webBodies === undefined ? undefined : resolveProfileWebBodies(draft);
   const presentation = normalizeProfilePresentation(draft.presentation);
-  const v2 = {
+  const current = {
     ...base,
     ...silo,
     ...(webEgress === undefined ? {} : { webEgress }),
     ...(webBodies === undefined ? {} : { webBodies }),
     ...(presentation ? { presentation } : {}),
   };
-  return parentRevision ? { ...v2, parentRevision } : v2;
+  return parentRevision ? { ...current, parentRevision } : current;
 }
 
 /**

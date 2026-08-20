@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, Context, Model, Tool, ToolResultMessage } from "../index";
+import type { AssistantMessage, Context, Model, Tool, ToolResultMessage } from "../types";
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "./openai-completions";
 import {
   collectEvents,
@@ -123,16 +123,37 @@ describe("openai-completions request construction", () => {
     expect(plainRun.body.messages[0]).toEqual({ role: "system", content: "be terse" });
   });
 
-  it("maps maxTokens to max_completion_tokens by default and max_tokens for detected providers", async () => {
+  it("maps maxTokens from protocol defaults and explicit model compat, never from an unrelated hostname", async () => {
     const openai = await runAndCapture(createModel(), { messages: [USER] }, { maxTokens: 100 });
     expect(openai.body.max_completion_tokens).toBe(100);
     expect(openai.body.max_tokens).toBeUndefined();
 
-    const chutes = await runAndCapture(createModel({ provider: "chutes", baseUrl: "https://llm.chutes.ai/v1" }), { messages: [USER] }, { maxTokens: 100 });
-    expect(chutes.body.max_tokens).toBe(100);
-    expect(chutes.body.max_completion_tokens).toBeUndefined();
+    const sameHostDifferentProvider = await runAndCapture(
+      createModel({ provider: "custom", baseUrl: "https://llm.chutes.ai/v1" }),
+      { messages: [USER] },
+      { maxTokens: 100 },
+    );
+    expect(sameHostDifferentProvider.body.max_completion_tokens).toBe(100);
+    expect(sameHostDifferentProvider.body.max_tokens).toBeUndefined();
+    expect(sameHostDifferentProvider.body.store).toBe(false);
 
-    const moonshot = await runAndCapture(createModel({ provider: "moonshotai", baseUrl: "https://api.moonshot.ai/v1" }), { messages: [USER] }, { maxTokens: 100 });
+    const declaredLegacyField = await runAndCapture(
+      createModel({
+        provider: "custom",
+        baseUrl: "https://proxy.example/v1",
+        compat: { maxTokensField: "max_tokens" },
+      }),
+      { messages: [USER] },
+      { maxTokens: 100 },
+    );
+    expect(declaredLegacyField.body.max_tokens).toBe(100);
+    expect(declaredLegacyField.body.max_completion_tokens).toBeUndefined();
+
+    const moonshot = await runAndCapture(
+      createModel({ provider: "moonshotai", baseUrl: "https://api.moonshot.ai/v1" }),
+      { messages: [USER] },
+      { maxTokens: 100 },
+    );
     expect(moonshot.body.max_tokens).toBe(100);
   });
 

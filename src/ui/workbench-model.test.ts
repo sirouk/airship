@@ -233,7 +233,7 @@ describe("file strip verdict", () => {
 
   it("gives the read-only cases their own vocabulary", () => {
     expect(workbenchBufferState({ binary: true, truncated: true, dirty: false })).toMatchObject({
-      word: "Protected bytes",
+      word: "Binary file",
       detail: "Binary · read-only",
     });
     expect(workbenchBufferState({ binary: false, truncated: true, dirty: false }).word).toBe("Bounded preview");

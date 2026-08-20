@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ChutesTransportError } from "../inference/chutes/errors";
 import { LocalProviderError } from "../inference/local/endpoint-policy";
 import { ProviderTransportError } from "../inference/providers/browser-cloud";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "./contracts";
@@ -120,37 +119,26 @@ describe("retry classification", () => {
     expect(isRetryableTransportFailure(failure!)).toBe(true);
   });
 
-  it("reads the shape the Chutes transport really throws", () => {
-    // The flagship provider spells the same failures in SCREAMING_SNAKE. Until
-    // this module knew that vocabulary, a Chutes 503 matched nothing and was
-    // the only lane with no in-turn retry at all.
+  it("gives no retry to a code vocabulary this build no longer ships", () => {
+    // Retired transports spelled the same failures in SCREAMING_SNAKE. Their
+    // codes must read as an unclassified family — no retry at all — rather
+    // than as a half-remembered dialect that quietly matches something.
+    class RetiredTransportError extends Error {
+      constructor(readonly code: string, message: string, readonly status?: number) {
+        super(message);
+        this.name = "RetiredTransportError";
+      }
+    }
     const gatewayRefusal = namedTransportFailure(
-      new ChutesTransportError("HTTP_ERROR", "Chutes returned HTTP 503.", { status: 503, operation: "invoke" }),
+      new RetiredTransportError("HTTP_ERROR", "The provider returned HTTP 503.", 503),
     );
     expect(gatewayRefusal).toEqual({ code: "HTTP_ERROR", status: 503 });
-    expect(isRetryableTransportFailure(gatewayRefusal!)).toBe(true);
-
-    const droppedStream = namedTransportFailure(
-      new ChutesTransportError("STREAM_TRUNCATED", "Chutes response stream ended early."),
-    );
-    expect(isRetryableTransportFailure(droppedStream!)).toBe(true);
-
-    // A refusal the request itself caused is still a verdict, whatever the
-    // spelling — and an HTTP_ERROR raised before any request went out has no
-    // status to judge.
+    expect(isRetryableTransportFailure(gatewayRefusal!)).toBe(false);
     expect(isRetryableTransportFailure(
-      namedTransportFailure(new ChutesTransportError("HTTP_ERROR", "Chutes rejected the key.", { status: 401 }))!,
+      namedTransportFailure(new RetiredTransportError("STREAM_TRUNCATED", "The response stream ended early."))!,
     )).toBe(false);
     expect(isRetryableTransportFailure(
-      namedTransportFailure(new ChutesTransportError("HTTP_ERROR", "A Chutes API key is required."))!,
-    )).toBe(false);
-    expect(isRetryableTransportFailure(
-      namedTransportFailure(new ChutesTransportError("ATTESTATION_FAILED", "The instance did not attest."))!,
-    )).toBe(false);
-    // The 300s lifetime is not a carriage failure: three of them is a quarter
-    // of an hour of silence.
-    expect(isRetryableTransportFailure(
-      namedTransportFailure(new ChutesTransportError("TIMEOUT", "Chutes inference exceeded its lifetime limit."))!,
+      namedTransportFailure(new RetiredTransportError("NETWORK_ERROR", "The network operation failed."))!,
     )).toBe(false);
   });
 

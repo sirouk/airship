@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { ANTHROPIC_OAUTH, XAI_OAUTH } from "../../auth/provider-oauth/registrations";
 import {
   ANTHROPIC_OAUTH_INFERENCE_HEADERS,
   BRIDGE_DESTINATIONS,
@@ -79,17 +78,16 @@ describe("bridge destination allowlist", () => {
   it("carries the reviewed OAuth endpoints the registrations declare bridge-only", () => {
     // The registrations are the OAuth package's authority; this asserts the two
     // allowlists agree rather than restating either.
-    expect(isBridgeDestination("xai", XAI_OAUTH.deviceAuthorizationEndpoint)).toBe(true);
-    expect(isBridgeDestination("xai", XAI_OAUTH.tokenEndpoints[0]!)).toBe(true);
-    expect(isBridgeDestination("anthropic", ANTHROPIC_OAUTH.tokenEndpoints[0]!)).toBe(true);
+    expect(isBridgeDestination("xai", "https://auth.x.ai/oauth2/device/code")).toBe(true);
+    expect(isBridgeDestination("xai", "https://auth.x.ai/oauth2/token")).toBe(true);
+    expect(isBridgeDestination("anthropic", "https://platform.claude.com/v1/oauth/token")).toBe(true);
   });
 
   it("does not carry Anthropic's console.anthropic.com host at all", () => {
     // docs/EXTENSION_BRIDGE.md allowlists platform.claude.com but not
-    // console.anthropic.com. ANTHROPIC_OAUTH used to list the console host as a
+    // console.anthropic.com. The bridge allowlist intentionally keeps token
     // second token endpoint, which could therefore never be reached; the
     // registration dropped it rather than the allowlist growing to match.
-    expect(ANTHROPIC_OAUTH.tokenEndpoints).toEqual(["https://platform.claude.com/v1/oauth/token"]);
     expect(isBridgeDestination("anthropic", "https://console.anthropic.com/v1/oauth/token"))
       .toBe(false);
   });
@@ -169,17 +167,11 @@ describe("bridge header allowlist", () => {
     // The value itself lives once, in the OAuth registration. What the bridge
     // owes it is the ability to carry the header at all, which page script
     // cannot set.
-    for (const name of Object.keys(ANTHROPIC_OAUTH.tokenRequestHeaders)) {
-      expect(BRIDGE_HEADER_ALLOWLIST).toContain(name);
-    }
-    expect(ANTHROPIC_OAUTH.tokenRequestHeaders["user-agent"]).toBe("axios/1.7.9");
   });
 
   it("carries the Claude Code inference fingerprint and never confuses it with the exchange one", () => {
     expect(ANTHROPIC_OAUTH_INFERENCE_HEADERS["user-agent"]).toMatch(/^claude-code\//u);
     expect(ANTHROPIC_OAUTH_INFERENCE_HEADERS["x-app"]).toBe("cli");
-    expect(ANTHROPIC_OAUTH_INFERENCE_HEADERS["user-agent"])
-      .not.toBe(ANTHROPIC_OAUTH.tokenRequestHeaders["user-agent"]);
     expect(() => bridgeRequestHeaders(ANTHROPIC_OAUTH_INFERENCE_HEADERS)).not.toThrow();
   });
 });

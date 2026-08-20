@@ -8,10 +8,10 @@ import {
 
 describe("Airship core operating charter", () => {
   it("is versioned, deterministic, and byte-stable", async () => {
-    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(9);
+    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(10);
     expect(AIRSHIP_CORE_CHARTER).not.toMatch(/\{\{|\$\{|20\d\d-/u);
     expect(await sha256(AIRSHIP_CORE_CHARTER)).toBe(
-      "sha256:Vet6d6nhdrxjWY2_U3xbV3neec8UD2UAwtHcGzfs1HM",
+      "sha256:t-YCttbEomTEO_PRgXhDALFDqyx7N1BTBytoP85wQhY",
     );
   });
 
@@ -52,7 +52,7 @@ describe("Airship core operating charter", () => {
       // highest-authority text in the prompt.
       "never tell someone the thread must be discarded to change models",
       "do not assume adoption, synchronization, durability, or freshness",
-      "Do not equate a local receipt",
+      "They do not establish provider authorship or authenticity",
       "reliable execution while suspended",
       "discover before concluding",
     ]) {

@@ -94,7 +94,7 @@ function makeGoldenInput(store: InMemoryHarnessStore): CollectPrimeSystemPromptF
     workingDirectory: "/workspace",
     conversationLogPath: "not persisted",
     currentDate: "2025-01-15",
-    securityPosture: "encrypted-attested",
+    securityPosture: "local",
     harnessStore: store,
     projectInstructionProvider: { loadProjectInstructions: () => Promise.resolve(GOLDEN_INSTRUCTIONS) },
     liveEnvironmentProvider: { captureLiveEnvironment: () => Promise.resolve(GOLDEN_LIVE_ENVIRONMENT) },
@@ -154,13 +154,17 @@ describe("composePrimeSystemPrompt", () => {
     expect(later.prompt).toContain("Current date: 2025-01-16");
   });
 
-  it("renders the security posture sentence from the manifest fact and omits it when the manifest pins none", async () => {
-    const pinned = await composePrimeSystemPrompt(makeFacts({ securityPosture: "plaintext-remote" }));
-    expect(pinned.prompt).toContain(
-      "Security posture: plaintext-remote \u2014 prompts travel to a remote provider over TLS without end-to-end encryption or attestation.",
+  it("renders the supported inference-path sentences from the manifest fact and omits them when the manifest pins none", async () => {
+    const local = await composePrimeSystemPrompt(makeFacts({ securityPosture: "local" }));
+    expect(local.prompt).toContain(
+      "Inference path: local — inference runs on this device; prompts do not leave it.",
+    );
+    const remote = await composePrimeSystemPrompt(makeFacts({ securityPosture: "plaintext-remote" }));
+    expect(remote.prompt).toContain(
+      "Inference path: plaintext-remote — prompts travel to a remote provider over TLS.",
     );
     const unpinned = await composePrimeSystemPrompt(makeFacts());
-    expect(unpinned.prompt).not.toContain("Security posture:");
+    expect(unpinned.prompt).not.toContain("Inference path:");
   });
 
   it("renders child doctrine verbatim when depth > 0 and names the spawner", async () => {
@@ -476,14 +480,14 @@ describe("offline golden fixture", () => {
   it("matches the checked-in snapshot text and content hashes for the deterministic session", async () => {
     const composition = await buildPrimeSystemPrompt(makeGoldenInput(await makeGoldenStore()));
     expect(composition.prompt).toBe(GOLDEN_SYSTEM_PROMPT);
-    expect(composition.cacheKey.finalHash).toBe("d1a1faa8cef3e8d4d7d0414d31789687340cc1a206b46358d0263ade1814df2b");
+    expect(composition.cacheKey.finalHash).toBe("5a198b6394940a17b2aff345bd5a1d87ff64b33acb92d3133e51f4f4b951a590");
     expect(composition.cacheKey.fragmentsHashes).toEqual({
-      base_runtime_facts: "67ecedaa5cd7e0c2328beb1fad1f95c60a6aac0fb8ee8fd7e35a451945de7666",
+      base_runtime_facts: "c85bcc8cdc6b4083c52e876261ff0ded1c928d5285ab6b9f2057b8ff47e440b3",
       harness_prompt_notes: "57439c3ad66b801f190b1698242bb87ef10a948b3e02ecf3e6b589048ef5886e",
       project_instructions: "b5696a5e2ba8d115e137e93baedc9773e61387afef076f8de6750347d1691f90",
       live_environment: "dbc4b39bde76ebb95f9175124ff98eefbd93733b5b35fa28abba4606379e3bda",
       harness_overview: "88d8aae7992d1d4761f5a7d11cfe2cf9babc2fa4730c54c5db810b979c3dd3f9",
-      continuation_policy: "c51cad6447d8d5a6930c6724888acf6ec6cd6c9944889451bf7ed88dff8fa2ac",
+      continuation_policy: "d6ae204ea1e2cbcc540456d3ff71d4105832fe2d2611794279cac1f55b15b0e1",
     });
     expect(composition.prompt).not.toContain(PRIME_PROMPT_TRUNCATION_MARKER);
   });
@@ -501,22 +505,22 @@ You solve tasks by breaking down problems into sub-tasks, writing and executing 
 When you are done, stop calling tools and state your final answer.
 
 Runtime: prime-runtime — the prime-agent core ported into the Airship page runtime.
-Engine: prime kernel worker (persistent; the namespace survives across calls until a crash resets it, and a reset is always reported).
+Engine: prime JavaScript kernel worker (job-scoped; the worker is terminated after every result). Only the optional Pyodide engine has kernel-instance namespace persistence.
 Working directory: /workspace
 Conversation log: not persisted
 Current date: 2025-01-15
 Recursive agent depth: 0
-Security posture: encrypted-attested — prompts are encrypted end-to-end to a verified, attested confidential enclave.
+Inference path: local — inference runs on this device; prompts do not leave it.
 
 Tool surface:
 - edit_file: Replace exact text in one workspace file; a missing, ambiguous, or no-op match is refused, and the write is revision-checked.
-- execute_code: Run JavaScript in the persistent prime kernel worker; the namespace survives across calls until a crash resets it.
+- execute_code: Run JavaScript in a fresh job-scoped prime kernel worker; its namespace does not survive the call.
 - list_files: List workspace files sorted by path; a partial list carries a cursor to resume with.
 - read_file: Read one workspace file by 1-indexed line range; bounded windows never end mid-line and a partial read names its continuation line.
 - search_text: Literal text search over bounded workspace content; matches sorted by path, line, and column with a cursor to resume from.
 - write_file: Create or fully replace one workspace file; the expected revision refuses the write when the file changed underneath.
 
-Kernel capabilities: the kernel is persistent, so keep intermediate variables, helper functions, and parsed results in its namespace instead of re-reading. Kernel code has no ambient network, storage, or DOM; workspace and host effects go through the reviewed tool bridge \`pat.call(tool, args)\`. Every bridged call is journaled and approval-bound with operation identity \`prime-kernel:<jobId>:<seq>\`, exactly like a top-level tool call.
+Kernel capabilities: each JavaScript call has a fresh job-scoped namespace, so return or durably record anything a later call needs; do not expect variables or helpers to persist. Only the optional Pyodide engine has kernel-instance namespace persistence. Kernel code has no ambient network, storage, or DOM; workspace and host effects go through the reviewed tool bridge \`pat.call(tool, args)\`. Every bridged call is journaled and approval-bound with operation identity \`prime-kernel:<jobId>:<seq>\`, exactly like a top-level tool call.
 
 # Continual Harness Prompt Notes
 
@@ -563,7 +567,7 @@ recent refinements: 1
 
 Turn discipline: break work into sub-tasks and iterate one step at a time; when the task is done, stop calling tools and state your final answer.
 
-The prime kernel is the agent's long-lived environment: a persistent worker for reasoning, context management, state, and tool orchestration. Keep intermediate variables, inspect and transform outputs, and write small helper functions there; namespace state persists across calls until a crash reset, which is always reported.
+Each execute_code JavaScript call runs in a fresh job-scoped worker that is terminated after its result. Keep intermediate variables and helpers only within that call; return or durably record anything a later call needs. Only an explicitly selected optional Pyodide engine has kernel-instance namespace persistence, ending at restart, crash, or terminate.
 
 Do not assume the kernel is the native runtime of the external thing being investigated. A repository, package, service, dataset, paper, website, benchmark, or API may have its own environment and normal interface. Evaluate external systems through their own interface, then use the kernel to coordinate the process and analyze what comes back.
 

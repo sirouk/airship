@@ -3,7 +3,7 @@
 ## Decision
 
 Airship treats the selected encrypted `ObjectStore`—Google Drive by default,
-S3-compatible storage as an advanced adapter, or page memory while
+a host-composed S3-compatible adapter, or page memory while
 Ephemeral—as the authoritative substrate for workspace context. The browser
 does not download a whole vector database and does not depend on a continuously
 running retrieval service. It holds a small decrypted routing mirror in memory,

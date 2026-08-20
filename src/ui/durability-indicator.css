@@ -1,7 +1,7 @@
 /*
  * Layout and the live region only. The pill, the border tone, the type size and
- * the bespoke 8px fully-rounded dot are all gone: the <Seal> chip inside is the
- * chip, and the four durability states are four seal states rather than four
+ * the bespoke 8px fully-rounded dot are all gone: the <StatusMark> chip inside is the
+ * chip, and the four durability states are four status mark states rather than four
  * bespoke border treatments.
  */
 /* `flex: 0 0 auto` because a chip that a flex sibling is allowed to squeeze
@@ -11,4 +11,4 @@
 /* Page memory is unchecked, not broken, and `--truth-local` is the tone that
    says "this is happening here". Expressed in the sheet rather than as an
    `origin` prop so the claim costs no startup bytes. */
-.durability-indicator.ephemeral .seal { color:var(--truth-local); }
+.durability-indicator.ephemeral .status-mark { color:var(--truth-local); }

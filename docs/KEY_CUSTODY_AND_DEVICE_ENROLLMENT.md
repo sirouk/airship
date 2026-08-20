@@ -12,7 +12,7 @@ three different authorities:
 ```text
 Google/S3 grant -> encrypted object access
 key custodian   -> unwrap one workspace seed
-job grant       -> disclose selected data to one verified executor
+job grant       -> disclose selected data to one explicitly selected executor
 ```
 
 No single shared service token supplies all three. The random 256-bit workspace
@@ -48,7 +48,7 @@ recovery, or cross-device convergence. The interface must not imply otherwise.
 
 The deterministic Google Drive browser gate does exercise a storage-empty
 second browser context with the saved v1 value and an independent page-memory
-Google grant. That proves the implemented manual recovery ceremony and exact
+Google grant. That exercises the implemented manual recovery ceremony and exact
 folder rediscovery at the substituted provider boundary; it is not physical
 device, real-account, or multi-writer convergence certification.
 
@@ -104,7 +104,7 @@ The store contains no workspace plaintext or raw key. It exposes:
 
 - load an exact workspace keyset generation;
 - create a first keyset only if absent;
-- advance a generation through a provider-proved conditional operation or
+- advance a generation through a provider-qualified conditional operation or
   append a conflict head;
 - list bounded recovery heads for explicit reconciliation;
 - preserve revoked-recipient tombstones;
@@ -162,7 +162,7 @@ request. An already unlocked device:
    real-world identity;
 3. checks request expiry and replay state;
 4. wraps the seed to the new recipient;
-5. signs and appends an immutable grant/head; providers with proved conditional
+5. signs and appends an immutable grant/head; providers with qualified conditional
    writes may fence the head, while Drive preserves/reconciles divergent heads;
 6. leaves an auditable enrollment event without key material.
 
@@ -235,22 +235,6 @@ Airship has not established that Bitwarden offers a supported production browser
 SDK/CORS contract. The public SDK repository includes a WASM-capable Rust core,
 but its bundle/runtime behavior and restrictive SDK license require explicit
 technical, legal, provenance, and live-provider gates before any distribution.
-
-## Remote executor grants
-
-Remote execution uses a fresh per-job data key, not a key-custody wrapper. Only
-after approval and attestation-bound channel verification does Airship wrap
-that key to the executor's verified ephemeral key. The grant is bound to:
-
-- operation and prepared-plan digest;
-- executor, endpoint key, and evidence lease;
-- workspace snapshot and allowed mounts;
-- input/output byte and time ceilings;
-- exact egress and secret capability identifiers;
-- expiry and channel identity.
-
-The executor cannot use that grant to discover or unwrap any other workspace
-object. See [`COMPUTE_CONTINUUM.md`](COMPUTE_CONTINUUM.md).
 
 ## Secret capabilities for tools
 

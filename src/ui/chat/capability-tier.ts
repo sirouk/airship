@@ -6,7 +6,7 @@ const CAPABILITY_TIERS = new Set<CapabilityTier>([
   "web-baseline",
   "web-enhanced",
   "native",
-  "remote-confidential",
+  "remote-heavy",
 ]);
 
 export function parseCapabilityTier(value: unknown): CapabilityTier | undefined {
@@ -19,7 +19,7 @@ export function capabilityTierLabel(tier: CapabilityTier): string {
   if (tier === "web-baseline") return "Browser baseline";
   if (tier === "web-enhanced") return "Browser enhanced";
   if (tier === "native") return "Native companion";
-  return "Remote confidential";
+  return "Remote heavy";
 }
 
 export function capabilityTierDetail(tier: CapabilityTier): string {

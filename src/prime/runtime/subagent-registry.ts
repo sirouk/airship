@@ -1,4 +1,8 @@
-import type { ApprovalPolicy, InferenceTransport } from "../../core/contracts";
+import type {
+  ApprovalPolicy,
+  InferenceTransport,
+  SessionInferenceBindingV2,
+} from "../../core/contracts";
 import type { EventJournal } from "../../core/journal";
 import type { WorkspacePort } from "../../workspace/contracts";
 import type { Api, Model } from "../ai/types";
@@ -35,6 +39,7 @@ export type PrimeSubagentRegistryDeps = Readonly<{
   airshipTools: ToolRegistry;
   transport: InferenceTransport;
   providerId: string;
+  inferenceBinding?: SessionInferenceBindingV2;
   workspaceId: string;
   sessionId: string;
   model: Model<Api>;
@@ -86,6 +91,7 @@ export function createPrimeSubagentRegistry(deps: PrimeSubagentRegistryDeps): Pr
     airshipTools: deps.airshipTools,
     transport: deps.transport,
     providerId: deps.providerId,
+    ...(deps.inferenceBinding ? { inferenceBinding: deps.inferenceBinding } : {}),
     workspaceId: deps.workspaceId,
     ...(deps.maxSteps !== undefined ? { maxSteps: deps.maxSteps } : {}),
     ...(deps.signal ? { signal: deps.signal } : {}),

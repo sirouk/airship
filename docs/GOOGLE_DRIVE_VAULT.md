@@ -231,8 +231,8 @@ gates 1 or 2.
 3. Enable Google Drive API and configure the OAuth consent screen.
 4. Configure the public client ID at deployment time; never add a client secret.
    Airship reads it from `VITE_GOOGLE_CLIENT_ID`.
-5. Keep exact CSP grants for `accounts.google.com`, `www.googleapis.com`, and
-   `openidconnect.googleapis.com`; do not use provider wildcards.
+5. Keep the exact Google `script-src` and `frame-src` grants. HTTPS API egress
+   is covered by the dynamic endpoint policy; do not add wildcard script hosts.
 6. Run object-store conformance and encrypted composition probes before adopting
    the Drive runtime, then complete every release gate above before a production
    synchronization claim.

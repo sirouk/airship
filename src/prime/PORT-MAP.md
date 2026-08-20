@@ -17,15 +17,15 @@ needs an explicit host capability / acceptance run.
   `ApprovalPolicy`, `WorkspacePort`, `InferenceTransport`/fabrics,
   receipts — reused, never reimplemented. The evidence chain for prime turns
   is the same chain existing sessions produce; no parallel transcript exists.
-- Execution walls come down where it's honest: the kernel is a **persistent**
-  worker (no 10 s job ceiling inside its own budgets; host-policy-bounded,
-  named in results), and sandboxed code reaches the world **only** through
+- Execution walls come down where it is honest: stock JavaScript uses a fresh
+  worker for every host-policy-bounded job, while optional Pyodide alone keeps
+  a kernel-instance namespace. Sandboxed code reaches the world **only** through
   the tool bridge — reviewed, provenance-bound, journaled under
   `prime.kernel.tool.*` beside (never inside) the canonical transcript.
 - Network for the model: ported provider cores drive `fetch`+SSE straight to
   provider endpoints (browser-safe; Anthropic gets the documented browser
   header; scoped by host connectivity), or airship transports via the
-  transport-adapter (Chutes E2EE etc. keep their posture).
+  transport-adapter (each transport keeps its own posture).
 
 ## Subsystem map
 
@@ -37,7 +37,7 @@ needs an explicit host capability / acceptance run.
 | packages/ai/src/stream.ts | 59 | `src/prime/ai/stream.ts` | done | never-throw contract; lazy resolution via streamLazy |
 | packages/ai/src/utils/json-parse.ts | 124 | `src/prime/ai/stream-json.ts` | done | dependency-free partial parser (partial-json reimplemented) |
 | packages/ai/src/utils/sanitize-unicode.ts | 25 | `src/prime/ai/sanitize.ts` | done | 1:1 |
-| packages/ai/src/utils/overflow.ts | 153 | `src/prime/ai/overflow.ts` | done | full provider-pattern table ported |
+| packages/ai/src/utils/overflow.ts | 153 | — | excluded | no caller in the shipped retry/compression path; provider-specific string tables are not retained speculatively |
 | packages/ai/src/utils/hash.ts | 13 | `src/prime/ai/hash.ts` | done | + WebCrypto sha256/hmac helpers |
 | packages/ai/src/cache-pricing.ts | 78 | `src/prime/ai/cost.ts` | done | + usageCost helper |
 | packages/ai/src/utils/validation.ts | n/a | `src/prime/ai/validate.ts` | done | schema-lite checker replacing typebox Value.Check (same fail-closed semantics) |
@@ -54,11 +54,11 @@ needs an explicit host capability / acceptance run.
 | packages/agent/src/agent-loop.ts | 986 | `src/prime/agent/agent-loop.ts` | done | invariants 16-21 enforcement; mixed-step batched lane added — contiguous declared-read runs parallelize, everything else is a barrier (W4) |
 | airship fork-context admission (`assertForkContextHistoryCompatible` + seed verify) | ~430 | `src/prime/runtime/fork-admission.ts` | done | v1 replay-only gate first, seed at events[1], byte-identical refusals, byte-equal materialize options (W3) |
 | airship read-effect batch discipline (`readEffectBatch`) | ~140 | `src/prime/agent/tool-batches.ts` | done | allSettled concurrency, completion-order ends, source-order results, abort-blocked starts (W4; session declares from registry effect) |
-| airship conversation naming (`conversationTitleFromModel` / `conversation.named` writer) | ~240 | `src/prime/runtime/naming.ts` | done | heuristic-first, paid naming journaled under naming-* identities with finalized receipt + usage (W5) |
+| airship conversation naming | — | `src/core/conversation-title.ts` | replaced | bounded deterministic first-prompt title; no provider request, receipt, or usage side channel (W5) |
 | airship runtime gate default | — | `src/load-agent-runtime.ts` + `src/prime/runtime/agent-runtimes.ts` + lazy UI tag | done | prime default by journal evidence, fork-the-session refusals, honest status surface (W1/W6) |
 | packages/agent/src/agent.ts | 613 | `src/prime/agent/agent.ts` | done | Agent class + queue semantics + settlement |
 | packages/agent/src/proxy.ts | 367 | — | excluded | daemon transport (in-process single page) |
-| packages/coding-agent/src/core/kernel/* (ZMQ/CPython runtime) | 3329 | `src/prime/kernel/*` | done (kernel-contract, kernel-worker-source, kernel-host, tool-bridge) | persistent worker engine + approval-bound bridge (semantics re-hosted; ZMQ dropped) |
+| packages/coding-agent/src/core/kernel/* (ZMQ/CPython runtime) | 3329 | `src/prime/kernel/*` | done (kernel-contract, kernel-worker-source, kernel-host, tool-bridge) | job-scoped JavaScript, optional persistent Pyodide, and approval-bound bridge (semantics re-hosted; ZMQ dropped) |
 | packages/coding-agent/src/core/ipython tool | 708 | `src/prime/tools/kernel-tool.ts` | done | execute_code binding to kernel; sequential executionMode preserved |
 | packages/coding-agent/src/core/tools/* (file tools) | ~2k | `src/prime/tools/*.ts` | done | prime vocabulary over WorkspacePort + CAS |
 | packages/coding-agent/src/core/refinement/* | 1018 | `src/prime/harness/*` | done | prompts verbatim; optimistic concurrency; rollback |
@@ -69,7 +69,7 @@ needs an explicit host capability / acceptance run.
 | packages/coding-agent/src/core/session-manager.ts | 2324 | `src/prime/runtime/runtime.ts` | done (facade + gate) | façade: create/attach/list/prompt/dispose over one page runtime |
 | packages/coding-agent/src/core/daemon* (protocol v7) | ~18k | — | excluded | single-page runtime = the inference daemon; replay/lease semantics yield to journal + session cursors |
 | packages/coding-agent TUI/themes/export-html | ~31k | — | excluded | airship owns UI |
-| packages/coding-agent/src/core/skills.ts (+ skill creator) | ~2.3k | `src/prime/tools/skills.ts` | done | markdown skills first; python skills execute through eager kernel |
+| packages/coding-agent/src/core/skills.ts (+ skill creator) | ~2.3k | — | deferred | no stock skill discovery/composition or Python-skill execution lane; profile skill governance is a separate Airship feature |
 | packages/coding-agent goals/heartbeats/cron | ~2.6k | `src/prime/tools/goals-tools.ts` + runtime scheduler seam | spec | data-plane CRUD now; tick driver as a host seam |
 | packages/coding-agent compaction | 1398 | session transformContext seam + airship planContextCompression | done | pinned compression, calibrated summarizer, plan restatement after summary only — see W2 in docs/PRIME-RUNTIME-GATE.md |
 | packages/coding-agent extensions/hooks | 3900 | — | excluded v1 | swallow map later |

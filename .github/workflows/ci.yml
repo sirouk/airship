@@ -199,9 +199,8 @@ jobs:
         run: |
           # Several specs need the encrypted-Vault lab, and a runner without it
           # does not "skip" them — it fails them. The first run of this workflow
-          # reported 10 desktop and 6 mobile failures that were entirely
-          # `vault-auto-adoption`, `vault-provider-switch` and
-          # `route-adversarial-audit` unable to reach MinIO on 127.0.0.1:9900.
+          # reported desktop and mobile failures in `vault-auto-adoption` and
+          # `route-adversarial-audit` when MinIO was absent on 127.0.0.1:9900.
           #
           # Provisioning it is the honest fix. Gating those specs on the lab's
           # absence would turn Airship's durability coverage into a pass made of
@@ -210,14 +209,10 @@ jobs:
           # Storage only, deliberately. `lab:start` also starts a lab-owned Vite,
           # and `labEnvironment()` always sets `VITE_GOOGLE_CLIENT_ID`. Because
           # `playwright.config.ts` reuses an existing server on 4173, that
-          # lab-owned Vite became the matrix's server and synthesised a Google
-          # registration the matrix documents it must not have — so
-          # `vault-provider-switch`, which asserts that a provider that cannot be
-          # opened cannot be chosen, failed on a premise this workflow had broken.
-          # A one-variable check is decisive: with the lab's client ID the spec
-          # fails 3/3, without it the spec passes 3/3, storage identical. The
-          # matrix owns its own server so the run measures the product rather than
-          # the harness.
+          # lab-owned Vite would become the matrix's server and synthesize a
+          # Google registration the matrix did not request. The matrix owns its
+          # exact lab-enabled server; its one unconfigured-build assertion owns
+          # a separate server on 4174.
           npm run lab:storage
 
       - name: Lab must actually be up
@@ -236,17 +231,21 @@ jobs:
           # and passed.
           npx playwright test --list --project=desktop-chromium --reporter=json > desktop-list.json
           npx playwright test --list --project=mobile-chromium --reporter=json > mobile-list.json
+          npx playwright test --list --project=unconfigured-desktop-chromium --reporter=json > unconfigured-list.json
 
       - name: Browser matrix
         run: |
           set +e
-          npx playwright test --project=desktop-chromium --reporter=json > desktop.json 2>desktop.err
+          npx playwright test --project=desktop-chromium --reporter=json --output=test-results/desktop > desktop.json 2>desktop.err
           desktop=$?
-          npx playwright test --project=mobile-chromium --reporter=json > mobile.json 2>mobile.err
+          npx playwright test --project=mobile-chromium --reporter=json --output=test-results/mobile > mobile.json 2>mobile.err
           mobile=$?
+          npx playwright test --project=unconfigured-desktop-chromium --reporter=json --output=test-results/unconfigured > unconfigured.json 2>unconfigured.err
+          unconfigured=$?
           set -e
           echo "DESKTOP_EXIT=$desktop" >> "$GITHUB_ENV"
           echo "MOBILE_EXIT=$mobile" >> "$GITHUB_ENV"
+          echo "UNCONFIGURED_EXIT=$unconfigured" >> "$GITHUB_ENV"
           # The cardinality gate below is the one that decides, so a reporter
           # that dies mid-run cannot be read as a pass.
           exit 0
@@ -261,7 +260,8 @@ jobs:
           # unmeasured.
           node "$RUNNER_TEMP/browser-cardinality.mjs" \
             "desktop-chromium:desktop-list.json:desktop.json:$DESKTOP_EXIT" \
-            "mobile-chromium:mobile-list.json:mobile.json:$MOBILE_EXIT"
+            "mobile-chromium:mobile-list.json:mobile.json:$MOBILE_EXIT" \
+            "unconfigured-desktop-chromium:unconfigured-list.json:unconfigured.json:$UNCONFIGURED_EXIT"
 
       - name: Stop the local S3 lab
         if: always()
@@ -292,10 +292,13 @@ jobs:
             measured-sha.txt
             desktop-list.json
             mobile-list.json
+            unconfigured-list.json
             desktop.json
             mobile.json
+            unconfigured.json
             desktop.err
             mobile.err
+            unconfigured.err
             playwright-report/
             test-results/
             artifact-checksums.txt

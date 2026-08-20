@@ -41,7 +41,7 @@ export type VaultProviderRequirements = Readonly<{
     persistence: "memory-only";
     resetEvents: readonly ["logout", "account-switch", "vault-disconnect"];
   }>;
-  cspConnectSrc: readonly string[];
+  networkOrigins: readonly string[];
   cors: Readonly<{
     allowedMethods: readonly string[];
     allowedRequestHeaders: readonly string[];
@@ -117,7 +117,7 @@ export function validateVaultS3Configuration(input: VaultS3ConfigurationInput): 
     throw new VaultConfigurationError("credential-source-invalid", "A local-development vault must declare its local credential source explicitly.");
   }
   if (!forcePathStyle && bucket.includes(".")) {
-    throw new VaultConfigurationError("bucket-invalid", "Virtual-host vaults refuse dotted bucket names for an exact TLS/CSP origin.");
+    throw new VaultConfigurationError("bucket-invalid", "Virtual-host vaults refuse dotted bucket names for an exact TLS origin.");
   }
 
   const displayName = exactDisplayName(input.credentialSource.displayName);
@@ -152,7 +152,7 @@ export function vaultProviderRequirements(config: VaultS3Configuration): VaultPr
   const objectOrigin = config.forcePathStyle
     ? endpoint.origin
     : `${endpoint.protocol}//${config.bucket}.${endpoint.host}`;
-  const cspConnectSrc = Object.freeze([...new Set([
+  const networkOrigins = Object.freeze([...new Set([
     objectOrigin,
     ...config.credentialSource.authorityOrigins,
   ])].sort());
@@ -164,7 +164,7 @@ export function vaultProviderRequirements(config: VaultS3Configuration): VaultPr
       persistence: "memory-only",
       resetEvents: Object.freeze(["logout", "account-switch", "vault-disconnect"] as const),
     }),
-    cspConnectSrc,
+    networkOrigins,
     cors: Object.freeze({
       allowedMethods: Object.freeze(["GET", "PUT"] as const),
       allowedRequestHeaders: Object.freeze([

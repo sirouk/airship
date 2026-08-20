@@ -31,7 +31,7 @@ export function createLiveAcceptancePlan(config, environment = process.env) {
    */
   return Object.freeze([
     Object.freeze({
-      label: `direct cloud vendor wire-contract gate (${config.configuredVendorKeys.join(", ")}; protocol only, no CORS proof)`,
+      label: `direct cloud vendor wire-contract gate (${config.configuredVendorKeys.join(", ")}; protocol only, no browser CORS validation)`,
       command: process.execPath,
       args: Object.freeze([
         vitestCli,

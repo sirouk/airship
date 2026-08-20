@@ -165,7 +165,7 @@ describe("agent-facing Git tools", () => {
     // to the same function the adapter refuses with, and the refusal itself is
     // exercised: the advertised list and the enforced list cannot drift.
     expect(capabilities.remote.permittedOrigins).toEqual([...gitRemoteConnectOrigins()]);
-    expect(capabilities.remote.detail).toContain("Content-Security-Policy");
+    expect(capabilities.remote.detail).toContain("Git egress policy");
     expect(registry.get("git_remote")!.definition.description).toContain("permittedOrigins");
 
     // This host has no document origin, so nothing is reachable. Claiming the
@@ -176,7 +176,7 @@ describe("agent-facing Git tools", () => {
     expect(capabilities.features.clone!.reason).toContain("no origin at all");
     await expect(clone(registry, "https://github.com")).rejects.toThrow(/clone is unavailable/u);
 
-    // Given a page origin, the same code reaches the CSP gate: the page's own
+    // Given a page origin, the same code reaches the Git policy gate: the page's own
     // origin is permitted, and github.com is refused by name before any request.
     vi.stubGlobal("location", { origin: "https://git.example.test" });
     try {
@@ -192,11 +192,11 @@ describe("agent-facing Git tools", () => {
       expect(granted.remote.detail).toContain("github.com and gitlab.com are not among them");
 
       await expect(clone(scoped.registry, "https://github.com"))
-        .rejects.toThrow(/Content-Security-Policy blocks a direct Git clone to https:\/\/github\.com/u);
+        .rejects.toThrow(/Git remote policy blocks a direct Git clone to https:\/\/github\.com/u);
       // The permitted origin gets past the policy gate and fails on transport,
       // which is what proves the gate is origin-specific and not a blanket no.
       await expect(clone(scoped.registry, "https://git.example.test"))
-        .rejects.not.toThrow(/Content-Security-Policy blocks a direct Git clone/u);
+        .rejects.not.toThrow(/Git remote policy blocks a direct Git clone/u);
     } finally {
       vi.unstubAllGlobals();
     }

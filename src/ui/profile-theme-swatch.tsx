@@ -10,7 +10,7 @@ import type { PresentationDefaults } from "./platform-shell";
  * two are reconciled here, at the write site, rather than by renaming the enum:
  * theme manifests are content-addressed and already persisted, so changing the
  * stored word would fail every existing catalog's digest check. One attribute,
- * one vocabulary — without invalidating sealed content.
+ * one vocabulary — without invalidating pinned content.
  */
 export function themePresentation(theme: ThemeManifest): PresentationDefaults {
   return Object.freeze({

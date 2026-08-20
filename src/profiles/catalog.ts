@@ -247,6 +247,7 @@ export async function removeAuthoredSkill(catalog: ProfileCatalog, skillId: stri
     delete skillModes[skillId];
     return createProfileRevision({
       ...profile,
+      version: 3,
       parentRevision: profile.revision,
       skillModes,
       createdAt: new Date().toISOString(),
@@ -388,7 +389,6 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
       systemPrompt: profile.systemPrompt,
       providerId: "airship-demo",
       model: "airship/demo-v1",
-      minimumPosture: "local",
       workspaceBinding: { kind: "active-workspace" },
       // Research shipped as `workspace`, which never widened anything: every
       // memory reader narrows on the pinned profile ID, so it resolved exactly

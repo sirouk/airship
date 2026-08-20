@@ -34,7 +34,7 @@ test("disconnected Chat keeps local commands live and offers one clear inference
   await expect(page.getByRole("button", { name: "Connect a model", exact: true })).toHaveCount(1);
   await page.getByRole("banner").getByRole("button", { name: "Connect a model", exact: true }).click();
   await expect(page).toHaveURL(/#connection$/);
-  await expect(page.getByRole("heading", { name: "Connection", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cloud and local models", exact: true, level: 2 })).toBeVisible();
 });
 
 test("Capabilities states that runtime activation is provider-independent", async ({ page }) => {

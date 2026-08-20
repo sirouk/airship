@@ -31,7 +31,7 @@ import { expect, test, type Page } from "@playwright/test";
 /** Every route the shell can be addressed at. */
 const ROUTES = [
   "chat", "sessions", "memory", "workspace", "editor",
-  "attestations", "billing", "access", "profiles", "vault",
+  "access", "profiles", "vault",
   /*
    * `skills` joined when the route became writable. It was measurably under the
    * floor the whole time it was read-only: the global toggle is a

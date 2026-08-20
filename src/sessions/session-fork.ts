@@ -6,7 +6,15 @@ import {
   prepareForkContext,
   sealForkContextSeed,
 } from "../core/fork-context";
-import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
+import {
+  projectedSessionApprovalMode,
+  projectedSessionContextPolicy,
+  projectedSessionModel,
+  type DurableEvent,
+  type EventJournal,
+  type SessionRecord,
+} from "../core/journal";
+import { assertValidSessionInferenceBinding } from "../core/inference-binding";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import { DEFAULT_SESSION_INSPECTION_LIMITS, type SessionInspectionLimits } from "./domain";
 import {
@@ -95,7 +103,7 @@ export async function forkSession(
   const forkedAt = now();
   if (!Number.isFinite(Date.parse(forkedAt))) throw new Error("The session library clock returned an invalid timestamp.");
   const title = forkTitle(request.title, source.title);
-  const manifest = structuredClone(request.manifest ?? source.manifest);
+  const manifest = structuredClone(request.manifest ?? manifestAtBoundary(source.manifest, sourcePrefix));
   manifest.createdAt = forkedAt;
   manifest.lineage = {
     version: 1,
@@ -190,7 +198,7 @@ function resolveForkBoundary(
  * before it is an audited ancillary inference record carrying its own IDs.
  * Requiring that event itself to be session-scoped rejected Edit/Retry after a
  * completed conversation-naming call. The following request plus the prefix
- * audit below are the stronger proof: this exact digest ended the quiescent
+ * audit below is the stronger record: this exact digest ended the quiescent
  * prefix from which the next turn began.
  */
 function isImmediatePreTurnBoundary(
@@ -209,6 +217,22 @@ function isSessionScopedBoundary(event: DurableEvent): boolean {
   return event.turnId === undefined && event.operationId === undefined;
 }
 
+function manifestAtBoundary(
+  source: SessionManifest,
+  prefix: readonly DurableEvent[],
+): SessionManifest {
+  const model = projectedSessionModel(prefix, source.model) ?? source.model;
+  const contextPolicy = projectedSessionContextPolicy(prefix, source.contextPolicy);
+  const manifest = structuredClone(source);
+  manifest.model = model;
+  if (manifest.inferenceBinding) {
+    manifest.inferenceBinding = { ...manifest.inferenceBinding, modelId: model };
+  }
+  if (contextPolicy === null || contextPolicy === undefined) delete manifest.contextPolicy;
+  else manifest.contextPolicy = contextPolicy;
+  return manifest;
+}
+
 function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[]): SessionRecord {
   const boundary = prefix.at(-1);
   if (!boundary) throw new SessionForkConflictError("The source journal has no auditable creation boundary.");
@@ -221,9 +245,17 @@ function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[
       title = payload.title;
     }
   }
+  const model = projectedSessionModel(prefix, source.manifest.model);
+  const contextPolicy = projectedSessionContextPolicy(prefix, source.manifest.contextPolicy);
+  const approvalMode = projectedSessionApprovalMode(prefix, undefined);
   return {
     ...structuredClone(source),
     title,
+    ...(model && model !== source.manifest.model ? { modelOverride: model } : { modelOverride: undefined }),
+    ...(contextPolicy !== source.manifest.contextPolicy
+      ? { contextPolicyOverride: contextPolicy }
+      : { contextPolicyOverride: undefined }),
+    ...(approvalMode ? { approvalModeOverride: approvalMode } : { approvalModeOverride: undefined }),
     updatedAt: boundary.recordedAt,
     headSequence: boundary.sequence,
     headDigest: boundary.digest,
@@ -260,6 +292,7 @@ function validateForkManifest(manifest: SessionManifest): void {
   ) {
     throw new TypeError("Fork manifest does not satisfy a supported bounded session protocol shape.");
   }
+  assertValidSessionInferenceBinding(manifest);
 }
 
 function assertSessionId(value: string): void {

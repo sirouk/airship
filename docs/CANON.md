@@ -57,9 +57,11 @@ next turn. It is not a hidden fork.
 
 ### Storage
 
-Airship starts in ephemeral page memory. Durable options form a ladder:
-Local Device, Google Drive, S3-compatible storage, and Walrus. Durable state is
-client-encrypted before upload.
+Airship starts in ephemeral page memory. The stock selector can adopt Local
+Device storage or Google Drive in a configured build. Durable state is
+client-encrypted before upload. S3-compatible storage remains a host-composed
+adapter (plus the loopback lab), and Walrus remains an optional immutable blob
+transport rather than a selectable Vault.
 
 ### Workspace and execution
 

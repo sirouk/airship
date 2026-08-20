@@ -184,6 +184,11 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
   const adoption: DurabilityAdoption = value.vaultBackend === "ephemeral" || vaultAdopted === undefined
     ? undefined
     : vaultAdopted ? "connected" : "not-connected";
+  const durabilityUnavailable = vaultBackendUnavailableReason(
+    value.vaultBackend,
+    import.meta.env.VITE_GOOGLE_CLIENT_ID,
+    typeof window === "undefined" ? undefined : window.location,
+  );
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div ref={dialog} class={scrolled ? "preferences-dialog is-scrolled" : "preferences-dialog"} role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 2)} onKeyDown={(event) => { if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); } else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
@@ -193,7 +198,7 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
           <button type="button" onClick={profileApproval.onManage}>Manage in Profiles</button>
           <p>{approvalModeDescription(profileApproval.mode)} A saved change creates a new profile revision and takes effect in a new pinned conversation.</p>
         </div> : <>
-          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · no prompts, any HTTPS origin"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
+          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · writes only; stronger effects ask"],["full-access","Full Access · no prompts, any HTTPS origin"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
           <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
         </>}
         <PreferenceSelect
@@ -229,7 +234,7 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
           }).map((option) => [option.value, option.label, option.description, option.disabled ?? false] as const)}
           onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
         />
-        <p>{durabilityRowNote(adoption)}</p>
+        <p role={durabilityUnavailable ? "alert" : undefined}>{durabilityUnavailable ?? durabilityRowNote(adoption)}</p>
         <button
           class="preferences-dialog__reset"
           type="button"

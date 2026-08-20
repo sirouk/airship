@@ -172,13 +172,6 @@ describe("ClientExecutionRuntime", () => {
       expect(offered?.state).toBe("installable");
       expect(offered?.blocker).toBeUndefined();
 
-      // wasix is unavailable because this release does not promote it. No host
-      // condition may overwrite that with something the reader could "fix".
-      vi.stubGlobal("crossOriginIsolated", false);
-      const unadvertised = new ClientExecutionRuntime().capabilities().find(({ id }) => id === "wasix");
-      expect(unadvertised?.state).toBe("unavailable");
-      expect(unadvertised?.blocker).toBeUndefined();
-      expect(unadvertised?.detail).not.toContain("This page is not cross-origin isolated.");
     } finally {
       vi.unstubAllGlobals();
     }

@@ -11,7 +11,7 @@ below are reproducible from this worktree.
   wiring, faux scripted provider (conformance suite)
 - `src/prime/agent/` — prime-agent loop with upstream event-order guarantee
   (78 tests, golden event-sequence assertions)
-- `src/prime/kernel/` — persistent worker REPL (javascript + pyodide engines),
+- `src/prime/kernel/` — job-scoped JavaScript plus optional persistent Pyodide,
   host lifecycle, tool bridge with prime.kernel.tool.* evidence namespace,
   worker runtime sources, capability description
 - `src/prime/subagents/` — admission/registry/router with nuclear-family
@@ -52,8 +52,8 @@ below are reproducible from this worktree.
   100k events/step); one-terminal per turn signal-neutrally committed.
 - Kernel bridge pauses: operation identity `prime-kernel:<jobId>:<seq>`
   provenance captioned with truth; cap checks (64 calls/step, cash, 4 MiB).
-- Benches: Pyodide cold boot ≈2 s; repo shoulder per-job vs ≈1 ms
-  persistent; SSE 131 MB/s isolated / 58.9 MB/s contended; stream-json
+- Benches: optional Pyodide cold boot ≈2 s and ≈1 ms warm persistent
+  round-trips; SSE 131 MB/s isolated / 58.9 MB/s contended; stream-json
   30k/cps isolated / 11.7k/cps contended (`scripts/bench/`).
 - static security frontiers stay aligned (airship's own guards unaffected.)
 

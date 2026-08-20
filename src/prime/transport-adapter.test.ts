@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationReceipt } from "../receipts/types";
+import type { ConversationReceipt } from "../core/conversation-receipt";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "../core/contracts";
 import { UUID_V4_PATTERN } from "../core/id";
 import { namedTransportFailure } from "../core/inference-retry";
@@ -70,28 +70,18 @@ function assistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantM
 }
 
 function makeReceipt(): ConversationReceipt {
-  const claim = { status: "unavailable" as const, summary: "not applicable" };
   return {
     version: 1,
+    origin: "local",
+    attestation: "none",
     receiptId: "urn:airship:receipt:test",
     sessionId: "s-1",
     turnId: "t-1",
     createdAt: "2024-01-01T00:00:00.000Z",
-    proofLevel: "local",
-    posture: "local",
     provider: "test-provider",
-    claims: {
-      encryption: claim,
-      freshness: claim,
-      cpuTee: claim,
-      gpuTee: claim,
-      endpointKey: claim,
-      model: claim,
-      conversation: claim,
-      payment: claim,
-    },
-    bindings: { algorithm: "SHA-256" },
-    verifications: [],
+    model: "test-model",
+    requestDigest: "sha256:req",
+    responseDigest: "sha256:res",
   };
 }
 
@@ -169,9 +159,9 @@ function primeContext(overrides: Partial<Context> = {}): Context {
  * reasoning *phase*, so it mapped `progress` to an empty thinking block and
  * said in as many words that "thinking_delta text never does" cross. Then
  * `reasoning-delta` joined the canonical vocabulary and every vendor transport
- * started emitting it — `chutes/openai.ts` from `delta.reasoning_content`,
- * `browser-cloud.ts` from `delta.thinking` — while this adapter still had no
- * branch for it. Prime became the default engine, prime reaches its provider
+ * started emitting it — the openai-compatible lanes from
+ * `delta.reasoning_content`, `browser-cloud.ts` from `delta.thinking` — while
+ * this adapter still had no branch for it. Prime became the default engine, prime reaches its provider
  * through here, and the live reasoning block had nothing to render: the phase
  * marker crossed, the words were dropped one layer above the wire.
  */

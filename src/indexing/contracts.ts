@@ -39,10 +39,9 @@ export interface EmbeddingProvider {
   readonly dimensions: number;
   /**
    * Where the vectors are computed, because it is a privacy claim and not an
-   * implementation detail. `confidential-remote` leaves the device, so it may
-   * only name a provider whose compute is attested — an ordinary remote
-   * embedder would put the corpus in someone else's plaintext and is not a
-   * posture this type admits.
+   * implementation detail. Every posture this build ships runs on this device;
+   * a remote embedder would put the corpus in someone else's plaintext and is
+   * not a posture this type admits.
    */
   readonly posture?: EmbeddingPosture;
   embed(texts: string[], signal?: AbortSignal): Promise<Float32Array[]>;

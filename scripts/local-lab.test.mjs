@@ -19,15 +19,16 @@ describe("local full-system lab contract", () => {
   });
 
   it("builds the live harness environment without mutating or dropping the caller environment", () => {
-    const source = { PATH: "/test/bin", CUSTOM: "preserved" };
+    const source = { PATH: "/test/bin", CUSTOM: "preserved", VITE_AIRSHIP_ENABLE_LOCAL_LAB: "0" };
     const result = labEnvironment(source);
-    expect(source).toEqual({ PATH: "/test/bin", CUSTOM: "preserved" });
+    expect(source).toEqual({ PATH: "/test/bin", CUSTOM: "preserved", VITE_AIRSHIP_ENABLE_LOCAL_LAB: "0" });
     expect(result).toMatchObject({
       PATH: "/test/bin",
       CUSTOM: "preserved",
       AIRSHIP_LOCAL_S3_ENDPOINT: LOCAL_LAB.s3Endpoint,
       AIRSHIP_LOCAL_S3_BUCKET: LOCAL_LAB.bucket,
       AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
+      VITE_AIRSHIP_ENABLE_LOCAL_LAB: "1",
       VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "google-drive",
       VITE_GOOGLE_CLIENT_ID: LOCAL_LAB_GOOGLE_CLIENT_ID,
     });

@@ -59,7 +59,7 @@ describe("live release acceptance infrastructure", () => {
     const plan = createLiveAcceptancePlan(config, environment);
     expect(plan).toHaveLength(1);
     expect(plan[0].label).toContain("direct cloud vendor wire-contract gate");
-    expect(plan[0].label).toContain("no CORS proof");
+    expect(plan[0].label).toContain("no browser CORS validation");
     expect(plan[0].args).toContain("src/inference/providers/browser-cloud.live.test.ts");
     expect(plan[0].environment.AIRSHIP_ANTHROPIC_API_KEY).toBe(credential);
     expect(plan.flatMap((stage) => [stage.command, ...stage.args]).join(" ")).not.toContain(credential);

@@ -30,55 +30,78 @@ export type ConversationReceipt = Readonly<{
   toolCalls?: readonly Readonly<{ id: string; name: string }>[];
 }>;
 
-export function createLocalReceipt(args: Readonly<{
+export type ConversationReceiptAuthority = Readonly<{
   sessionId: string;
   turnId: string;
   provider: string;
   model?: string;
   requestDigest?: string;
   responseDigest?: string;
-  now?: string;
-}>): ConversationReceipt {
-  const createdAt = args.now ?? new Date().toISOString();
+}>;
+
+export function createLocalReceipt(args: ConversationReceiptAuthority & Readonly<{ now?: string }>): ConversationReceipt {
+  // Snapshot caller-owned fields exactly once before creating the receipt.
+  const sessionId = requiredText(args.sessionId, "Conversation session ID", SESSION_ID_MAX);
+  const turnId = requiredText(args.turnId, "Conversation turn ID", TURN_ID_MAX);
+  const provider = requiredText(args.provider, "Conversation provider ID", PROVIDER_MAX);
+  const model = optionalText(args.model, "Conversation model ID", MODEL_MAX);
+  const requestDigest = optionalDigest(args.requestDigest, "Conversation request digest");
+  const responseDigest = optionalDigest(args.responseDigest, "Conversation response digest");
+  const suppliedNow = args.now;
+  const createdAt = suppliedNow === undefined
+    ? new Date().toISOString()
+    : canonicalTimestamp(suppliedNow, "Conversation receipt timestamp");
   return Object.freeze({
     version: 1,
     origin: "local",
     attestation: "none",
     receiptId: `urn:receipt:${randomUuid()}`,
-    sessionId: args.sessionId,
-    turnId: args.turnId,
+    sessionId,
+    turnId,
     createdAt,
-    provider: args.provider,
-    ...(args.model ? { model: args.model } : {}),
-    ...(args.requestDigest ? { requestDigest: args.requestDigest } : {}),
-    ...(args.responseDigest ? { responseDigest: args.responseDigest } : {}),
+    provider,
+    ...(model ? { model } : {}),
+    ...(requestDigest ? { requestDigest } : {}),
+    ...(responseDigest ? { responseDigest } : {}),
     completedAt: createdAt,
   });
 }
 
 export function finalizeProviderReceipt(
   receipt: ConversationReceipt,
-  provider: string,
-  requestDigest?: string,
-  responseDigest?: string,
+  authority: ConversationReceiptAuthority,
 ): ConversationReceipt {
-  // Provider output is a runtime boundary. Reject exotic prototypes and
-  // accessors before reading a single field so receipt materialization cannot
-  // execute provider-controlled code.
+  // Snapshot local authority once before examining provider-controlled data.
+  const expectedSessionId = requiredText(authority.sessionId, "Conversation session ID", SESSION_ID_MAX);
+  const expectedTurnId = requiredText(authority.turnId, "Conversation turn ID", TURN_ID_MAX);
+  const finalizedProvider = requiredText(authority.provider, "Conversation provider ID", PROVIDER_MAX);
+  const expectedModel = optionalText(authority.model, "Conversation model ID", MODEL_MAX);
+  const authoritativeRequestDigest = authority.requestDigest;
+  const authoritativeResponseDigest = authority.responseDigest;
+
+  // Provider output is a runtime boundary. Read one descriptor-safe owned
+  // snapshot so accessors, proxies, and later mutation cannot change the
+  // identity that is checked and then journaled.
   const source = plainRecord(receipt);
   if (!source || source.version !== 1) throw new TypeError("Conversation receipt version is invalid.");
   const receiptId = requiredText(source.receiptId, "Conversation receipt ID", RECEIPT_ID_MAX);
-  const sessionId = requiredText(source.sessionId, "Conversation session ID", SESSION_ID_MAX);
-  const turnId = requiredText(source.turnId, "Conversation turn ID", TURN_ID_MAX);
+  const suppliedSessionId = requiredText(source.sessionId, "Conversation session ID", SESSION_ID_MAX);
+  const suppliedTurnId = requiredText(source.turnId, "Conversation turn ID", TURN_ID_MAX);
+  const suppliedModel = optionalText(source.model, "Conversation model ID", MODEL_MAX);
+  if (suppliedSessionId !== expectedSessionId || suppliedTurnId !== expectedTurnId) {
+    throw new TypeError("Conversation receipt identity does not match the active turn.");
+  }
+  if (suppliedModel !== undefined && expectedModel !== undefined && suppliedModel !== expectedModel) {
+    throw new TypeError("Conversation receipt model does not match the active inference route.");
+  }
   const createdAt = canonicalTimestamp(source.createdAt, "Conversation receipt timestamp");
-  const finalizedProvider = requiredText(provider, "Conversation provider ID", PROVIDER_MAX);
-  const model = optionalText(source.model, "Conversation model ID", MODEL_MAX);
+  const model = expectedModel ?? suppliedModel;
   const finalizedRequestDigest = optionalDigest(
-    requestDigest ?? source.requestDigest,
+    authoritativeRequestDigest ?? source.requestDigest,
     "Conversation request digest",
   );
   const finalizedResponseDigest = optionalDigest(
-    responseDigest ?? source.responseDigest,
+    authoritativeResponseDigest ?? source.responseDigest,
     "Conversation response digest",
   );
   const startedAt = optionalTimestamp(source.startedAt, "Conversation receipt start timestamp");
@@ -93,8 +116,8 @@ export function finalizeProviderReceipt(
     origin: "provider",
     attestation: "none",
     receiptId,
-    sessionId,
-    turnId,
+    sessionId: expectedSessionId,
+    turnId: expectedTurnId,
     createdAt,
     provider: finalizedProvider,
     ...(model ? { model } : {}),
@@ -178,10 +201,10 @@ function sanitizeReceiptTimings(value: unknown): Readonly<Record<string, number>
 function sanitizeReceiptToolCalls(
   value: unknown,
 ): readonly Readonly<{ id: string; name: string }>[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  if (value.length > MAX_TOOL_CALLS) return undefined;
+  const items = plainArray(value, MAX_TOOL_CALLS);
+  if (!items) return undefined;
   const sanitized: Array<Readonly<{ id: string; name: string }>> = [];
-  for (const item of value) {
+  for (const item of items) {
     const record = plainRecord(item);
     const id = boundedTextOrUndefined(record?.id, TOOL_CALL_TEXT_MAX);
     const name = boundedTextOrUndefined(record?.name, TOOL_CALL_TEXT_MAX);
@@ -193,11 +216,51 @@ function sanitizeReceiptToolCalls(
 
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Object.values(descriptors).some((descriptor) => "get" in descriptor || "set" in descriptor)) {
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== "string") return undefined;
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+      snapshot[key] = descriptor.value;
+    }
+    return snapshot;
+  } catch {
     return undefined;
   }
-  return value as Record<string, unknown>;
+}
+
+function plainArray(value: unknown, maximum: number): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  try {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const descriptorMap: object = descriptors;
+    const lengthDescriptor: PropertyDescriptor | undefined = Reflect.get(descriptorMap, "length");
+    if (!lengthDescriptor || !("value" in lengthDescriptor)) return undefined;
+    const length: unknown = lengthDescriptor.value;
+    if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 || length > maximum) {
+      return undefined;
+    }
+    const snapshot = new Array<unknown>(length);
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (key === "length") continue;
+      if (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/u.test(key)) return undefined;
+      const index = Number(key);
+      const descriptor = descriptors[key];
+      if (index >= length || !descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      snapshot[index] = descriptor.value;
+    }
+    for (let index = 0; index < length; index += 1) {
+      if (!Object.hasOwn(snapshot, index)) return undefined;
+    }
+    return snapshot;
+  } catch {
+    return undefined;
+  }
 }

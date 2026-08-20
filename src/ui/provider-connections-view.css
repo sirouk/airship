@@ -242,6 +242,32 @@
   padding: 0 12px 12px;
 }
 
+.provider-setup-card--custom {
+  grid-column: 1 / -1;
+}
+
+.provider-custom-lifetime {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.provider-custom-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.provider-custom-fields--advanced {
+  padding-top: 10px;
+}
+
+.provider-setup-card--custom .provider-auth-contract {
+  min-height: 0;
+}
+
 .provider-setup-card > p,
 .provider-auth-contract p {
   margin: 0;

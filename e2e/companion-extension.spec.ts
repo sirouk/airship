@@ -88,18 +88,14 @@ test("the real Chromium companion reports, computes, and stores only after opt-i
     });
 
     await page.reload();
-    /*
-     * The Companion is now the sixth row of the lane list rather than a 219px
-     * card above it, so the selector moves. The invariant is *stronger* than
-     * the one it replaces: all three readings are asserted on the COLLAPSED
-     * row, which means a truthful positive state is observable without opening
-     * anything — the card required no gesture either, but it also spent 66% of
-     * a phone viewport saying "Not active" three times when it was false.
-     */
-    const companion = page.locator('.connect-lane[data-lane="companion"]');
-    await expect(companion).toContainText("Extension 1.1.1", { timeout: 15_000 });
-    await expect(companion.locator(".connect-lane__facts")).toContainText("1 page");
-    await expect(companion.locator(".connect-lane__facts")).toContainText("Hash + vector ranking");
+    await page.evaluate(() => { window.location.hash = "#capabilities"; });
+    // The live Companion report now belongs to device Capabilities. The cache
+    // protocol above already proves the exact one-page record; this card names
+    // only the bridge state and operations that remain available after reload.
+    const companion = page.locator(".capability-extension-surface");
+    await expect(companion).toContainText("Airship Companion 1.1.1", { timeout: 15_000 });
+    await expect(companion).toContainText(/Ciphertext cache\s*Enabled/u);
+    await expect(companion).toContainText(/Background compute\s*sha256, cosine-top-k/u);
   } finally {
     await context?.close();
   }

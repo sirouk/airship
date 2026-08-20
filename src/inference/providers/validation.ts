@@ -89,7 +89,7 @@ export function httpsUrl(value: string, label: string): string {
 export function providerBaseUrl(
   value: string,
   label: string,
-  boundary: "e2ee-attestable" | "provider-tls" | "loopback-local",
+  boundary: "provider-tls" | "loopback-local",
 ): string {
   if (boundary === "loopback-local") {
     let candidate: URL;

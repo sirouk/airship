@@ -43,7 +43,7 @@ SEMANTIC INVARIANT 30).
 - **LLM transport**: planner calls the injected `HarnessCompletionClient`;
   bridging it to airship's `InferenceTransport` is host-side.
 - **IndexedDB adapter runtime test**: `IndexedDbHarnessKvAdapter` is the
-  `IndexedDbWorkspace`-style thin IDB wrapper; node test env has no IDB, so it
+  thin IDB wrapper; the Node test environment has no IDB, so it
   is covered via the shared base-class suite on the in-memory adapter and a
   `HarnessKvAdapter` seam for fakes.
 

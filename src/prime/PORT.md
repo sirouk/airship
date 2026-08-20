@@ -15,7 +15,7 @@ Upstream sources of truth: `packages/coding-agent/src/core/system-prompt.ts`,
 | 3 | `formatHarnessStateForPrompt` overview | split: `harness_prompt_notes` + `harness_overview` | same caps via `DEFAULT_OVERVIEW_*` (6/5/180), same merge (local shadows global), same line shapes |
 | 4 | `# Additional Guidance` (tool promptGuidelines) | — | deferred: no consumer in this build; guidance seams live on the tools layer |
 | 5 | `# Project Context` (`loadProjectContextFiles` walk) | `project_instructions` | ported as data: host walks via `PrimeProjectInstructionProvider`; verbatim block shape |
-| 6 | `<available_skills>` | — | deferred: lands with `src/prime/tools/skills.ts`; the composer exposes no skills layer until the runtime can answer it |
+| 6 | `<available_skills>` | — | deferred: no stock runtime composition or executable Python-skill lane is shipped |
 | 7 | `appendSystemPrompt`, trailing date/cwd | — | deferred: date already renders in `base_runtime_facts` (`currentDate`); append seam belongs to session manifest assembly |
 
 Order inside the port prompt is `PRIME_PROMPT_LAYER_ORDER`:
@@ -50,8 +50,8 @@ live_environment → harness_overview → continuation_policy.
 
 - **No Python prose.** Upstream's pre-installed package list, `uv pip`
   install hint, `%%bash` cells, `global_=True`, and the `rlm.harness` /
-  `refine.run()` call forms are dropped or rewritten: the kernel here is a
-  persistent JavaScript worker whose only egress is the reviewed
+  `refine.run()` call forms are dropped or rewritten: stock JavaScript runs in
+  a fresh job-scoped worker whose only egress is the reviewed
   `pat.call(tool, args)` bridge (operation identity
   `prime-kernel:<jobId>:<seq>`). Shipping IPython prose would teach the model
   a runtime this build cannot answer; the kernel-use paragraphs keep
@@ -131,7 +131,8 @@ content-addressed and host-embeddable.
 ## Deferred
 
 - `rlm_spawn`/`agent_message`/`subagent` tool prose when `rlm-tools.ts` lands.
-- `<available_skills>` layer with `tools/skills.ts`; markdown+python skills.
+- `<available_skills>` composition and executable skill registry. Profile
+  skill governance remains separate and does not claim a Python-skill runtime.
 - `# Additional Guidance` (tool `promptGuidelines`) when a consumer exists.
 - `appendSystemPrompt` seam at session-manifest assembly.
 - Kernel-side harness IPC (`rlm.harness.*`) and refine call-form prose

@@ -41,7 +41,7 @@ export class GoogleDriveWorkspaceManager {
   /**
    * Recover an existing hierarchy without creating any folders.
    *
-   * A recovery value is decryption authority, not proof that the currently
+   * A recovery value is decryption authority, not evidence that the currently
    * selected Google account owns the matching ciphertext. Creating a blank
    * hierarchy on a miss would make a wrong-account selection look like a
    * successful recovery and establish a second authority. Imported recovery

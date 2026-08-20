@@ -9,7 +9,6 @@
  * boundaries where no such crossing exists.
  */
 @import "./platform-shell.css";
-@import "./model-picker.css";
 @import "./menu-select.css";
 @import "./tokens.css";
 @import "./shell.css";

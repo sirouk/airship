@@ -917,7 +917,7 @@ self.addEventListener("message", event => {
       // long as its worker runs, taken before the directory exists. Reclaiming
       // a sibling therefore requires taking that sibling's exclusive lock
       // immediately: a partition any other context still holds is provably in
-      // use and is never deleted. Without the Locks API there is no such proof,
+      // use and is never deleted. Without the Locks API there is no such guarantee,
       // so nothing is reclaimed rather than guessing that a sibling is stale.
       let held = false;
       if (typeof navigator.locks?.request === "function") {

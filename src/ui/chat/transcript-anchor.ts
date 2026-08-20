@@ -52,15 +52,8 @@ export function preferredJumpBehavior(reducedMotion: boolean, streaming: boolean
   return reducedMotion || streaming ? "auto" : "smooth";
 }
 
-/*
- * Back from Proof to the message Proof is about.
- *
- * Measured (J050): "Inspect evidence →" produced
- * `#proof?session=…&receipt=…&turn=1c52c6d1…`, and every enabled control on
- * that page led further into evidence. The address already carried the turn;
- * nothing spent it. This is the return half, and it lives beside the other
- * transcript anchoring rather than in a module of its own.
- */
+/* A session detail can return to the turn it describes. The address already
+   carries the turn id, so this helper spends it on the transcript card. */
 
 /**
  * Brings the card carrying `turnId` into view and marks it, or reports that

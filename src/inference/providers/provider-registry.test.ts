@@ -8,15 +8,12 @@ import type {
   PublicPkceAuthMethod,
 } from "./contracts";
 import { InferenceModelCatalog } from "./model-catalog";
-import { OPENAI_CODEX_OAUTH } from "../../auth/provider-oauth/registrations";
 import {
   ANTHROPIC_PROVIDER,
-  BUILTIN_PROVIDER_COMPATIBILITY,
-  BUILTIN_PROVIDER_OAUTH_REACHABILITY,
+  CHUTES_PROVIDER,
   OFFICIAL_CLOUD_PROVIDERS,
   OPENAI_PROVIDER,
   XAI_PROVIDER,
-  createChutesProviderDescriptor,
 } from "./official-providers";
 import { InferenceProviderCatalog } from "./provider-catalog";
 import {
@@ -31,30 +28,17 @@ const CHECKED_AT = "2026-07-24T12:00:01.000Z";
 const OBSERVED_AT = "2026-07-24T12:00:02.000Z";
 
 describe("provider-neutral inference catalog", () => {
-  it("keeps built-in OAuth claims honest and machine-readable", () => {
-    // OpenAI is configured because its exchange was measured working from the page.
-    // The other two keep an unconfigured OAuth state: their grants exist but no page
-    // can complete them, so nothing here may present them as in-page sign-ins.
+  it("keeps the built-in browser auth surface explicit", () => {
     expect(OPENAI_PROVIDER.oauth).toMatchObject({
-      state: "configured-public-pkce",
-      authMethodId: "openai-codex-oauth",
+      state: "configuration-required",
+      detail: "No account sign-in flow is wired into this static build.",
     });
     expect(ANTHROPIC_PROVIDER.oauth.state).toBe("first-party-only");
     expect(XAI_PROVIDER.oauth.state).toBe("not-documented");
     expect(OFFICIAL_CLOUD_PROVIDERS.flatMap((provider) =>
       provider.authMethods.filter((method) => method.kind === "oauth-public-pkce")
-    ).map((method) => method.id)).toEqual(["openai-codex-oauth"]);
+    )).toEqual([]);
     expect(OPENAI_PROVIDER.authMethods[0]).toMatchObject({
-      id: "openai-codex-oauth",
-      kind: "oauth-public-pkce",
-      // The approved presentation of this connection is Codex, not "OpenAI".
-      label: "Codex",
-      clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-      tokenEndpointAuthMethod: "none",
-      codeChallengeMethod: "S256",
-      redirectUris: ["http://localhost:1455/auth/callback"],
-    });
-    expect(OPENAI_PROVIDER.authMethods[1]).toMatchObject({
       kind: "api-key",
       browserUse: "dangerous-user-opt-in",
     });
@@ -66,46 +50,26 @@ describe("provider-neutral inference catalog", () => {
       kind: "api-key",
       browserUse: "direct-contract-unpublished",
     });
-    expect(BUILTIN_PROVIDER_COMPATIBILITY
-      .filter((provider) => provider.oauth === "published-third-party-pkce")
-      .map((provider) => provider.providerId)).toEqual(["chutes"]);
-  });
-
-  it("records which OAuth exchanges the page can actually make", () => {
-    expect(BUILTIN_PROVIDER_OAUTH_REACHABILITY.map((entry) => [
-      entry.providerId,
-      entry.grant,
-      entry.tokenExchange,
-      entry.blockedBy,
-    ])).toEqual([
-      ["openai", "authorization-code-pkce", "direct-from-page", undefined],
-      ["anthropic", "authorization-code-pkce", "extension-bridge", "forbidden-user-agent-header"],
-      ["xai", "device-code", "extension-bridge", "cors"],
-    ]);
-    // Every provider that needs the bridge has to be able to name its cause.
-    for (const entry of BUILTIN_PROVIDER_OAUTH_REACHABILITY) {
-      expect(entry.evidence.length).toBeGreaterThan(32);
-      expect(entry.tokenExchange === "extension-bridge").toBe(entry.blockedBy !== undefined);
-    }
-  });
-
-  it("keeps the Codex descriptor and the OAuth registration from drifting apart", () => {
-    const method = OPENAI_PROVIDER.authMethods
-      .find((candidate) => candidate.kind === "oauth-public-pkce");
-    expect(method).toBeDefined();
-    if (method?.kind !== "oauth-public-pkce") throw new Error("unreachable");
-    expect(method.authorizationEndpoint).toBe(OPENAI_CODEX_OAUTH.authorizationEndpoint);
-    expect(method.tokenEndpoint).toBe(OPENAI_CODEX_OAUTH.tokenEndpoints[0]);
-    expect(method.clientId).toBe(OPENAI_CODEX_OAUTH.clientId);
-    expect(method.redirectUris).toEqual([OPENAI_CODEX_OAUTH.redirectUri]);
-    expect(method.scopes).toEqual([...OPENAI_CODEX_OAUTH.scopes]);
-    expect(OPENAI_CODEX_OAUTH.transport.kind).toBe("direct-from-page");
+    expect(CHUTES_PROVIDER).toMatchObject({
+      protocol: "openai-compatible",
+      oauth: { state: "not-documented" },
+    });
+    expect(CHUTES_PROVIDER.authMethods[0]).toMatchObject({
+      kind: "api-key",
+      browserUse: "direct-contract-unpublished",
+    });
+    expect(OFFICIAL_CLOUD_PROVIDERS.flatMap((provider) =>
+      provider.authMethods.flatMap((method) => method.kind === "api-key" ? [method.warning] : [])
+    )).toEqual(Array.from(
+      { length: 4 },
+      () => "This screen uses a browser-direct API key. It remains in this tab and is sent to the configured provider endpoint.",
+    ));
   });
 
   it("registers frozen metadata with provider-local revisions", () => {
     const catalog = new InferenceProviderCatalog([OPENAI_PROVIDER, ANTHROPIC_PROVIDER]);
     const before = catalog.require("openai");
-    catalog.register({ ...OPENAI_PROVIDER, label: "OpenAI reviewed" });
+    catalog.register({ ...OPENAI_PROVIDER, label: "OpenAI updated" });
     const after = catalog.require("openai");
 
     expect(before.revision).toBe(1);
@@ -115,13 +79,23 @@ describe("provider-neutral inference catalog", () => {
     expect(Object.isFrozen(after.provider.authMethods)).toBe(true);
   });
 
-  it("accepts only reviewed secretless S256 public-PKCE metadata", () => {
+  it("removes only the exact provider revision requested", () => {
+    const catalog = new InferenceProviderCatalog([OPENAI_PROVIDER]);
+    const first = catalog.require("openai");
+    expect(catalog.unregister("openai", first.revision + 1)).toBe(false);
+    expect(catalog.require("openai")).toBe(first);
+    expect(catalog.unregister("openai", first.revision)).toBe(true);
+    expect(catalog.get("openai")).toBeUndefined();
+    expect(catalog.unregister("openai", first.revision)).toBe(false);
+  });
+
+  it("accepts only the configured S256 public-PKCE record shape", () => {
     const oauth = pkce();
-    const provider = createChutesProviderDescriptor(oauth);
+    const provider = providerWithReviewedPkce(oauth);
     const catalog = new InferenceProviderCatalog([provider]);
-    expect(catalog.require("chutes").provider.oauth).toMatchObject({
+    expect(catalog.require("openai").provider.oauth).toMatchObject({
       state: "configured-public-pkce",
-      authMethodId: "chutes-browser-pkce",
+      authMethodId: "airship-browser-pkce",
     });
 
     const withSecret = {
@@ -129,16 +103,16 @@ describe("provider-neutral inference catalog", () => {
       clientSecret: "must-never-enter-browser-metadata",
     } as PublicPkceAuthMethod;
     expect(() => new InferenceProviderCatalog([
-      createChutesProviderDescriptor(withSecret),
+      providerWithReviewedPkce(withSecret),
     ])).toThrow("client secret");
     expect(() => new InferenceProviderCatalog([
-      createChutesProviderDescriptor({
+      providerWithReviewedPkce({
         ...oauth,
         tokenEndpointAuthMethod: "client_secret_post",
       } as unknown as PublicPkceAuthMethod),
     ])).toThrow("public S256 PKCE");
     expect(() => new InferenceProviderCatalog([
-      createChutesProviderDescriptor({
+      providerWithReviewedPkce({
         ...oauth,
         codeChallengeMethod: "plain",
       } as unknown as PublicPkceAuthMethod),
@@ -230,28 +204,28 @@ describe("simultaneous inference connections", () => {
     )).resolves.toBe("invocation-authorized");
   });
 
-  it("installs OAuth only against the matching reviewed registration and scopes", () => {
+  it("installs OAuth only against the matching configured registration and scopes", () => {
     const providers = providersWithChutes(pkce());
     const registry = new InferenceConnectionRegistry(providers, () => NOW);
     expect(() => registry.connectOAuth({
       id: "chutes-oauth",
-      providerId: "chutes",
-      authMethodId: "chutes-browser-pkce",
-      label: "Chutes sign-in",
+      providerId: "openai",
+      authMethodId: "airship-browser-pkce",
+      label: "OpenAI sign-in",
       accessToken: "access-token",
       refreshToken: "refresh-token",
       expiresAt: "2026-07-24T13:00:00.000Z",
-      scopes: ["openid", "profile", "chutes:invoke"],
+      scopes: ["openid", "profile", "inference:invoke"],
     })).not.toThrow();
     expect(registry.require("chutes-oauth")).toMatchObject({
       authKind: "oauth-public-pkce",
       refreshable: true,
-      scopes: ["openid", "profile", "chutes:invoke"],
+      scopes: ["openid", "profile", "inference:invoke"],
     });
     expect(() => registry.connectOAuth({
       id: "bad-scope",
-      providerId: "chutes",
-      authMethodId: "chutes-browser-pkce",
+      providerId: "openai",
+      authMethodId: "airship-browser-pkce",
       label: "Bad scope",
       accessToken: "access-token",
       expiresAt: "2026-07-24T13:00:00.000Z",
@@ -273,8 +247,8 @@ describe("simultaneous inference connections", () => {
     const registry = new InferenceConnectionRegistry(providersWithChutes(pkce()), () => now);
     registry.connectOAuth({
       id: "oauth",
-      providerId: "chutes",
-      authMethodId: "chutes-browser-pkce",
+      providerId: "openai",
+      authMethodId: "airship-browser-pkce",
       label: "OAuth",
       accessToken: "access-token",
       expiresAt: "2026-07-24T12:05:00.000Z",
@@ -293,20 +267,20 @@ describe("simultaneous inference connections", () => {
     const registry = new InferenceConnectionRegistry(providersWithChutes(pkce()), () => NOW);
     const connected = registry.connectOAuth({
       id: "oauth",
-      providerId: "chutes",
-      authMethodId: "chutes-browser-pkce",
+      providerId: "openai",
+      authMethodId: "airship-browser-pkce",
       label: "OAuth",
       accessToken: "old-access-token",
       refreshToken: "rotating-refresh-token",
       expiresAt: "2026-07-24T12:05:00.000Z",
-      scopes: ["openid", "chutes:invoke"],
+      scopes: ["openid", "inference:invoke"],
     });
     const rotated = registry.rotateOAuth({
       connectionId: "oauth",
       expectedGeneration: connected.generation,
       accessToken: "new-access-token",
       expiresAt: "2026-07-24T13:00:00.000Z",
-      scopes: ["openid", "chutes:invoke"],
+      scopes: ["openid", "inference:invoke"],
     });
 
     expect(rotated.generation).toBe(connected.generation);
@@ -383,6 +357,35 @@ describe("model catalog, session pins, and agent awareness", () => {
     expect(models.get("chutes-main", 2, "org/account-one")).toBeUndefined();
   });
 
+  it("states missing connection and model observations without claiming proof", () => {
+    const { providers, connections, models } = readyRuntime();
+    connections.updateCapabilities("chutes-main", {
+      invoke: { state: "unknown", source: "live-probe", checkedAt: CHECKED_AT },
+    });
+    expect(() => pinInferenceRoute(providers, connections, models, {
+      connectionId: "chutes-main",
+      modelId: "org/model",
+      pinnedAt: OBSERVED_AT,
+    })).toThrow("The inference connection does not currently report invocation access required for session pinning.");
+
+    connections.updateCapabilities("chutes-main", {
+      invoke: { state: "available", source: "live-probe", checkedAt: CHECKED_AT },
+    });
+    models.replaceConnectionModels("chutes-main", 1, "chutes", [{
+      ...model("chutes", "org/model", ["text-input", "text-output", "tool-calling"]),
+      availability: {
+        state: "unavailable",
+        source: "provider-directory",
+        observedAt: OBSERVED_AT,
+      },
+    }]);
+    expect(() => pinInferenceRoute(providers, connections, models, {
+      connectionId: "chutes-main",
+      modelId: "org/model",
+      pinnedAt: OBSERVED_AT,
+    })).toThrow("The selected model is currently reported unavailable by the model catalog.");
+  });
+
   it("pins provider, connection generation, and model semantics immutably", () => {
     const { providers, connections, models } = readyRuntime();
     const pin = pinInferenceRoute(providers, connections, models, {
@@ -391,7 +394,7 @@ describe("model catalog, session pins, and agent awareness", () => {
       pinnedAt: OBSERVED_AT,
     });
     expect(pin).toMatchObject({
-      provider: { id: "chutes", revision: 1, protocol: "chutes-e2ee-v1" },
+      provider: { id: "chutes", revision: 1, protocol: "openai-compatible" },
       connection: { id: "chutes-main", generation: 1 },
       model: { id: "org/model", contextWindowTokens: 128_000 },
     });
@@ -431,7 +434,7 @@ describe("model catalog, session pins, and agent awareness", () => {
       pinnedAt: OBSERVED_AT,
     });
     second.providers.register({
-      ...createChutesProviderDescriptor(),
+      ...CHUTES_PROVIDER,
       label: "Chutes changed",
     });
     expect(resolvePinnedInferenceRoute(
@@ -484,15 +487,15 @@ describe("model catalog, session pins, and agent awareness", () => {
 
   it("carries catalog model limits to the agent and omits the ones nobody observed", async () => {
     const { providers, connections, models } = readyRuntime();
-    const measured = model("chutes", "org/model", ["text-input", "text-output", "tool-calling"]);
-    const { contextWindowTokens, maxOutputTokens, ...unmeasured } = model(
+    const declared = model("chutes", "org/model", ["text-input", "text-output", "tool-calling"]);
+    const { contextWindowTokens, maxOutputTokens, ...undeclared } = model(
       "chutes",
-      "org/unmeasured",
+      "org/undeclared",
       ["text-input"],
     );
     expect(contextWindowTokens).toBe(128_000);
     expect(maxOutputTokens).toBe(16_384);
-    models.replaceConnectionModels("chutes-main", 1, "chutes", [measured, unmeasured]);
+    models.replaceConnectionModels("chutes-main", 1, "chutes", [declared, undeclared]);
 
     const snapshot = createInferenceAvailabilitySnapshot({
       providers,
@@ -505,7 +508,7 @@ describe("model catalog, session pins, and agent awareness", () => {
       contextWindowTokens: 128_000,
       maxOutputTokens: 16_384,
     });
-    const unknownRow = rows.find((row) => row.id === "org/unmeasured")!;
+    const unknownRow = rows.find((row) => row.id === "org/undeclared")!;
     expect(unknownRow).not.toHaveProperty("contextWindowTokens");
     expect(unknownRow).not.toHaveProperty("maxOutputTokens");
 
@@ -513,7 +516,7 @@ describe("model catalog, session pins, and agent awareness", () => {
     expect(prompt).toContain(
       "org/model[available;text-input,text-output,tool-calling;ctx=128000;out=16384]",
     );
-    expect(prompt).toContain("org/unmeasured[available;text-input]");
+    expect(prompt).toContain("org/undeclared[available;text-input]");
 
     // The agent's actual read surface is the tool result, not the renderer.
     const tool = new InspectInferenceConnectionsTool({
@@ -534,7 +537,7 @@ describe("model catalog, session pins, and agent awareness", () => {
       contextWindowTokens: 128_000,
       maxOutputTokens: 16_384,
     });
-    expect(toolRows.find((row) => row.id === "org/unmeasured"))
+    expect(toolRows.find((row) => row.id === "org/undeclared"))
       .not.toHaveProperty("contextWindowTokens");
   });
 
@@ -560,6 +563,8 @@ describe("model catalog, session pins, and agent awareness", () => {
       signal: new AbortController().signal,
     });
     expect(tool.definition.effect).toBe("read");
+    expect(tool.definition.description).toContain("observed availability");
+    expect(tool.definition.description).not.toContain("proved");
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(result.content)).toMatchObject({
       version: 1,
@@ -582,10 +587,22 @@ describe("model catalog, session pins, and agent awareness", () => {
 
 function providersWithChutes(oauth?: PublicPkceAuthMethod): InferenceProviderCatalog {
   return new InferenceProviderCatalog([
-    createChutesProviderDescriptor(oauth),
-    ...OFFICIAL_CLOUD_PROVIDERS,
+    oauth ? providerWithReviewedPkce(oauth) : OPENAI_PROVIDER,
+    ...OFFICIAL_CLOUD_PROVIDERS.filter((provider) => provider.id !== "openai"),
     localProvider(),
   ]);
+}
+
+function providerWithReviewedPkce(oauth: PublicPkceAuthMethod): InferenceProviderDescriptor {
+  return {
+    ...OPENAI_PROVIDER,
+    oauth: {
+      state: "configured-public-pkce",
+      authMethodId: oauth.id,
+      detail: "Configured browser PKCE metadata for the provider registry tests.",
+    },
+    authMethods: [oauth, ...OPENAI_PROVIDER.authMethods.filter((method) => method.kind !== "oauth-public-pkce")],
+  };
 }
 
 function localProvider(): InferenceProviderDescriptor {
@@ -614,24 +631,24 @@ function localProvider(): InferenceProviderDescriptor {
 
 function pkce(): PublicPkceAuthMethod {
   return {
-    id: "chutes-browser-pkce",
+    id: "airship-browser-pkce",
     kind: "oauth-public-pkce",
-    label: "Sign in with Chutes",
-    authorizationEndpoint: "https://api.chutes.ai/idp/authorize",
-    tokenEndpoint: "https://api.chutes.ai/idp/token",
+    label: "Airship browser PKCE",
+    authorizationEndpoint: "https://auth.example.test/authorize",
+    tokenEndpoint: "https://auth.example.test/token",
     clientId: "cid_airship-browser",
     redirectUris: [
-      "https://airship.example/auth/chutes/callback",
-      "http://127.0.0.1:4173/auth/chutes/callback",
+      "https://airship.example/auth/callback",
+      "http://127.0.0.1:4173/auth/callback",
     ],
-    scopes: ["openid", "profile", "chutes:invoke", "billing:read"],
+    scopes: ["openid", "profile", "inference:invoke"],
     tokenEndpointAuthMethod: "none",
     codeChallengeMethod: "S256",
     browserUse: "reviewed-direct",
     review: {
-      id: "chutes-airship-public-pkce",
+      id: "airship-public-pkce",
       reviewedAt: "2026-07-24T00:00:00.000Z",
-      sourceUrl: "https://api.chutes.ai/idp/apps/cid_airship-browser",
+      sourceUrl: "https://auth.example.test/clients/cid_airship-browser",
     },
   };
 }

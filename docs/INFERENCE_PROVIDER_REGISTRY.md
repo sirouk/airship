@@ -19,12 +19,25 @@ Airship keeps provider credentials in page memory and exposes one generic
 
 ## Connection rules
 
-- Cloud providers use direct browser API calls with user-supplied credentials.
+- The stock static build connects cloud providers with browser-direct API keys. It does not acquire provider OAuth grants or advertise provider account sign-in.
+- The generic registry can validate an already-issued, page-memory OAuth token for a host-composed or extension-relayed integration, but no official static provider entry configures that path.
 - Local providers are explicit loopback connections.
 - Credentials stay in page memory. They are not written to session storage,
   durable vaults, logs, or URLs.
 - Provider catalogs contribute provider metadata only. Models are runtime data
   discovered from each connected provider's own listing.
+
+## User-owned OpenAI-compatible endpoints
+
+The Providers screen can create an immutable page-lifetime descriptor from a
+name, HTTPS API base URL, optional model-catalog URL, and API-key header format.
+The key is held separately in the private connection registry. A failed catalog
+read publishes neither a connection nor a provider descriptor. Model selection
+is local; the first user turn checks inference access.
+
+The static CSP permits dynamic HTTPS connections for this purpose while keeping
+plaintext remote origins, wildcard hosts, and broad WebSocket schemes blocked.
+The provider remains responsible for browser CORS support.
 
 ## Session contract
 

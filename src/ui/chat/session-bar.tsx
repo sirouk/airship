@@ -13,10 +13,8 @@ import { TRANSCRIPT_INTRO_DEMO_LINE } from "./transcript-intro";
  *
  * It replaces an 88px two-column header plus a 42px guidance band: 219px of
  * chrome above an empty conversation on a 900px viewport, 24.3%, which is the
- * measurement this package exists to answer. Nothing in it was deleted — the
- * eyebrow moved into the monogram's accessible name, the trust row moved into
- * the status chip's popover, and the guidance band moved into the transcript
- * intro and the composer's permanent description.
+ * measurement this package exists to answer. Durability and lifecycle facts
+ * live in the status chip; guidance lives in the transcript intro and composer.
  *
  * The right cluster is ordered by how often it is *read*, not by how often it
  * is clicked, and the `+` sits at the end at every width: promoting it out of
@@ -29,11 +27,6 @@ export type SessionJournal = Readonly<{
   sessionId?: string;
   /** Present only for a forked conversation; the fork's source keeps its own target. */
   lineage?: Readonly<{ sourceSessionId: string; onOpen(): void }>;
-}>;
-
-export type PinnedSessionSkills = Readonly<{
-  skillSetDigest: string;
-  skills: readonly Readonly<{ skillId: string; name: string; digest: string }>[];
 }>;
 
 /**
@@ -339,27 +332,6 @@ export function SessionBar({
       </div>
     </div>
   );
-}
-
-export function pinnedSkillsLabel(count: number): string {
-  return `${count} skill${count === 1 ? "" : "s"} pinned to this conversation`;
-}
-
-/**
- * The whole sentence the pinned-skills popover used to render, now that the
- * chip that opened it no longer occupies a slot on the bar.
- *
- * A `<ul>` of names inside a 44px trigger became one line of prose because the
- * carrier changed: the runtime chip's sheet renders a claim as label plus
- * sentence, and a sentence is what a claim row can hold. Every name and every
- * short digest survives — the set digest included, because it is the thing a
- * reader compares against a manifest.
- */
-export function pinnedSkillsDetail(pin: PinnedSessionSkills): string {
-  const named = pin.skills.length
-    ? pin.skills.map((skill) => `${skill.name} (${skill.digest.slice(-9)})`).join(", ")
-    : "No Skill instructions were pinned.";
-  return `This immutable set composed the conversation prompt. Later Skill changes apply only to a new conversation. ${named} Skill-set digest ${pin.skillSetDigest}.`;
 }
 
 /**

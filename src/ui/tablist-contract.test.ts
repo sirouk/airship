@@ -3,25 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * `tabs.tsx` declares itself the single owner of the tablist contract, and
- * nothing enforced that. Four strips in the app carry `role="tablist"` without
- * adopting `Tabs` — Chutes access, the Connect method switch, Terminal sessions
- * and the Account provider strip — and three of them took the role as
- * styling-adjacent markup and shipped without the behaviour it obliges: a
- * roving tabindex and ←/→/Home/End moving selection and focus. Every one of
- * them was a strip a keyboard user could reach and then not move through.
+ * `tabs.tsx` owns keyboard movement for every tablist.
  *
- * The fourth is the reason this file checks provenance and not just presence.
- * The Account strip *had* a handler — it had its own arrow ladder, its own
- * wrap-around, its own Home/End — so a guard that only asked "is there an
- * onKeyDown" called it compliant while it was a second copy of the movement
- * rule. So the check below is: the movement rule must come from `nextTabId`.
- * That is what makes "one implementation of the tablist contract" a fact this
- * suite holds rather than a claim three comments make.
- *
- * `Tabs` itself hangs the handler on each tab button, which is why it is the
- * one exemption; every other tablist has to carry the handler on the element
- * that owns the role, where this check can see it.
+ * `Tabs` uses the shared rule internally. A specialized hand-rolled strip may
+ * keep its own markup, but it must import `nextTabId`, expose a roving tab stop,
+ * and bind selection to that same tab. This scan covers every TSX source so a
+ * new strip cannot silently opt out.
  */
 const OWNER = join("src", "ui", "tabs.tsx");
 
@@ -83,17 +70,10 @@ describe("the tablist contract", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("sees every hand-rolled strip in the app, not a fixture of three", () => {
-    // The guard this replaced named three surfaces and was blind to a fourth
-    // that had a movement rule of its own making. A scan that stops finding one
-    // of them has gone quiet, not clean, so the known four are named here — and
-    // a fifth is welcome, it simply has to pass the two checks above.
-    expect(handRolledTablists()).toEqual(expect.arrayContaining([
-      join("src", "ui", "access-view.tsx"),
-      join("src", "ui", "billing-view.tsx"),
-      join("src", "ui", "connect", "connect-surface.tsx"),
+  it("sees the specialized Terminal strip rather than a stale fixture ledger", () => {
+    expect(handRolledTablists()).toEqual([
       join("src", "ui", "terminal-view.tsx"),
-    ]));
+    ]);
   });
 });
 

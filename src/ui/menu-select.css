@@ -23,9 +23,6 @@
    menu. Both are `aria-hidden` presentational text: the listbox already
    carries the scope in its accessible name, and the note is additionally the
    listbox's `aria-describedby` target, so nothing here is sighted-only. */
-.menu-select-popover__header, .menu-select-popover__note { margin:0; padding:var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-micro); }
-.menu-select-popover__header { border-bottom:1px solid var(--line); }
-.menu-select-popover__note { border-top:1px solid var(--line); color:var(--ink-faint); }
 .menu-select-option:hover, .menu-select-option:focus-visible { border-color:var(--line); background:color-mix(in srgb,var(--accent) 8%,var(--surface-soft)); }
 .menu-select-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--accent) 38%,var(--line)); background:color-mix(in srgb,var(--accent) 11%,var(--surface-soft)); }
 .menu-select-check { color:var(--accent-bright); }
@@ -138,10 +135,6 @@
   /* Sticky, so the field this sheet sets and the way out of it are both legible
      after the list has been scrolled. */
   .menu-select[data-sheet="true"] .menu-select-sheet-header { display:flex; position:sticky; top:0; z-index:1; gap:var(--sp-2); align-items:center; justify-content:space-between; min-width:0; min-height:44px; padding:0 var(--sp-3); border-bottom:1px solid var(--line); background:var(--surface-raised); }
-  /* The title wraps rather than ellipsising: it is the only statement of which
-     control this sheet belongs to, and half of `Profile minimum proof posture`
-     names nothing. `padding-block` sits inside the 44px floor, so a one-line
-     title costs the route no extra height. */
   .menu-select[data-sheet="true"] .menu-select-sheet-header > strong { overflow-wrap:anywhere; padding-block:var(--sp-2); color:var(--ink-muted); font-size:var(--fs-micro); font-weight:var(--fw-strong); white-space:normal; }
   /*
    * Done: a 44px target with a 28px painted pill inside it.

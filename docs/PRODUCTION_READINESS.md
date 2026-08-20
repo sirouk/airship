@@ -1,12 +1,12 @@
 # Airship production readiness
 
-This document separates what the repository can prove from the launch work that
+This document separates what the repository can validate from the launch work that
 still depends on external infrastructure, provider registrations, and store
 reviews.
 
 ## Current release shape
 
-Airship is a static web application. A release must prove:
+Airship is a static web application. A release must validate:
 
 - the build stays static and self-contained;
 - the browser security headers remain correct;
@@ -38,7 +38,7 @@ npm run test:vault:live
 npm run test:pyodide:live
 ```
 
-## What `npm run check` proves
+## What `npm run check` validates
 
 `npm run check` runs the current local gate:
 

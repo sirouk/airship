@@ -55,8 +55,8 @@ describe("one implementation per question", () => {
   it("declares deepFreeze once outside the UI, and freezing a cycle terminates", async () => {
     const declarations = declaring(/^(?:export )?function deepFreeze</mu);
     expect(declarations.filter((file) => !IN_UI(file))).toEqual(["core/freeze.ts"]);
-    // src/ui/attestations-model.ts is the twentieth copy; src/ui belongs to a
-    // different owner in this pass. Never raise this number.
+    // src/ui/runtime-copy.ts is the remaining UI copy in this pass; src/ui
+    // belongs to a different owner here. Never raise this number.
     expect(declarations.filter(IN_UI).length).toBeLessThanOrEqual(1);
 
     // The behaviour the eight recurse-then-freeze copies got wrong. A fork seed
@@ -99,12 +99,4 @@ describe("one implementation per question", () => {
     expect(declaring(/^(?:export )?function requiredString\(value: JsonValue/mu)).toEqual(["tools/schema.ts"]);
   });
 
-  it("gives the shipped Chutes sign-in the shared PKCE primitives rather than copies", () => {
-    const chutes = readFileSync(resolve(repositoryRoot, "auth/chutes-oauth.ts"), "utf8");
-    expect(chutes).not.toMatch(/^function (?:bytesToBase64Url|constantTimeEqual|randomBase64Url)\(/mu);
-    expect(chutes).toContain('} from "./provider-oauth/pkce";');
-    // The hardcoded 48/32 that made PKCE_VERIFIER_BYTES an importerless constant.
-    expect(chutes).not.toContain("randomBase64Url(48,");
-    expect(chutes).not.toContain("randomBase64Url(32,");
-  });
 });

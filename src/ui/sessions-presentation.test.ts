@@ -8,13 +8,13 @@ import {
   sessionEmptyState,
   sessionEventCount,
   sessionIntegrityRow,
+  sessionReceiptAssessmentDetail,
   sessionLineage,
   shortSessionId,
   titleMatchSegments,
   sessionReconnectPlan,
   type SessionIntegrityInput,
 } from "./sessions-presentation";
-import { CONNECT_LANE_IDS } from "./connect/connect-lanes";
 import {
   decideSessionResume,
   type ActiveSessionRuntime,
@@ -27,6 +27,7 @@ const NOW = new Date("2026-07-27T15:00:00.000Z");
 function integrityInput(overrides: Partial<SessionIntegrityInput> = {}): SessionIntegrityInput {
   return {
     history: { status: "consistent", label: "Journal structure passed", checkedEvents: 4, totalEvents: 4, turnCount: 2 },
+    verification: { scope: "structural-linkage-only", digestRecomputed: false, authenticity: "not-proven" },
     receiptCount: 0,
     lifecycle: { state: "idle", label: "Ready" },
     compatibility: { action: "resume", label: "Ready to resume" },
@@ -101,7 +102,7 @@ describe("sessionIntegrityRow", () => {
     expect(row.pills[1]?.state).not.toBe("failed");
     // The audit's own verdict is not withdrawn by the replay failure.
     expect(row.pills[0]?.label).toBe("Structure passed");
-    expect(row.pills[1]?.detail).toContain("History verified");
+    expect(row.pills[1]?.detail).toContain("History check passed");
     // …and the explanation cannot be hidden behind a collapsed control.
     expect(row.autoExpanded).toBe(true);
     expect(row.label).toContain("Transcript cannot be replayed");
@@ -125,17 +126,30 @@ describe("sessionIntegrityRow", () => {
     expect(row.autoExpanded).toBe(true);
   });
 
-  it("does not colour a receipt count as a verdict", () => {
+  it("does not colour a receipt count as a verdict and carries the assessment limit", () => {
     const row = sessionIntegrityRow(integrityInput({ receiptCount: 3 }));
-    expect(row.pills[2]).toMatchObject({ state: "none", label: "3 receipts" });
+    expect(row.pills[2]).toMatchObject({
+      state: "none",
+      label: "3 receipts",
+      detail: "Structural linkage only · digests not recomputed · authenticity not proven",
+    });
+    expect(row.label).toContain("Receipt assessment: Structural linkage only");
     expect(row.state).toBe("verified");
+  });
+
+  it("derives receipt scope copy from the assessment instead of upgrading it", () => {
+    expect(sessionReceiptAssessmentDetail({
+      scope: "structural-linkage-only",
+      digestRecomputed: false,
+      authenticity: "not-proven",
+    })).toBe("Structural linkage only · digests not recomputed · authenticity not proven");
   });
 
   it("states what the expansion contains in its own accessible name", () => {
     const row = sessionIntegrityRow(integrityInput());
     expect(row.label).toContain("Structure passed");
     expect(row.label).toContain("runtime decision");
-    expect(row.label).toContain("proof scope");
+    expect(row.label).toContain("local inspection details");
   });
 
   /*
@@ -343,52 +357,54 @@ describe("sessionReconnectPlan", () => {
   const CONVERSATION = "3f2c1b0a-0000-4000-8000-000000000001";
 
   function pins(overrides: Partial<SessionPins> = {}): SessionPins {
-    return Object.freeze({
+    const value: SessionPins = {
       protocolVersion: 2,
-      providerId: "chutes-e2ee-v1",
-      model: "zai-org/GLM-5.2-TEE",
+      providerId: "openai",
+      model: "models/pinned-route",
       inferenceBinding: {
         version: 1,
-        connectionId: "conn-1",
+        connectionId: "remote-connection-1",
         connectionGeneration: 3,
-        providerId: "chutes-e2ee-v1",
-        providerLabel: "Chutes",
+        providerId: "openai",
+        providerLabel: "Pinned provider",
         providerRevision: 2,
         authMethod: "api-key",
-        transportBoundary: "e2ee-attestable",
-        modelId: "zai-org/GLM-5.2-TEE",
+        transportBoundary: "provider-tls",
+        modelId: "models/pinned-route",
         boundAt: "2026-07-27T10:25:00.000Z",
       },
       workspaceId: "workspace-1",
       capabilityTier: "web-enhanced",
       systemPromptDigest: "sha256:prompt",
       toolManifestDigest: "sha256:tools",
-      posture: { basis: "manifest", value: "encrypted-unattested", observedValues: ["encrypted-unattested"], mixed: false },
+      posture: { basis: "manifest", value: "plaintext-remote", observedValues: ["plaintext-remote"], mixed: false },
       ...overrides,
-    } as SessionPins);
+    };
+    return Object.freeze(value);
   }
 
   function runtime(overrides: Partial<ActiveSessionRuntime> = {}): ActiveSessionRuntime {
-    return Object.freeze({
-      providerId: "airship-demo",
-      model: "airship/demo-v1",
+    const value: ActiveSessionRuntime = {
+      providerId: "anthropic",
+      model: "models/active-route",
       posture: "local",
       toolManifestDigest: "sha256:tools",
       workspaceId: "workspace-1",
       ...overrides,
-    } as ActiveSessionRuntime);
+    };
+    return Object.freeze(value);
   }
 
-  const HISTORY: SessionHistoryAssessment = Object.freeze({
+  const HISTORY = Object.freeze({
     status: "consistent",
     label: "Locally consistent",
-    verification: { scope: "structural-linkage-only" as const, digestRecomputed: false as const, authenticity: "not-proven" as const },
+    verification: Object.freeze({ scope: "structural-linkage-only", digestRecomputed: false, authenticity: "not-proven" }),
     checkedEvents: 110,
     totalEvents: 110,
     turnCount: 12,
     completedTurnCount: 12,
-    issues: [],
-  });
+    issues: Object.freeze([]),
+  } satisfies SessionHistoryAssessment);
 
   function plan(sessionPins = pins(), active = runtime()) {
     const compatibility = decideSessionResume(sessionPins, HISTORY, active);
@@ -401,10 +417,10 @@ describe("sessionReconnectPlan", () => {
     expect(compatibility.action).toBe("fork-required");
     expect(compatibility.reasons.map((reason) => reason.code)).toContain("PROVIDER_MISMATCH");
     expect(reconnect?.header).toBe(
-      "CANNOT CONTINUE HERE — this tab is on airship-demo · demo-v1; this conversation is pinned to Chutes · GLM-5.2-TEE. Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
+      "CANNOT CONTINUE HERE — this tab is on anthropic · active-route; this conversation is pinned to Pinned provider · pinned-route. Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
     );
-    expect(reconnect?.primaryLabel).toBe("Check exact Chutes · GLM-5.2-TEE connection");
-    expect(reconnect?.secondaryLabel).toBe("Continue with airship-demo · demo-v1");
+    expect(reconnect?.primaryLabel).toBe("Check exact Pinned provider · pinned-route connection");
+    expect(reconnect?.secondaryLabel).toBe("Continue with anthropic · active-route");
     // A pinned posture the demo runtime cannot offer is a real fourth
     // difference, so the shorter claim below is withheld here.
     expect(reconnect?.connectionOnly).toBe(false);
@@ -416,36 +432,31 @@ describe("sessionReconnectPlan", () => {
    * can continue the source conversation.
    */
   it("classifies pure route drift without saying a new connection is the missing remedy", () => {
-    const { plan: reconnect } = plan(pins(), runtime({ posture: "encrypted-unattested" }));
+    const { plan: reconnect } = plan(pins(), runtime({ posture: "plaintext-remote" }));
     expect(reconnect?.connectionOnly).toBe(true);
     expect(reconnect?.header).toContain("Check whether this page still holds that exact pinned connection");
     expect(reconnect?.header).not.toContain("only thing missing");
     expect(reconnect?.primaryLabel).not.toContain("continue");
   });
 
-  it("carries the lane, auth method, model, and exact connection generation the conversation pinned", () => {
+  it("carries the provider, auth method, model, and exact connection generation the conversation pinned", () => {
     const href = plan().plan?.href ?? "";
     const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
     expect(href.startsWith("#connection?")).toBe(true);
     expect(query.get("method")).toBe("api-key");
-    expect(query.get("model")).toBe("zai-org/GLM-5.2-TEE");
-    expect(query.get("connection")).toBe("conn-1");
-    expect(query.get("generation")).toBe("3");
-    expect(query.get("return")).toBe(CONVERSATION);
-    /*
-     * And the lane token is one `#connection` actually has. It is derived from the
-     * provider id's first segment rather than transcribed, so `chutes-e2ee-v1`
-     * and a future `chutes-oauth` land on one lane without a second table to
-     * keep in step; this is the assertion that the derivation is not fiction.
-     */
-    expect(CONNECT_LANE_IDS).toContain(query.get("lane"));
+    expect(query.get("model")).toBe("models/pinned-route");
+    expect(query.get("connectionId")).toBe("remote-connection-1");
+    expect(query.get("connectionGeneration")).toBe("3");
+    expect(query.get("returnSessionId")).toBe(CONVERSATION);
+    expect(query.get("providerId")).toBe("openai");
+    expect(query.has("lane")).toBe(false);
   });
 
   it("promotes every pin that carries an identifier into a pinned/active row", () => {
     expect(plan().plan?.deltas).toEqual([
-      { label: "Provider", pinned: "chutes-e2ee-v1", active: "airship-demo" },
-      { label: "Model", pinned: "zai-org/GLM-5.2-TEE", active: "airship/demo-v1" },
-      { label: "Posture", pinned: "encrypted-unattested", active: "local" },
+      { label: "Provider", pinned: "openai", active: "anthropic" },
+      { label: "Model", pinned: "models/pinned-route", active: "models/active-route" },
+      { label: "Posture", pinned: "plaintext-remote", active: "local" },
     ]);
   });
 
@@ -478,8 +489,8 @@ describe("sessionReconnectPlan", () => {
    */
   it("stays absent when reconnecting would not cure the refusal", () => {
     const governed = pins({
-      providerId: "airship-demo",
-      model: "airship/demo-v1",
+      providerId: "anthropic",
+      model: "models/active-route",
       inferenceBinding: undefined,
       profile: {
         profileId: "general", profileRevision: "rev-2", themeId: "brass", themeDigest: "sha256:t",
@@ -488,7 +499,7 @@ describe("sessionReconnectPlan", () => {
       },
     });
     const active = runtime({
-      posture: "encrypted-unattested",
+      posture: "plaintext-remote",
       profile: {
         profileId: "general", profileRevision: "rev-3", themeDigest: "sha256:t",
         skillSetDigest: "sha256:s", resolutionDigest: "sha256:r",
@@ -502,7 +513,7 @@ describe("sessionReconnectPlan", () => {
   });
 
   it("stays absent when the runtime is willing to resume, and when there is no runtime", () => {
-    const matched = runtime({ providerId: "chutes-e2ee-v1", model: "zai-org/GLM-5.2-TEE", posture: "encrypted-unattested" });
+    const matched = runtime({ providerId: "openai", model: "models/pinned-route", posture: "plaintext-remote" });
     const source = pins({ inferenceBinding: undefined });
     const compatibility = decideSessionResume(source, HISTORY, matched);
     expect(compatibility.action).toBe("resume");

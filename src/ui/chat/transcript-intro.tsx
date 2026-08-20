@@ -1,7 +1,7 @@
-import type { ConversationReceipt } from "../../receipts/types";
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
 import type { SessionPresentationMarker } from "./session-message-presentation";
 import { densityAllows, usePresentationDensity } from "../density";
+import { RunDetails } from "./run-details";
 
 /**
  * What an empty conversation says, in one place.
@@ -149,12 +149,6 @@ export function TranscriptIntro({
 
 export type TranscriptMarkerProps = Readonly<{
   marker: SessionPresentationMarker;
-  /**
-   * Opens Proof at this marker's receipt. Only markers that record a billed
-   * provider request have one, so the control appears only where there is
-   * something to open.
-   */
-  onOpenProof?: (receipt: ConversationReceipt) => void;
 }>;
 
 /**
@@ -171,14 +165,12 @@ export type TranscriptMarkerProps = Readonly<{
  * event type, so a marker on screen can be found in the journal it came from,
  * and so a record this build cannot read still says exactly where it is.
  *
- * Where the record is an out-of-turn *inference* — today, the naming call — it
- * also carries a receipt, and this is the only surface that can hand that
- * receipt to Proof: turn receipts arrive on assistant rows, and a record with no
- * row had no route at all. A receipt nothing can open is not evidence.
+ * Historical or imported out-of-turn inference records can carry a receipt.
+ * The neutral run metadata stays visible even though the record is not an
+ * assistant row. Current conversation naming is local and creates no request.
  */
-export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps) {
+export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
   const density = usePresentationDensity();
-  const receipt = marker.receipt;
   return (
     <div
       class="transcript-marker"
@@ -187,6 +179,7 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
       aria-label={`Session record. ${marker.detail}`}
     >
       <p class="transcript-marker__detail">{marker.detail}</p>
+      {marker.receipt ? <RunDetails receipt={marker.receipt} /> : null}
       {/* The inherited turns, readable. The count in the sentence above was the
           only evidence a branch carried anything, and it sat over an empty
           transcript showing the newcomer empty state — so the person was asked
@@ -207,26 +200,12 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
         </details>
       ) : null}
       {/* The provenance line is raw detail — sequence, kind, digest — which
-          the mantra puts one deliberate action away, always; and the proof
-          verb is proof chrome, which retires with the density. The record's
-          own sentence above is neither. */}
+          the mantra puts one deliberate action away, always. The record's own
+          sentence above is neither. */}
       {densityAllows("raw", density) ? (
         <p class="transcript-marker__provenance">
           {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
         </p>
-      ) : null}
-      {receipt && onOpenProof && densityAllows("proof", density) ? (
-        <button
-          type="button"
-          class="transcript-marker__proof"
-          // The receipt id is in the name because a conversation can hold more
-          // than one of these records, and "Open proof" alone would give a
-          // screen-reader user several identically named controls.
-          aria-label={`Open proof for receipt ${receipt.receiptId}`}
-          onClick={() => onOpenProof(receipt)}
-        >
-          Open proof
-        </button>
       ) : null}
     </div>
   );

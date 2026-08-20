@@ -17,7 +17,7 @@ import {
   terminalGitNotice,
   terminalPanelAutoStart,
   terminalPersistenceNotice,
-  terminalSealState,
+  terminalStatusMarkState,
   terminalTypography,
   terminalUnreconciledInputs,
   TERMINAL_KEYBOARD_OWNERSHIP,
@@ -42,14 +42,14 @@ describe("terminal runtime band", () => {
   });
 });
 
-describe("terminal status in the one seal vocabulary", () => {
+describe("terminal status in the shared status vocabulary", () => {
   it("maps every lifecycle state without inventing a verdict", () => {
-    expect(terminalSealState("running")).toBe("verified");
-    expect(terminalSealState("starting")).toBe("checking");
-    expect(terminalSealState("failed")).toBe("failed");
-    expect(terminalSealState("restart-required")).toBe("attention");
+    expect(terminalStatusMarkState("running")).toBe("verified");
+    expect(terminalStatusMarkState("starting")).toBe("checking");
+    expect(terminalStatusMarkState("failed")).toBe("failed");
+    expect(terminalStatusMarkState("restart-required")).toBe("attention");
     // An exited process is a finished process, not a broken one.
-    expect(terminalSealState("exited")).toBe("none");
+    expect(terminalStatusMarkState("exited")).toBe("none");
   });
 });
 
@@ -92,8 +92,7 @@ describe("terminal durability wording", () => {
     const durability = inferredTerminalDurability(workspace);
     expect(durability.state).toBe("local");
     expect(durability.label).toBe("Client-encrypted workspace · tier unknown");
-    expect(durability.detail).toContain("backing tier was not supplied");
-    expect(durability.detail).toContain("does not claim device or cloud synchronization");
+    expect(durability.detail).toBe("The active workspace reports Airship client-envelope support; its backing tier is unknown.");
     expect(terminalPersistenceNotice(durability, "profile-a")).toContain("Processes still restart after reload");
   });
 
@@ -719,35 +718,23 @@ describe("the terminal's one Git command surface", () => {
   });
 });
 
-describe("the tab rename affordance on touch surfaces", () => {
+describe("the terminal tab actions on touch surfaces", () => {
   /*
-   * 34px wide, no height, and invisible until hover: the rename control had
-   * no reachable path on a device that cannot hover.
-   *
-   * This used to assert a split — the phone block lifts it to 44px, the coarse
-   * block keeps it painted — and the split was the defect. Paint and size are
-   * one question ("is a finger doing the pointing"), and answering them on two
-   * different queries meant every coarse pointer outside the phone width got
-   * one answer and not the other: measured on the built tree, a tablet at
-   * 768x1024 and a landscape phone at 932x430 both rendered this control
-   * *visible* and 34x44 — floored on the axis it never needed, 10px under on
-   * the axis it did, and the previous version of this test read that as a pass
-   * because both strings it looked for were present.
-   *
-   * So the width floor now lives on the pointer query beside the paint, and
-   * this asserts that rather than the split. The phone block keeps its own
-   * copy: a narrow *desktop* window is a fine pointer, so `pointer: coarse` is
-   * false there and the width rule still has work to do.
+   * Rename used to be visible but 34px wide on a coarse pointer. Close then
+   * repeated the defect at 22×44. Paint and both size axes are one question:
+   * whether a finger is doing the pointing. Keep both actions in the same
+   * pointer query and do not duplicate the floor in a phone-width query.
    */
-  it("floors and paints the rename control on the same coarse-pointer query", () => {
+  it("floors and paints rename and close on the same coarse-pointer query", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const start = css.indexOf("@media(pointer:coarse){\n  .terminal-tab .terminal-tab__rename");
+    expect(start).toBeGreaterThan(-1);
+    const coarse = css.slice(start, css.indexOf("\n}", start) + 2);
+    expect(coarse).toContain(".terminal-tab .terminal-tab__rename");
+    expect(coarse).toContain(".terminal-tab .terminal-tab__close");
+    expect(coarse).toContain("min-width:var(--touch-target);min-height:var(--touch-target);opacity:1");
     const phone = css.slice(css.indexOf("@media(max-width:760px)"));
-    expect(phone).toContain(".terminal-tab .terminal-tab__rename{min-width:var(--touch-target);min-height:var(--touch-target);opacity:1}");
-    // Width and paint together — the floor may not be left behind on a width.
-    expect(css).toContain("@media(pointer:coarse){.terminal-tab .terminal-tab__rename{min-width:var(--touch-target);opacity:1}}");
-    // The height floor reaches it from `.terminal-route button`, so a coarse
-    // pointer has both axes; asserted here so removing that rule fails loudly.
-    expect(css).toMatch(/^\.terminal-route button\{[^}]*min-height:var\(--touch-target\)/mu);
+    expect(phone).not.toContain(".terminal-tab .terminal-tab__rename{min-width:var(--touch-target)");
   });
 
   /*

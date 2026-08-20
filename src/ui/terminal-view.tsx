@@ -15,7 +15,7 @@ import { Icon } from "./icons";
 import { densityAllows, usePresentationDensity } from "./density";
 import { RouteHeader } from "./route-header";
 import { useScrollEdges } from "./scroll-affordance";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import { readTerminalDockState, terminalDockStorageKey, terminalOpenRequestForAuthority, updateTerminalDockState, type TerminalOpenRequest } from "./terminal-dock-state";
 import "./terminal-view.css";
 
@@ -147,7 +147,7 @@ export function terminalUnreconciledInputs(sessions: readonly TerminalSessionSna
 }
 
 /** The one status vocabulary, fed by the terminal's own lifecycle. */
-export function terminalSealState(status: TerminalSessionSnapshot["status"]): SealState {
+export function terminalStatusMarkState(status: TerminalSessionSnapshot["status"]): StatusMarkState {
   if (status === "running") return "verified";
   if (status === "starting") return "checking";
   if (status === "failed") return "failed";
@@ -298,14 +298,14 @@ export function terminalGitNotice(outcome: TerminalGitOutcome): string {
     : `Airship Browser Git completed ${outcome.command} against the browser-owned repository at ${outcome.cwd} without changing it.`;
 }
 
-/** Infer only what the workspace port proves. App should pass its richer durability state. */
+/** Infer only what the workspace port reports. App should pass its richer durability state. */
 export function inferredTerminalDurability(workspace: WorkspacePort): TerminalDurability {
   const encryptionBoundary = (workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary;
   if (encryptionBoundary === "airship-client-envelope-v1") {
     return Object.freeze({
       state: "local",
       label: "Client-encrypted workspace · tier unknown",
-      detail: "The active workspace proves Airship's client-encryption boundary. Its backing tier was not supplied to Terminal, so this view does not claim device or cloud synchronization.",
+      detail: "The active workspace reports Airship client-envelope support; its backing tier is unknown.",
     });
   }
   return Object.freeze({
@@ -365,7 +365,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
    * so the second tab read as a word cut off at the frame edge: "Termina".
    *
    * The affordance is not invented here. `.tabs__strip` (tabs.tsx:336,
-   * routes.css:4753) and `.git-posture-chips` (sources-view.css:514) both
+   * routes.css:4753) and `.git-source-fact-chips` (sources-view.css:514) both
    * already paint a measured edge fade from this exact hook; this strip is the
    * one horizontal scroller in the route that never adopted it, because it
    * cannot adopt `Tabs` itself (a tab being renamed becomes a text input).
@@ -608,10 +608,10 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
         description="Interactive page-local processes with profile-scoped, workspace-backed tab metadata, bounded transcripts, input history, and lineage."
         headingId="terminal-title"
         notes={<>
-          {/* Verified against `manager.ts`, which spawns `jsh`, and against
+          {/* Checked against `manager.ts`, which spawns `jsh`, and against
               `execution-tools.ts`, where airship-sh is the agent's shell
               runtime. Neither claim is inferred from the other. */}
-          <p>Each tab spawns one persistent, interactive <code>jsh</code> PTY inside the page's WebContainer. It is not host Bash or Linux. The real WASIX Bash pack currently runs bounded disposable jobs, so Airship does not inject commands into it and mislabel that as a terminal.</p>
+          <p>Each tab spawns one persistent, interactive <code>jsh</code> PTY inside the page's WebContainer. It is not host Bash or Linux, and Airship does not present an unavailable shell as a terminal.</p>
           <p>{profileId ? `Owned by profile ${profileName ?? profileId}.` : "This app integration has not supplied a profile ID, so these are legacy unscoped tabs."} {threadId ? `Attached to conversation thread ${threadId}.` : "No conversation thread is attached to this route."}</p>
         </>}
         actions={<div class="terminal-route__actions">
@@ -734,9 +734,9 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
             onDblClick={() => beginRename(session)}
           >
             {/* The status word was printed twice within 90px — here and again
-                in the panel bar below. It is one seal now, and the word it
-                dropped is the seal's accessible name. */}
-            <Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} />
+                in the panel bar below. It is one status mark now, and the word it
+                dropped is the status mark's accessible name. */}
+            <StatusMark state={terminalStatusMarkState(session.status)} label={statusLabel(session)} density="dot" size={16} />
             <span class="terminal-tab__label"><strong>{session.name}</strong></span>
           </button>}
           <button class="terminal-tab__rename" type="button" aria-label={`Rename ${session.name}`} title="Rename terminal" onClick={() => beginRename(session)}>✎</button>
@@ -827,8 +827,8 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
 
       <footer class="terminal-route__footer" role="status">
         {persistenceFailure
-          ? <Seal state="attention" label="Terminal metadata is not reaching storage" density="dot" size={15} />
-          : <Icon name="proof" size={15} />}
+          ? <StatusMark state="attention" label="Terminal metadata is not reaching storage" density="dot" size={15} />
+          : <Icon name="check" size={15} />}
         <span>{terminalFooterNotice(notice, persistenceFailure)}</span>
       </footer>
     </section>
@@ -996,11 +996,11 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
 
   return <div class="terminal-panel" id={terminalPanelId(session.id)} role="tabpanel" aria-labelledby={terminalTabId(session.id)}>
     <div class="terminal-panel__bar">
-      {/* The seal is hidden from the accessible tree because the word it
+      {/* The status mark is hidden from the accessible tree because the word it
           carries is the `<strong>` immediately beside it — shape and word are
           both present visually, and the name is said once. */}
       <div>
-        <span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span>
+        <span aria-hidden="true"><StatusMark state={terminalStatusMarkState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span>
         <strong>{statusLabel(session)}</strong>
         {/* The measured defect: this chip printed the *workspace* path, so one
             frame carried "/workspace" here, "~/airship-node/airship-workspace"

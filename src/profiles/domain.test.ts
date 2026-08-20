@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { JsonValue } from "../core/contracts";
+import { sha256, stableStringify } from "../core/hash";
 import { AIRSHIP_CORE_CHARTER } from "../core/operating-charter";
 import {
   createGlobalSkillSettings,
@@ -83,7 +85,7 @@ describe("profile domain", () => {
     expect(Object.isFrozen(child.skillModes)).toBe(true);
   });
 
-  it("pins profile-owned workspace, memory, approvals, and proof posture into a v2 resolution", async () => {
+  it("pins profile-owned workspace, memory, and approvals into a v2 session resolution", async () => {
     const theme = await createThemeManifest(themeDraft(colors));
     const profile = await createProfileRevision({
       ...profileDraft(theme, {}),
@@ -93,11 +95,10 @@ describe("profile domain", () => {
     });
     const pin = await resolveProfileForSession({ profile, theme, skills: [], globalSkills: {} });
 
-    expect(profile.version).toBe(2);
+    expect(profile.version).toBe(3);
     expect(pin.workspaceBinding).toEqual({ kind: "workspace-id", workspaceId: "vault+gdrive://workspace/root" });
     expect(pin.memoryScope).toBe("session");
     expect(pin.approvalMode).toBe("auto-approve");
-    expect(pin.minimumPosture).toBe("encrypted-attested");
     expect(pin.resolutionDigest).toMatch(/^sha256:/u);
   });
 
@@ -150,7 +151,15 @@ describe("profile domain", () => {
 
   it("resolves legacy v1 profiles with explicit safe silo defaults without changing their digest", async () => {
     const theme = await createThemeManifest(themeDraft(colors));
-    const legacy = await createProfileRevision({ ...profileDraft(theme, {}), version: 1 });
+    const payload = {
+      ...profileDraft(theme, {}),
+      version: 1 as const,
+      minimumPosture: "local" as const,
+    };
+    const legacy = await validateProfileRevision({
+      ...payload,
+      revision: await sha256(stableStringify(payload as unknown as JsonValue)),
+    } as unknown as Parameters<typeof validateProfileRevision>[0]);
 
     expect(legacy.version).toBe(1);
     expect(resolveProfileSilo(legacy)).toEqual({
@@ -491,7 +500,6 @@ function profileDraft(
     systemPrompt: "Be careful and useful.",
     providerId: "chutes",
     model: "example/model",
-    minimumPosture: "encrypted-attested",
     theme: { themeId: theme.themeId, digest: theme.digest },
     skillModes,
     createdAt: "2026-07-18T00:00:00.000Z",

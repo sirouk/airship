@@ -189,7 +189,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
   const remote: Tool = {
     definition: {
       name: "git_remote",
-      description: "Clone or fetch a real Git remote directly from this browser. Airship never inserts a proxy, and this build's own Content-Security-Policy limits which origins Git Smart HTTP can reach at all — read git_inspect capabilities.remote.permittedOrigins first.",
+      description: "Clone or fetch a real Git remote directly from this browser. Airship never inserts a proxy, and this build's separate Git remote policy limits which origins Smart HTTP can reach — read git_inspect capabilities.remote.permittedOrigins first.",
       effect: "network",
       inputSchema: {
         type: "object",

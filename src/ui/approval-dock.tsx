@@ -82,7 +82,7 @@ export function approvalConsequenceSummary(facts: WriteApprovalFacts): string {
  * turn ended." for a refusal, "Local command complete; no model request made"
  * for an approval, a claim about the model containing neither the path nor the
  * byte count. The outcome half reuses `approvalOutcomeReason`, the same sentence
- * the journal keeps, so the audible proof and the durable proof carry one claim.
+ * the journal keeps, so audible feedback and the durable record stay aligned.
  *
  * An allow says the effect *may run*, never that it did: this surface decides
  * permission and does not observe execution, and a completion claim it cannot

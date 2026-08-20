@@ -33,14 +33,6 @@
   cursor: pointer;
   text-align: left;
 }
-
-/*
- * Every disclosure in the product is a `.popover__trigger`, so the touch floor
- * belongs to the primitive rather than to each route that remembered. Routes
- * had patched this individually (sessions, billing) while the shared control
- * stayed 24px tall on a coarse pointer — below the 44px rule everywhere the
- * route had not noticed.
- */
 @media (pointer: coarse) {
   .popover__trigger {
     min-height: 44px;
@@ -195,63 +187,9 @@
 .popover[data-side="above"][data-align="start"] .popover__panel { --popover-origin: bottom left; }
 .popover[data-side="above"][data-align="end"] .popover__panel { --popover-origin: bottom right; }
 
-/*
- * The anchored panel says what it is doing to the route, once the reader has
- * asked for it twice.
- *
- * The sheet has said this since the scrim below landed. The anchored tier never
- * did, and the judges read the result as the panel being in the way rather than
- * being a layer: at every fine-pointer width the route-header ⓘ opens directly
- * over the block it exists to explain. Measured with `elementsFromPoint` under
- * the panel's own centre line, on the build this replaces — `capabilities` at
- * 1440 covers `dd "0 concurrent"` and the `seal` that dates the reading;
- * `connection` covers `p.connect-lane__detail "Chutes sign-in is not available
- * in this build."`; `account` covers the route's only sentence.
- *
- * Geometry cannot answer this one, which is why the flip above is not also the
- * fix for it. These triggers sit in the route header with the whole route
- * beneath them, so there is nothing above to flip into — measured at 1440 the
- * pane's top edge is 24.6px above the trigger against a panel 142–240px tall —
- * and there is no gutter to move sideways into either: the route column spans
- * 258→1414 of a 1440px viewport, leaving 26px beside it, 23px at laptop-1024,
- * 18px at tablet-768 and 264px at wide-1920, against a 320px panel. Every
- * placement inside the pane lands on route content. What was missing was not a
- * better position; it was the panel admitting it is temporarily on top.
- *
- * So the same `--scrim` the sheet uses, on the same host `::before`, for the
- * same reason: content dimmed underneath a raised panel reads as content behind
- * something, and content at full contrast under an opaque card reads as content
- * that has been cut.
- *
- * `pointer-events: none` is the one place this deliberately differs from the
- * sheet, and the difference is what the two overlays are. A sheet covers the
- * route and takes the press so a reader cannot fire a control they can only
- * half see. An anchored panel covers a card's worth of a route that stays fully
- * legible and fully operable around it, and pressing straight through to what
- * you meant to press — which both dismisses the disclosure and does the thing —
- * is the behaviour this primitive has always had and that the suite relies on
- * (`e2e/catalog-enrichment-retry.spec.ts` presses an embedding choice with the
- * provenance panel open). Taking the press here would make an info chip modal
- * on a desktop for no defect that was reported. It also keeps the host's hit
- * area exactly as it was: a fixed pseudo that swallowed pointer events would
- * put the whole viewport inside `.popover`, so `onPointerLeave` would never
- * fire and the hover tier would stop being able to close itself.
- *
- * `[data-intent="commit"]` is the whole reason this is affordable. A fine
- * pointer opens these panels by hovering for 150ms, and dimming a route because
- * a cursor crossed a chip would be a worse defect than the one being fixed. A
- * click or an Enter is a different gesture: the reader has asked for this panel
- * and it stays until they dismiss it, which is precisely when the page behind
- * it needs to read as waiting. A hover-open panel keeps the route bright and
- * disappears the moment the pointer leaves — nothing is occluded for longer
- * than the glance that produced it.
- *
- * z-index 59 against the panel's 60. `.popover` sets no `z-index` and no
- * `transform`, so both resolve against the root: this paints over every layer
- * the routes use — 40 is the highest z-index in any route stylesheet — and
- * under the topbar (90–110) and the navigation band (100), which stay readable
- * and pressable exactly as the short-shape sheet's scrim leaves them.
- */
+/* A route-header popover necessarily covers route content on narrow layouts.
+   The non-interactive scrim makes that temporary layer explicit without
+   intercepting presses outside the anchored panel. */
 .popover[data-mode="anchored"][data-open="true"][data-intent="commit"]::before {
   content: "";
   position: fixed;
@@ -794,20 +732,20 @@
 }
 
 /*
- * The claim rows every disclosure body is made of.
+ * The detail rows every disclosure body is made of.
  *
  * `TrustPostureSheet` and the session-status chip render the same component
  * from different scopes, so a claim reads identically wherever a user reaches
  * it — and the `detail` sentence that used to be hover-only is body text here,
  * which is the whole point of the ladder on a device with no hover.
  */
-.popover__body .claim-rows {
+.popover__body .detail-rows {
   display: grid;
   gap: var(--sp-1);
 }
 
-.popover__body .claim-rows > button,
-.popover__body .claim-rows > p {
+.popover__body .detail-rows > button,
+.popover__body .detail-rows > p {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--sp-1) var(--sp-2);
@@ -823,14 +761,14 @@
   text-align: left;
 }
 
-.popover__body .claim-rows > button { cursor: pointer; }
-.popover__body .claim-rows > button:hover { background: var(--surface-soft); }
+.popover__body .detail-rows > button { cursor: pointer; }
+.popover__body .detail-rows > button:hover { background: var(--surface-soft); }
 
 /*
- * Explicit placement, because the row's source order is seal, sentence, arrow
+ * Explicit placement, because the row's source order is status mark, sentence, arrow
  * and auto-placement puts the arrow on a third line of its own.
  */
-.popover__body .claim-rows .seal {
+.popover__body .detail-rows .status-mark {
   grid-area: 1 / 1;
   justify-self: start;
   max-width: 100%;
@@ -842,18 +780,18 @@
  * session` reading as `Secure hardware not checked · this…` here would put a
  * truncation at the one place the full string is supposed to arrive.
  */
-.popover__body .claim-rows .seal .seal__label {
+.popover__body .detail-rows .status-mark .status-mark__label {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
 }
 
-.popover__body .claim-rows > button > span[aria-hidden="true"] {
+.popover__body .detail-rows > button > span[aria-hidden="true"] {
   grid-area: 1 / 2;
   color: var(--ink-faint);
 }
 
-.popover__body .claim-rows small {
+.popover__body .detail-rows small {
   grid-area: 2 / 1 / 3 / -1;
   color: var(--ink-muted);
   font-size: var(--fs-caption);
@@ -887,14 +825,6 @@
  * `--ink-muted` rather than `--ink-faint` because it has to be readable: a
  * pointer nobody can read is the same as no pointer.
  */
-.popover__scope-note {
-  margin: var(--sp-2) 0 0;
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--line);
-  color: var(--ink-muted);
-  font-size: var(--fs-caption);
-  line-height: 1.45;
-}
 
 /*
  * Reduced motion retracts the travel; the global reset handles the rest.

@@ -21,7 +21,7 @@ export type InferenceAvailabilityToolOptions = Readonly<{
   activeSession?: () => SessionInferenceRoutePin | undefined;
   now?: () => number;
   limits?: Partial<InferenceAvailabilityLimits>;
-  /** Optional credential-free projection for an externally managed provider such as Chutes. */
+  /** Optional credential-free projection for an externally managed provider. */
   project?: (snapshot: InferenceAvailabilitySnapshot) => InferenceAvailabilitySnapshot;
 }>;
 
@@ -32,7 +32,7 @@ export type InferenceAvailabilityToolOptions = Readonly<{
 export class InspectInferenceConnectionsTool implements Tool {
   readonly definition = Object.freeze({
     name: "inspect_inference_connections",
-    description: "Inspect connected inference providers, proved availability, models, capabilities, and the immutable active-session route. Returns no credentials.",
+    description: "Inspect connected inference providers, observed availability, models, capabilities, and the immutable active-session route. Returns no credentials.",
     inputSchema: Object.freeze({
       type: "object",
       properties: Object.freeze({}),

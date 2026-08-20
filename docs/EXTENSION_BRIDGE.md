@@ -14,7 +14,8 @@ network paths and a few local acceleration tasks. It is not an Airship backend.
 
 - store provider credentials durably;
 - become the source of truth for sessions or vault state;
-- turn a provider connection into a stronger trust tier; or
+- turn a provider connection into a stronger trust tier;
+- acquire a provider OAuth grant or expose a built-in account sign-in flow; or
 - manufacture account authorization a provider did not already grant.
 
 ## Trust meaning

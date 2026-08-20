@@ -92,7 +92,7 @@ export class S3ObjectStore implements ReclaimableObjectStore {
     this.prefix = normalizePrefix(options.prefix ?? "");
     this.forcePathStyle = options.forcePathStyle ?? true;
     if (!this.forcePathStyle && this.bucket.includes(".")) {
-      throw new Error("Virtual-host S3 mode refuses dotted bucket names because they weaken exact-origin TLS/CSP assumptions.");
+      throw new Error("Virtual-host S3 mode refuses dotted bucket names because they weaken exact-origin TLS assumptions.");
     }
     this.credentialProvider = options.credentialProvider;
     // Window.fetch is a Web IDL method and some browsers reject calls whose

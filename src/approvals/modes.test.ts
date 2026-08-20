@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { JsonValue, ToolContext, ToolDefinition } from "../core/contracts";
+import type { ToolContext, ToolDefinition } from "../core/contracts";
 import { ApprovalBroker } from "./broker";
-import { approvalProvenance, createApprovalModePolicy, type SafetyReviewResult } from "./modes";
+import { approvalProvenance, createApprovalModePolicy } from "./modes";
 
 const writeTool: ToolDefinition = {
   name: "write_file",
@@ -71,49 +71,34 @@ describe("approval modes", () => {
     expect(write).toContain("path confinement");
   });
 
-  it("Auto Approve allows only a structured safe verdict and denies an unsafe verdict", async () => {
+  it("Auto Approve deterministically permits registered write effects without inference", async () => {
     const broker = new ApprovalBroker();
-    const safetyReview = vi.fn(async (_tool: ToolDefinition, _args: JsonValue): Promise<SafetyReviewResult> => ({
-      verdict: "safe" as const,
-      reason: "The write stays inside the revision-bound workspace.",
-      requestId: "review-safe",
-      model: "review-model",
-    }));
-    const policy = createApprovalModePolicy({ mode: "auto-approve", broker, safetyReview });
-    const safeContext = context("safe");
-    await expect(policy.review(writeTool, { path: "notes/a.md" }, safeContext)).resolves.toBe("allow");
-    expect(approvalProvenance(policy, safeContext)).toEqual({
-      mode: "auto-approve",
-      source: "model-review",
-      reason: "The write stays inside the revision-bound workspace.",
-      reviewRequestId: "review-safe",
-      reviewModel: "review-model",
-    });
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const writeContext = context("auto-write");
 
-    safetyReview.mockResolvedValueOnce({ verdict: "unsafe", reason: "Unexpected destructive scope" });
-    const unsafeContext = context("unsafe");
-    await expect(policy.review(writeTool, {}, unsafeContext)).resolves.toBe("deny");
+    await expect(policy.review(writeTool, { path: "notes/a.md" }, writeContext)).resolves.toBe("allow");
+    expect(approvalProvenance(policy, writeContext)).toMatchObject({
+      mode: "auto-approve",
+      source: "bounded-browser-sandbox",
+    });
+    expect(approvalProvenance(policy, writeContext)).toBeUndefined();
     expect(broker.snapshot().pending).toHaveLength(0);
-    expect(approvalProvenance(policy, unsafeContext)).toMatchObject({ source: "model-review" });
   });
 
-  it("Auto Approve fails closed to a human prompt when review is unavailable or malformed", async () => {
+  it("Auto Approve asks a person for execute, network, and identity effects", async () => {
     const broker = new ApprovalBroker();
-    const policy = createApprovalModePolicy({
-      mode: "auto-approve",
-      broker,
-      safetyReview: async () => ({ verdict: "indeterminate", reason: "Malformed structured output." }),
-    });
-    const toolContext = context();
-    const decision = policy.review(writeTool, {}, toolContext);
-    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
-    broker.decide(broker.snapshot().pending[0]!.id, "deny");
-    await expect(decision).resolves.toBe("deny");
-    expect(approvalProvenance(policy, toolContext)).toMatchObject({
-      mode: "auto-approve",
-      source: "human-fallback",
-    });
-    expect(approvalProvenance(policy, toolContext)).toBeUndefined();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    for (const effect of ["execute", "network", "identity"] as const) {
+      const toolContext = context(`auto-${effect}`);
+      const decision = policy.review({ ...writeTool, effect }, {}, toolContext);
+      await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+      broker.decide(broker.snapshot().pending[0]!.id, "deny");
+      await expect(decision).resolves.toBe("deny");
+      expect(approvalProvenance(policy, toolContext)).toMatchObject({
+        mode: "auto-approve",
+        source: "human-fallback",
+      });
+    }
   });
 
   /*

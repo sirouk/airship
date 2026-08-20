@@ -1,54 +1,31 @@
 import { effectiveSessionModel, type SessionRecord } from "../core/journal";
 
 /**
- * Where a chosen Chutes model lands, decided once and in words before any
- * network or journal work begins. The conversation-visible distinction the
- * whole feature exists for: a thread whose manifest pins the live
- * connection changes in place (one durable event, transcript and route
- * untouched), everything else keeps the pinned-fork semantics it had.
+ * Where a chosen model lands, decided once and in words before any journal
+ * work begins. Switching a conversation's model is one in-place durable
+ * override event on the thread itself — the same plan for every provider.
+ * There is no fork arm: forking is an explicit user action, never a side
+ * effect of choosing a model.
  */
-export type ChutesModelSwitchPlan =
+export type ModelSwitchPlan =
   | Readonly<{ kind: "noop" }>
-  | Readonly<{ kind: "in-place"; session: SessionRecord }>
-  | Readonly<{ kind: "fork" }>;
+  | Readonly<{ kind: "in-place"; session: SessionRecord }>;
 
-export function planChutesModelSwitch(args: Readonly<{
-  /** A reconnect request always takes the audited-reconnect path. */
-  reconnectIntent: boolean;
+export function planModelSwitch(args: Readonly<{
   /** The conversation on screen, when one is open. */
   activeSession?: SessionRecord;
-  /** The live connection identity the transport answers to. */
-  connectionId?: string;
-  /** The connection's own pinned model. */
-  connectionModel: string;
-  /** True when the connected lane is the active runtime, not a standby. */
-  activeConnection: boolean;
   /** The model the person just chose. */
   targetModelId: string;
-}>): ChutesModelSwitchPlan {
-  const { reconnectIntent, activeSession, connectionId, connectionModel, activeConnection, targetModelId } = args;
-  const sameThread = !reconnectIntent
-    && activeSession
-    && connectionId
-    && activeSession.manifest.inferenceBinding?.providerId === "chutes"
-    && activeSession.manifest.inferenceBinding.connectionId === connectionId
-    ? activeSession
-    : undefined;
+}>): ModelSwitchPlan {
+  const { activeSession, targetModelId } = args;
+  if (!activeSession) return { kind: "noop" };
   /*
-   * The record's *effective* model decides no-op, not the connection pin:
-   * choosing the pinned model while an override is active is the change
+   * The record's *effective* model decides no-op, not the manifest pin:
+   * choosing the birth model while an override is active is the change
    * "back to the thread's birth model", and must run, not exit.
    */
-  if (sameThread) {
-    if (targetModelId === effectiveSessionModel(sameThread)) return { kind: "noop" };
-    return { kind: "in-place", session: sameThread };
-  }
-  // No visible thread pins this connection: choosing the model the pinned
-  // connection already runs is a no-op, anything else is the fork it was.
-  if (!reconnectIntent && activeConnection && targetModelId === connectionModel) {
-    return { kind: "noop" };
-  }
-  return { kind: "fork" };
+  if (targetModelId === effectiveSessionModel(activeSession)) return { kind: "noop" };
+  return { kind: "in-place", session: activeSession };
 }
 
 /**

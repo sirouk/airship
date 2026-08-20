@@ -18,18 +18,12 @@ function responsesSse(includeTranscript: boolean): string {
 
 type OpenAiMock = Readonly<{
   unmocked: string[];
-  failNextResponse(): void;
-  holdNextResponse(): Promise<void>;
-  releaseHeldResponse(): Promise<void>;
+  readonly responseRequests: number;
 }>;
 
 async function mockOpenAi(page: Page): Promise<OpenAiMock> {
   const unmocked: string[] = [];
-  let holdNextResponse = false;
-  let failNextResponse = false;
-  let responseReached: (() => void) | undefined;
-  let releaseResponse: (() => void) | undefined;
-  let responseReleaseCompleted: (() => void) | undefined;
+  let responseRequests = 0;
   await page.route("https://api.openai.com/**", (route) => {
     unmocked.push(`${route.request().method()} ${route.request().url()}`);
     return route.fulfill({ status: 503, json: { error: "not mocked" } });
@@ -44,57 +38,18 @@ async function mockOpenAi(page: Page): Promise<OpenAiMock> {
     },
   }));
   await page.route("https://api.openai.com/v1/responses", async (route: Route) => {
-    if (failNextResponse) {
-      failNextResponse = false;
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { message: "Reconnect verification unavailable." } }),
-      });
-      return;
-    }
-    let heldResponse = false;
-    if (holdNextResponse) {
-      heldResponse = true;
-      holdNextResponse = false;
-      const released = new Promise<void>((resolve) => { releaseResponse = resolve; });
-      responseReached?.();
-      responseReached = undefined;
-      await released;
-      releaseResponse = undefined;
-    }
+    responseRequests += 1;
     const body = JSON.parse(route.request().postData() ?? "{}") as { input?: unknown };
     const includeTranscript = JSON.stringify(body.input).includes(USER_MARKER);
-    try {
-      await route.fulfill({
-        status: 200,
-        contentType: "text/event-stream",
-        body: responsesSse(includeTranscript),
-      });
-    } finally {
-      if (heldResponse) {
-        responseReleaseCompleted?.();
-        responseReleaseCompleted = undefined;
-      }
-    }
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: responsesSse(includeTranscript),
+    });
   });
   return Object.freeze({
     unmocked,
-    failNextResponse() {
-      if (failNextResponse || holdNextResponse || releaseResponse) throw new Error("A response outcome is already staged.");
-      failNextResponse = true;
-    },
-    holdNextResponse() {
-      if (holdNextResponse || releaseResponse) throw new Error("A response is already held.");
-      holdNextResponse = true;
-      return new Promise<void>((resolve) => { responseReached = resolve; });
-    },
-    releaseHeldResponse() {
-      if (!releaseResponse) throw new Error("No response has reached the hold point.");
-      const completed = new Promise<void>((resolve) => { responseReleaseCompleted = resolve; });
-      releaseResponse();
-      return completed;
-    },
+    get responseRequests() { return responseRequests; },
   });
 }
 
@@ -134,7 +89,7 @@ async function connectOpenAiCredential(page: Page, apiKey: string): Promise<void
 
 async function connectOpenAi(page: Page): Promise<void> {
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cloud and local models", exact: true, level: 2 })).toBeVisible();
   await page.keyboard.press("Escape");
   await connectOpenAiCredential(page, "sk-return-journey-page-memory");
 
@@ -149,7 +104,7 @@ async function connectOpenAi(page: Page): Promise<void> {
 
 async function connectAndActivateAnthropic(page: Page): Promise<void> {
   await page.evaluate(() => { window.location.hash = "#connection"; });
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cloud and local models", exact: true, level: 2 })).toBeVisible();
   await page.keyboard.press("Escape");
   const setup = page.locator("#provider-setup-anthropic");
   await setup.scrollIntoViewIfNeeded();
@@ -197,14 +152,13 @@ async function requestReturnToSourceConversation(page: Page): Promise<ReconnectJ
   await expect(page.getByRole("article", { name: "Your message" }).filter({ hasText: USER_MARKER })).toHaveCount(1);
   await expect(page.getByRole("article", { name: "Airship message" }).filter({ hasText: ASSISTANT_MARKER })).toHaveCount(1);
 
-  const modelMenu = page.getByRole("button", { name: /OpenAI session model/u });
-  const activeModel = (await modelMenu.innerText()).includes(FIRST_MODEL) ? FIRST_MODEL : SECOND_MODEL;
-  const otherModel = activeModel === FIRST_MODEL ? SECOND_MODEL : FIRST_MODEL;
-  await modelMenu.click();
-  await page.getByRole("listbox", { name: /OpenAI session model/u })
-    .getByRole("option", { name: new RegExp(otherModel, "u") })
-    .click();
-  await expect(modelMenu).toContainText(otherModel, { timeout: 30_000 });
+  // A model change on this same OpenAI connection is now resumable in place,
+  // so it cannot honestly exercise reconnect. Move current work to a distinct
+  // provider route; A then retains an inactive exact OpenAI binding.
+  await mockAnthropic(page);
+  await connectAndActivateAnthropic(page);
+  expect(page.url()).not.toContain(sourceSessionId!);
+  const activeModel = FIRST_MODEL;
 
   await page.evaluate(() => { window.location.hash = "#sessions"; });
   await expect(page.getByRole("heading", { name: "All conversations", exact: true })).toBeVisible();
@@ -224,12 +178,14 @@ async function requestReturnToSourceConversation(page: Page): Promise<ReconnectJ
   const reconnectHref = await reconnect.getAttribute("href");
   const reconnectQuery = new URLSearchParams(reconnectHref!.slice(reconnectHref!.indexOf("?") + 1));
   expect(reconnectHref).toMatch(/^#connection\?/u);
-  expect(reconnectQuery.get("return")).toBe(sourceSessionId);
+  expect(reconnectQuery.get("returnSessionId")).toBe(sourceSessionId);
+  expect(reconnectQuery.get("providerId")).toBe("openai");
+  expect(reconnectQuery.get("method")).toBe("api-key");
   expect(reconnectQuery.get("model")).toBe(activeModel);
-  expect(reconnectQuery.get("connection")).toMatch(/^[a-z0-9][a-z0-9._:/-]{0,127}$/u);
-  expect(reconnectQuery.get("generation")).toMatch(/^[1-9]\d*$/u);
+  expect(reconnectQuery.get("connectionId")).toMatch(/^[a-z0-9][a-z0-9._:/-]{0,127}$/u);
+  expect(reconnectQuery.get("connectionGeneration")).toMatch(/^[1-9]\d*$/u);
   await reconnect.click();
-  await expect(page).toHaveURL(/#connection\?lane=codex/u);
+  await expect(page).toHaveURL(/#connection\?providerId=openai&method=api-key/u);
 
   return {
     activeSessionId: activeSessionId!,
@@ -238,11 +194,62 @@ async function requestReturnToSourceConversation(page: Page): Promise<ReconnectJ
   };
 }
 
+type ReconnectDigestGate = {
+  mode: "pass" | "hold" | "fail";
+  reached: boolean;
+  release?: () => void;
+};
+
+async function armReconnectDigest(page: Page, mode: "hold" | "fail"): Promise<void> {
+  await page.evaluate((nextMode) => {
+    const gate = (globalThis as typeof globalThis & { __airshipReconnectDigestGate: ReconnectDigestGate })
+      .__airshipReconnectDigestGate;
+    gate.mode = nextMode;
+    gate.reached = false;
+  }, mode);
+}
+
+async function waitForReconnectDigest(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => (
+    globalThis as typeof globalThis & { __airshipReconnectDigestGate: ReconnectDigestGate }
+  ).__airshipReconnectDigestGate.reached)).toBe(true);
+}
+
+async function releaseReconnectDigest(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const gate = (globalThis as typeof globalThis & { __airshipReconnectDigestGate: ReconnectDigestGate })
+      .__airshipReconnectDigestGate;
+    gate.release?.();
+  });
+}
+
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
-    mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans",
-    vaultBackend: "ephemeral", approvalMode: "ask-first",
-  })));
+  await page.addInitScript(() => {
+    localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
+      mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans",
+      vaultBackend: "ephemeral", approvalMode: "ask-first",
+    }));
+    const gate: ReconnectDigestGate = { mode: "pass", reached: false };
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    Object.defineProperty(crypto.subtle, "digest", {
+      configurable: true,
+      value: async (...args: Parameters<SubtleCrypto["digest"]>) => {
+        if (gate.mode === "fail") {
+          gate.mode = "pass";
+          gate.reached = true;
+          throw new DOMException("The local reconnect digest check failed.", "OperationError");
+        }
+        if (gate.mode === "hold") {
+          gate.reached = true;
+          await new Promise<void>((resolve) => { gate.release = resolve; });
+          gate.release = undefined;
+          gate.mode = "pass";
+        }
+        return digest(...args);
+      },
+    });
+    Object.defineProperty(globalThis, "__airshipReconnectDigestGate", { value: gate });
+  });
 });
 
 test("an exact held route check offers continuation without creating another conversation", async ({ page }, testInfo) => {
@@ -250,13 +257,14 @@ test("an exact held route check offers continuation without creating another con
   test.setTimeout(90_000);
   const mock = await mockOpenAi(page);
   const journey = await requestReturnToSourceConversation(page);
+  const responseRequestsBeforeReconnect = mock.responseRequests;
   const connection = page.locator("article.provider-connection").filter({
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
   });
   await expect(connection.getByRole("button", { name: "OpenAI model for the requested conversation" })).toBeDisabled();
-  const responseHeld = mock.holdNextResponse();
+  await armReconnectDigest(page, "hold");
   await connection.getByRole("button", { name: "Continue requested conversation" }).click();
-  await responseHeld;
+  await waitForReconnectDigest(page);
   const returnNotice = page.locator(".provider-fabric__return--exact");
   await expect(returnNotice).toBeVisible();
   const pending = page.getByText("Connection change in progress", { exact: true });
@@ -274,11 +282,13 @@ test("an exact held route check offers continuation without creating another con
   expect(markerGeometry.progressWidth ?? 0).toBeGreaterThan(80);
   expect(markerGeometry.progressFlexBasis).not.toBe("7px");
   await expect(page.getByRole("button", { name: "Abandon return request" })).toHaveCount(0);
-  await mock.releaseHeldResponse();
+  await releaseReconnectDigest(page);
 
   await expect(page).toHaveURL(new RegExp(`#chat/${journey.sourceSessionId}$`, "u"), { timeout: 30_000 });
   await expect(page.getByRole("article", { name: "Your message" }).filter({ hasText: USER_MARKER })).toHaveCount(1);
   await expect(page.getByRole("article", { name: "Airship message" }).filter({ hasText: ASSISTANT_MARKER })).toHaveCount(1);
+  // Route selection and local audit must not spend a hidden model request.
+  expect(mock.responseRequests).toBe(responseRequestsBeforeReconnect);
 
   await page.evaluate(() => { window.location.hash = "#sessions"; });
   await expect(page.locator(".session-library-row")).toHaveCount(journey.countBeforeReconnect);
@@ -295,8 +305,9 @@ test("a failed exact route check answers beside the continuation control", async
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
   });
   const continueButton = connection.getByRole("button", { name: "Continue requested conversation" });
-  mock.failNextResponse();
+  await armReconnectDigest(page, "fail");
   await continueButton.click();
+  await waitForReconnectDigest(page);
 
   const failure = connection.locator(".provider-connection__activation-error");
   await expect(failure).toBeVisible();
@@ -317,14 +328,14 @@ test("Back cancels a held exact return before preparation or selection can publi
   const connection = page.locator("article.provider-connection").filter({
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
   });
-  const responseHeld = mock.holdNextResponse();
+  await armReconnectDigest(page, "hold");
   await connection.getByRole("button", { name: "Continue requested conversation" }).click();
-  await responseHeld;
+  await waitForReconnectDigest(page);
   await expect(page.getByText("Connection change in progress", { exact: true })).toBeVisible();
 
   await page.goBack();
   await expect(page).not.toHaveURL(/#connection\?/u);
-  await mock.releaseHeldResponse();
+  await releaseReconnectDigest(page);
   await page.evaluate(() => { window.location.hash = "#sessions"; });
   await expect(page.getByRole("heading", { name: "All conversations", exact: true })).toBeVisible();
   await expect(page.locator(".session-library-row")).toHaveCount(journey.countBeforeReconnect);
@@ -346,16 +357,16 @@ test("in-app navigation cancels a held exact return before selection can publish
    * the words the carriers share, so it takes the desktop shell's one. */
   const runtimeLine = page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text");
   const runtimeBeforeReconnect = await runtimeLine.innerText();
-  const responseHeld = mock.holdNextResponse();
+  await armReconnectDigest(page, "hold");
   await connection.getByRole("button", { name: "Continue requested conversation" }).click();
-  await responseHeld;
+  await waitForReconnectDigest(page);
   await expect(page.getByText("Connection change in progress", { exact: true })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Primary" })
     .getByRole("button", { name: "Chat", exact: true })
     .click();
   await expect(page).toHaveURL(new RegExp(`#chat/${journey.activeSessionId}$`, "u"));
-  await mock.releaseHeldResponse();
+  await releaseReconnectDigest(page);
   await expect(page).toHaveURL(new RegExp(`#chat/${journey.activeSessionId}$`, "u"));
   await expect(runtimeLine).toHaveText(runtimeBeforeReconnect);
 
@@ -390,7 +401,7 @@ test("an exact return protects its inactive pinned connection until the request 
   const reconnect = page.locator("a.session-library-reconnect__primary");
   await expect(reconnect).toBeVisible();
   await reconnect.click();
-  await expect(page).toHaveURL(/#connection\?lane=codex/u);
+  await expect(page).toHaveURL(/#connection\?providerId=openai&method=api-key/u);
 
   const sourceConnection = page.locator("article.provider-connection").filter({
     has: page.getByRole("heading", { name: "OpenAI", exact: true }),
