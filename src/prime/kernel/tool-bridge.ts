@@ -63,6 +63,12 @@ export class KernelToolBridge implements KernelBridgePort {
     };
     const meta = { jobId: request.jobId, seq: request.seq, label: label ?? null };
 
+    if (request.tool === "execute_code") {
+      const message = "The Prime kernel bridge cannot invoke execute_code recursively; return from the current kernel job before starting another.";
+      await this.failed(operationId, request, meta, message);
+      return { seq: request.seq, ok: false, error: message };
+    }
+
     try {
       registry.validateArguments(request.tool, request.arguments);
     } catch (error) {
