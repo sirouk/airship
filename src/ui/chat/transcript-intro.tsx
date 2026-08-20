@@ -1,7 +1,7 @@
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
 import type { SessionPresentationMarker } from "./session-message-presentation";
 import { densityAllows, usePresentationDensity } from "../density";
-import { RunDetails } from "./run-details";
+import { DeferredRunDetails } from "./deferred-run-details";
 
 /**
  * What an empty conversation says, in one place.
@@ -179,7 +179,7 @@ export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
       aria-label={`Session record. ${marker.detail}`}
     >
       <p class="transcript-marker__detail">{marker.detail}</p>
-      {marker.receipt ? <RunDetails receipt={marker.receipt} /> : null}
+      {marker.receipt ? <DeferredRunDetails receipt={marker.receipt} /> : null}
       {/* The inherited turns, readable. The count in the sentence above was the
           only evidence a branch carried anything, and it sat over an empty
           transcript showing the newcomer empty state — so the person was asked

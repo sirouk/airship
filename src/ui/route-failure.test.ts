@@ -22,7 +22,7 @@ describe("a failed route chunk is a stated fact with a way out", () => {
   it("gives every deferred route the same failure panel, not eight dead ends and one Retry", () => {
     for (const [title, state] of DEFERRED_ROUTES) {
       expect(app, `${title} routes its failure through the shared component`)
-        .toContain(`<RouteFailure title="${title}" message={${state}} onRetry={retryDeferredChunk}`);
+        .toContain(`<DeferredRouteFailure title="${title}" message={${state}} onRetry={retryDeferredChunk}`);
     }
     // The nine hand-written `<section class="work-view panel" role="alert">`
     // branches this replaces. Each shipped a heading, one sentence and no
@@ -85,7 +85,7 @@ describe("All conversations reports its own chunk failure", () => {
     expect(app).toContain("setRuntimeStatus(\"Session library interface could not be loaded\")");
     // Pending still renders the skeleton: the error branch is tested first, so
     // the skeleton is reachable only while nothing has failed.
-    expect(app).toMatch(/\) : sessionsViewError \? \(\s*<RouteFailure title="All conversations"/u);
+    expect(app).toMatch(/\) : sessionsViewError \? \(\s*<DeferredRouteFailure title="All conversations"/u);
     expect(app).toMatch(/<RouteSkeleton label="Loading conversation history" \/>/u);
   });
 });

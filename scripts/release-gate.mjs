@@ -363,9 +363,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // would have left 623 B, so raw takes 64 KiB and leaves 1,651 B; gzip stays
   // inside 20 KiB with 1,508 B.
   optionalSessionLibrary: Object.freeze({ raw: 64 * 1024, gzip: 20 * 1024 }),
-  // Session pin/digest construction runs during profile-session activation,
-  // after the shell can paint. Shared policy/mode code now owns its own lazy
-  // chunk, leaving this one at 1,037 B raw / 546 B gzip.
+  // Session pin/digest construction, receipt inspection, route recovery, and
+  // cross-tab status load after the shell can paint. They remain exact,
+  // separately named chunks under this unchanged aggregate ceiling.
   optionalSessionManifest: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
   // Pure keyboard/drop intent translation loads when a favorite is first
   // reordered; journal order remains owned by the Session Library.
@@ -1610,10 +1610,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
   const optionalSessionLibraryMeasurement = measure(optionalSessionLibraryPacks[0].payload);
   const optionalSessionManifestPacks = javaScriptFiles.filter((file) => isOptionalSessionManifestPath(file.path));
-  if (optionalSessionManifestPacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional session-manifest chunk; found ${optionalSessionManifestPacks.length}.`);
-  }
-  const optionalSessionManifestMeasurement = measure(optionalSessionManifestPacks[0].payload);
+  assertExactChunkStems(
+    "Post-paint session metadata",
+    optionalSessionManifestPacks.map((file) => file.path),
+    ["route-failure", "run-details", "session-manifest", "tab-presence"],
+  );
+  const optionalSessionManifestMeasurement = sumMeasurements(optionalSessionManifestPacks.map((file) => measure(file.payload)));
   const optionalFavoriteOrderingPacks = javaScriptFiles.filter((file) => isOptionalFavoriteOrderingPath(file.path));
   if (optionalFavoriteOrderingPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional favorite-ordering chunk; found ${optionalFavoriteOrderingPacks.length}.`);
@@ -2185,7 +2187,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         ...optionalSessionLibraryMeasurement,
       }),
       optionalSessionManifest: Object.freeze({
-        path: optionalSessionManifestPacks[0].path,
+        paths: Object.freeze(optionalSessionManifestPacks.map((file) => file.path)),
         ...optionalSessionManifestMeasurement,
       }),
       optionalFavoriteOrdering: Object.freeze({
@@ -2431,7 +2433,7 @@ export function isOptionalSessionLibraryPath(path) {
 }
 
 export function isOptionalSessionManifestPath(path) {
-  return /^assets\/session-manifest-[A-Za-z0-9_-]+\.js$/u.test(path);
+  return /^assets\/(?:route-failure|run-details|session-manifest|tab-presence)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalFavoriteOrderingPath(path) {

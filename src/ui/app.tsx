@@ -159,7 +159,7 @@ import { loadRetryableChunk } from "./chunk-recovery";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { ModelControl } from "./model-control";
-import { RunDetails } from "./chat/run-details";
+import { DeferredRunDetails } from "./chat/deferred-run-details";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
   PwaUpdateBanner,
@@ -287,10 +287,10 @@ import {
   TranscriptMarker,
   transcriptIntroNote,
 } from "./chat/transcript-intro";
-import { TabPresenceNote } from "./tab-presence";
+import { DeferredTabPresenceNote } from "./deferred-tab-presence";
 import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
 import { durabilityLabel, durabilityStatusMark, durabilityShort, type DurabilityState } from "./durability-indicator";
-import { RouteFailure } from "./route-failure";
+import { DeferredRouteFailure } from "./deferred-route-failure";
 import { RouteSkeleton } from "./route-skeleton";
 import type { ProfileSwitchFailure } from "./skills-manager-view";
 import {
@@ -8657,7 +8657,7 @@ export function App() {
           */}
           <span class="topbar-destination" aria-hidden="true">{destinationLabel(view) ?? "Airship"}</span>
           <div class="topbar-runtime-state" role="group" aria-label="Runtime state">
-          <TabPresenceNote />
+          <DeferredTabPresenceNote />
           </div>
         </div>
         <div class="topbar-actions">
@@ -9322,7 +9322,7 @@ export function App() {
             onFocusSessionConsumed={() => setSessionsFocusId(undefined)}
           />
         ) : sessionsViewError ? (
-          <RouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />
+          <DeferredRouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />
         ) : (
           <section class="work-view panel" aria-labelledby="session-library-loading-title">
             <RouteBar
@@ -9366,7 +9366,7 @@ export function App() {
           destinationArrival={destinationArrival}
           codeThemeId={profileCodeThemeId(catalog, activeProfile.profileId)}
           onCodeThemeChange={async (codeThemeId) => { await setProfileCodeThemeId(activeProfile.profileId, codeThemeId); }}
-        /> : editorViewError ? <RouteFailure title="Editor" message={editorViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
+        /> : editorViewError ? <DeferredRouteFailure title="Editor" message={editorViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current && gitClient ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}
           workspaceIdentity={runtime.current.workspaceId}
@@ -9380,7 +9380,7 @@ export function App() {
           openRequest={terminalOpenRequest}
           onOpenRequestHandled={(id) => setTerminalOpenRequest((current) => current?.id === id ? undefined : current)}
           workspaceRoot="/workspace"
-        /> : terminalViewError ? <RouteFailure title="Terminal" message={terminalViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser terminal" /> : null}
+        /> : terminalViewError ? <DeferredRouteFailure title="Terminal" message={terminalViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser terminal" /> : null}
         {view === "memory" || view === "context" ? MemoryScreen ? (
           <MemoryScreen
             key={`${profileId}:${sessionId ?? "no-session"}`}
@@ -9396,7 +9396,7 @@ export function App() {
             initialTab={view === "context" ? "index" : "search"}
             onOpenSource={(target) => void openMemorySource(target)}
           />
-        ) : memoryViewError ? <RouteFailure title="Memory" message={memoryViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading private memory" /> : null}
+        ) : memoryViewError ? <DeferredRouteFailure title="Memory" message={memoryViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading private memory" /> : null}
         {view === "profiles" || view === "capabilities" || view === "skills" ? <nav class="profile-hub-tabs" aria-label="Agent configuration">
           {([{"id":"profiles","label":"Profiles"},{"id":"skills","label":"Skills"},{"id":"capabilities","label":"Capabilities"}] as const).map((tab) => <button key={tab.id} type="button" aria-current={view === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}>{tab.label}</button>)}
         </nav> : null}
@@ -9452,7 +9452,7 @@ export function App() {
         ) : null}
         {view === "capabilities" ? CapabilitiesScreen ? (
           <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} inspectExtension={observeExtensionBridge} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
-        ) : capabilitiesViewError ? <RouteFailure title="Capabilities" message={capabilitiesViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
+        ) : capabilitiesViewError ? <DeferredRouteFailure title="Capabilities" message={capabilitiesViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
         {view === "skills" ? SkillsScreen ? (
           <SkillsScreen
             catalog={catalog}
@@ -9482,7 +9482,7 @@ export function App() {
               : undefined}
             scope={profileHubScope}
           />
-        ) : skillsViewError ? <RouteFailure title="Skills" message={skillsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Skills" /> : null}
+        ) : skillsViewError ? <DeferredRouteFailure title="Skills" message={skillsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Skills" /> : null}
         {view === "vault" ? (
           <div class="work-view vault-route">
             {VaultScreen ? <VaultScreen
@@ -9531,7 +9531,7 @@ export function App() {
               onDisconnect={localDeviceRuntimeAdopted || vaultSnapshot.phase !== "disconnected"
                 ? () => void disconnectVaultSafely()
                 : undefined}
-            /> : vaultViewError ? <RouteFailure title="Vault" message={vaultViewError} onRetry={retryDeferredChunk} class="panel" /> : <RouteSkeleton label="Loading the Vault interface" />}
+            /> : vaultViewError ? <DeferredRouteFailure title="Vault" message={vaultViewError} onRetry={retryDeferredChunk} class="panel" /> : <RouteSkeleton label="Loading the Vault interface" />}
             {preferences.vaultBackend === "local-device" ? (
               <div class="vault-setup-slot">
                 {LocalDeviceVaultSetupScreen ? <LocalDeviceVaultSetupScreen
@@ -9575,7 +9575,7 @@ export function App() {
             onActivate={activateExternalInference}
             onDisconnect={disconnectExternalInference}
           />
-        ) : providerFabricError ? <RouteFailure title="Providers" message={providerFabricError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Providers" /> : null}
+        ) : providerFabricError ? <DeferredRouteFailure title="Providers" message={providerFabricError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Providers" /> : null}
       </main>
       </ViewErrorBoundary>
 
@@ -11085,7 +11085,7 @@ function MessageCard({
             </span>
           </div>
         ) : null}
-        {message.receipt ? <RunDetails receipt={message.receipt} /> : null}
+        {message.receipt ? <DeferredRunDetails receipt={message.receipt} /> : null}
         {copyFailure ? <p class="message-copy-failure" role="alert">{copyFailure}</p> : null}
         {/* Pointer devices get a reserved footer toolbar that fades on
             hover/focus; touch devices get the disclosure below. This is
