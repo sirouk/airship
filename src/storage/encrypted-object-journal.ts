@@ -1,5 +1,6 @@
 import type { JsonValue, SessionManifest } from "../core/contracts";
 import { canonicalSessionContextPolicy } from "../core/context-policy";
+import { assertValidSessionInferenceBinding } from "../core/inference-binding";
 import {
   JournalConflictError,
   projectedSessionApprovalMode,
@@ -743,13 +744,25 @@ function validateManifest(value: Record<string, unknown>): asserts value is Sess
     requiredString(binding.transportBoundary, "manifest inference transport boundary");
     const modelId = requiredString(binding.modelId, "manifest inference model ID");
     requiredString(binding.boundAt, "manifest inference binding time");
+    if (binding.version === 2) {
+      requiredString(binding.transportId, "manifest inference transport ID");
+    }
     if (
-      binding.version !== 1 ||
+      (binding.version !== 1 && binding.version !== 2) ||
+      (binding.version === 2 && (
+        !["openai-responses", "openai-chat-completions", "anthropic-messages", "openai-compatible"]
+          .includes(String(binding.protocol)) ||
+        binding.providerId !== value.providerId
+      )) ||
       modelId !== value.model ||
       !["oauth-pkce", "api-key", "local-none"].includes(String(binding.authMethod)) ||
-      !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(binding.transportBoundary)) ||
+      !(binding.version === 1
+        ? ["e2ee-attestable", "provider-tls", "loopback-local"]
+        : ["provider-tls", "loopback-local"]
+      ).includes(String(binding.transportBoundary)) ||
       !Number.isFinite(Date.parse(String(binding.boundAt)))
     ) throw new Error("Encrypted session inference binding is invalid.");
+    assertValidSessionInferenceBinding(value as Pick<SessionManifest, "providerId" | "model" | "inferenceBinding">);
   }
 }
 
