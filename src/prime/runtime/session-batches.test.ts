@@ -156,15 +156,16 @@ describe("prime read-effect batching, journal evidence", () => {
     ]);
     const result = await fix.session.prompt("run the mixed batch");
     expect(result.outcome).toBe("completed");
-    // Barrier discipline: read_a settles before write_b starts; the second
-    // read run starts only after write_b settles, and d(5) settles before
-    // c(30) — concurrency inside the run, serialization across the barrier.
-    expect(log).toEqual([
+    // Barrier discipline: read_a settles before write_b starts, and the
+    // second read run starts only after write_b settles. Its invocations may
+    // enter adjacent microtasks in either order, but both start before d(5)
+    // settles and then c(30) settles — concurrency inside the run.
+    expect(log.slice(0, 4)).toEqual([
       "read_a:start", "read_a:end",
       "write_b:start", "write_b:end",
-      "read_c:start", "read_d:start",
-      "read_d:end", "read_c:end",
     ]);
+    expect([...log.slice(4, 6)].sort()).toEqual(["read_c:start", "read_d:start"]);
+    expect(log.slice(6)).toEqual(["read_d:end", "read_c:end"]);
     const events = await fix.journal.readEvents(fix.sessionId);
     const results = events.filter((event) => event.type === "tool.resulted");
     expect(results.map((event) => event.operationId)).toEqual(["call-a", "call-b", "call-c", "call-d"]);
