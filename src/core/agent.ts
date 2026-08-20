@@ -154,6 +154,8 @@ const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/gu;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
+const PRIME_RUNTIME_MISMATCH = "runtime selection mismatch: this session is prime-pinned by journal records; fork the session to use the airship-core runtime.";
+const TERMINAL_RECONCILIATION_FAILED = "The turn failed and its durable terminal state could not be reconciled.";
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
@@ -190,7 +192,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   // conflict path below covers the complementary ordering where Prime lands
   // after this read but before Core's compare-and-set.
   if (existingEvents.some((event) => event.type.startsWith("prime."))) {
-    throw new Error("runtime selection mismatch: this session is prime-pinned by journal records; fork the session to use the airship-core runtime.");
+    throw new Error(PRIME_RUNTIME_MISMATCH);
   }
   const unfinishedTurn = findUnfinishedProviderTurn(existingEvents);
   if (unfinishedTurn) {
@@ -281,7 +283,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     if (error instanceof JournalConflictError) {
       const currentEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
       if (currentEvents.some((event) => event.type.startsWith("prime."))) {
-        throw new Error("runtime selection mismatch: this session is prime-pinned by journal records; fork the session to use the airship-core runtime.");
+        throw new Error(PRIME_RUNTIME_MISMATCH);
       }
     }
     throw error;
@@ -820,7 +822,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       } catch (reconciliationError) {
         throw new AggregateError(
           [error, reconciliationError],
-          "The turn failed and its durable terminal state could not be reconciled.",
+          TERMINAL_RECONCILIATION_FAILED,
         );
       }
     }
@@ -842,7 +844,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         } catch (reconciliationError) {
           throw new AggregateError(
             [error, terminalError, reconciliationError],
-            "The turn failed and its durable terminal state could not be reconciled.",
+            TERMINAL_RECONCILIATION_FAILED,
           );
         }
         if (terminalRecovered) throw error;

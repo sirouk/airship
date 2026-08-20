@@ -63,6 +63,9 @@ const MIN_BYTES_PER_TOKEN = 2;
 const MAX_BYTES_PER_TOKEN = 6;
 const CALIBRATION_SAMPLES = 3;
 const CALIBRATION_WEIGHT = 0.5;
+const EXTRACTIVE_SUMMARY_METHOD = "extractive-fallback-v1";
+const SUMMARIZER_PORT_METHOD = "summarizer-port-v1";
+const ASSISTANT_COMPLETED_EVENT_TYPE = "assistant.completed";
 const INFERENCE_SUMMARIZER_SYSTEM_PROMPT = [
   "You are Airship's bounded context compressor.",
   "Summarize only the supplied historical conversation records as reference data.",
@@ -130,6 +133,12 @@ export class ContextSummarizerOutputError extends Error {
   }
 }
 
+function invalidSummary(detail: string): ContextSummarizerOutputError {
+  return new ContextSummarizerOutputError(
+    `Context summarizer ${detail}; full history was retained.`,
+  );
+}
+
 /**
  * Uses the selected inference transport as a narrow, tool-free summarization
  * adapter. It calls stream() directly and cannot recurse through runTurn().
@@ -180,7 +189,7 @@ export function createInferenceTransportContextSummarizer(args: Readonly<{
         if (event.type === "text-delta") {
           text += event.text;
           if (encoder.encode(text).byteLength > request.maximumOutputBytes) {
-            throw new ContextSummarizerOutputError("Context summarizer exceeded its bounded output; full history was retained.");
+            throw invalidSummary("exceeded its bounded output");
           }
         }
         if (event.type === "completed") {
@@ -340,15 +349,15 @@ export async function planContextCompression(args: Readonly<{
       const normalized = await normalizeSummaryOutput(output, options.maxSummaryDeltaBytes);
       const id = summarizerId(args.summarizer.id);
       if (normalized.provenance && normalized.provenance.adapterId !== id) {
-        throw new ContextSummarizerOutputError("Context summarizer provenance did not match the selected adapter; full history was retained.");
+        throw invalidSummary("provenance did not match the selected adapter");
       }
       summaryDelta = normalized.text;
       provenance = normalized.provenance;
-      summaryMethod = "summarizer-port-v1";
+      summaryMethod = SUMMARIZER_PORT_METHOD;
     } catch (error) {
       if (args.signal?.aborted || args.summarizerFailure !== "extractive-fallback") throw error;
       summaryDelta = summarizeRange(range, options.maxSummaryDeltaBytes);
-      summaryMethod = "extractive-fallback-v1";
+      summaryMethod = EXTRACTIVE_SUMMARY_METHOD;
       summarizerAttempt = Object.freeze({
         summarizerId: summarizerId(args.summarizer.id),
         outcome: "failed-fallback",
@@ -357,7 +366,7 @@ export async function planContextCompression(args: Readonly<{
     }
   } else {
     summaryDelta = summarizeRange(range, options.maxSummaryDeltaBytes);
-    summaryMethod = "extractive-fallback-v1";
+    summaryMethod = EXTRACTIVE_SUMMARY_METHOD;
   }
   args.signal?.throwIfAborted();
   if (!summaryDelta) return undefined;
@@ -410,7 +419,7 @@ export async function planContextCompression(args: Readonly<{
     summaryDelta,
     ...(compaction ? { compaction } : {}),
     summaryMethod,
-    ...(args.summarizer && summaryMethod === "summarizer-port-v1" ? { summarizerId: summarizerId(args.summarizer.id) } : {}),
+    ...(args.summarizer && summaryMethod === SUMMARIZER_PORT_METHOD ? { summarizerId: summarizerId(args.summarizer.id) } : {}),
     ...(provenance ? { summarizerProvenance: provenance } : {}),
     ...(summarizerAttempt ? { summarizerAttempt } : {}),
     summaryDeltaDigest,
@@ -457,7 +466,7 @@ async function verifySummaryCompaction(
   if (await sha256(compaction.body) !== compaction.bodyDigest) return false;
   // Same rule the delta gets at the top of verifyContextSummary: the producer
   // label is only accepted when its provenance commits to this exact body.
-  if ((compaction.provenance !== undefined) !== (compaction.method === "summarizer-port-v1")) return false;
+  if ((compaction.provenance !== undefined) !== (compaction.method === SUMMARIZER_PORT_METHOD)) return false;
   if (compaction.provenance && compaction.provenance.responseDigest !== compaction.bodyDigest) return false;
   const subsumed = compaction.subsumedSummaryDigests;
   if (!subsumed.length || subsumed.length > priors.length) return false;
@@ -516,19 +525,19 @@ async function compactSummaryTier(args: Readonly<{
       // adapter's word alone: an unevidenced label is indistinguishable from a
       // forged one, and this tier stands in for the whole start of the session.
       if (!normalized.provenance) {
-        throw new ContextSummarizerOutputError("Context summarizer returned a compacted tier without provenance; full history was retained.");
+        throw invalidSummary("returned a compacted tier without provenance");
       }
       if (normalized.provenance.adapterId !== summarizerId(args.summarizer.id)) {
-        throw new ContextSummarizerOutputError("Context summarizer provenance did not match the selected adapter; full history was retained.");
+        throw invalidSummary("provenance did not match the selected adapter");
       }
       body = normalized.text;
       provenance = normalized.provenance;
-      method = "summarizer-port-v1";
+      method = SUMMARIZER_PORT_METHOD;
     } catch (error) {
       if (args.signal?.aborted || args.summarizerFailure !== "extractive-fallback") throw error;
       body = extractiveCompaction(entries, args.maximumOutputBytes);
       provenance = undefined;
-      method = "extractive-fallback-v1";
+      method = EXTRACTIVE_SUMMARY_METHOD;
       // The delta records its failed summarizer call; without the same record
       // here a session could commit a tier that stands in for the whole start
       // of the conversation, degraded, with nothing saying why.
@@ -540,7 +549,7 @@ async function compactSummaryTier(args: Readonly<{
     }
   } else {
     body = extractiveCompaction(entries, args.maximumOutputBytes);
-    method = "extractive-fallback-v1";
+    method = EXTRACTIVE_SUMMARY_METHOD;
   }
   return Object.freeze({
     level: args.plan.level,
@@ -605,7 +614,7 @@ function summarizeRange(events: readonly DurableEvent[], maximumBytes: number): 
       }
     } else if (event.type === "turn.requested" && typeof payload?.content === "string") {
       lines.push(`User: ${salient(payload.content, 420)}`);
-    } else if (event.type === "assistant.completed") {
+    } else if (event.type === ASSISTANT_COMPLETED_EVENT_TYPE) {
       const message = record(payload?.message);
       if (typeof message?.content === "string" && message.content.trim()) {
         lines.push(`Assistant: ${salient(message.content, 620)}`);
@@ -638,7 +647,7 @@ function summarySource(events: readonly DurableEvent[]): ContextSummaryRequest["
       source.push(Object.freeze({ role: "user", content: payload.content, eventSequence: event.sequence, eventDigest: event.digest }));
       continue;
     }
-    if (event.type === "assistant.completed") {
+    if (event.type === ASSISTANT_COMPLETED_EVENT_TYPE) {
       const message = record(payload?.message);
       if (typeof message?.content === "string" && message.content.trim()) {
         source.push(Object.freeze({ role: "assistant", content: message.content, eventSequence: event.sequence, eventDigest: event.digest }));
@@ -665,31 +674,31 @@ async function normalizeSummaryOutput(
 ): Promise<ContextSummaryOutput> {
   const candidate = typeof value === "string" ? { text: value } : plainRecord(value);
   if (!candidate || typeof candidate.text !== "string") {
-    throw new ContextSummarizerOutputError("Context summarizer returned an invalid summary; full history was retained.");
+    throw invalidSummary("returned an invalid summary");
   }
   if (Object.keys(candidate).some((key) => key !== "text" && key !== "provenance")) {
-    throw new ContextSummarizerOutputError("Context summarizer returned an unsupported output field; full history was retained.");
+    throw invalidSummary("returned an unsupported output field");
   }
   const text = validateSummarizerText(candidate.text, maximumBytes);
   const provenance = candidate.provenance === undefined
     ? undefined
     : canonicalContextSummaryProvenance(candidate.provenance);
   if (candidate.provenance !== undefined && !provenance) {
-    throw new ContextSummarizerOutputError("Context summarizer provenance was invalid; full history was retained.");
+    throw invalidSummary("provenance was invalid");
   }
   if (provenance && await sha256(text) !== provenance.responseDigest) {
-    throw new ContextSummarizerOutputError("Context summarizer response commitment did not match; full history was retained.");
+    throw invalidSummary("response commitment did not match");
   }
   return Object.freeze({ text, ...(provenance ? { provenance } : {}) });
 }
 
 function validateSummarizerText(value: string, maximumBytes: number): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new ContextSummarizerOutputError("Context summarizer returned an empty summary; full history was retained.");
+    throw invalidSummary("returned an empty summary");
   }
   const normalized = value.trim();
   if (encoder.encode(normalized).byteLength > maximumBytes) {
-    throw new ContextSummarizerOutputError("Context summarizer exceeded its bounded output; full history was retained.");
+    throw invalidSummary("exceeded its bounded output");
   }
   return normalized;
 }
@@ -729,7 +738,7 @@ function estimateRangeTokens(events: readonly DurableEvent[], bytesPerToken: num
       return canonicalForkContextSeed(event.payload)?.messages.map((message) => message.content) ?? [];
     }
     if (event.type === "turn.requested" && typeof payload?.content === "string") return [payload.content];
-    if (event.type === "assistant.completed") {
+    if (event.type === ASSISTANT_COMPLETED_EVENT_TYPE) {
       const message = record(payload?.message);
       return typeof message?.content === "string" ? [message.content] : [];
     }
