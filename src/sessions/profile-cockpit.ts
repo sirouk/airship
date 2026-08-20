@@ -1,7 +1,7 @@
 import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
 import { enforcedMemoryScope } from "../profiles/domain";
-import { JournalConflictError, type DurableEvent, type EventJournal, type SessionRecord } from "../core/journal";
+import { JournalConflictError, type DurableEvent, type EventJournal, type JournalHead, type SessionRecord } from "../core/journal";
 
 export const PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE = "profile.active-conversation.selected";
 
@@ -117,7 +117,7 @@ export async function selectProfileActiveConversation(
   profileId: string,
   sessionId: string,
   options: Readonly<{
-    expectedTargetHead?: Readonly<{ sequence: number; digest: string }>;
+    expectedTargetHead?: JournalHead;
     signal?: AbortSignal;
   }> = {},
 ): Promise<SelectProfileActiveConversationResult> {
@@ -132,10 +132,12 @@ export async function selectProfileActiveConversation(
   const selectionHead = options.expectedTargetHead ?? {
     sequence: target.headSequence,
     digest: target.headDigest,
+    ...(target.headIncarnation ? { incarnation: target.headIncarnation } : {}),
   };
   if (
     target.headSequence !== selectionHead.sequence
     || target.headDigest !== selectionHead.digest
+    || (selectionHead.incarnation !== undefined && target.headIncarnation !== selectionHead.incarnation)
   ) {
     throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
   }
@@ -147,6 +149,7 @@ export async function selectProfileActiveConversation(
       !stableTarget
       || stableTarget.headSequence !== selectionHead.sequence
       || stableTarget.headDigest !== selectionHead.digest
+      || (selectionHead.incarnation !== undefined && stableTarget.headIncarnation !== selectionHead.incarnation)
     ) {
       throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
     }

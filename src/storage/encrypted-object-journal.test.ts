@@ -211,6 +211,19 @@ class StallingNextCasObjectStore extends MemoryObjectStore {
   }
 }
 
+class RemovingRejectedHeadObjectStore extends MemoryObjectStore {
+  removeAfterNextRejectedPut = false;
+
+  override async putIfAbsent(key: string, bytes: Uint8Array) {
+    const result = await super.putIfAbsent(key, bytes);
+    if (this.removeAfterNextRejectedPut && !result.created && key.includes("/session-heads/")) {
+      this.removeAfterNextRejectedPut = false;
+      await super.trash([key]);
+    }
+    return result;
+  }
+}
+
 class ScriptedCasObjectStore extends MemoryObjectStore {
   private casCalls = 0;
   private failOnCall?: number;
@@ -269,7 +282,7 @@ describe("EncryptedObjectJournalBackend", () => {
     const backend = new EncryptedObjectJournalBackend(store, key);
     let id = 0;
     const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => `id-${++id}`);
-    const session = await journal.createSession("Private title", await manifest());
+    const session = await journal.createSession("Private title", await manifest({ capabilityTier: "remote-confidential", transportBoundary: "provider-tls" }));
     await journal.append(session.id, [{ type: "message.user", payload: { content: "private prompt" } }]);
 
     const sessions = await journal.listSessions();
@@ -402,13 +415,28 @@ describe("EncryptedObjectJournalBackend", () => {
   });
 });
 
-async function manifest() {
+async function manifest(options: { capabilityTier?: "web-baseline" | "web-enhanced" | "native" | "remote-confidential"; transportBoundary?: "provider-tls" | "loopback-local" } = {}) {
   return createSessionManifest({
     systemPrompt: "private system prompt",
     providerId: "test",
     model: "test-model",
     tools: [],
     workspaceId: "workspace",
+    capabilityTier: options.capabilityTier as Parameters<typeof createSessionManifest>[0]["capabilityTier"],
+    inferenceBinding: options.transportBoundary
+      ? {
+        version: 1,
+        connectionId: "connection-1",
+        connectionGeneration: 1,
+        providerId: "test",
+        providerLabel: "Test provider",
+        providerRevision: 1,
+        authMethod: options.transportBoundary === "loopback-local" ? "local-none" : "api-key",
+        transportBoundary: options.transportBoundary,
+        modelId: "test-model",
+        boundAt: "2026-07-18T00:00:00.000Z",
+      }
+      : undefined,
   });
 }
 
@@ -674,6 +702,89 @@ describe("EncryptedObjectJournalBackend deletion", () => {
     await expect(staleRetry).resolves.toBeUndefined();
     expect((await restoringBackend.getSession("restored-session"))?.title).toBe("replacement");
     expect(await store.list("airship/v1/session-heads/")).toHaveLength(1);
+  });
+
+  it("rejects a replayed old head after an exact-ID replacement repeats sequence and digest", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key, "aba");
+    const createdAt = "2026-08-20T00:00:00.000Z";
+    const sessionManifest = await manifest();
+    const record = (title: string) => ({
+      id: "same-id",
+      title,
+      manifest: sessionManifest,
+      createdAt,
+      updatedAt: createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    const staleHead = { sequence: 0, digest: "genesis" };
+    await backend.createSession(record("old"));
+    await backend.deleteSession("same-id", staleHead);
+    await backend.createSession(record("replacement"));
+
+    await expect(backend.deleteSession("same-id", staleHead)).rejects.toBeInstanceOf(JournalConflictError);
+    expect((await backend.getSession("same-id"))?.title).toBe("replacement");
+  });
+
+  it("keeps reuse fenced when an occupied marker disappears before restore reads it", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new RemovingRejectedHeadObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key, "disappearing-marker");
+    const createdAt = "2026-08-20T00:00:00.000Z";
+    const sessionManifest = await manifest();
+    const record = (title: string) => ({
+      id: "same-id",
+      title,
+      manifest: sessionManifest,
+      createdAt,
+      updatedAt: createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    const staleHead = { sequence: 0, digest: "genesis" };
+    await backend.createSession(record("old"));
+    await backend.deleteSession("same-id", staleHead);
+
+    // The restore observes an occupied key, but a concurrent legacy cleanup
+    // removes it before the follow-up get. The retry remains a reuse write.
+    store.removeAfterNextRejectedPut = true;
+    await backend.createSession(record("replacement"));
+    await expect(backend.deleteSession("same-id", staleHead)).rejects.toBeInstanceOf(JournalConflictError);
+    expect((await backend.getSession("same-id"))?.title).toBe("replacement");
+  });
+
+  it("rejects a stale append capability from a deleted incarnation", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key, "append-aba");
+    const journal = new EventJournal(backend, () => "2026-08-20T00:00:00.000Z", () => crypto.randomUUID());
+    const sessionManifest = await manifest();
+    const record = (title: string) => ({
+      id: "same-id",
+      title,
+      manifest: sessionManifest,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      updatedAt: "2026-08-20T00:00:00.000Z",
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    await backend.createSession(record("old"));
+    const old = (await backend.getSession("same-id"))!;
+    const staleHead = {
+      sequence: old.headSequence,
+      digest: old.headDigest,
+      incarnation: old.headIncarnation,
+    };
+    await backend.deleteSession("same-id", staleHead);
+    await backend.createSession(record("replacement"));
+
+    await expect(journal.appendAtHead("same-id", staleHead, [
+      { type: "message.user", payload: { content: "belongs only to old incarnation" } },
+    ])).rejects.toBeInstanceOf(JournalConflictError);
+    expect((await backend.getSession("same-id"))?.title).toBe("replacement");
+    expect(await backend.readEvents("same-id")).toEqual([]);
   });
 
   it("keeps the marker retryable when its last, post-segment retirement CAS throws", async () => {

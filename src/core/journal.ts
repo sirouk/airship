@@ -29,6 +29,11 @@ export type SessionRecord = {
   headSequence: number;
   headDigest: string;
   /**
+   * Opaque storage incarnation fence. It is authority metadata, not portable
+   * conversation content, and must be carried back on fenced mutations.
+   */
+  headIncarnation?: string;
+  /**
    * The conversation's own approval policy, carried beside the pinned manifest
    * like title is. The manifest names the policy the conversation was created
    * under; this is what the person asked for in-flight, on the same thread,
@@ -53,6 +58,17 @@ export type SessionRecord = {
   contextPolicyOverride?: SessionContextPolicy | null;
 };
 
+export type JournalHead = Readonly<{
+  sequence: number;
+  digest: string;
+  /**
+   * Optional for legacy/non-reusable backends. A backend that can restore an
+   * exact deleted ID must return and require an opaque incarnation fence so a
+   * repeated sequence/digest cannot become an ABA mutation capability.
+   */
+  incarnation?: string;
+}>;
+
 export type JournalAppendCommit = Readonly<{
   events: DurableEvent[];
   session: SessionRecord;
@@ -65,7 +81,7 @@ export interface JournalBackend {
   readEvents(sessionId: string, afterSequence?: number, signal?: AbortSignal): Promise<DurableEvent[]>;
   append(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     events: DurableEvent[],
     /**
      * Cancellation is admissible only before the backend enters its atomic
@@ -97,7 +113,7 @@ export interface JournalBackend {
    */
   deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void>;
 }
@@ -203,7 +219,7 @@ export class EventJournal {
    */
   async deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void> {
     const head = snapshotJournalHead(expectedHead);
@@ -333,7 +349,7 @@ export class EventJournal {
    */
   appendAtHead(
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     signal?: AbortSignal,
   ): Promise<JournalAppendCommit> {
@@ -397,7 +413,7 @@ export class EventJournal {
   private async commitAtHeadAfter(
     pending: Promise<unknown>,
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     signal?: AbortSignal,
   ): Promise<JournalAppendCommit> {
@@ -412,7 +428,11 @@ export class EventJournal {
 
     return (await this.commitAtHead(
       sessionId,
-      { sequence: session.headSequence, digest: session.headDigest },
+      {
+        sequence: session.headSequence,
+        digest: session.headDigest,
+        ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
+      },
       drafts,
       undefined,
       signal,
@@ -421,7 +441,7 @@ export class EventJournal {
 
   private async commitAtHead(
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     preAdmissionSignal?: AbortSignal,
     backendSignal?: AbortSignal,
@@ -486,11 +506,12 @@ export class EventJournal {
 
 /** Capture a compare-and-set boundary without retaining caller accessors. */
 function snapshotJournalHead(
-  head: Readonly<{ sequence: number; digest: string }>,
-): Readonly<{ sequence: number; digest: string }> {
+  head: JournalHead,
+): JournalHead {
   const sequence = head.sequence;
   const digest = head.digest;
-  return { sequence, digest };
+  const incarnation = head.incarnation;
+  return { sequence, digest, ...(incarnation ? { incarnation } : {}) };
 }
 
 /**

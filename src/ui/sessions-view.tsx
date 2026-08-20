@@ -445,6 +445,7 @@ export function SessionsView({
         expectedSourceHead: {
           sequence: detail.session.headSequence,
           digest: detail.session.headDigest,
+          ...(detail.session.headIncarnation ? { incarnation: detail.session.headIncarnation } : {}),
         },
       });
       await onForked?.(result, detail);
@@ -488,7 +489,11 @@ export function SessionsView({
     const ledgerModule = import("./chat/return-ledger").catch(() => undefined);
     try {
       await library.delete(detail.session.id, {
-        expectedHead: { sequence: detail.session.headSequence, digest: detail.session.headDigest },
+        expectedHead: {
+          sequence: detail.session.headSequence,
+          digest: detail.session.headDigest,
+          ...(detail.session.headIncarnation ? { incarnation: detail.session.headIncarnation } : {}),
+        },
       });
       const removed = detail.session.title;
       /*

@@ -30,7 +30,11 @@ export async function forkSession(
   if (!source) throw new Error(`Unknown session: ${sourceSessionId}`);
   if (
     request.expectedSourceHead &&
-    (request.expectedSourceHead.sequence !== source.headSequence || request.expectedSourceHead.digest !== source.headDigest)
+    (
+      request.expectedSourceHead.sequence !== source.headSequence ||
+      request.expectedSourceHead.digest !== source.headDigest ||
+      (request.expectedSourceHead.incarnation !== undefined && request.expectedSourceHead.incarnation !== source.headIncarnation)
+    )
   ) {
     throw new SessionForkConflictError();
   }
@@ -227,7 +231,9 @@ function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[
 }
 
 function sameHead(left: SessionRecord, right: SessionRecord): boolean {
-  return left.headSequence === right.headSequence && left.headDigest === right.headDigest;
+  return left.headSequence === right.headSequence
+    && left.headDigest === right.headDigest
+    && left.headIncarnation === right.headIncarnation;
 }
 
 function forkTitle(requested: string | undefined, sourceTitle: string): string {

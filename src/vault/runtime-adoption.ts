@@ -148,6 +148,7 @@ export async function migrateJournalState(source: EventJournal, target: JournalB
       !fresh ||
       fresh.headSequence !== session.headSequence ||
       fresh.headDigest !== session.headDigest ||
+      fresh.headIncarnation !== session.headIncarnation ||
       !eventHeadMatches
     ) {
       throw new Error(`Session ${session.id} changed during vault migration; retry after the turn settles.`);
@@ -165,17 +166,29 @@ export async function migrateJournalState(source: EventJournal, target: JournalB
       }
       continue;
     }
+    const portableSession = structuredClone(session);
+    delete portableSession.headIncarnation;
     await target.createSession({
-      ...structuredClone(session),
+      ...portableSession,
       updatedAt: session.createdAt,
       headSequence: 0,
       headDigest: "genesis",
     });
-    let expectedHead = { sequence: 0, digest: "genesis" };
+    const created = await target.getSession(session.id);
+    if (!created) throw new Error(`Session ${session.id} disappeared during vault migration.`);
+    let expectedHead = {
+      sequence: 0,
+      digest: "genesis",
+      ...(created.headIncarnation ? { incarnation: created.headIncarnation } : {}),
+    };
     for (let offset = 0; offset < events.length; offset += 4_096) {
       const segment = events.slice(offset, offset + 4_096);
       const updated = await target.append(session.id, expectedHead, segment);
-      expectedHead = { sequence: updated.headSequence, digest: updated.headDigest };
+      expectedHead = {
+        sequence: updated.headSequence,
+        digest: updated.headDigest,
+        ...(updated.headIncarnation ? { incarnation: updated.headIncarnation } : {}),
+      };
     }
     if (expectedHead.sequence !== session.headSequence || expectedHead.digest !== session.headDigest) {
       throw new Error(`Session ${session.id} did not preserve its digest head during vault migration.`);
@@ -276,5 +289,9 @@ function sameWorkspaceSnapshot(
 }
 
 function sameSessionRecord(left: SessionRecord, right: SessionRecord): boolean {
-  return stableStringify(left as unknown as JsonValue) === stableStringify(right as unknown as JsonValue);
+  const portableLeft = structuredClone(left);
+  const portableRight = structuredClone(right);
+  delete portableLeft.headIncarnation;
+  delete portableRight.headIncarnation;
+  return stableStringify(portableLeft as unknown as JsonValue) === stableStringify(portableRight as unknown as JsonValue);
 }

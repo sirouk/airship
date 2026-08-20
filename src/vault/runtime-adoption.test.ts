@@ -7,6 +7,7 @@ import { createBuiltInProfileCatalog } from "../profiles/catalog";
 import { createGlobalSkillSettings } from "../profiles/domain";
 import { EncryptedProfileCatalogStore, MemoryProfileCatalogStore } from "../profiles/persistence";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
+import { EncryptedObjectJournalBackend } from "../storage/encrypted-object-journal";
 import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import {
   adoptionCarriedNote,
@@ -168,6 +169,39 @@ describe("vault runtime adoption", () => {
 
     await source.append(session.id, [{ type: "turn.completed", turnId: "turn-1", payload: { responseDigest: "digest" } }]);
     await expect(migrateJournalState(source, target)).rejects.toThrow("conflicting session");
+  });
+
+  it("restores an exact deleted encrypted ID and appends its preserved history under the new incarnation", async () => {
+    const source = new EventJournal(
+      new MemoryJournalBackend(),
+      () => "2026-08-20T00:00:00.000Z",
+      () => "same-id",
+    );
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "test-model",
+      tools: [],
+      workspaceId: "memory://test",
+      now: "2026-08-20T00:00:00.000Z",
+    });
+    const session = await source.createSession("Restored history", manifest);
+    await source.append(session.id, [
+      { type: "message.user", payload: { content: "preserve me" } },
+    ]);
+    const { key } = await WorkspaceRootKey.generate();
+    const target = new EncryptedObjectJournalBackend(new MemoryObjectStore(), key, "adoption-reuse");
+    await migrateJournalState(source, target);
+    const first = (await target.getSession(session.id))!;
+    await target.deleteSession(session.id, {
+      sequence: first.headSequence,
+      digest: first.headDigest,
+      incarnation: first.headIncarnation,
+    });
+
+    await expect(migrateJournalState(source, target)).resolves.toBeUndefined();
+    expect((await target.getSession(session.id))?.title).toBe("Restored history");
+    expect(await target.readEvents(session.id)).toEqual(await source.readEvents(session.id));
   });
 
   it("migrates a newly created session whose journal head is still genesis", async () => {

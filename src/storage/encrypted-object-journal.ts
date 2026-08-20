@@ -9,6 +9,7 @@ import {
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
+  type JournalHead,
   type SessionRecord,
   lastRecencyAdvancingEvent,
 } from "../core/journal";
@@ -60,6 +61,9 @@ type SessionHead = {
   version: 1;
   session: SessionRecord;
   segments: SegmentReference[];
+  incarnationId: string;
+  /** Missing incarnation tokens remain compatible only before exact-ID reuse. */
+  incarnationFenceRequired: boolean;
 };
 
 type SessionDeletionMarker = {
@@ -67,6 +71,7 @@ type SessionDeletionMarker = {
   sessionId: string;
   headSequence: number;
   headDigest: string;
+  headIncarnation: string;
   /** Unique authority for one deleted incarnation of a reusable session ID. */
   deletionId: string;
   /** True only after every segment received a confirmed reclamation receipt. */
@@ -119,8 +124,24 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     if (session.headSequence !== 0 || session.headDigest !== "genesis") {
       throw new Error("A new encrypted session must start at the genesis head.");
     }
-    const cloudKey = await this.headCloudKey(session.id);
-    const bytes = await this.sealHead({ version: 1, session: structuredClone(session), segments: [] });
+    // Own caller data before opaque-key derivation yields. Direct backend users
+    // deserve the same snapshot boundary EventJournal provides.
+    const storedSession = structuredClone(session);
+    delete storedSession.headIncarnation;
+    const cloudKey = await this.headCloudKey(storedSession.id);
+    const initialHead: SessionHead = {
+      version: 1,
+      session: storedSession,
+      segments: [],
+      incarnationId: randomUuid(),
+      incarnationFenceRequired: false,
+    };
+    const bytes = await this.sealHead(initialHead);
+    const restoredBytes = await this.sealHead({
+      ...initialHead,
+      incarnationId: randomUuid(),
+      incarnationFenceRequired: true,
+    });
     const initial = await this.store.putIfAbsent(cloudKey, bytes);
     if (initial.created) return;
 
@@ -135,7 +156,10 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const record = await this.store.get(cloudKey);
       if (!record) {
-        const retried = await this.store.putIfAbsent(cloudKey, bytes);
+        // The ID was observed occupied earlier in this call. Even if a legacy
+        // cleanup removed its marker meanwhile, reinstalling is still reuse and
+        // must not regain first-incarnation compatibility with tokenless heads.
+        const retried = await this.store.putIfAbsent(cloudKey, restoredBytes);
         if (retried.created) return;
         continue;
       }
@@ -145,7 +169,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
         await this.finishDeletion(record, opened.marker);
         continue;
       }
-      const restored = await this.store.compareAndSwap(cloudKey, record.etag, bytes);
+      const restored = await this.store.compareAndSwap(cloudKey, record.etag, restoredBytes);
       if (restored.updated) return;
     }
     throw new JournalConflictError(`Session ${session.id} changed while its deleted ID was being restored.`);
@@ -153,7 +177,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
 
   async getSession(sessionId: string, signal?: AbortSignal): Promise<SessionRecord | undefined> {
     const loaded = await this.loadHead(sessionId, signal);
-    return loaded?.status === "active" ? structuredClone(loaded.head.session) : undefined;
+    return loaded?.status === "active" ? publicSession(loaded.head) : undefined;
   }
 
   async listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
@@ -164,7 +188,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
         const record = await this.store.get(summary.key, signal);
         if (!record) return undefined; // A concurrent confirmed deletion won after list().
         const opened = await this.openHeadRecord(record);
-        return opened.status === "active" ? structuredClone(opened.head.session) : undefined;
+        return opened.status === "active" ? publicSession(opened.head) : undefined;
       }),
     );
     const sessions = candidates.filter((candidate): candidate is SessionRecord => candidate !== undefined);
@@ -189,7 +213,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
 
   async append(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     events: DurableEvent[],
     signal?: AbortSignal,
   ): Promise<SessionRecord> {
@@ -202,7 +226,11 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     const loaded = await this.loadHead(sessionId, signal);
     if (!loaded || loaded.status === "deleted") throw new Error(`Unknown session: ${sessionId}`);
     const current = loaded.head.session;
-    if (current.headSequence !== expectedHead.sequence || current.headDigest !== expectedHead.digest) {
+    if (
+      current.headSequence !== expectedHead.sequence ||
+      current.headDigest !== expectedHead.digest ||
+      !matchesIncarnationFence(loaded.head, expectedHead)
+    ) {
       throw new JournalConflictError();
     }
     validateAppend(sessionId, expectedHead, events);
@@ -289,6 +317,8 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
         version: 1,
         session: updated,
         segments: [...loaded.head.segments, reference],
+        incarnationId: loaded.head.incarnationId,
+        incarnationFenceRequired: loaded.head.incarnationFenceRequired,
       };
       if (nextHead.segments.length > MAX_SEGMENTS_PER_SESSION) {
         throw new Error("Encrypted journal requires segment compaction before another append.");
@@ -307,7 +337,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       if (!swapped.updated) throw new JournalConflictError();
       // No cleanup is admissible after the head has published the reference.
       published = true;
-      return structuredClone(updated);
+      return publicSession(nextHead);
     } catch (error) {
       /*
        * A successful immutable put followed by a final abort, head-seal error,
@@ -341,7 +371,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
    */
   async deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void> {
     const loaded = await this.loadHead(sessionId, signal);
@@ -355,7 +385,11 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     }
 
     const { session, segments } = loaded.head;
-    if (session.headSequence !== expectedHead.sequence || session.headDigest !== expectedHead.digest) {
+    if (
+      session.headSequence !== expectedHead.sequence ||
+      session.headDigest !== expectedHead.digest ||
+      !matchesIncarnationFence(loaded.head, expectedHead)
+    ) {
       throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
     }
     const marker: SessionDeletionMarker = {
@@ -363,6 +397,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       sessionId,
       headSequence: session.headSequence,
       headDigest: session.headDigest,
+      headIncarnation: loaded.head.incarnationId,
       deletionId: randomUuid(),
       cleanupComplete: false,
       segmentKeys: segments.map((segment) => segment.cloudKey),
@@ -485,7 +520,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       key: this.key,
       namespace: ROOT_NAMESPACE,
       logicalId: headLogicalId(head.session.id),
-      revision: `${head.session.headSequence}:${head.session.headDigest}`,
+      revision: `${head.session.headSequence}:${head.session.headDigest}:${head.incarnationId}`,
       contentType: HEAD_CONTENT_TYPE,
       plaintext: encodeJson(head),
     });
@@ -520,7 +555,10 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       const head = parseHead(plaintext);
       if (expectedSessionId && head.session.id !== expectedSessionId) throw new Error("Encrypted session head ID does not match its key.");
       if (record.key !== (await this.headCloudKey(head.session.id))) throw new Error("Encrypted session head is stored under the wrong opaque key.");
-      if (envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}`) {
+      if (
+        envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}:${head.incarnationId}` &&
+        envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}`
+      ) {
         throw new Error("Encrypted session head metadata does not match its contents.");
       }
       return { status: "active", head };
@@ -642,7 +680,18 @@ function parseHead(bytes: Uint8Array): SessionHead {
   if (value.session.headSequence !== sequence || value.session.headDigest !== digest) {
     throw new Error("Encrypted session head does not match its segment chain.");
   }
-  return { version: 1, session: structuredClone(value.session), segments };
+  const incarnationId = value.incarnationId === undefined
+    ? "legacy"
+    : requiredString(value.incarnationId, "session head incarnation ID");
+  const incarnationFenceRequired = value.incarnationFenceRequired === undefined
+    ? false
+    : value.incarnationFenceRequired;
+  if (typeof incarnationFenceRequired !== "boolean") {
+    throw new Error("Encrypted session head incarnation fence is invalid.");
+  }
+  const session = structuredClone(value.session);
+  delete session.headIncarnation;
+  return { version: 1, session, segments, incarnationId, incarnationFenceRequired };
 }
 
 function parseDeletionMarker(bytes: Uint8Array, prefix: string): SessionDeletionMarker {
@@ -660,6 +709,9 @@ function parseDeletionMarker(bytes: Uint8Array, prefix: string): SessionDeletion
   }
   const headSequence = requiredInteger(value.headSequence, "deleted session head sequence", true);
   const headDigest = requiredString(value.headDigest, "deleted session head digest");
+  const headIncarnation = value.headIncarnation === undefined
+    ? "legacy"
+    : requiredString(value.headIncarnation, "deleted session head incarnation ID");
   const deletionId = value.deletionId === undefined
     ? `legacy:${headSequence}:${headDigest}`
     : requiredString(value.deletionId, "session deletion incarnation ID");
@@ -672,6 +724,7 @@ function parseDeletionMarker(bytes: Uint8Array, prefix: string): SessionDeletion
     sessionId: requiredString(value.sessionId, "deleted session ID"),
     headSequence,
     headDigest,
+    headIncarnation,
     deletionId,
     cleanupComplete,
     segmentKeys,
@@ -794,8 +847,20 @@ function hasConfirmedReclamation(
   );
 }
 
+function publicSession(head: SessionHead): SessionRecord {
+  return {
+    ...structuredClone(head.session),
+    headIncarnation: head.incarnationId,
+  };
+}
+
+function matchesIncarnationFence(head: SessionHead, expected: JournalHead): boolean {
+  if (expected.incarnation !== undefined) return expected.incarnation === head.incarnationId;
+  return !head.incarnationFenceRequired;
+}
+
 function deletionMarkerRevision(marker: SessionDeletionMarker): string {
-  return `deleted:${marker.headSequence}:${marker.headDigest}:${marker.deletionId}:${marker.cleanupComplete ? "complete" : "pending"}`;
+  return `deleted:${marker.headSequence}:${marker.headDigest}:${marker.headIncarnation}:${marker.deletionId}:${marker.cleanupComplete ? "complete" : "pending"}`;
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
