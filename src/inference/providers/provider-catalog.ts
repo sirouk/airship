@@ -113,7 +113,9 @@ export function normalizeProvider(raw: InferenceProviderDescriptor): InferencePr
     oauth,
     authMethods,
     capabilities: [...capabilitySet],
-    documentationUrl: httpsUrl(raw.documentationUrl, "Provider documentation URL"),
+    ...(raw.documentationUrl
+      ? { documentationUrl: httpsUrl(raw.documentationUrl, "Provider documentation URL") }
+      : {}),
   }) as InferenceProviderDescriptor;
 }
 

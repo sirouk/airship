@@ -127,7 +127,7 @@ export type InferenceProviderDescriptor = Readonly<{
   oauth: ProviderOAuthAvailability;
   authMethods: readonly InferenceAuthMethod[];
   capabilities: readonly ConnectionCapability[];
-  documentationUrl: string;
+  documentationUrl?: string;
 }>;
 
 export type ProviderCatalogEntry = Readonly<{
