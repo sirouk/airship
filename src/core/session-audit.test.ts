@@ -22,6 +22,118 @@ const writeTool: ToolDefinition = {
 };
 
 describe("auditSessionHistory", () => {
+  it("audits one immediate snapshot of event scalars and caller options", async () => {
+    const fixture = await createFixture([]);
+    await fixture.journal.renameSession(fixture.session.id, "Snapshot title");
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const originalSecondEventId = events[1]!.eventId;
+    const options = {
+      checkedAt: "2026-07-18T00:01:00.000Z",
+      trustedHead: {
+        sequence: session.headSequence,
+        digest: session.headDigest,
+        source: "call-time trusted head",
+      },
+    };
+
+    const auditing = auditSessionHistory({ session, events }, options);
+    events[1]!.eventId = events[0]!.eventId;
+    options.checkedAt = "2099-01-01T00:00:00.000Z";
+    options.trustedHead.digest = `sha256:${"A".repeat(43)}`;
+    options.trustedHead.source = "mutated trusted head";
+
+    const report = await auditing;
+    expect(events[1]!.eventId).not.toBe(originalSecondEventId);
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+    expect(report.checkedAt).toBe("2026-07-18T00:01:00.000Z");
+    expect(report.anchor).toEqual({ status: "matched", source: "call-time trusted head" });
+    expect(report.commitment).toEqual({ sequence: session.headSequence, digest: session.headDigest });
+  });
+
+  it("audits the call-time nested event payload after immediate caller mutation", async () => {
+    const fixture = await createFixture([]);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const eventManifest = (events[0]!.payload as unknown as { manifest: SessionRecord["manifest"] }).manifest;
+
+    const auditing = auditSessionHistory({ session, events });
+    eventManifest.model = "caller-mutated-event-model";
+
+    const report = await auditing;
+    expect(eventManifest.model).toBe("caller-mutated-event-model");
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+  });
+
+  it("audits the call-time session manifest after immediate caller mutation", async () => {
+    const fixture = await createFixture([]);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+
+    const auditing = auditSessionHistory({ session, events });
+    session.manifest.model = "caller-mutated-session-model";
+
+    const report = await auditing;
+    expect(session.manifest.model).toBe("caller-mutated-session-model");
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+  });
+
+  it.each(["session manifest", "event field", "event array entry", "caller options"] as const)(
+    "rejects a %s accessor without invoking caller code",
+    async (location) => {
+      const fixture = await createFixture([]);
+      const session = (await fixture.journal.getSession(fixture.session.id))!;
+      const events = await fixture.journal.readEvents(session.id);
+      let reads = 0;
+      const accessor = () => {
+        reads += 1;
+        throw new Error("The audit invoked caller-owned accessor code.");
+      };
+      let options = {};
+
+      if (location === "session manifest") {
+        Object.defineProperty(session.manifest, "model", {
+          enumerable: true,
+          configurable: true,
+          get: accessor,
+        });
+      } else if (location === "event field") {
+        Object.defineProperty(events[0]!, "eventId", {
+          enumerable: true,
+          configurable: true,
+          get: accessor,
+        });
+      } else if (location === "event array entry") {
+        Object.defineProperty(events, 0, {
+          enumerable: true,
+          configurable: true,
+          get: accessor,
+        });
+      } else {
+        const trustedHead = {
+          sequence: session.headSequence,
+          digest: session.headDigest,
+        } as { sequence: number; digest: string; source: string };
+        Object.defineProperty(trustedHead, "source", {
+          enumerable: true,
+          configurable: true,
+          get: accessor,
+        });
+        options = { trustedHead };
+      }
+
+      const auditing = auditSessionHistory({ session, events }, options);
+      expect(reads).toBe(0);
+      const report = await auditing;
+      expect(reads).toBe(0);
+      expect(report.status).toBe("invalid");
+      expect(report.findings).toEqual([expect.objectContaining({ code: "INPUT_INVALID" })]);
+    },
+  );
+
   it("verifies the chain, manifest, transcript request, response, and receipt bindings independently", async () => {
     const fixture = await createFixture([]);
     const turnId = "turn-final";

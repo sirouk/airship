@@ -326,10 +326,34 @@ type LastContextMessage = Readonly<{ index: number; content: string }>;
  * backend. The report deliberately distinguishes local consistency from
  * authenticity; only a separately trusted head can anchor the chain.
  */
-export async function auditSessionHistory(
+export function auditSessionHistory(
   input: SessionAuditInput,
   options: SessionAuditOptions = {},
 ): Promise<SessionAuditReport> {
+  /*
+   * One synchronous ownership boundary for the whole audit call.
+   *
+   * The chain walk yields for every SHA-256 operation. Retaining even one
+   * caller-owned event, manifest field, or trusted-head option across that
+   * yield lets the digest preimage and the later protocol/report reads observe
+   * different values. Snapshot the complete graph in one traversal before the
+   * async implementation starts, preserving aliases while refusing accessors
+   * without executing them.
+   */
+  let snapshot: Readonly<{ input: SessionAuditInput; options: SessionAuditOptions }>;
+  try {
+    snapshot = descriptorSafeDeepSnapshot({ input, options });
+  } catch {
+    return Promise.resolve(invalidAuditSnapshotReport());
+  }
+  return auditSessionHistorySnapshot(snapshot.input, snapshot.options);
+}
+
+async function auditSessionHistorySnapshot(
+  input: SessionAuditInput,
+  options: SessionAuditOptions,
+): Promise<SessionAuditReport> {
+  if (!asPlainRecord(options)) return invalidAuditSnapshotReport();
   const limits = resolveLimits(options.limits);
   const findings: SessionAuditFinding[] = [];
   const add = (
@@ -502,6 +526,101 @@ export async function auditSessionHistory(
     counts,
     anchor: options.trustedHead,
   });
+}
+
+/** Fail closed without consulting any part of a graph that could not be owned safely. */
+function invalidAuditSnapshotReport(): SessionAuditReport {
+  return finishReport({
+    sessionId: "unknown",
+    session: undefined,
+    events: [],
+    findings: [Object.freeze({
+      code: "INPUT_INVALID",
+      severity: "error",
+      category: "schema",
+      message: "Audit input must contain a plain session record and an event array.",
+    })],
+    counts: emptyCounts(),
+  });
+}
+
+const INVALID_AUDIT_SNAPSHOT_PROTOTYPE = Object.freeze(Object.create(null) as object);
+
+/**
+ * Clone one caller-owned graph through own property descriptors only.
+ *
+ * `structuredClone` executes getters. That is acceptable for several trusted
+ * construction APIs, but not for this verifier: exported journal data is
+ * untrusted and the audit's existing plain-record contract explicitly rejects
+ * accessors. This iterative clone never reads a property through `[[Get]]`.
+ * It preserves data descriptors, aliases, cycles, sparse arrays, and null
+ * prototypes. Exotic prototypes are replaced by one internal prototype so the
+ * existing plain-record checks still reject them without retaining a caller
+ * object through the clone's prototype chain.
+ */
+function descriptorSafeDeepSnapshot<T>(value: T): T {
+  type PendingClone = Readonly<{ source: object; target: object; array: boolean }>;
+  const clones = new WeakMap<object, object>();
+  const pending: PendingClone[] = [];
+
+  const allocate = (candidate: unknown): unknown => {
+    if (typeof candidate === "function") {
+      throw new TypeError("Audit snapshots cannot contain functions.");
+    }
+    if (candidate === null || typeof candidate !== "object") return candidate;
+    const existing = clones.get(candidate);
+    if (existing) return existing;
+
+    let array: boolean;
+    let prototype: object | null;
+    try {
+      array = Array.isArray(candidate);
+      prototype = Object.getPrototypeOf(candidate);
+    } catch {
+      throw new TypeError("Audit input could not be inspected safely.");
+    }
+    const target = array
+      ? []
+      : prototype === Object.prototype
+        ? {}
+        : prototype === null
+          ? Object.create(null) as object
+          : Object.create(INVALID_AUDIT_SNAPSHOT_PROTOTYPE) as object;
+    clones.set(candidate, target);
+    pending.push({ source: candidate, target, array });
+    return target;
+  };
+
+  const snapshot = allocate(value);
+  while (pending.length > 0) {
+    const { source, target, array } = pending.pop()!;
+    let descriptors: PropertyDescriptorMap;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(source);
+    } catch {
+      throw new TypeError("Audit input could not be inspected safely.");
+    }
+    const descriptorRecord = descriptors as unknown as Record<PropertyKey, PropertyDescriptor>;
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (array && key === "length") continue;
+      const descriptor = descriptorRecord[key];
+      if (!descriptor || !("value" in descriptor)) {
+        throw new TypeError("Audit snapshots require accessor-free own data properties.");
+      }
+      Object.defineProperty(target, key, {
+        ...descriptor,
+        value: allocate(descriptor.value),
+      });
+    }
+    if (array) {
+      const lengthDescriptor = descriptorRecord.length;
+      if (!lengthDescriptor || !("value" in lengthDescriptor)) {
+        throw new TypeError("Audit arrays require a data length property.");
+      }
+      Object.defineProperty(target, "length", lengthDescriptor);
+    }
+  }
+  return snapshot as T;
 }
 
 function resolveLimits(overrides: Partial<SessionAuditLimits> | undefined): SessionAuditLimits {
