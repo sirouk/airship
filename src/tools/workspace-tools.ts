@@ -14,6 +14,8 @@ import { ToolRegistry } from "./registry";
 import { objectArguments, rawString, requiredString } from "./schema";
 
 const MAX_TEXT_EDITOR_EDITS = 32;
+const STRING_SCHEMA = Object.freeze({ type: "string" } as const);
+const BOOLEAN_FALSE_SCHEMA = Object.freeze({ type: "boolean", default: false } as const);
 
 /**
  * The window `read_file` returns when the caller names none.
@@ -47,6 +49,10 @@ function integerArgument(value: JsonValue | undefined, name: string, fallback: n
 
 function workspacePath(value: JsonValue | undefined, name: string): string {
   return userWorkspacePath(normalizeWorkspacePath(requiredString(value, name)));
+}
+
+function fileNotFound(path: string): ToolExecutionResult {
+  return { content: `File not found: ${path}`, isError: true };
 }
 
 function userWorkspacePath(path: string): string {
@@ -133,7 +139,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string" },
+          path: STRING_SCHEMA,
           offset: { type: "integer", minimum: 0, description: "First byte to return. Use the nextOffsetBytes a partial read reports." },
           maxBytes: { type: "integer", minimum: 1, maximum: MAX_READ_FILE_BYTES, description: "Bytes to return, snapped down to a whole character." },
         },
@@ -151,7 +157,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
         throw new Error(`maxBytes must be between 1 and ${MAX_READ_FILE_BYTES}.`);
       }
       const file = await workspace.read(path);
-      if (!file) return { content: `File not found: ${path}`, isError: true };
+      if (!file) return fileNotFound(path);
       if (isWorkspaceBinaryEnvelope(file.content)) {
         return {
           content: `Binary file is not available through read_file: ${path}. Use stat_path or a byte-capable execution runtime.`,
@@ -201,8 +207,8 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string" },
-          content: { type: "string" },
+          path: STRING_SCHEMA,
+          content: STRING_SCHEMA,
           expectedRevision: { type: ["string", "null"] },
         },
         required: ["path", "content"],
@@ -234,7 +240,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       effect: "read",
       inputSchema: {
         type: "object",
-        properties: { path: { type: "string" } },
+        properties: { path: STRING_SCHEMA },
         required: ["path"],
         additionalProperties: false,
       },
@@ -270,7 +276,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
         properties: {
           path: { type: "string", description: "File or directory under /workspace" },
           query: { type: "string", minLength: 1, maxLength: 4096 },
-          caseSensitive: { type: "boolean", default: false },
+          caseSensitive: BOOLEAN_FALSE_SCHEMA,
           maxResults: {
             type: "integer",
             minimum: 1,
@@ -371,11 +377,11 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string" },
+          path: STRING_SCHEMA,
           oldText: { type: "string", minLength: 1, maxLength: 262144 },
           newText: { type: "string", maxLength: 1048576 },
-          replaceAll: { type: "boolean", default: false },
-          expectedRevision: { type: "string" },
+          replaceAll: BOOLEAN_FALSE_SCHEMA,
+          expectedRevision: STRING_SCHEMA,
         },
         required: ["path", "oldText", "newText"],
         additionalProperties: false,
@@ -391,7 +397,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       if (!oldText) throw new Error("oldText must not be empty.");
 
       const file = await workspace.read(path);
-      if (!file) return { content: `File not found: ${path}`, isError: true };
+      if (!file) return fileNotFound(path);
       if (isWorkspaceBinaryEnvelope(file.content)) {
         return { content: `Refused text replacement in binary file: ${path}.`, isError: true, metadata: { path, encoding: "binary" } };
       }
@@ -422,9 +428,9 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       inputSchema: {
         type: "object",
         properties: {
-          sourcePath: { type: "string" },
-          destinationPath: { type: "string" },
-          expectedRevision: { type: "string" },
+          sourcePath: STRING_SCHEMA,
+          destinationPath: STRING_SCHEMA,
+          expectedRevision: STRING_SCHEMA,
         },
         required: ["sourcePath", "destinationPath"],
         additionalProperties: false,
@@ -437,7 +443,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const expectedRevision = optionalStringArgument(argumentsObject.expectedRevision, "expectedRevision");
       if (sourcePath === destinationPath) throw new Error("sourcePath and destinationPath must differ.");
       const source = await workspace.read(sourcePath);
-      if (!source) return { content: `File not found: ${sourcePath}`, isError: true };
+      if (!source) return fileNotFound(sourcePath);
       if (expectedRevision !== undefined && expectedRevision !== source.revision) throw new WorkspaceConflictError();
       if (await workspace.read(destinationPath)) {
         return { content: `Destination already exists: ${destinationPath}`, isError: true };
@@ -469,8 +475,8 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       inputSchema: {
         type: "object",
         properties: {
-          path: { type: "string" },
-          expectedRevision: { type: "string" },
+          path: STRING_SCHEMA,
+          expectedRevision: STRING_SCHEMA,
         },
         required: ["path"],
         additionalProperties: false,
@@ -481,7 +487,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const path = workspacePath(argumentsObject.path, "path");
       const expectedRevision = optionalStringArgument(argumentsObject.expectedRevision, "expectedRevision");
       const file = await workspace.read(path);
-      if (!file) return { content: `File not found: ${path}`, isError: true };
+      if (!file) return fileNotFound(path);
       if (expectedRevision !== undefined && expectedRevision !== file.revision) throw new WorkspaceConflictError();
       await workspace.remove(path, { expectedRevision: file.revision });
       return { content: `Removed ${path}.`, metadata: { path, revision: file.revision, size: workspaceEntryByteLength(file) } };
@@ -503,10 +509,10 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
             items: {
               type: "object",
               properties: {
-                path: { type: "string" },
+                path: STRING_SCHEMA,
                 oldText: { type: ["string", "null"], description: "Exact text to replace; null creates a new file." },
                 newText: { type: "string", maxLength: 1_048_576 },
-                replaceAll: { type: "boolean", default: false },
+                replaceAll: BOOLEAN_FALSE_SCHEMA,
                 expectedRevision: { type: ["string", "null"] },
               },
               required: ["path", "oldText", "newText"],

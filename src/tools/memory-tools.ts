@@ -10,6 +10,7 @@ import type { ToolRegistry } from "./registry";
 
 export const MEMORY_PATH = "/workspace/.airship/memory.json";
 const MAX_MEMORIES = 512;
+const LEGACY_MEMORY_SCOPE = "legacy-unscoped";
 
 export type MemoryScope = "session" | "profile" | "workspace";
 
@@ -127,7 +128,7 @@ export function registerMemoryTools(
           records,
           (memory) => memory.content,
           {
-            scopeKey: (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+            scopeKey: (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : LEGACY_MEMORY_SCOPE,
             createdAt: (memory) => memory.createdAt,
           },
         );
@@ -233,7 +234,7 @@ export function registerMemoryTools(
           content,
           scoped,
           (memory) => memory.content,
-          (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+          (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : LEGACY_MEMORY_SCOPE,
           profile.profileId,
         );
         const exact = duplicates.find((candidate) => candidate.exact);
@@ -291,7 +292,7 @@ export function registerMemoryTools(
         scope: binding.memoryScope,
         profileId: profile.profileId,
         profileRevision: profile.profileRevision,
-        legacyQuarantined: next.filter((record) => record.scope.kind === "legacy-unscoped").length,
+        legacyQuarantined: next.filter((record) => record.scope.kind === LEGACY_MEMORY_SCOPE).length,
         schemaVersion: 2,
         revision: written.revision,
         path: written.path,
@@ -323,7 +324,7 @@ export function parseMemoryDocument(content: string): MemoryDocument {
   return Object.freeze({
     records: Object.freeze(records),
     sourceVersion,
-    legacyCount: records.filter((item) => item.scope.kind === "legacy-unscoped").length,
+    legacyCount: records.filter((item) => item.scope.kind === LEGACY_MEMORY_SCOPE).length,
   });
 }
 
@@ -335,12 +336,12 @@ function parseRecord(value: unknown, version: 1 | 2): MemoryRecord {
     source: stringUnknown(value.source, "memory source", 2_048),
     createdAt: timestamp(value.createdAt),
   };
-  if (version === 1) return Object.freeze({ ...base, scope: Object.freeze({ kind: "legacy-unscoped" }) });
-  if (!record(value.scope) || (value.scope.kind !== "profile" && value.scope.kind !== "legacy-unscoped")) {
+  if (version === 1) return Object.freeze({ ...base, scope: Object.freeze({ kind: LEGACY_MEMORY_SCOPE }) });
+  if (!record(value.scope) || (value.scope.kind !== "profile" && value.scope.kind !== LEGACY_MEMORY_SCOPE)) {
     throw new Error(`${MEMORY_PATH} contains an invalid memory scope.`);
   }
-  const scope: ProfileMemoryScope | LegacyMemoryScope = value.scope.kind === "legacy-unscoped"
-    ? Object.freeze({ kind: "legacy-unscoped" })
+  const scope: ProfileMemoryScope | LegacyMemoryScope = value.scope.kind === LEGACY_MEMORY_SCOPE
+    ? Object.freeze({ kind: LEGACY_MEMORY_SCOPE })
     : Object.freeze({
         kind: "profile",
         profileId: strictString(value.scope.profileId, "memory profile ID", 256),
