@@ -48,6 +48,7 @@ next-env.d.ts
 /outputs/
 /work/
 /.airship-lab/
+/public/extension/releases/
 
 # Disposable, read-only upstream study checkouts. The tracked catalog and
 # clean-room rules live in /references.

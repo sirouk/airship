@@ -90,22 +90,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // ceiling remains 384 KiB; 118 KiB gzip is 78 bytes below the shipped entry,
   // so gzip takes the next whole-KiB step to 119 KiB (946 bytes spare).
   entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 119 * 1024 }),
-  // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
-  // entry remains governed by its stricter entry-specific ceiling above. Heavy
-  // QVL stays deferred.
-  //
   // This is the first-paint cost on a phone. It held at 132 KiB through three
   // waves of capability, each absorbed by deferring startup weight rather than
-  // by raising the number — the fixture-only in-memory Git backend, and the
-  // Chutes account-telemetry client that now travels with the Billing surface
-  // it serves.
+  // by raising the number.
   //
   // The Profile cockpit, durable favourites, inline rename and the unified
   // workbench then landed in the entry chunk together and put the measured
   // baseline at 132.58 KiB, 594 bytes over. Every one of the 19 chunks in this
   // set is genuinely `modulepreload`ed, so none of it could be reclassified
-  // away; `tdx` and the endpoint-evidence store were the only two that could,
-  // and moving them to their real owners recovered 2.72 KiB before this.
+  // away; the two that could be were moved to their real owners, recovering
+  // 2.72 KiB before this.
   //
   // Raised deliberately, with headroom for the remaining waves and a hard cap
   // well under 200 KiB. It is a ceiling, not a target: the deferral habit above
@@ -1784,45 +1778,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalMessageParts: Object.freeze({ raw: 14 * 1024, gzip: 5 * 1024 }),
   /* See `isOptionalApprovalDockPath`. Measured after the accessibility pass. */
   optionalApprovalDock: Object.freeze({ raw: 24 * 1024, gzip: 8 * 1024 }),
-  // Proof presentation and privacy-safe receipt serialization are fetched only
-  // when the user opens the comprehensive Proof surface.
-  // The claim rail (`proof-inspector`) and the one fail-closed receipt rule it
-  // renders (`seal-states`) joined this pack when they stopped being defined
-  // inside `app.tsx`. Nothing was added to the product: 1.69 KiB gzip of
-  // first-paint weight moved out of `allJavaScriptAndWorkers` and landed here,
-  // behind a panel that cannot render until a turn has produced a receipt.
-  // That is the trade this file has taken three times before. Measured 74,690 B
-  // raw, and gzip crossed the 23 KiB ceiling this pack shipped under
-  // — by four bytes, but it crossed it — so it steps to 24 KiB and leaves 1,020;
-  // the 25 KiB it was briefly raised to was a further step nothing measured asked
-  // for. 73 KiB raw would have left 62 bytes, which a minifier rename can erase, so
-  // raw held at 74 KiB and left 1,086.
-  //
-  // The human-journey pass raises raw to 76 KiB. Proof is the route the whole
-  // product's promise rests on, and the Atlas caught it under-reporting: a
-  // session that had staged and committed under two approvals exported an audit
-  // declaring zero tool operations, and a local slash-command turn produced no
-  // receipt while the transcript labelled it COMPLETED. An audit surface that
-  // under-reports is worse than none, because it is believed.
-  // The eight-lane pass then answered the rest of it: an operation ledger that
-  // counts what actually ran, a receipt for a local turn that previously had
-  // none, and provenance a reader can follow from a claim back to its source.
-  // Measured 89,774 B raw / 27,986 B gzip, each the tightest whole-KiB step.
-  // Re-measured at 90,166 B raw / 28,108 B gzip. The raw delta is the phone
-  // pass (e764668): Proof now asks `useShellIsPhone` which layout it is drawing
-  // and picks its disclosure defaults from the answer, because how much of a
-  // claim ledger sits above the fold is DOM state a stylesheet cannot set. Raw
-  // takes the next whole-KiB step to 89 KiB and leaves 970 B; 28 KiB gzip is
-  // still the tightest step above its reading and does not move, leaving 563 B.
-  // Still fetched only when Proof opens; first paint is untouched.
-  optionalProofSurface: Object.freeze({ raw: 89 * 1024, gzip: 28 * 1024 }),
-  // Receipt-keyed acquisition scheduling, its WorkspacePort CAS adapter, and
-  // the credential-free endpoint-evidence record store. All three load only
-  // when a Chutes credential can run or recover the worker, and none belongs to
-  // first paint. The record store joined them here rather than staying unowned
-  // and being charged to the startup ceiling it never loads with. Measured
-  // together at 39.92 KiB raw / 12.31 KiB gzip.
-  optionalEvidenceAcquisition: Object.freeze({ raw: 44 * 1024, gzip: 14 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part
   // of initial navigation or a background capability probe. The dock state and
   // the Profile-owned manager travel with it; the vendor runtime dominates.
@@ -1862,17 +1817,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
-  // Model catalog + utilization normalization is loaded only when provider
-  // discovery opens and is enforced separately from the interactive app.
-  optionalModelCatalog: Object.freeze({ raw: 33 * 1024, gzip: 12 * 1024 }),
-  // Which chutes can embed, and which one was chosen. Two modules with no
-  // imports at all, shared by the Connection route (which asks whether there is
-  // an embedding choice to hand over) and the context runtime (which resolves
-  // one). They are their own pack because that sharing is the point: a static
-  // import from either side would drag the other's graph across a pack
-  // boundary, which is the same reason `confidential-authority.ts` exists.
-  // Measured 2.96 KiB raw / 1.60 KiB gzip.
-  optionalConfidentialEmbedding: Object.freeze({ raw: 6 * 1024, gzip: 3 * 1024 }),
   // Multi-provider connection UI, page-lifetime provider fabric, credential-
   // free route contracts, and cloud transport adapters load with the
   // Connection route/runtime bootstrap. They are deliberately absent from the
@@ -1904,14 +1848,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the aggregate's 768-byte floor, so raw takes 165 KiB and gzip takes 53,
   // leaving 1,290 / 1,749 B respectively.
   optionalInferenceProviders: Object.freeze({ raw: 165 * 1024, gzip: 53 * 1024 }),
-  // Chutes registration metadata plus PKCE/token operations load for Connect,
-  // an OAuth callback, or a scheduled refresh—never for first paint.
-  //
-  // Pass 2 separated the two opposite meanings of `invalid_client`: a localhost
-  // bridge has process credentials to repair, a public PKCE client has a
-  // registration to re-check, and the remedy for one is wrong for the other.
-  // Measured together at 13,530 B raw / 5,125 B gzip.
-  optionalChutesOAuth: Object.freeze({ raw: 14 * 1024, gzip: 6 * 1024 }),
   // The prime runtime port measured at 88,098 B raw / 26,594 B gzip — the
   // claim states the floor across both build modes, with the origin-inlined
   // Docker variant one raw byte and twenty-nine gzip bytes under the
@@ -2003,8 +1939,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // budget keeps on itself; gzip takes 20 KiB and leaves 1,003 B. All of it
   // is fetched after the person picks Local Device, never at first paint.
   optionalLocalDeviceVault: Object.freeze({ raw: 65 * 1024, gzip: 20 * 1024 }),
-  optionalDcapQvlJavaScript: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
-  optionalDcapQvlWasm: Object.freeze({ raw: 1536 * 1024, gzip: 512 * 1024 }),
   optionalPythonPack: Object.freeze({ raw: 16 * 1024 * 1024, gzip: 8 * 1024 * 1024 }),
   // First-paint weight: CSS blocks render, so this is deliberately tighter than
   // the JavaScript ceilings. The Pass 1 audit added per-claim capability copy,
@@ -2099,9 +2033,7 @@ export const RELEASE_BUDGETS = Object.freeze({
 });
 
 const secretPatterns = Object.freeze([
-  ["Chutes client secret", /\bcsc_[A-Za-z0-9_-]{16,}\b/u],
-  ["Chutes user credential", /\bcak_[A-Za-z0-9_-]{16,}\b/u],
-  ["Chutes inference key", /\bcpk_[A-Za-z0-9_-]{16,}\b/u],
+  ["Chutes API key", /\bcpk_[A-Za-z0-9_-]{16,}\b/u],
   ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/u],
   ["GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/u],
   ["npm token", /\bnpm_[A-Za-z0-9]{24,}\b/u],
@@ -2205,7 +2137,6 @@ export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
   "optionalCapabilitiesView",
   "optionalMemoryView",
   "optionalSkillsManagerView",
-  "optionalProofSurface",
   "optionalSkillEditor",
   "optionalTerminal",
 ]);
@@ -2592,28 +2523,21 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
     budgets: Object.freeze(["optionalWorkspaceWorkbench", "optionalSourceControl", "optionalBrowserGit"]),
   }),
   Object.freeze({
-    label: "Optional Sessions / Memory / Memory support / Proof",
-    budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport", "optionalProofSurface"]),
+    label: "Optional Sessions / Memory / Memory support",
+    budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport"]),
   }),
   Object.freeze({
     label: "Optional Skills route / skill editor",
     budgets: Object.freeze(["optionalSkillsManagerView", "optionalSkillEditor"]),
   }),
   Object.freeze({ label: "Optional Terminal", budgets: Object.freeze(["optionalTerminal"]) }),
-  Object.freeze({
-    label: "Optional semantic worker / model catalog",
-    budgets: Object.freeze(["optionalSemanticWorker", "optionalModelCatalog"]),
-  }),
+  Object.freeze({ label: "Optional semantic worker", budgets: Object.freeze(["optionalSemanticWorker"]) }),
   Object.freeze({ label: "Optional inference/provider + Companion protocol packs", budgets: Object.freeze(["optionalInferenceProviders"]) }),
   Object.freeze({ label: "Optional prime runtime pack", budgets: Object.freeze(["optionalPrimePack"]) }),
-  Object.freeze({
-    label: "Optional Intel DCAP QVL JS / WASM",
-    budgets: Object.freeze(["optionalDcapQvlJavaScript", "optionalDcapQvlWasm"]),
-  }),
   Object.freeze({ label: "Pinned same-origin Pyodide distribution", budgets: Object.freeze(["optionalPythonPack"]) }),
   Object.freeze({ label: "HTML-referenced entry CSS", budgets: Object.freeze(["entryCss"]) }),
   Object.freeze({
-    label: "General WASM excluding separately capped DCAP",
+    label: "General WASM excluding separately capped engine WASM",
     budgets: Object.freeze(["eachWasm", "allWasm"]),
   }),
 ]);
@@ -2831,8 +2755,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalPythonPackPath(file.path)
       && !isOptionalSemanticPackPath(file.path),
   );
-  if (wasmFiles.length === 0) throw new Error("The production build is missing the Chutes crypto WASM artifact.");
-
   const entryJavaScriptMeasurement = measure(entryJavaScript.payload);
   const initialJavaScriptMeasurement = sumMeasurements(initialJavaScriptFiles.map((file) => measure(file.payload)));
   const entryCssMeasurement = measure(entryCss.payload);
@@ -3063,18 +2985,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one palette-actions chunk; found ${optionalPaletteActionPacks.length}.`);
   }
   const optionalPaletteActionsMeasurement = measure(optionalPaletteActionPacks[0].payload);
-  const optionalProofSurfacePacks = javaScriptFiles.filter((file) => isOptionalProofSurfacePath(file.path));
-  if (optionalProofSurfacePacks.length !== 6) {
-    throw new Error(`Production must contain exactly six optional Proof-surface chunks; found ${optionalProofSurfacePacks.length}.`);
-  }
-  const optionalProofSurfaceMeasurement = sumMeasurements(optionalProofSurfacePacks.map((file) => measure(file.payload)));
-  const optionalEvidenceAcquisitionPacks = javaScriptFiles.filter((file) => isOptionalEvidenceAcquisitionPath(file.path));
-  if (optionalEvidenceAcquisitionPacks.length !== 3) {
-    throw new Error(`Production must contain exactly three optional evidence-acquisition chunks; found ${optionalEvidenceAcquisitionPacks.length}.`);
-  }
-  const optionalEvidenceAcquisitionMeasurement = sumMeasurements(
-    optionalEvidenceAcquisitionPacks.map((file) => measure(file.payload)),
-  );
   const optionalTerminalPacks = javaScriptFiles.filter((file) => isOptionalTerminalPath(file.path));
   if (optionalTerminalPacks.length !== 3) {
     throw new Error(`Production must contain exactly three optional Terminal packs; found ${optionalTerminalPacks.length}.`);
@@ -3085,18 +2995,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional semantic worker; found ${optionalSemanticWorkerPacks.length}.`);
   }
   const optionalSemanticWorkerMeasurement = measure(optionalSemanticWorkerPacks[0].payload);
-  const optionalModelCatalogPacks = javaScriptFiles.filter((file) => isOptionalModelCatalogPath(file.path));
-  if (optionalModelCatalogPacks.length !== 3) {
-    throw new Error(`Production must contain exactly three optional model-catalog packs; found ${optionalModelCatalogPacks.length}.`);
-  }
-  const optionalModelCatalogMeasurement = sumMeasurements(optionalModelCatalogPacks.map((file) => measure(file.payload)));
-  const optionalConfidentialEmbeddingPacks = javaScriptFiles.filter((file) => isOptionalConfidentialEmbeddingPath(file.path));
-  if (optionalConfidentialEmbeddingPacks.length !== 2) {
-    throw new Error(`Production must contain exactly two confidential-embedding discovery chunks; found ${optionalConfidentialEmbeddingPacks.length}.`);
-  }
-  const optionalConfidentialEmbeddingMeasurement = sumMeasurements(
-    optionalConfidentialEmbeddingPacks.map((file) => measure(file.payload)),
-  );
   // Six since the extension-bridge client became shared: the Connect surface
   // observes bridge presence with the same client the provider transports use,
   // so Rollup emits it once instead of embedding it in the session route.
@@ -3120,11 +3018,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
   const optionalPrimePackMeasurement = sumMeasurements(optionalPrimePackPacks.map((file) => measure(file.payload)));
 
-  const optionalChutesOAuthPacks = javaScriptFiles.filter((file) => isOptionalChutesOAuthPath(file.path));
-  if (optionalChutesOAuthPacks.length !== 2) {
-    throw new Error(`Production must contain exactly two optional Chutes OAuth chunks; found ${optionalChutesOAuthPacks.length}.`);
-  }
-  const optionalChutesOAuthMeasurement = sumMeasurements(optionalChutesOAuthPacks.map((file) => measure(file.payload)));
   const optionalExtensionObservationPacks = javaScriptFiles.filter((file) => isOptionalExtensionObservationPath(file.path));
   if (optionalExtensionObservationPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional extension-observation pack; found ${optionalExtensionObservationPacks.length}.`);
@@ -3137,16 +3030,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const optionalLocalDeviceVaultMeasurement = sumMeasurements(
     optionalLocalDeviceVaultPacks.map((file) => measure(file.payload)),
   );
-  const optionalDcapQvlPacks = javaScriptFiles.filter((file) => isOptionalDcapQvlPath(file.path));
-  if (optionalDcapQvlPacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional DCAP QVL JavaScript pack; found ${optionalDcapQvlPacks.length}.`);
-  }
-  const optionalDcapQvlJavaScriptMeasurement = measure(optionalDcapQvlPacks[0].payload);
-  const optionalDcapQvlWasmFiles = wasmFiles.filter((file) => isOptionalDcapQvlWasmPath(file.path));
-  if (optionalDcapQvlWasmFiles.length !== 1) {
-    throw new Error(`Production must contain exactly one optional DCAP QVL WASM pack; found ${optionalDcapQvlWasmFiles.length}.`);
-  }
-  const optionalDcapQvlWasmMeasurement = measure(optionalDcapQvlWasmFiles[0].payload);
   const optionalWasixWasmFiles = wasmFiles.filter((file) => isOptionalWasixWasmPath(file.path));
   assertUnpromotedWasixAbsent("engine WASM", optionalWasixWasmFiles.map((file) => file.path));
   const optionalWasixWasmMeasurement = sumMeasurements(optionalWasixWasmFiles.map((file) => measure(file.payload)));
@@ -3192,18 +3075,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalMemorySupportPath(file.path)
       && !isOptionalSkillsManagerViewPath(file.path)
       && !isOptionalSkillEditorPath(file.path)
-      && !isOptionalProofSurfacePath(file.path)
-      && !isOptionalEvidenceAcquisitionPath(file.path)
       && !isOptionalTerminalPath(file.path)
       && !isOptionalSemanticWorkerPath(file.path)
-      && !isOptionalModelCatalogPath(file.path)
-      && !isOptionalConfidentialEmbeddingPath(file.path)
       && !isOptionalInferenceProviderPath(file.path)
       && !isOptionalPrimePackPath(file.path)
-      && !isOptionalChutesOAuthPath(file.path)
       && !isOptionalExtensionObservationPath(file.path)
       && !isOptionalLocalDeviceVaultPath(file.path)
-      && !isOptionalDcapQvlPath(file.path)
       && !isDeferredCapabilityPackPath(file.path)
       && !isCompanionInstallScriptPath(file.path),
   );
@@ -3278,24 +3155,16 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "resume-report", paths: optionalResumeReportPacks.map((file) => file.path) },
       { name: "approval-dock", paths: optionalApprovalDockPacks.map((file) => file.path) },
       { name: "message-parts", paths: optionalMessagePartsPacks.map((file) => file.path) },
-      { name: "proof-surface", paths: optionalProofSurfacePacks.map((file) => file.path) },
-      { name: "evidence-acquisition", paths: optionalEvidenceAcquisitionPacks.map((file) => file.path) },
       { name: "terminal-vendor", paths: optionalTerminalPacks.map((file) => file.path) },
       { name: "semantic-worker", paths: optionalSemanticWorkerPacks.map((file) => file.path) },
-      { name: "model-catalog", paths: optionalModelCatalogPacks.map((file) => file.path) },
-      { name: "confidential-embedding", paths: optionalConfidentialEmbeddingPacks.map((file) => file.path) },
       { name: "inference-providers", paths: optionalInferenceProviderPacks.map((file) => file.path) },
       { name: "prime-pack", paths: optionalPrimePackPacks.map((file) => file.path) },
-      { name: "chutes-oauth", paths: optionalChutesOAuthPacks.map((file) => file.path) },
       { name: "extension-observation", paths: optionalExtensionObservationPacks.map((file) => file.path) },
       { name: "local-device-vault", paths: optionalLocalDeviceVaultPacks.map((file) => file.path) },
-      { name: "dcap-qvl", paths: optionalDcapQvlPacks.map((file) => file.path) },
       { name: "companion-install", paths: companionInstallScripts.map((file) => file.path) },
     ],
   );
-  const baselineWasmFiles = wasmFiles.filter(
-    (file) => !isOptionalDcapQvlWasmPath(file.path) && !isOptionalWasixWasmPath(file.path),
-  );
+  const baselineWasmFiles = wasmFiles.filter((file) => !isOptionalWasixWasmPath(file.path));
   const allWasmMeasurement = sumMeasurements(baselineWasmFiles.map((file) => measure(file.payload)));
 
   assertWithinBudget("Entry JavaScript", entryJavaScriptMeasurement, RELEASE_BUDGETS.entryJavaScript);
@@ -3396,31 +3265,14 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   assertWithinBudget("Optional resume report", optionalResumeReportMeasurement, RELEASE_BUDGETS.optionalResumeReport);
   assertWithinBudget("Optional approval dock", optionalApprovalDockMeasurement, RELEASE_BUDGETS.optionalApprovalDock);
   assertWithinBudget("Optional message parts", optionalMessagePartsMeasurement, RELEASE_BUDGETS.optionalMessageParts);
-  assertWithinBudget("Optional Proof surface", optionalProofSurfaceMeasurement, RELEASE_BUDGETS.optionalProofSurface);
-  assertWithinBudget(
-    "Optional evidence acquisition",
-    optionalEvidenceAcquisitionMeasurement,
-    RELEASE_BUDGETS.optionalEvidenceAcquisition,
-  );
   assertWithinBudget("Optional Terminal", optionalTerminalMeasurement, RELEASE_BUDGETS.optionalTerminal);
   assertWithinBudget("Optional semantic worker", optionalSemanticWorkerMeasurement, RELEASE_BUDGETS.optionalSemanticWorker);
-  assertWithinBudget(
-    "Optional confidential-embedding discovery",
-    optionalConfidentialEmbeddingMeasurement,
-    RELEASE_BUDGETS.optionalConfidentialEmbedding,
-  );
-  assertWithinBudget(
-    "Optional model catalog",
-    optionalModelCatalogMeasurement,
-    RELEASE_BUDGETS.optionalModelCatalog,
-  );
   assertWithinBudget(
     "Optional inference providers",
     optionalInferenceProviderMeasurement,
     RELEASE_BUDGETS.optionalInferenceProviders,
   );
   assertWithinBudget("Optional prime runtime", optionalPrimePackMeasurement, RELEASE_BUDGETS.optionalPrimePack);
-  assertWithinBudget("Optional Chutes OAuth", optionalChutesOAuthMeasurement, RELEASE_BUDGETS.optionalChutesOAuth);
   assertWithinBudget(
     "Optional extension observation",
     optionalExtensionObservationMeasurement,
@@ -3430,16 +3282,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     "Optional Local Device Vault",
     optionalLocalDeviceVaultMeasurement,
     RELEASE_BUDGETS.optionalLocalDeviceVault,
-  );
-  assertWithinBudget(
-    "Optional DCAP QVL JavaScript",
-    optionalDcapQvlJavaScriptMeasurement,
-    RELEASE_BUDGETS.optionalDcapQvlJavaScript,
-  );
-  assertWithinBudget(
-    "Optional DCAP QVL WASM",
-    optionalDcapQvlWasmMeasurement,
-    RELEASE_BUDGETS.optionalDcapQvlWasm,
   );
   assertWithinBudget(
     "Deferred capability pack",
@@ -3490,7 +3332,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalCapabilitiesView: optionalCapabilitiesViewMeasurement,
     optionalMemoryView: optionalMemoryViewMeasurement,
     optionalSkillsManagerView: optionalSkillsManagerViewMeasurement,
-    optionalProofSurface: optionalProofSurfaceMeasurement,
     optionalSkillEditor: optionalSkillEditorMeasurement,
     optionalTerminal: optionalTerminalMeasurement,
   });
@@ -3637,27 +3478,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         path: optionalPaletteActionPacks[0].path,
         ...optionalPaletteActionsMeasurement,
       }),
-      optionalProofSurface: Object.freeze({
-        paths: Object.freeze(optionalProofSurfacePacks.map((file) => file.path)),
-        ...optionalProofSurfaceMeasurement,
-      }),
-      optionalEvidenceAcquisition: Object.freeze({
-        paths: Object.freeze(optionalEvidenceAcquisitionPacks.map((file) => file.path)),
-        ...optionalEvidenceAcquisitionMeasurement,
-      }),
       optionalTerminal: Object.freeze({
         paths: Object.freeze(optionalTerminalPacks.map((file) => file.path)),
         ...optionalTerminalMeasurement,
       }),
       optionalSemanticWorker: Object.freeze({ path: optionalSemanticWorkerPacks[0].path, ...optionalSemanticWorkerMeasurement }),
-      optionalModelCatalog: Object.freeze({
-        paths: Object.freeze(optionalModelCatalogPacks.map((file) => file.path)),
-        ...optionalModelCatalogMeasurement,
-      }),
-      optionalConfidentialEmbedding: Object.freeze({
-        paths: Object.freeze(optionalConfidentialEmbeddingPacks.map((file) => file.path)),
-        ...optionalConfidentialEmbeddingMeasurement,
-      }),
       optionalInferenceProviders: Object.freeze({
         paths: Object.freeze(optionalInferenceProviderPacks.map((file) => file.path)),
         ...optionalInferenceProviderMeasurement,
@@ -3666,10 +3491,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         paths: Object.freeze(optionalPrimePackPacks.map((file) => file.path)),
         ...optionalPrimePackMeasurement,
       }),
-      optionalChutesOAuth: Object.freeze({
-        paths: Object.freeze(optionalChutesOAuthPacks.map((file) => file.path)),
-        ...optionalChutesOAuthMeasurement,
-      }),
       optionalExtensionObservation: Object.freeze({
         path: optionalExtensionObservationPacks[0].path,
         ...optionalExtensionObservationMeasurement,
@@ -3677,14 +3498,6 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalLocalDeviceVault: Object.freeze({
         paths: Object.freeze(optionalLocalDeviceVaultPacks.map((file) => file.path)),
         ...optionalLocalDeviceVaultMeasurement,
-      }),
-      optionalDcapQvlJavaScript: Object.freeze({
-        path: optionalDcapQvlPacks[0].path,
-        ...optionalDcapQvlJavaScriptMeasurement,
-      }),
-      optionalDcapQvlWasm: Object.freeze({
-        path: optionalDcapQvlWasmFiles[0].path,
-        ...optionalDcapQvlWasmMeasurement,
       }),
       deferredCapabilities: Object.freeze({
         paths: Object.freeze(deferredCapabilityPacks.map((file) => file.path)),
@@ -3728,14 +3541,6 @@ export function isOptionalExecutionToolsPath(path) {
 
 export function isOptionalWasiPreview1WorkerPath(path) {
   return /^assets\/wasi-preview1-worker-[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
-export function isOptionalDcapQvlPath(path) {
-  return /^assets\/airship_dcap_qvl-[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
-export function isOptionalDcapQvlWasmPath(path) {
-  return /^assets\/airship_dcap_qvl_bg-[A-Za-z0-9_-]+\.wasm$/u.test(path);
 }
 
 export function isOptionalNodeExecutionPackPath(path) {
@@ -3996,39 +3801,12 @@ export function isOptionalResumeReportPath(path) {
   return /^assets\/(?:resume-report|return-ledger|instant-format)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
-export function isOptionalProofSurfacePath(path) {
-  // `proof-inspector` and `seal-states` are the claim rail and the one
-  // fail-closed receipt rule it renders. They left the entry chunk when the
-  // rail stopped being defined inside `app.tsx`: neither can draw anything
-  // until a turn has produced a receipt, so neither belongs in first paint.
-  // `tdx` is the Intel quote/report parser every one of those claims rests on.
-  // It became its own chunk when the endpoint-evidence record store started
-  // importing it too; it stays classified with the Proof surface because that
-  // is the capability it exists to serve, and nothing renders it at first paint.
-  return /^assets\/(?:proof-view-[A-Za-z0-9_-]+|proof-inspector-[A-Za-z0-9_-]+|seal-states-[A-Za-z0-9_-]+|provider-client-[A-Za-z0-9_-]+|tdx-[A-Za-z0-9_-]+|client-(?!runtime-|context-)[A-Za-z0-9_-]+)\.js$/u.test(path);
-}
-
-export function isOptionalEvidenceAcquisitionPath(path) {
-  return /^assets\/(?:evidence-acquisition-queue|workspace-evidence-acquisition-persistence|workspace-endpoint-evidence-persistence)-[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
 export function isOptionalTerminalPath(path) {
   return /^assets\/(?:terminal-view|manager|terminal-dock-state)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalSemanticWorkerPath(path) {
   return /^assets\/semantic\.worker-[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
-export function isOptionalModelCatalogPath(path) {
-  // `model-picker` is the one rich picker Connection and Chat now share. It is
-  // dynamically imported by both, so it fetches with the catalog it renders and
-  // never at first paint.
-  return /^assets\/(?:client-runtime|telemetry|model-picker)-[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
-export function isOptionalConfidentialEmbeddingPath(path) {
-  return /^assets\/(?:chutes-embedding-catalog|confidential-embedding-choice)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalInferenceProviderPath(path) {
@@ -4047,10 +3825,6 @@ export function isOptionalPrimePackPath(path) {
   // which has its own budget; lookalike names must not quietly merge two
   // budgets into one.
   return /^assets\/(?:(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|cost|event-stream|transform)-|runtime-(?!registry-))[A-Za-z0-9_-]+\.js$/u.test(path);
-}
-
-export function isOptionalChutesOAuthPath(path) {
-  return /^assets\/(?:chutes-oauth|chutes-oauth-registration)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalExtensionObservationPath(path) {
@@ -4130,7 +3904,7 @@ export function assertOptionalSemanticPackIntegrity(files, manifest, declaredAva
 }
 
 export function assertOptionalPacksAreNotPreloaded(index) {
-  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|manager|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
+  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|client|request-state|terminal-view|manager|terminal-dock-state|semantic\.worker|fabric|openai|provider-connections-view|providers|session-route|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
     throw new Error("Production HTML must not preload deferred capability or optional execution packs.");
   }
 }

@@ -1,7 +1,7 @@
 {
-  "name": "Airship private edge agent",
+  "name": "Airship local-first agent runtime",
   "short_name": "Airship",
-  "description": "A private, local-first agent runtime with verifiable confidential inference.",
+  "description": "A local-first, browser-native agent runtime that keeps providers portable and explicit.",
   "id": ".",
   "start_url": "./",
   "scope": "./",

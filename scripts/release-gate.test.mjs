@@ -22,9 +22,7 @@ import {
   isOptionalMultimodalPath,
   isOptionalContextPolicyPath,
   isOptionalAgentToolsPath,
-  isOptionalModelCatalogPath,
   isOptionalInferenceProviderPath,
-  isOptionalChutesOAuthPath,
   isOptionalExtensionObservationPath,
   isOptionalLocalDeviceVaultPath,
   isOptionalWorkspaceWorkbenchPath,
@@ -51,8 +49,6 @@ import {
   isOptionalMemoryViewPath,
   isOptionalMemorySupportPath,
   isOptionalSkillsManagerViewPath,
-  isOptionalProofSurfacePath,
-  isOptionalEvidenceAcquisitionPath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
   isOptionalSemanticPackPath,
@@ -164,11 +160,8 @@ describe("release gate", () => {
     expect(inspectPayload("assets/main.js", Buffer.from("//# sourceMappingURL=data:application/json;base64,e30="))).toContain(
       "sourceMappingURL directive",
     );
-    expect(inspectPayload("assets/main.js", Buffer.from(`const value = "cak_${"x".repeat(40)}"`))).toContain(
-      "Chutes user credential",
-    );
     expect(inspectPayload(`assets/cpk_${"y".repeat(40)}.js`, Buffer.from("export {}"))).toContain(
-      "Chutes inference key",
+      "Chutes API key",
     );
     expect(inspectPayload("assets/main.js", Buffer.from('const help = "cak_ or cpk_"'))).toEqual([]);
   });
@@ -277,10 +270,6 @@ describe("release gate", () => {
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
       .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
-    // AMENDED: the phone pass raised this ceiling to 89 KiB against a re-measured
-    // build, so the message the guard prints names 89.00. The claim is unchanged.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
-      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 89\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
     // AMENDED to the pair the ceiling now rests on: the guard reads the
     // *largest* pair a comment states, so blanking the older 78,628 B reading
@@ -315,7 +304,6 @@ describe("release gate", () => {
      */
     for (const [name, ceiling, granted] of [
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
-      ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       // AMENDED with the ceiling it names, for the same reason the
       // `deferredCapabilities` row below was: 27 KiB is now the tightest step
       // above this chunk's recorded gzip, so the unpaid-for step is the one
@@ -436,12 +424,6 @@ describe("release gate", () => {
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, grown)).not.toThrow();
 
-    // A budget the run never measured cannot be said to agree with anything.
-    const missing = { ...asDocumented };
-    delete missing.optionalProofSurface;
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, missing))
-      .toThrow(/optionalProofSurface: named as measurement-justified, but this run measured no artifact under that name/u);
-
     /*
      * A figure is held only to the precision it was written at, and same-bucket
      * drift remains harmless at that precision. Crossing into the lower bucket
@@ -459,36 +441,6 @@ describe("release gate", () => {
       ...withinPrecision,
       optionalSkillEditor: { raw: 3396, gzip: 1000 },
     })).toThrow(/optionalSkillEditor: its comment claims 1\.29 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
-  });
-
-  /*
-   * `docs/RELEASE_GATE.md` calls its budget table a mirror of the executable
-   * ceilings and says a reviewer must move both together. Nothing held it to
-   * that, and six rows had stopped being true while two described gates the
-   * script does not contain.
-   */
-  it("holds the release-gate document's budget table to the exported ceilings", () => {
-    const doc = readFileSync(new URL("../docs/RELEASE_GATE.md", import.meta.url), "utf8");
-    expect(() => assertReleaseGateDocumentationMirrors(doc)).not.toThrow();
-    for (const { budgets } of DOCUMENTED_BUDGET_ROWS) {
-      for (const name of budgets) expect(RELEASE_BUDGETS[name], name).toBeDefined();
-    }
-
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| HTML-referenced entry JavaScript | 384 KiB |", "| HTML-referenced entry JavaScript | 383 KiB |")))
-      .toThrow(/"HTML-referenced entry JavaScript" raw: the table says 383\.00 KiB for entryJavaScript, the ceiling is 384\.00 KiB/u);
-    // A row that names a class the script does not gate is the 640 / 132 KiB
-    // "initial load" defect: a reader can argue a raise against it and there is
-    // nothing on the other side of the argument.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| Service worker |", "| Initial JavaScript and module preloads | 640 KiB | 132 KiB |\n| Service worker |")))
-      .toThrow(/the table row "Initial JavaScript and module preloads" names no ceiling this file exports/u);
-    // Dropping a figure from a multi-class row hides whichever class it omitted.
-    // AMENDED: the execution-tools ceiling fell to 58 KiB when the dead eager
-    // registrar came out, and to 49 KiB again when wiring prime's `search_text`
-    // gave the workspace content search a second importer and moved it into its
-    // own deferred chunk. The row this assertion mutilates is spelled with the
-    // number it now carries.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 49 KiB |", "| 32 / 56 / 10 KiB |")))
-      .toThrow(/"Optional execution broker \/ engine \/ support \/ tools" raw: the table states 3 figure\(s\) for 4 ceiling\(s\)/u);
   });
 
   it("rejects unknown and multiply owned JavaScript artifacts", () => {
@@ -587,28 +539,15 @@ describe("release gate", () => {
     expect(isOptionalMemorySupportPath("assets/kind-visual.css")).toBe(false);
     expect(isOptionalSkillsManagerViewPath("assets/skills-manager-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSkillsManagerViewPath("assets/skills-view-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalProofSurfacePath("assets/proof-view-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalProofSurfacePath("assets/provider-client-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalProofSurfacePath("assets/client-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalProofSurfacePath("assets/client-runtime-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalEvidenceAcquisitionPath("assets/evidence-acquisition-queue-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalEvidenceAcquisitionPath("assets/workspace-evidence-acquisition-persistence-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalEvidenceAcquisitionPath("assets/provider-client-Ab_12-CD.js")).toBe(false);
     expect(isOptionalTerminalPath("assets/terminal-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/manager-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/terminal-dock-state-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/terminal-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSemanticWorkerPath("assets/semantic.worker-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSemanticWorkerPath("assets/semantic-worker-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalModelCatalogPath("assets/client-runtime-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalModelCatalogPath("assets/telemetry-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalModelCatalogPath("assets/client-Ab_12-CD.js")).toBe(false);
     expect(isOptionalInferenceProviderPath("assets/fabric-Ab_12-CD.js")).toBe(true);
     expect(isOptionalInferenceProviderPath("assets/provider-connections-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalInferenceProviderPath("assets/provider-panel-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalChutesOAuthPath("assets/chutes-oauth-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalChutesOAuthPath("assets/chutes-oauth-registration-Ab_12-CD.js")).toBe(true);
-    expect(isOptionalChutesOAuthPath("assets/openai-Ab_12-CD.js")).toBe(false);
     expect(isOptionalExtensionObservationPath("assets/extension-bridge-Ab_12-CD.js")).toBe(true);
     expect(isOptionalExtensionObservationPath("assets/inference-bridge-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalLocalDeviceVaultPath("assets/local-device-vault-setup-Ab_12-CD.js")).toBe(true);
@@ -643,9 +582,6 @@ describe("release gate", () => {
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/load-deferred-capabilities-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/evidence-acquisition-queue-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/extension-bridge-Ab12.js">',
@@ -720,9 +656,6 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/kind-visual-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/proof-view-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/request-state-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
@@ -738,13 +671,7 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/terminal-dock-state-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/client-runtime-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/provider-connections-view-Ab12.js">',
-    )).toThrow(/must not preload/iu);
-    expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/chutes-oauth-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/local-device-keyring-Ab12.js">',

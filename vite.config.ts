@@ -3,11 +3,10 @@ import { fileURLToPath } from "node:url";
 // The test block below is vitest config, not vite config; vitest extends the
 // vite type so both live in this object.
 import { defineConfig } from "vitest/config";
-import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
 import { airshipSemanticPackAssets, readVerifiedSemanticPack } from "./scripts/semantic-pack-assets";
 
-const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
+const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|client|request-state|terminal-view|terminal-dock-state|semantic\.worker|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
 /**
  * Vite may otherwise promote dependencies of dynamic imports into index.html.
  * Preserve its just-in-time JS-host preloads, but keep optional Airship packs
@@ -107,7 +106,6 @@ export default defineConfig({
     preact(),
     airshipPyodideAssets(),
     airshipSemanticPackAssets(VERIFIED_SEMANTIC_PACK),
-    localChutesOAuthBridge(),
     {
       name: "airship-local-development-csp",
       apply: "serve",
@@ -274,9 +272,9 @@ export default defineConfig({
           /*
            * `git/client.ts` moved off the startup path so a visitor who never
            * opens the Workspace does not pay for Git. Alone it emits a chunk
-           * named `client`, a shape the release gate's Proof-surface classifier
-           * already claims. Name it for what it is so the classifier stays
-           * exact rather than matching by accident.
+           * named `client`, a name several unrelated chunks also emit. Name it
+           * for what it is so the release gate's classifier stays exact rather
+           * than matching by accident.
            */
           /*
            * Any chunk made purely of Git modules that is not the adapter facade

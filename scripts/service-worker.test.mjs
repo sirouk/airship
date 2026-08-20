@@ -33,7 +33,7 @@ describe("production service worker", () => {
               artifacts: [
                 { path: "assets/index-a1.js" },
                 { path: "assets/index-b2.css" },
-                { path: "assets/chutes-e2ee-c3.wasm" },
+                { path: "assets/provider-connections-view-c3.js" },
                 { path: "execution-packs/pyodide/python_stdlib.zip" },
                 { path: "../escape.js" },
                 { path: "assets/../scope-escape.js" },
@@ -64,7 +64,7 @@ describe("production service worker", () => {
       "/airship/favicon.svg",
       "/airship/assets/index-a1.js",
       "/airship/assets/index-b2.css",
-      "/airship/assets/chutes-e2ee-c3.wasm",
+      "/airship/assets/provider-connections-view-c3.js",
     ]);
   });
 

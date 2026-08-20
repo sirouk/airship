@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ const releaseRoot = resolve(root, "public", "extension", "releases");
 
 describe("companion release packages", () => {
   it("publishes six checksum-bound artifacts and keeps the install hub on their version", async () => {
+    execFileSync(process.execPath, [resolve(root, "extension", "package.mjs")], { cwd: root, stdio: "pipe" });
     const metadata = JSON.parse(await readFile(resolve(releaseRoot, "release.json"), "utf8"));
     const checksums = await readFile(resolve(releaseRoot, "SHA256SUMS"), "utf8");
     const installHub = await readFile(resolve(root, "public", "extension", "index.html"), "utf8");

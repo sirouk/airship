@@ -78,20 +78,7 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
      */
     const expectedConditionalS3Response = message.location().url.startsWith("http://127.0.0.1:9900/")
       && /status of (?:403|404|412)/u.test(message.text());
-    /*
-     * The Chutes sign-in readiness probe, answering.
-     *
-     * `#connection` asks the localhost token handler at load whether it can
-     * exchange a code, because the alternative is what shipped: an OAuth tab
-     * marked "Primary" above a filled brass button that returned an operator's
-     * restart instruction when pressed. A lab with no process-held client
-     * secret answers 503, the browser logs the response, and the lane renders
-     * that answer — it is a reading, not a failure. Scoped to the one endpoint
-     * and the one status so a genuine 503 anywhere else still fails this audit.
-     */
-    const expectedSignInReadinessResponse = message.location().url.endsWith("/__airship/chutes/oauth/token")
-      && /status of 503/u.test(message.text());
-    if (!expectedConditionalS3Response && !expectedSignInReadinessResponse) {
+    if (!expectedConditionalS3Response) {
       runtimeErrors.push(`[${activeRoute}] console: ${message.text()} (${message.location().url || "unknown source"})`);
     }
   });

@@ -93,10 +93,7 @@ test("high-value controls remain usable without credentials on every device clas
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   page.on("console", (message) => {
-    if (message.type() !== "error") return;
-    const expectedSignInReadinessResponse = message.location().url.endsWith("/__airship/chutes/oauth/token")
-      && /status of 503/u.test(message.text());
-    if (!expectedSignInReadinessResponse) runtimeErrors.push(message.text());
+    if (message.type() === "error") runtimeErrors.push(message.text());
   });
 
   await page.goto("/#chat");
@@ -147,25 +144,11 @@ test("high-value controls remain usable without credentials on every device clas
   await page.keyboard.press("Escape");
   await expectContainedLayout(page);
 
-  await page.goto("/#proof");
-  await expect(page.locator(".trust-hub-tabs")).toHaveCount(0);
-  await page.getByRole("tab", { name: "Attestation evidence" }).click();
-  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
-  await expectContainedLayout(page);
-
   await page.goto("/#connection");
   await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
-  const chutes = page.locator('.connect-lane[data-lane="chutes"]');
-  if ((await chutes.getAttribute("data-open")) !== "true") {
-    await chutes.getByRole("button", { name: /Chutes/u }).first().click();
-  }
-  // This acceptance build does not configure Chutes OAuth. It must lead with
-  // the functional API-key path instead of rendering a broken sign-in action.
-  await expect(chutes.getByRole("button", { name: "Sign in to Chutes", exact: true })).toHaveCount(0);
-  await expect(chutes.getByRole("tab", { name: /^API key/u })).toHaveAttribute("aria-selected", "true");
-  await expect(chutes.getByRole("textbox", { name: "Chutes API key", exact: true })).toBeVisible();
-  await expect(chutes.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
-  await expect(chutes.getByRole("button", { name: "Discover models with key" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cloud and local models", level: 2 })).toBeVisible();
+  await expect(page.getByText(/Keep multiple providers in page memory\./u)).toBeVisible();
+  await expect(page.getByText(/OpenAI|Anthropic|Chutes/u).first()).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Choose a model" })).toHaveCount(0);
   await expectContainedLayout(page);
 

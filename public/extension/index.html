@@ -154,7 +154,7 @@
           <div><dt>Provider OAuth</dt><dd>The extension can transport only a supported, reviewed grant flow. It does not manufacture provider permission or embed a client secret.</dd></div>
           <div><dt>Local storage</dt><dd>Disabled by default. When enabled from the popup, it accepts bounded encrypted Airship pages only; the Vault remains authoritative.</dd></div>
           <div><dt>Compute</dt><dd>Moves bounded hashing and vector ranking off the interface thread. It uses the browser’s available execution context and makes no unmeasured GPU claim.</dd></div>
-          <div><dt>Trust</dt><dd>Installing the extension changes reachability, not attestation. Provider and TEE evidence remain independently reported in Airship Proof.</dd></div>
+          <div><dt>Trust</dt><dd>Installing the extension changes reachability, not provider authority. Airship still reports provider state separately, and the extension does not manufacture trust signals.</dd></div>
         </dl>
       </section>
       <footer class="page-footer">
