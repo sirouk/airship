@@ -70,8 +70,7 @@ export function createReviewedGitHttp(options: ReviewedGitHttpOptions): HttpClie
         );
       }
 
-      const responseHeaders: Record<string, string> = {};
-      for (const [name, value] of response.headers.entries()) responseHeaders[name] = value;
+      const responseHeaders = Object.fromEntries(response.headers.entries());
       return {
         url: finalUrl.href,
         method,
@@ -88,15 +87,18 @@ type ReviewedRemoteAuthority = Readonly<{
   remoteUrl: string;
   origin: string;
   repositoryPath: string;
+  requestRepositoryPath: string;
 }>;
 
 function exactHttpsRemote(value: string): ReviewedRemoteAuthority {
   let parsed: URL;
   try { parsed = new URL(value); }
   catch { throw new GitValidationError("Reviewed Git HTTP repository URL is invalid."); }
-  const repositoryPath = parsed.pathname.endsWith("/")
-    ? parsed.pathname.slice(0, -1)
-    : parsed.pathname;
+  const requestRepositoryPath = parsed.pathname;
+  const repositoryPath = requestRepositoryPath.endsWith("/")
+    ? requestRepositoryPath.slice(0, -1)
+    : requestRepositoryPath;
+  const remoteUrl = `${parsed.origin}${repositoryPath}`;
   if (
     parsed.protocol !== "https:"
     || parsed.username
@@ -104,11 +106,12 @@ function exactHttpsRemote(value: string): ReviewedRemoteAuthority {
     || parsed.search
     || parsed.hash
     || repositoryPath.length < 2
-    || `${parsed.origin}${repositoryPath}` !== value
+    || repositoryPath.endsWith("/")
+    || parsed.href !== value
   ) {
     throw new GitValidationError("Reviewed Git HTTP repository URL must be one exact canonical HTTPS repository path.");
   }
-  return Object.freeze({ remoteUrl: value, origin: parsed.origin, repositoryPath });
+  return Object.freeze({ remoteUrl, origin: parsed.origin, repositoryPath, requestRepositoryPath });
 }
 
 function reviewedRequestUrl(value: unknown, authority: ReviewedRemoteAuthority): URL {
@@ -121,6 +124,12 @@ function reviewedRequestUrl(value: unknown, authority: ReviewedRemoteAuthority):
   }
   if (parsed.origin !== authority.origin || parsed.username || parsed.password || parsed.hash) {
     throw requestAuthorityMismatch(authority);
+  }
+  if (
+    authority.requestRepositoryPath !== authority.repositoryPath
+    && parsed.pathname.startsWith(`${authority.requestRepositoryPath}/`)
+  ) {
+    parsed.pathname = `${authority.repositoryPath}${parsed.pathname.slice(authority.requestRepositoryPath.length)}`;
   }
   const suffix = parsed.pathname.slice(authority.repositoryPath.length);
   if (!parsed.pathname.startsWith(`${authority.repositoryPath}/`)) {

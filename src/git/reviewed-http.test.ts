@@ -41,6 +41,27 @@ describe("reviewed Git HTTP adapter", () => {
     expect(reviewAuthority.mock.invocationCallOrder[0]).toBeLessThan(fetch.mock.invocationCallOrder[0]!);
   });
 
+  it("canonicalizes a trailing-slash remote's doubled request without widening authority", async () => {
+    const reviewedRemoteUrl = `${remoteUrl}/`;
+    const doubledRequestUrl = `${reviewedRemoteUrl}/info/refs?service=git-upload-pack`;
+    const fetch = vi.fn().mockResolvedValue(responseAt(requestUrl, 200));
+    const reviewAuthority = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const http = createReviewedGitHttp({ remoteUrl: reviewedRemoteUrl, reviewAuthority });
+
+    await expect(http.request({ url: doubledRequestUrl })).resolves.toMatchObject({ url: requestUrl });
+    expect(fetch.mock.calls[0]?.[0]).toBe(requestUrl);
+
+    await expect(http.request({
+      url: `${remoteUrl}.attacker/info/refs?service=git-upload-pack`,
+    })).rejects.toMatchObject({
+      code: "git-http-request-authority-mismatch",
+      message: `Git Smart HTTP refused a request outside the reviewed repository ${remoteUrl}.`,
+    });
+    expect(reviewAuthority).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([307, 308])("refuses an adversarial %s redirect without following it", async (status) => {
     const fetch = vi.fn().mockResolvedValue(responseAt(requestUrl, status, {
       Location: "https://evil.example.test/stolen.git",
