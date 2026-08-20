@@ -13,7 +13,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/providers/faux.test-support";
 import { materializeMessages } from "../../core/agent";
 import type {
   ApprovalPolicy,

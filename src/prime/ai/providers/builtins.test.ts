@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hasApiProvider, registeredApis, resolveApiProvider, stream } from "../index";
 import type { Context, Model } from "../types";
-import { collectEvents, sseJson, sseResponse, stubFetch } from "./test-helpers";
+import { collectEvents, sseJson, sseResponse, stubFetch } from "./provider.test-support";
 
 /**
  * register-builtins wiring: the three ported providers are lazy-loaded

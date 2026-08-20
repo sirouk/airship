@@ -10,7 +10,7 @@ import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/providers/faux.test-support";
 import type { InferenceTransport, JsonValue } from "../../core/contracts";
 import { EventJournal } from "../../core/journal";
 import { MemoryJournalBackend } from "../../core/memory-journal";

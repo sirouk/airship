@@ -7,7 +7,7 @@ import {
   type PrimeHarnessStore,
   type PrimeSubagentSpawnOptions,
 } from "./types";
-import { createFakeFactory, createFakeIds, createOwner, flush } from "./test-utils";
+import { createFakeFactory, createFakeIds, createOwner, flush } from "./test-utils.test-support";
 
 /**
  * Admission is the contract's crown jewel: spawn returns with a handle and

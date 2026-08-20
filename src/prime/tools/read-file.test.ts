@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPrimeReadFileTool } from "./read-file";
-import { FakeWorkspacePort, makeToolContext } from "./test-utils";
+import { FakeWorkspacePort, makeToolContext } from "./test-utils.test-support";
 
 /**
  * read_file: the line-oriented read head policy over WorkspacePort

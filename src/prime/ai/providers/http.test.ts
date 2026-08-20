@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fetchWithRetry, HttpResponseError } from "./http";
-import { jsonResponse, stubFetch } from "./test-helpers";
+import { jsonResponse, stubFetch } from "./provider.test-support";
 
 /**
  * Retry/timeout/abort semantics of the provider HTTP layer. Timing-sensitive

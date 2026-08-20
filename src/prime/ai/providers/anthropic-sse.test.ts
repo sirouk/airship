@@ -9,7 +9,7 @@ import {
   sseJson,
   sseResponse,
   stubFetch,
-} from "./test-helpers";
+} from "./provider.test-support";
 
 /**
  * Anthropic SSE → AssistantMessageEvent conformance: event ordering, block

@@ -1,4 +1,5 @@
-import type { AssistantMessageEvent, AssistantMessageEventStream } from "../index";
+import type { AssistantMessageEventStream } from "../event-stream";
+import type { AssistantMessageEvent } from "../types";
 
 /**
  * Test plumbing for provider conformance tests: a globalThis.fetch stub that

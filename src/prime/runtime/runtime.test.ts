@@ -9,7 +9,7 @@ import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/providers/faux.test-support";
 import type { Model } from "../ai/types";
 import type { InferenceTransport } from "../../core/contracts";
 import { EventJournal } from "../../core/journal";

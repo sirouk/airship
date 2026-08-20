@@ -23,7 +23,7 @@ import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt
  * child sessions instead of a named absence.
  *
  * Until now the only implementation of this interface was the test double in
- * `subagents/test-utils.ts`, which is why `createPrimeToolRegistry` omitted
+ * `subagents/test-utils.test-support.ts`, which is why `createPrimeToolRegistry` omitted
  * the whole RLM family with "no agent registry is attached to this session".
  *
  * The contract this has to honour, and the one that is easy to get wrong: a

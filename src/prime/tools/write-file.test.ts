@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WorkspaceConflictError } from "../../workspace/contracts";
 import { createPrimeEditFileTool, createPrimeWriteFileTool } from "./write-file";
-import { FakeWorkspacePort, makeToolContext } from "./test-utils";
+import { FakeWorkspacePort, makeToolContext } from "./test-utils.test-support";
 
 /**
  * write_file/edit_file: create-vs-replace wording, revision-CAS semantics

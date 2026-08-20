@@ -22,7 +22,7 @@ import type { KernelEngine, KernelJobResult } from "../kernel/kernel-contract";
 import type { KernelWorkerLike } from "../kernel/kernel-host";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { InMemoryHarnessStore } from "../harness/store";
-import { FakeWorkspacePort, makeToolContext } from "./test-utils";
+import { FakeWorkspacePort, makeToolContext } from "./test-utils.test-support";
 import {
   PRIME_SKILL_RESULT_BEGIN,
   PRIME_SKILL_RESULT_END,

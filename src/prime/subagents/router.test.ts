@@ -6,7 +6,7 @@ import {
   type PrimeAgentRegistryDeps,
   type PrimeRuntimeEvent,
 } from "./types";
-import { createAttached, createFakeClock, createFakeFactory, createFakeIds, createOwner, flush, makeMessage } from "./test-utils";
+import { createAttached, createFakeClock, createFakeFactory, createFakeIds, createOwner, flush, makeMessage } from "./test-utils.test-support";
 
 /**
  * Nuclear-family routing (manifest invariant 26): parent, siblings, and

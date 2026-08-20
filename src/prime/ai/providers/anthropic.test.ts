@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage, Context, Model, Tool, ToolResultMessage } from "../index";
 import { streamAnthropic, type AnthropicMessagesRequest, type AnthropicOptions } from "./anthropic";
-import { sseJson, sseResponse, stubFetch, type CapturedRequest } from "./test-helpers";
+import { sseJson, sseResponse, stubFetch, type CapturedRequest } from "./provider.test-support";
 
 /**
  * Anthropic provider request-shape goldens: payload mapping for system

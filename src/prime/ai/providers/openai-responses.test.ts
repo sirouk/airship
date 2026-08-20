@@ -18,7 +18,7 @@ import {
   sseResponse,
   stubFetch,
   type CapturedRequest,
-} from "./test-helpers";
+} from "./provider.test-support";
 
 /**
  * OpenAI Responses provider: input-item goldens (signature/id replay

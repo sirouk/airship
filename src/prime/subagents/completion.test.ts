@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrimeRuntimeEvent } from "../runtime/types-prime";
 import { InMemoryPrimeAgentLedger, PrimeAgentRegistry } from "./registry";
-import { createDeferred, createFakeFactory, createFakeIds, createOwner, createUsage, flush } from "./test-utils";
+import { createDeferred, createFakeFactory, createFakeIds, createOwner, createUsage, flush } from "./test-utils.test-support";
 
 /**
  * Completion notices (manifest invariant 26): a child either explicitly

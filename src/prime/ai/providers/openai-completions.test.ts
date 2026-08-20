@@ -9,7 +9,7 @@ import {
   sseResponse,
   stubFetch,
   type CapturedRequest,
-} from "./test-helpers";
+} from "./provider.test-support";
 
 /**
  * OpenAI chat-completions provider: payload goldens (compat auto-detection,

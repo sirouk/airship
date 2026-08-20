@@ -8,8 +8,8 @@ import {
   fauxToolCall,
   registerFauxProvider,
   type FauxProviderRegistration,
-} from "./faux";
-import { collectEvents, expectEventProtocolConformance } from "./test-helpers";
+} from "./faux.test-support";
+import { collectEvents, expectEventProtocolConformance } from "./provider.test-support";
 
 /** Faux provider: deterministic scripted streaming for harness tests. */
 

@@ -10,7 +10,7 @@ import {
   fauxThinking,
   fauxToolCall,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/providers/faux.test-support";
 
 /**
  * Port of prime-agent packages/agent/test/e2e.test.ts.

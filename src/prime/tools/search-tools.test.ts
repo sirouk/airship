@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPrimeListFilesTool, createPrimeSearchTextTool } from "./search-tools";
-import { FakeWorkspacePort, makeToolContext } from "./test-utils";
+import { FakeWorkspacePort, makeToolContext } from "./test-utils.test-support";
 
 /**
  * list_files/search_text: deterministic inventory (sorted, control-plane
