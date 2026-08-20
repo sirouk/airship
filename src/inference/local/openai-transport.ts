@@ -4,8 +4,8 @@ import type {
   InferenceTransport,
   SecurityPosture,
 } from "../../core/contracts";
-import { buildOpenAiPayload, OpenAiStreamAssembler } from "../chutes/openai";
-import { BoundedSseParser, type SseMessage } from "../chutes/sse";
+import { buildOpenAiPayload, OpenAiStreamAssembler } from "../openai-wire/chat";
+import { BoundedSseParser, type SseMessage } from "../openai-wire/sse";
 import type { MemoryCredential } from "./contracts";
 import {
   LocalProviderError,
@@ -191,8 +191,8 @@ export class LocalOpenAiTransport implements InferenceTransport {
         throw externalSignal.reason ?? new DOMException("Cancelled.", "AbortError");
       }
       if (error instanceof LocalProviderError) throw error;
-      if (isChutesParserError(error)) {
-        const code = error.code === "SSE_LIMIT" ? "response-too-large" : "invalid-payload";
+      if (isWireParserError(error)) {
+        const code = error.code === "sse-limit" ? "response-too-large" : "invalid-payload";
         throw new LocalProviderError(providerDiagnostic(
           code,
           code === "response-too-large"
@@ -288,7 +288,7 @@ function consumeSse(
  * local inference stream ended before a completion marker." — a complaint about
  * framing, in front of a person whose model server had just said exactly what
  * was wrong. The parser has carried `event` since it was written
- * (`chutes/sse.ts`); nothing inspected it.
+ * (`openai-wire/sse.ts`); nothing inspected it.
  *
  * The text is untrusted: it is another program's output being placed in this
  * person's transcript, so control characters go and the length is bounded, the
@@ -328,7 +328,7 @@ function invalidStream(message: string): LocalProviderError {
   return new LocalProviderError(providerDiagnostic("invalid-payload", message));
 }
 
-function isChutesParserError(value: unknown): value is { code: string } {
+function isWireParserError(value: unknown): value is { code: string } {
   return typeof value === "object"
     && value !== null
     && "code" in value
