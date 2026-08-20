@@ -1027,10 +1027,9 @@ export class PrimeAgentSession {
   private async prepareTurnContext(turn: ActiveTurn, content: string): Promise<CanonicalContextSelection | undefined> {
     const provider = this.options.registry.getTurnContextProvider();
     const manifest = this.options.manifest;
-    // Historical protocol-v1 manifests omitted the pin; core preserves the
-    // provider-if-present behavior there. Prime never admits v1 (the
-    // constructor gate), so the fallback pattern still mirrors core exactly.
-    const mode = manifest.turnContext ?? (provider ? "required" : "disabled");
+    // Construction refuses protocol v1, so admitted turns use only their exact
+    // protocol-v2 policy instead of reviving an unreachable compatibility rule.
+    const mode = manifest.turnContext;
     if (mode === "disabled") return undefined;
     if (!provider) {
       throw new Error("This session requires turn-context retrieval, but no provider is attached.");

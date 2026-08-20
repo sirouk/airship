@@ -866,10 +866,9 @@ async function prepareTurnContext(args: Readonly<{
   signal: AbortSignal;
 }>): Promise<CanonicalContextSelection | undefined> {
   const provider = args.tools.getTurnContextProvider();
-  // Historical protocol-v1 manifests omitted the pin. Preserve their exact
-  // provider-if-present behavior; createSessionManifest now always pins new
-  // sessions so current turns are never governed by this compatibility path.
-  const mode = args.manifest.turnContext ?? (provider ? "required" : "disabled");
+  // Protocol-v1 sessions are refused before this helper; every admitted turn
+  // therefore uses the exact policy pinned in its protocol-v2 manifest.
+  const mode = args.manifest.turnContext;
   if (mode === "disabled") return undefined;
   if (!provider) throw new Error("This session requires turn-context retrieval, but no provider is attached.");
   const query = canonicalTurnContextQuery(args.content);
