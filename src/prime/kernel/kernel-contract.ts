@@ -112,6 +112,18 @@ export const DEFAULT_KERNEL_BUDGETS: KernelBudgets = Object.freeze({
   maxQueuedJobs: 64,
 });
 
+/** Fixed wire bounds shared by the kernel adapters. */
+export const KERNEL_PROTOCOL_TOKEN_BYTES = 32;
+export const MAX_KERNEL_JOB_ID_CHARS = 256;
+export const MAX_KERNEL_LABEL_CHARS = 1_024;
+export const MAX_KERNEL_TOOL_NAME_CHARS = 256;
+export const MAX_KERNEL_JSON_DEPTH = 64;
+export const MAX_KERNEL_JSON_NODES = 100_000;
+/** Empty writes still consume a frame; cap message amplification independently of captured text. */
+export const MAX_KERNEL_STREAM_FRAMES = 4_096;
+/** Charge each stream frame for its separator/wire boundary, including an empty first frame. */
+export const KERNEL_STREAM_FRAME_OVERHEAD_CHARS = 1;
+
 
 
 export type KernelHostToWorkerMessage =

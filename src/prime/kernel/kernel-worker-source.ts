@@ -19,6 +19,18 @@
  */
 
 import type { KernelBudgets } from "./kernel-contract";
+import { KERNEL_PROTOCOL_TOKEN_BYTES } from "./kernel-contract";
+
+/** Mint a generation-local capability. Production callers must never reuse it. */
+export function createKernelProtocolToken(): string {
+  const cryptography = globalThis.crypto;
+  if (!cryptography || typeof cryptography.getRandomValues !== "function") {
+    throw new Error("The prime kernel requires crypto.getRandomValues for its worker protocol capability.");
+  }
+  const bytes = new Uint8Array(KERNEL_PROTOCOL_TOKEN_BYTES);
+  cryptography.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
 
 export function kernelWorkerSource(budgets: KernelBudgets): string {
   return `"use strict";
