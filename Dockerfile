@@ -50,6 +50,8 @@ RUN if [ -n "$VITE_GOOGLE_CLIENT_ID" ]; then \
 # The app is hash-routed, but a deep link or a refresh can still arrive at a
 # path the bundle does not emit. Same fallback the Pages workflow uses.
 RUN cp dist/index.html dist/404.html
+# The fallback changes the release inventory, so regenerate and validate it.
+RUN npm run check:release
 
 
 FROM caddy:2-alpine AS runtime

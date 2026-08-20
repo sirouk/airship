@@ -41,6 +41,10 @@ describe("the deployment serves the base path it advertises", () => {
     expect(dockerfile).toContain("COPY --from=build /app/dist /srv${AIRSHIP_PUBLIC_BASE_PATH}");
   });
 
+  it("regenerates the release inventory after adding the static fallback", () => {
+    expect(dockerfile).toMatch(/RUN cp dist\/index\.html dist\/404\.html\n(?:#.*\n)?RUN npm run check:release/u);
+  });
+
   it("gives Caddy the value at run time, because Caddy is a real process", () => {
     // Once under `args:` because Vite inlines it, once under `environment:`
     // because Caddy has to answer the URLs that inlining produced.
