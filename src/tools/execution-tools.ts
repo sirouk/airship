@@ -42,7 +42,9 @@ const MAX_PYTHON_WORKSPACE_BYTES = 4 * 1_024 * 1_024;
 const PYTHON_WORKSPACE_EXCLUDED_SEGMENTS = new Set([".airship", ".git", "node_modules"]);
 const WORKER_POLICY_NAME = "airship-worker";
 const PYODIDE_VERSION = "314.0.2";
-const PYODIDE_ASSET_PATH = "/execution-packs/pyodide/";
+/** Vite owns the canonical root/subpath deployment prefix at build time. */
+const PYODIDE_DEPLOYMENT_BASE = import.meta.env.BASE_URL;
+const PYODIDE_PACK_RELATIVE_PATH = "execution-packs/pyodide/";
 const MAX_WORKSPACE_PROGRAM_CALLS = 16;
 const MAX_WORKSPACE_PROGRAM_RESULT_BYTES = 512 * 1_024;
 /**
@@ -1007,6 +1009,47 @@ type PyodideJobOptions = Readonly<{
   bootTimeoutMs?: number;
 }>;
 
+/**
+ * Resolve the build-pinned pack against only the page's origin.
+ *
+ * `import.meta.env.BASE_URL` is Vite's canonical deployment path. Using the
+ * current document URL as the path authority would make a deep route or a
+ * caller-controlled `<base>` relevant, while accepting a caller-supplied URL
+ * would turn runtime installation into a script-selection capability.
+ */
+function pinnedPyodideAssetBase(): string {
+  const pageOrigin = globalThis.location?.origin;
+  if (typeof pageOrigin !== "string" || pageOrigin === "null") {
+    throw new Error("Disposable Pyodide needs a browser origin to pin its same-origin pack.");
+  }
+  if (
+    typeof PYODIDE_DEPLOYMENT_BASE !== "string"
+    || !PYODIDE_DEPLOYMENT_BASE.startsWith("/")
+    || !PYODIDE_DEPLOYMENT_BASE.endsWith("/")
+    || PYODIDE_DEPLOYMENT_BASE.includes("//")
+    || PYODIDE_DEPLOYMENT_BASE.includes("?")
+    || PYODIDE_DEPLOYMENT_BASE.includes("#")
+  ) {
+    throw new TypeError("Disposable Pyodide must use a valid Vite-pinned same-origin deployment base.");
+  }
+
+  const deploymentBase = new URL(PYODIDE_DEPLOYMENT_BASE, `${pageOrigin}/`);
+  if (
+    deploymentBase.origin !== pageOrigin
+    || deploymentBase.pathname !== PYODIDE_DEPLOYMENT_BASE
+    || deploymentBase.search
+    || deploymentBase.hash
+  ) {
+    throw new TypeError("Disposable Pyodide must use a valid Vite-pinned same-origin deployment base.");
+  }
+
+  const assetBase = new URL(PYODIDE_PACK_RELATIVE_PATH, deploymentBase);
+  if (assetBase.origin !== pageOrigin || assetBase.search || assetBase.hash) {
+    throw new TypeError("Disposable Pyodide must use its Vite-pinned same-origin pack.");
+  }
+  return assetBase.href;
+}
+
 export async function runDisposablePyodide(
   code: string,
   args: readonly string[],
@@ -1026,7 +1069,7 @@ export async function runDisposablePyodide(
   if (environmentEntries.length > 64 || environmentEntries.some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/u.test(key) || value.length > 4_096)) {
     throw new Error("Python environment exceeds the execution budget.");
   }
-  const assetBase = new URL(PYODIDE_ASSET_PATH, globalThis.location.href).href;
+  const assetBase = pinnedPyodideAssetBase();
   const url = URL.createObjectURL(new Blob([pyodideWorkerSource(assetBase)], { type: "text/javascript" }));
   let worker: Worker;
   try {
