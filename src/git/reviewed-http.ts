@@ -52,7 +52,7 @@ export function createReviewedGitHttp(options: ReviewedGitHttpOptions): HttpClie
       // use it to re-read remote.<name>.url from .git/config, compare it with
       // the registry, and rerun the exact-origin Git policy.
       await reviewAuthority();
-      const response = await browserFetch.call(globalThis, requestUrl.toString(), {
+      const response = await browserFetch.call(globalThis, requestUrl.href, {
         method,
         headers: requestHeaders,
         ...(body ? { body } : {}),
@@ -73,7 +73,7 @@ export function createReviewedGitHttp(options: ReviewedGitHttpOptions): HttpClie
       const responseHeaders: Record<string, string> = {};
       for (const [name, value] of response.headers.entries()) responseHeaders[name] = value;
       return {
-        url: finalUrl.toString(),
+        url: finalUrl.href,
         method,
         statusCode: response.status,
         statusMessage: response.statusText,
@@ -158,7 +158,7 @@ function responseUrl(value: string, requestUrl: URL): URL {
       "Git Smart HTTP refused a response whose final URL could not be verified.",
     );
   }
-  if (parsed.toString() !== requestUrl.toString()) {
+  if (parsed.href !== requestUrl.href) {
     throw new GitDomainError(
       "git-http-response-authority-mismatch",
       "Git Smart HTTP refused a response whose final URL differed from the reviewed request.",
@@ -167,10 +167,14 @@ function responseUrl(value: string, requestUrl: URL): URL {
   return parsed;
 }
 
+function invalidRequestHeaders(reason = "invalid"): GitDomainError {
+  return new GitDomainError("git-http-request-headers-invalid", `Git Smart HTTP refused ${reason} request headers.`);
+}
+
 function snapshotRequestHeaders(value: GitHttpRequest["headers"]): Readonly<Record<string, string>> {
   if (value === undefined) return Object.freeze({});
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new GitDomainError("git-http-request-headers-invalid", "Git Smart HTTP refused invalid request headers.");
+    throw invalidRequestHeaders();
   }
   let descriptors: PropertyDescriptorMap;
   try {
@@ -178,12 +182,12 @@ function snapshotRequestHeaders(value: GitHttpRequest["headers"]): Readonly<Reco
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
     descriptors = Object.getOwnPropertyDescriptors(value);
   } catch {
-    throw new GitDomainError("git-http-request-headers-invalid", "Git Smart HTTP refused invalid request headers.");
+    throw invalidRequestHeaders();
   }
   const headers: Record<string, string> = {};
   const keys = Reflect.ownKeys(descriptors);
   if (keys.length > 64) {
-    throw new GitDomainError("git-http-request-headers-invalid", "Git Smart HTTP refused too many request headers.");
+    throw invalidRequestHeaders("too many");
   }
   for (const key of keys) {
     const descriptor = typeof key === "string" ? descriptors[key] : undefined;
@@ -199,7 +203,7 @@ function snapshotRequestHeaders(value: GitHttpRequest["headers"]): Readonly<Reco
       || /[\u0000-\u001f\u007f]/u.test(key)
       || /[\u0000\u000a\u000d]/u.test(descriptor.value)
     ) {
-      throw new GitDomainError("git-http-request-headers-invalid", "Git Smart HTTP refused invalid request headers.");
+      throw invalidRequestHeaders();
     }
     headers[key] = descriptor.value;
   }

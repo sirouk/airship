@@ -155,12 +155,15 @@ type WorktreeRecord = Readonly<{
   adminId?: string;
 }>;
 
-type WorktreeTarget = Readonly<{
-  repository: RepositoryRecord;
-  worktree: WorktreeRecord;
+type GitTarget = Readonly<{
   fs: git.PromiseFsClient;
   dir: string;
   gitdir: string;
+}>;
+
+type WorktreeTarget = GitTarget & Readonly<{
+  repository: RepositoryRecord;
+  worktree: WorktreeRecord;
 }>;
 
 type RegistryDocument = Readonly<{
@@ -313,7 +316,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     assertNotAborted(context.signal);
     const target = await this.requireTarget(request);
     const path = validateGitPath(request.path);
-    const content = await contentPlanes(target.fs, target.dir, target.gitdir, path);
+    const content = await contentPlanes(target, path);
     assertNotAborted(context.signal);
     const before = request.scope === "staged" ? content.head : content.stage;
     const after = request.scope === "staged" ? content.stage : content.workdir;
@@ -373,7 +376,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
     const paths = validatePathList(request.paths);
     const force = request.force === true;
-    const status = new Map((await statusEntries(target.fs, target.dir, target.gitdir)).map((entry) => [entry.path, entry]));
+    const status = new Map((await statusEntries(target)).map((entry) => [entry.path, entry]));
     // statusMatrix drops untracked-and-ignored rows, so an ignored path arrives
     // here indistinguishable from an unchanged one. Read the index only when a
     // path actually looks unchanged, so the common case pays nothing.
@@ -388,7 +391,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     for (const path of paths) {
       const file = await this.workspace.read(normalizeWorkspacePath(`${target.dir}/${path}`));
       if (!status.get(path)?.worktree) {
-        tracked ??= git.listFiles({ fs: target.fs, dir: target.dir, gitdir: target.gitdir });
+        tracked ??= git.listFiles(gitOptions(target));
         const ignored = !(await tracked).includes(path) && await this.isIgnoredPath(target, path);
         if (!ignored) throw new GitValidationError(`${path} has no unstaged change.`);
         if (!force || !file) {
@@ -401,8 +404,8 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       plan.push({ path, present: Boolean(file) });
     }
     for (const { path, present } of plan) {
-      if (present) await git.add({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, filepath: path, force });
-      else await git.remove({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, filepath: path });
+      if (present) await git.add({ ...gitOptions(target), filepath: path, force });
+      else await git.remove({ ...gitOptions(target), filepath: path });
     }
     assertNotAborted(context.signal);
     return this.result(target.repository, paths, context.signal, undefined, target.worktree.id);
@@ -412,7 +415,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const target = await this.requireTarget(request);
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
     const paths = validatePathList(request.paths);
-    const status = new Map((await statusEntries(target.fs, target.dir, target.gitdir)).map((entry) => [entry.path, entry]));
+    const status = new Map((await statusEntries(target)).map((entry) => [entry.path, entry]));
     // Refuse the whole set before touching the index, for the same reason
     // stage() does: a chunked request's first-chunk refusal must be provably
     // pre-write. See GIT_PRE_WRITE_FAILURE_CODES.
@@ -420,7 +423,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       if (!status.get(path)?.index) throw new GitValidationError(`${path} has no staged change.`);
     }
     for (const path of paths) {
-      await git.resetIndex({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, filepath: path });
+      await git.resetIndex({ ...gitOptions(target), filepath: path });
     }
     assertNotAborted(context.signal);
     return this.result(target.repository, paths, context.signal, undefined, target.worktree.id);
@@ -431,10 +434,10 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
     const message = validateCommitMessage(request.message);
     const author = validateAuthor(request.author);
-    const changed = (await statusEntries(target.fs, target.dir, target.gitdir)).filter((entry) => entry.index).map((entry) => entry.path);
+    const changed = (await statusEntries(target)).filter((entry) => entry.index).map((entry) => entry.path);
     if (!changed.length) throw new GitDomainError("nothing-to-commit", "No staged changes are available to commit.");
     const identity = gitIdentity(author, this.now());
-    const oid = await git.commit({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, message, author: identity, committer: identity });
+    const oid = await git.commit({ ...gitOptions(target), message, author: identity, committer: identity });
     assertNotAborted(context.signal);
     return this.result(target.repository, changed, context.signal, oid, target.worktree.id);
   }
@@ -445,9 +448,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const name = validateBranchName(request.name);
     if (request.checkout === true) await this.requireBranchAvailable(target.repository, name, target.worktree.id);
     await git.branch({
-      fs: target.fs,
-      dir: target.dir,
-      gitdir: target.gitdir,
+      ...gitOptions(target),
       ref: name,
       ...(request.startPoint ? { object: request.startPoint } : {}),
       checkout: request.checkout === true,
@@ -458,12 +459,12 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   async switchBranch(request: GitSwitchBranchRequest, context: GitOperationContext): Promise<GitMutationResult> {
     const target = await this.requireTarget(request);
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
-    if ((await statusEntries(target.fs, target.dir, target.gitdir)).length) {
+    if ((await statusEntries(target)).length) {
       throw new GitDomainError("dirty-worktree", "Commit or discard worktree changes before switching this checkout.");
     }
     const branch = validateBranchName(request.name);
     await this.requireBranchAvailable(target.repository, branch, target.worktree.id);
-    await git.checkout({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: branch, nonBlocking: true });
+    await git.checkout({ ...gitOptions(target), ref: branch, nonBlocking: true });
     return this.result(target.repository, [], context.signal, undefined, target.worktree.id);
   }
 
@@ -481,7 +482,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const reviewedRegistryRevision = this.registryRevision;
     await this.assertWorktreeDestinationAvailable(repository, path);
     await this.requireBranchAvailable(repository, branch);
-    const branches = await git.listBranches({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository) });
+    const branches = await git.listBranches(repositoryOptions(this.fs.client, repository));
     if (!branches.includes(branch)) throw new GitNotFoundError(`Branch ${branch}`);
 
     const adminId = await this.worktreeAdminId(repository, id);
@@ -534,7 +535,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const linked = repository.linkedWorktrees.find((candidate) => candidate.id === id);
     if (!linked) throw new GitNotFoundError(`Worktree ${id}`);
     const target = this.target(repository, linked);
-    if ((await statusEntries(target.fs, target.dir, target.gitdir)).length) {
+    if ((await statusEntries(target)).length) {
       throw new GitDomainError("dirty-worktree", "Commit or discard worktree changes before removing this checkout.");
     }
     const updated = deepFreeze({
@@ -664,16 +665,14 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const branch = validateBranchName(request.branch);
     const remote = repository.remotes.find((candidate) => candidate.name === remoteName);
     if (!remote) throw new GitNotFoundError(`Remote ${remoteName}`);
-    await git.resolveRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: `refs/heads/${branch}` });
+    await git.resolveRef({ ...gitOptions(target), ref: `refs/heads/${branch}` });
     const reviewedHttp = await this.reviewedRemoteHttp(repository, remote.name, remote.url, "push");
 
     let pushResult: Awaited<ReturnType<typeof git.push>>;
     try {
       pushResult = await git.push({
-        fs: target.fs,
+        ...gitOptions(target),
         http: reviewedHttp,
-        dir: target.dir,
-        gitdir: target.gitdir,
         remote: remoteName,
         ref: branch,
         remoteRef: branch,
@@ -715,9 +714,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const target = await this.requireTarget(request);
     const depth = validateBoundedCount(request.depth, "Log depth", GIT_LIMITS.maxLogDepth, GIT_LIMITS.maxLogDepth);
     const entries = await git.log({
-      fs: target.fs,
-      dir: target.dir,
-      gitdir: target.gitdir,
+      ...gitOptions(target),
       ref: request.ref ? validateRevision(request.ref) : "HEAD",
       depth,
       ...(request.path ? { filepath: validateGitPath(request.path), follow: request.follow === true, force: true } : {}),
@@ -730,14 +727,14 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     assertNotAborted(context.signal);
     const target = await this.requireTarget(request);
     const oid = await this.resolveRevision(target, validateRevision(request.revision));
-    const read = await git.readCommit({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, oid });
+    const read = await git.readCommit({ ...gitOptions(target), oid });
     const maxPaths = validateBoundedCount(request.maxPaths, "Patch path count", GIT_LIMITS.maxCommitPatchPaths, GIT_LIMITS.maxCommitPatchPaths);
     const parent = read.commit.parent[0];
     const changes = await commitChanges(target, oid, parent);
     assertNotAborted(context.signal);
     const files = await Promise.all(changes.slice(0, maxPaths).map(async (change) => {
-      const before = change.before ? (await git.readBlob({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, oid: change.before })).blob : undefined;
-      const after = change.after ? (await git.readBlob({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, oid: change.after })).blob : undefined;
+      const before = change.before ? (await git.readBlob({ ...gitOptions(target), oid: change.before })).blob : undefined;
+      const after = change.after ? (await git.readBlob({ ...gitOptions(target), oid: change.after })).blob : undefined;
       const rendered = renderPatch(change.path, before, after);
       return deepFreeze({
         path: change.path,
@@ -835,9 +832,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const before = new Set((await this.stashEntries(target)).map((entry) => entry.oid));
     try {
       await git.stash({
-        fs: target.fs,
-        dir: target.dir,
-        gitdir: target.gitdir,
+        ...gitOptions(target),
         op: request.op,
         ...(request.message === undefined ? {} : { message: validateCommitMessage(request.message) }),
         refIdx: index,
@@ -854,11 +849,11 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   async merge(request: GitMergeRequest, context: GitOperationContext): Promise<GitMutationResult> {
     const target = await this.requireTarget(request);
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
-    const ours = await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true });
+    const ours = await git.currentBranch({ ...gitOptions(target), test: true });
     if (!ours) throw new GitDomainError("detached-head", "This checkout has no current branch to merge into.");
     // git.merge writes refs and objects but never the worktree, so a dirty tree
     // would be silently overwritten by the checkout that has to follow it.
-    if ((await statusEntries(target.fs, target.dir, target.gitdir)).length) {
+    if ((await statusEntries(target)).length) {
       throw new GitDomainError("dirty-worktree", "Commit, stash, or discard worktree changes before merging into this checkout.");
     }
     const theirs = validateRevision(request.theirs);
@@ -866,9 +861,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     let merged: Awaited<ReturnType<typeof git.merge>>;
     try {
       merged = await git.merge({
-        fs: target.fs,
-        dir: target.dir,
-        gitdir: target.gitdir,
+        ...gitOptions(target),
         ours,
         theirs,
         fastForward: true,
@@ -883,7 +876,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     }
     // isomorphic-git's own pull does exactly this: merge moves the ref, and only
     // a checkout makes the worktree and index agree with the new HEAD.
-    await git.checkout({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: ours, force: true, nonBlocking: true });
+    await git.checkout({ ...gitOptions(target), ref: ours, force: true, nonBlocking: true });
     return this.result(target.repository, [], context.signal, merged.oid, target.worktree.id);
   }
 
@@ -891,14 +884,14 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const target = await this.requireTarget(request);
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
     const paths = validatePathList(request.paths);
-    const status = new Map((await statusEntries(target.fs, target.dir, target.gitdir)).map((entry) => [entry.path, entry]));
+    const status = new Map((await statusEntries(target)).map((entry) => [entry.path, entry]));
     for (const path of paths) {
       if (!status.get(path)) throw new GitValidationError(`${path} has no change to discard.`);
     }
     // Read every plane before writing anything: a request that names a path Git
     // has no recorded version of must be refused whole, not after its siblings
     // have already been discarded.
-    const planes = await contentPlanesFor(target.fs, target.dir, target.gitdir, new Set(paths));
+    const planes = await contentPlanesFor(target, new Set(paths));
     for (const path of paths) {
       const plane = planes.get(path) ?? {};
       // An untracked path has neither an index nor a HEAD plane, so there is
@@ -927,12 +920,10 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       }
     }
     if (request.source === "head") {
-      const branch = await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true });
+      const branch = await git.currentBranch({ ...gitOptions(target), test: true });
       if (!branch) throw new GitDomainError("detached-head", "This checkout has no current branch to restore from.");
       await git.checkout({
-        fs: target.fs,
-        dir: target.dir,
-        gitdir: target.gitdir,
+        ...gitOptions(target),
         ref: branch,
         filepaths: [...paths],
         force: true,
@@ -956,20 +947,20 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   async reset(request: GitResetRequest, context: GitOperationContext): Promise<GitMutationResult> {
     const target = await this.requireTarget(request);
     await this.expectExactVersion(target.repository, request.worktreeId, request.expectedWorktreeVersion, context.signal);
-    const branch = await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true });
+    const branch = await git.currentBranch({ ...gitOptions(target), test: true });
     if (!branch) throw new GitDomainError("detached-head", "This checkout has no current branch to reset.");
     const oid = await this.resolveRevision(target, validateRevision(request.ref));
     // Prove the target is a commit before moving a branch onto it.
-    await git.readCommit({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, oid });
+    await git.readCommit({ ...gitOptions(target), oid });
     if (request.mode === "mixed") {
       const paths = await resetIndexPaths(target, oid);
       for (const path of paths) {
-        await git.resetIndex({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, filepath: path, ref: oid });
+        await git.resetIndex({ ...gitOptions(target), filepath: path, ref: oid });
       }
     }
-    await git.writeRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: `refs/heads/${branch}`, value: oid, force: true });
+    await git.writeRef({ ...gitOptions(target), ref: `refs/heads/${branch}`, value: oid, force: true });
     if (request.mode === "hard") {
-      await git.checkout({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: branch, force: true, nonBlocking: true });
+      await git.checkout({ ...gitOptions(target), ref: branch, force: true, nonBlocking: true });
     }
     assertNotAborted(context.signal);
     return this.result(target.repository, [], context.signal, oid, target.worktree.id);
@@ -991,7 +982,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     const name = validateGitIdentifier(request.name, "Remote name");
     const existing = repository.remotes.find((candidate) => candidate.name === name);
     if (!existing) throw new GitNotFoundError(`Remote ${name}`);
-    await git.deleteRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name });
+    await git.deleteRemote({ ...repositoryOptions(this.fs.client, repository), remote: name });
     const updated = deepFreeze({ ...repository, remotes: repository.remotes.filter((candidate) => candidate.name !== name) });
     try {
       await this.replaceRepositoryRecord(updated, reviewedRegistryRevision);
@@ -999,7 +990,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
       // .git/config is not the published truth; the registry is. Put the config
       // back so the two cannot disagree about which remotes exist.
       try {
-        await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true });
+        await git.addRemote({ ...repositoryOptions(this.fs.client, repository), remote: name, url: existing.url, force: true });
       } catch (rollbackError) {
         this.quarantinedRemotes.set(repository.id, name);
         throw remoteConfigRollbackFailure(repository.id, name, error, rollbackError);
@@ -1025,7 +1016,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     if (mode === "add" && existing) throw new GitDomainError("remote-exists", `Remote ${name} already exists. Point it somewhere else with set-url.`);
     if (mode === "set-url" && !existing) throw new GitNotFoundError(`Remote ${name}`);
     if (!existing && repository.remotes.length >= MAX_REMOTES) throw new GitValidationError(`A browser repository holds at most ${MAX_REMOTES} remotes.`);
-    await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url, force: true });
+    await git.addRemote({ ...repositoryOptions(this.fs.client, repository), remote: name, url, force: true });
     const updated = deepFreeze({
       ...repository,
       remotes: [...repository.remotes.filter((candidate) => candidate.name !== name), { name, url }].sort((left, right) => asciiCompare(left.name, right.name)),
@@ -1035,9 +1026,9 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     } catch (error) {
       try {
         if (existing) {
-          await git.addRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name, url: existing.url, force: true });
+          await git.addRemote({ ...repositoryOptions(this.fs.client, repository), remote: name, url: existing.url, force: true });
         } else {
-          await git.deleteRemote({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), remote: name });
+          await git.deleteRemote({ ...repositoryOptions(this.fs.client, repository), remote: name });
         }
       } catch (rollbackError) {
         this.quarantinedRemotes.set(repository.id, name);
@@ -1056,7 +1047,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   ): Promise<git.HttpClient> {
     const canonicalRegistryUrl = validateRemoteUrl(registryUrl);
     assertRemoteOriginPermitted(canonicalRegistryUrl, operation);
-    const target = { fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository) };
+    const target = repositoryOptions(this.fs.client, repository);
     // Fail before handing control to isomorphic-git. The transport repeats the
     // same review at every actual fetch boundary to close config/read races.
     await this.reviewRemoteAuthority(target, remoteName, canonicalRegistryUrl, operation, repository.id);
@@ -1080,9 +1071,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     repositoryId?: string,
   ): Promise<void> {
     const configured = await git.getConfig({
-      fs: target.fs,
-      dir: target.dir,
-      gitdir: target.gitdir,
+      ...gitOptions(target),
       path: `remote.${remoteName}.url`,
     });
     if (typeof configured !== "string") {
@@ -1106,17 +1095,17 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   }
 
   private async isIgnoredPath(target: WorktreeTarget, path: string): Promise<boolean> {
-    return git.isIgnored({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, filepath: path });
+    return git.isIgnored({ ...gitOptions(target), filepath: path });
   }
 
   private async resolveRevision(target: WorktreeTarget, revision: string): Promise<string> {
     if (/^[0-9a-f]{40}$/u.test(revision)) return revision;
-    return git.resolveRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: revision });
+    return git.resolveRef({ ...gitOptions(target), ref: revision });
   }
 
   private async publishIdentity(target: WorktreeTarget, author: GitAuthor): Promise<void> {
-    await git.setConfig({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, path: "user.name", value: author.name });
-    await git.setConfig({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, path: "user.email", value: author.email });
+    await git.setConfig({ ...gitOptions(target), path: "user.name", value: author.name });
+    await git.setConfig({ ...gitOptions(target), path: "user.email", value: author.email });
   }
 
   /**
@@ -1169,7 +1158,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
         `Airship Git seed for ${id}: ${ignored.length} file(s) matched this repository's own ignore rules and were not committed. They remain in the workspace, untracked: ${ignored.slice(0, 20).join(", ")}${ignored.length > 20 ? ", …" : ""}`,
       );
     }
-    const identity = gitIdentity({ name: "Airship", email: "airship@local.invalid" }, this.now());
+    const identity = gitIdentity(AIRSHIP_IDENTITY, this.now());
     await git.commit({ fs: this.fs.client, dir: root, message: "Initial browser workspace", author: identity, committer: identity });
     if (root === "/workspace") await this.fs.writeText(`${root}/.git/info/exclude`, "sources/\n.airship/\n");
     if (seed.remoteUrl) await git.addRemote({ fs: this.fs.client, dir: root, remote: "origin", url: validateRemoteUrl(seed.remoteUrl) });
@@ -1204,7 +1193,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
         await git.add({ fs: this.fs.client, dir: repository.root, filepath: path, force: true });
       }
     }
-    const identity = gitIdentity({ name: "Airship", email: "airship@local.invalid" }, this.now());
+    const identity = gitIdentity(AIRSHIP_IDENTITY, this.now());
     if (files.size === 0) {
       const tree = await git.writeTree({ fs: this.fs.client, dir: repository.root, tree: [] });
       await git.commit({
@@ -1232,11 +1221,11 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   private async snapshot(repository: RepositoryRecord, signal: AbortSignal): Promise<GitRepositorySnapshot> {
     assertNotAborted(signal);
     const worktrees = await Promise.all(allWorktrees(repository).map((worktree) => this.worktreeSnapshot(this.target(repository, worktree), signal)));
-    const branchNames = await git.listBranches({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository) });
+    const branchNames = await git.listBranches(repositoryOptions(this.fs.client, repository));
     const checkedOut = new Set(worktrees.map((worktree) => worktree.branch));
     const branches = await Promise.all(branchNames.sort(asciiCompare).map(async (name) => ({
       name,
-      oid: await git.resolveRef({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), ref: name }),
+      oid: await git.resolveRef({ ...repositoryOptions(this.fs.client, repository), ref: name }),
       current: checkedOut.has(name),
     })));
     const version = await this.issueVersion(repository, undefined);
@@ -1256,11 +1245,11 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
 
   private async worktreeSnapshot(target: WorktreeTarget, signal: AbortSignal): Promise<GitWorktreeSnapshot> {
     assertNotAborted(signal);
-    const branch = await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true }) || target.repository.defaultBranch;
-    const head = await git.resolveRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: "HEAD" });
+    const branch = await git.currentBranch({ ...gitOptions(target), test: true }) || target.repository.defaultBranch;
+    const head = await git.resolveRef({ ...gitOptions(target), ref: "HEAD" });
     const [version, status] = await Promise.all([
       this.issueVersion(target.repository, target.worktree.id),
-      statusEntries(target.fs, target.dir, target.gitdir),
+      statusEntries(target),
     ]);
     return deepFreeze({ id: target.worktree.id, path: target.worktree.path, branch, head, version, status });
   }
@@ -1327,9 +1316,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
     let configured: Array<{ remote: string; url: string }>;
     try {
       configured = await git.listRemotes({
-        fs: this.fs.client,
-        dir: repository.root,
-        gitdir: commonGitdir(repository),
+        ...repositoryOptions(this.fs.client, repository),
       });
     } catch {
       return "configuration";
@@ -1419,7 +1406,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
   private async requireBranchAvailable(repository: RepositoryRecord, branch: string, exceptWorktreeId?: string): Promise<void> {
     const snapshots = await Promise.all(allWorktrees(repository).map(async (worktree) => {
       const target = this.target(repository, worktree);
-      return { id: worktree.id, branch: await git.currentBranch({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, test: true }) };
+      return { id: worktree.id, branch: await git.currentBranch({ ...gitOptions(target), test: true }) };
     }));
     const occupied = snapshots.find((candidate) => candidate.id !== exceptWorktreeId && candidate.branch === branch);
     if (occupied) throw new GitDomainError("branch-checked-out", `Branch ${branch} is already checked out by worktree ${occupied.id}.`);
@@ -1561,7 +1548,7 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
         this.workspace.read(`${repository.root}/.git/index`),
       ]);
       if (!head || !index) throw new GitValidationError(`Repository ${repository.id} is missing its real .git HEAD or index.`);
-      await git.resolveRef({ fs: this.fs.client, dir: repository.root, gitdir: commonGitdir(repository), ref: "HEAD" });
+      await git.resolveRef({ ...repositoryOptions(this.fs.client, repository), ref: "HEAD" });
       const divergentRemote = await this.remoteConfigDivergence(repository);
       if (divergentRemote) this.quarantinedRemotes.set(repository.id, divergentRemote);
       for (const linked of repository.linkedWorktrees) {
@@ -1582,10 +1569,18 @@ export class WorkspaceGitAdapter implements BrowserGitAdapter {
         ) {
           throw new GitValidationError(`Linked worktree ${repository.id}/${linked.id} has incomplete or mismatched conventional Git metadata.`);
         }
-        await git.resolveRef({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: "HEAD" });
+        await git.resolveRef({ ...gitOptions(target), ref: "HEAD" });
       }
     }
   }
+}
+
+function gitOptions(target: GitTarget): GitTarget {
+  return { fs: target.fs, dir: target.dir, gitdir: target.gitdir };
+}
+
+function repositoryOptions(fs: git.PromiseFsClient, repository: RepositoryRecord): GitTarget {
+  return { fs, dir: repository.root, gitdir: commonGitdir(repository) };
 }
 
 function commonGitdir(repository: RepositoryRecord): string {
@@ -1607,13 +1602,13 @@ function pathsOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-async function statusEntries(fs: git.PromiseFsClient, root: string, gitdir = `${root}/.git`): Promise<readonly GitStatusEntry[]> {
-  const matrix = await git.statusMatrix({ fs, dir: root, gitdir, refresh: false });
+async function statusEntries(target: GitTarget): Promise<readonly GitStatusEntry[]> {
+  const matrix = await git.statusMatrix({ ...gitOptions(target), refresh: false });
   const changed = matrix.filter(([, head, workdir, stage]) => !(head === 1 && workdir === 1 && stage === 1));
   if (!changed.length) return deepFreeze([]);
   // One walk for every changed path. Walking once per path is O(paths x files)
   // against a workspace whose every read is a port round trip.
-  const planes = await contentPlanesFor(fs, root, gitdir, new Set(changed.map(([path]) => path)));
+  const planes = await contentPlanesFor(target, new Set(changed.map(([path]) => path)));
   const entries = changed.map(([path, head, workdir, stage]) => {
     const index = head === stage ? null : { kind: deltaFromPresence(head, stage) } as const;
     const worktree = workdir === stage ? null : { kind: deltaFromPresence(stage, workdir) } as const;
@@ -1626,16 +1621,11 @@ async function statusEntries(fs: git.PromiseFsClient, root: string, gitdir = `${
 
 type ContentPlanes = { head?: Uint8Array; stage?: Uint8Array; workdir?: Uint8Array };
 
-async function contentPlanes(fs: git.PromiseFsClient, root: string, gitdir: string, path: string): Promise<ContentPlanes> {
-  return (await contentPlanesFor(fs, root, gitdir, new Set([path]))).get(path) ?? {};
+async function contentPlanes(target: GitTarget, path: string): Promise<ContentPlanes> {
+  return (await contentPlanesFor(target, new Set([path]))).get(path) ?? {};
 }
 
-async function contentPlanesFor(
-  fs: git.PromiseFsClient,
-  root: string,
-  gitdir: string,
-  paths: ReadonlySet<string>,
-): Promise<ReadonlyMap<string, ContentPlanes>> {
+async function contentPlanesFor(target: GitTarget, paths: ReadonlySet<string>): Promise<ReadonlyMap<string, ContentPlanes>> {
   type PlaneEntry = git.WalkerEntry | null;
   // Directories on the way to a requested path must be descended into; every
   // other subtree is pruned so the walk never reads an irrelevant blob.
@@ -1644,10 +1634,9 @@ async function contentPlanesFor(
     const segments = path.split("/");
     for (let length = 1; length < segments.length; length += 1) ancestors.add(segments.slice(0, length).join("/"));
   }
+  const options = gitOptions(target);
   const found = await git.walk({
-    fs,
-    dir: root,
-    gitdir,
+    ...options,
     trees: [git.TREE({ ref: "HEAD" }), git.WORKDIR({ refresh: false }), git.STAGE()],
     map: async (filepath, entries: PlaneEntry[]) => {
       if (!paths.has(filepath)) return filepath === "." || ancestors.has(filepath) ? undefined : null;
@@ -1655,7 +1644,7 @@ async function contentPlanesFor(
       const headContent = await head?.content();
       const workdirContent = await workdir?.content();
       const stageOid = await stage?.oid();
-      const stageContent = stageOid ? (await git.readBlob({ fs, dir: root, gitdir, oid: stageOid })).blob : undefined;
+      const stageContent = stageOid ? (await git.readBlob({ ...options, oid: stageOid })).blob : undefined;
       return { path: filepath, head: headContent, workdir: workdirContent, stage: stageContent };
     },
   }) as Array<ContentPlanes & { path: string }>;
@@ -1668,9 +1657,7 @@ type CommitChange = Readonly<{ path: string; before?: string; after?: string }>;
 async function commitChanges(target: WorktreeTarget, oid: string, parent?: string): Promise<readonly CommitChange[]> {
   const trees = parent ? [git.TREE({ ref: parent }), git.TREE({ ref: oid })] : [git.TREE({ ref: oid })];
   const found = await git.walk({
-    fs: target.fs,
-    dir: target.dir,
-    gitdir: target.gitdir,
+    ...gitOptions(target),
     trees,
     map: async (filepath, entries) => {
       if (filepath === ".") return undefined;
@@ -1692,8 +1679,8 @@ async function commitChanges(target: WorktreeTarget, oid: string, parent?: strin
 /** Index entries a mixed reset must rewrite: everything the index or the target tree names. */
 async function resetIndexPaths(target: WorktreeTarget, oid: string): Promise<readonly string[]> {
   const [indexed, committed] = await Promise.all([
-    git.listFiles({ fs: target.fs, dir: target.dir, gitdir: target.gitdir }),
-    git.listFiles({ fs: target.fs, dir: target.dir, gitdir: target.gitdir, ref: oid }),
+    git.listFiles(gitOptions(target)),
+    git.listFiles({ ...gitOptions(target), ref: oid }),
   ]);
   const paths = [...new Set([...indexed, ...committed])].sort(asciiCompare);
   if (paths.length > GIT_LIMITS.maxPathsPerRequest) {

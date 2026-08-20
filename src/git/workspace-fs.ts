@@ -123,7 +123,7 @@ export class WorkspaceGitFileSystem {
   private async readFile(path: string, options?: unknown): Promise<Uint8Array | string> {
     const normalized = fsPath(path);
     const file = await this.workspace.read(this.readable(normalized));
-    if (!file) throw fsError("ENOENT", `No such file: ${normalized}`);
+    if (!file) throw missingFile(normalized);
     const bytes = decodeWorkspaceBytes(file.content);
     const encoding = requestedEncoding(options);
     if (!encoding) return bytes;
@@ -158,7 +158,7 @@ export class WorkspaceGitFileSystem {
     const normalized = fsPath(path);
     const stored = this.mutable(normalized);
     const current = await this.workspace.read(stored);
-    if (!current) throw fsError("ENOENT", `No such file: ${normalized}`);
+    if (!current) throw missingFile(normalized);
     await this.workspace.remove(stored, { expectedRevision: current.revision });
   }
 
@@ -255,10 +255,10 @@ function linkedProjection(commonInput: string, worktreeInput: string): PathProje
   const common = normalizeWorkspacePath(commonInput);
   const worktree = normalizeWorkspacePath(worktreeInput);
   if (common === worktree) throw fsError("EINVAL", "Linked and common Git directories must differ.");
-  const shared = (path: string, prefix: string): boolean => path.startsWith(`${prefix}/`)
-    && isCommonGitRelativePath(path.slice(prefix.length + 1));
   return {
-    storage: (path) => shared(path, worktree) ? `${common}${path.slice(worktree.length)}` : path,
+    storage: (path) => path.startsWith(`${worktree}/`) && isCommonGitRelativePath(path.slice(worktree.length + 1))
+      ? `${common}${path.slice(worktree.length)}`
+      : path,
   };
 }
 
@@ -302,15 +302,15 @@ class WorkspaceFsStat {
 }
 
 function fsPath(path: string): string {
-  if (typeof path !== "string" || !path.startsWith("/workspace")) {
+  if (typeof path !== "string") {
     throw fsError("EINVAL", "Git filesystem paths must stay inside /workspace.");
   }
-  const rawParts = path.slice(1).split("/");
-  if (rawParts.some((part) => part === "..")) throw fsError("EINVAL", "Git filesystem paths cannot traverse above /workspace.");
+  const rawParts = path.split("/");
+  if (rawParts[0] || rawParts[1] !== "workspace") throw fsError("EINVAL", "Git filesystem paths must stay inside /workspace.");
+  if (rawParts.includes("..")) throw fsError("EINVAL", "Git filesystem paths cannot traverse above /workspace.");
   // isomorphic-git legitimately probes paths with `.` and trailing slashes;
   // canonicalize those Node-style spellings at this narrow filesystem waist.
   const parts = rawParts.filter((part) => part && part !== ".");
-  if (parts[0] !== "workspace") throw fsError("EINVAL", "Git filesystem paths must stay inside /workspace.");
   try {
     return normalizeWorkspacePath(`/${parts.join("/")}`);
   } catch (error) {
@@ -337,7 +337,7 @@ function revisionInode(revision: string): number {
 }
 
 function isGitMetadataPath(path: string): boolean {
-  return path.includes("/.git/") || path.endsWith("/.git");
+  return /\/\.git(?:\/|$)/u.test(path);
 }
 
 function parentPath(path: string): string {
@@ -360,6 +360,10 @@ function bytesFrom(value: unknown, options: unknown): Uint8Array {
 }
 
 type NodeLikeError = Error & { code?: string };
+function missingFile(path: string): NodeLikeError {
+  return fsError("ENOENT", `No such file: ${path}`);
+}
+
 function fsError(code: string, message: string): NodeLikeError {
   return Object.assign(new Error(message), { code });
 }
