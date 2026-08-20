@@ -39,10 +39,10 @@ export function pinInferenceRoute(
     throw new Error("The inference connection must pass a live health check before session pinning.");
   }
   if (connection.capabilities.invoke.state !== "available") {
-    throw new Error("The inference connection must prove invoke authorization before session pinning.");
+    throw new Error("The inference connection does not currently report invocation access required for session pinning.");
   }
-  if (model.availability.state !== "available") {
-    throw new Error("The selected model is not currently proved available.");
+  if (model.availability.state === "unavailable") {
+    throw new Error("The selected model is currently reported unavailable by the model catalog.");
   }
   return deepFreeze({
     version: 1,
@@ -121,7 +121,7 @@ export function resolvePinnedInferenceRoute(
     return deepFreeze({
       state: "connection-unavailable",
       pin,
-      detail: "The pinned connection is not currently authorized and healthy for inference.",
+      detail: "The pinned connection is not currently configured and healthy for inference.",
     });
   }
   const currentModel = models.get(
@@ -129,11 +129,11 @@ export function resolvePinnedInferenceRoute(
     pin.connection.generation,
     pin.model.id,
   );
-  if (!currentModel || currentModel.availability.state !== "available") {
+  if (!currentModel || currentModel.availability.state === "unavailable") {
     return deepFreeze({
       state: "model-unavailable",
       pin,
-      detail: "The pinned model is not currently present and available in the provider directory.",
+      detail: "The pinned model is missing or currently reported unavailable by the provider directory.",
     });
   }
   return deepFreeze({

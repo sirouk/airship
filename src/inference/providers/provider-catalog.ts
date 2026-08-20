@@ -45,6 +45,17 @@ export class InferenceProviderCatalog {
     return entry;
   }
 
+  unregister(providerId: string, expectedRevision?: number): boolean {
+    const id = identifier(providerId, "Provider ID");
+    const current = this.#providers.get(id);
+    if (!current || (expectedRevision !== undefined && current.revision !== expectedRevision)) {
+      return false;
+    }
+    this.#providers.delete(id);
+    this.#revision += 1;
+    return true;
+  }
+
   get(providerId: string): ProviderCatalogEntry | undefined {
     return this.#providers.get(providerId);
   }
