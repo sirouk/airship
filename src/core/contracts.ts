@@ -147,18 +147,43 @@ export type SessionContextPolicy = Readonly<{
  * refresh material, raw scopes, endpoints, and account identifiers are
  * intentionally absent.
  */
-export type SessionInferenceBinding = Readonly<{
-  version: 1;
+export type SessionInferenceProtocol =
+  | "openai-responses"
+  | "openai-chat-completions"
+  | "anthropic-messages"
+  | "openai-compatible";
+
+type SessionInferenceBindingBase = Readonly<{
   connectionId: string;
   connectionGeneration: number;
   providerId: string;
   providerLabel: string;
   providerRevision: number;
   authMethod: "oauth-pkce" | "api-key" | "local-none";
-  transportBoundary: "e2ee-attestable" | "provider-tls" | "loopback-local";
   modelId: string;
   boundAt: string;
 }>;
+
+/** Historical connection identity, retained for existing durable sessions. */
+export type SessionInferenceBindingV1 = SessionInferenceBindingBase & Readonly<{
+  version: 1;
+  /** Historical trust-era value remains readable but cannot upgrade to v2. */
+  transportBoundary: "e2ee-attestable" | "provider-tls" | "loopback-local";
+}>;
+
+/**
+ * Exact provider, wire protocol, and transport identity for new sessions.
+ * The fields are credential-free. They prevent a transport implementation ID
+ * from being mistaken for the provider whose compatibility policy applies.
+ */
+export type SessionInferenceBindingV2 = SessionInferenceBindingBase & Readonly<{
+  version: 2;
+  transportBoundary: "provider-tls" | "loopback-local";
+  transportId: string;
+  protocol: SessionInferenceProtocol;
+}>;
+
+export type SessionInferenceBinding = SessionInferenceBindingV1 | SessionInferenceBindingV2;
 
 type SessionManifestBase = {
   systemPrompt: string;
