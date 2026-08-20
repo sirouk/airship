@@ -1,4 +1,5 @@
 import type { JsonValue, SessionManifest } from "./contracts";
+import { deepFreeze } from "./freeze";
 import { sha256, stableStringify } from "./hash";
 import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
 
@@ -610,18 +611,6 @@ function arrayIndex(value: string, length: number): boolean {
   if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) return false;
   const index = Number(value);
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === value;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
-  const record = value as Record<PropertyKey, unknown>;
-  const descriptors = Object.getOwnPropertyDescriptors(record);
-  // Freeze before descending so repeated references terminate here.
-  Object.freeze(record);
-  for (const descriptor of Object.values(descriptors)) {
-    if ("value" in descriptor) deepFreeze(descriptor.value);
-  }
-  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
