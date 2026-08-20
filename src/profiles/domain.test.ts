@@ -11,6 +11,7 @@ import {
   createThemeManifest,
   resolveProfileForSession,
   themeCssVariables,
+  validateProfileRevision,
   type ProfileRevisionDraft,
   type SemanticThemeColors,
   type ThemeManifest,
@@ -227,6 +228,121 @@ describe("profile domain", () => {
     expect(left.resolutionDigest).toMatch(/^sha256:/u);
   });
 
+  it("snapshots nested caller-owned resolution material before the first digest await", async () => {
+    const source = await resolutionFixture();
+    const input = structuredClone(source) as DeepMutable<typeof source>;
+
+    const pending = resolveProfileForSession(input);
+    input.profile.revision = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    input.profile.model = "MUTATED_MODEL";
+    input.profile.systemPrompt = "MUTATED_PROFILE_PROMPT";
+    input.profile.theme.digest = "sha256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    if (input.profile.workspaceBinding?.kind !== "workspace-id") throw new Error("expected workspace fixture");
+    input.profile.workspaceBinding.workspaceId = "mutated-workspace";
+    input.profile.skillModes["snapshot-skill"] = "off";
+    input.theme.digest = "sha256:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+    input.theme.colors.accent = "#ffffff";
+    input.skills[0].digest = "sha256:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
+    input.skills[0].systemPrompt = "MUTATED_SKILL_PROMPT";
+    input.skills.splice(0);
+    input.globalSkills["snapshot-skill"] = false;
+    input.installedTools[0].description = "MUTATED_TOOL_DESCRIPTION";
+    input.installedTools[0].inputSchema.properties.query.type = "number";
+    input.browserCapabilities[0].detail = "MUTATED_CAPABILITY_DETAIL";
+    input.inferenceDirectory.active.modelId = "mutated-active-model";
+    input.inferenceDirectory.providers[0].models[0].id = "mutated-roster-model";
+
+    const pin = await pending;
+    expect(pin.profile).toEqual({
+      profileId: source.profile.profileId,
+      revision: source.profile.revision,
+    });
+    expect(pin.theme).toEqual({ themeId: source.theme.themeId, digest: source.theme.digest });
+    expect(pin.model).toBe("snapshot/model");
+    expect(pin.workspaceBinding).toEqual({ kind: "workspace-id", workspaceId: "snapshot-workspace" });
+    expect(pin.skillDecisions).toEqual([
+      expect.objectContaining({ skillId: "snapshot-skill", enabled: true }),
+    ]);
+    expect(pin.resolvedSkills).toEqual([{
+      skillId: "snapshot-skill",
+      digest: source.skills[0].digest,
+      promptOrder: 12,
+    }]);
+    expect(pin.systemPrompt).toContain("ORIGINAL_PROFILE_PROMPT");
+    expect(pin.systemPrompt).toContain("ORIGINAL_SKILL_PROMPT");
+    expect(pin.systemPrompt).toContain("ORIGINAL_TOOL_DESCRIPTION");
+    expect(pin.systemPrompt).toContain("ORIGINAL_CAPABILITY_DETAIL");
+    expect(pin.systemPrompt).toContain("original-roster-model");
+    expect(pin.systemPrompt).not.toContain("MUTATED_");
+    expect([
+      pin,
+      pin.profile,
+      pin.theme,
+      pin.workspaceBinding,
+      pin.skillDecisions,
+      pin.skillDecisions[0],
+      pin.resolvedSkills,
+      pin.resolvedSkills[0],
+      pin.resolvedSkillDigests,
+    ].every(Object.isFrozen)).toBe(true);
+  });
+
+  it("reads every accessor-backed resolution field once and pins the verified snapshot", async () => {
+    const source = await resolutionFixture();
+    const expected = await resolveProfileForSession(source);
+    const reads = new Map<string, number>();
+    const input = accessorBacked(source, "$", reads);
+
+    const pending = resolveProfileForSession(input);
+    expect(reads.size).toBeGreaterThan(50);
+    expect(new Set(reads.values())).toEqual(new Set([1]));
+
+    const pin = await pending;
+    expect(pin).toEqual(expected);
+    expect(pin.profile.revision).toBe(source.profile.revision);
+    expect(pin.model).toBe(source.profile.model);
+    expect(new Set(reads.values())).toEqual(new Set([1]));
+  });
+
+  it("captures the claimed profile revision synchronously before validation yields", async () => {
+    const source = await resolutionFixture();
+    let revisionReads = 0;
+    const candidate = Object.defineProperty({ ...source.profile }, "revision", {
+      enumerable: true,
+      get: () => {
+        revisionReads += 1;
+        if (revisionReads > 1) throw new Error("profile revision was reread");
+        return source.profile.revision;
+      },
+    }) as typeof source.profile;
+
+    const pending = validateProfileRevision(candidate);
+    expect(revisionReads).toBe(1);
+    await expect(pending).resolves.toEqual(source.profile);
+    expect(revisionReads).toBe(1);
+  });
+
+  it("deep-snapshots every profile validation accessor exactly once before hashing", async () => {
+    const source = (await resolutionFixture()).profile;
+    const reads = new Map<string, number>();
+    const candidate = accessorBacked(source, "$profile", reads);
+
+    const pending = validateProfileRevision(candidate);
+    expect(reads.size).toBeGreaterThan(20);
+    expect(new Set(reads.values())).toEqual(new Set([1]));
+
+    const validated = await pending;
+    expect(validated).toEqual(source);
+    expect(new Set(reads.values())).toEqual(new Set([1]));
+    expect([
+      validated,
+      validated.theme,
+      validated.skillModes,
+      validated.workspaceBinding,
+      validated.presentation,
+    ].every(Object.isFrozen)).toBe(true);
+  });
+
   it("treats omitted global and profile settings as disabled inheritance", async () => {
     const theme = await createThemeManifest(themeDraft(colors));
     const skill = await createSkillRevision({
@@ -380,4 +496,98 @@ function profileDraft(
     skillModes,
     createdAt: "2026-07-18T00:00:00.000Z",
   };
+}
+
+async function resolutionFixture() {
+  const theme = await createThemeManifest(themeDraft(colors));
+  const skill = await createSkillRevision({
+    skillId: "snapshot-skill",
+    name: "Snapshot skill",
+    description: "Exercises immutable profile resolution",
+    systemPrompt: "ORIGINAL_SKILL_PROMPT",
+    promptOrder: 12,
+    requiredTools: ["snapshot_tool"],
+  });
+  const profile = await createProfileRevision({
+    ...profileDraft(theme, { "snapshot-skill": "inherit" }),
+    systemPrompt: "ORIGINAL_PROFILE_PROMPT",
+    model: "snapshot/model",
+    workspaceBinding: { kind: "workspace-id", workspaceId: "snapshot-workspace" },
+    memoryScope: "session",
+    approvalMode: "ask-first",
+    webEgress: "browser-only",
+    webBodies: "text-only",
+    presentation: { reasoningVisibility: "expanded", density: "instrumented" },
+  });
+  return {
+    profile,
+    theme,
+    skills: [skill],
+    globalSkills: createGlobalSkillSettings({ "snapshot-skill": true }),
+    installedTools: [{
+      name: "snapshot_tool",
+      description: "ORIGINAL_TOOL_DESCRIPTION",
+      effect: "read" as const,
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+      },
+    }],
+    browserCapabilities: [{
+      id: "snapshot-capability",
+      evidence: "probe-passed" as const,
+      detail: "ORIGINAL_CAPABILITY_DETAIL",
+    }],
+    inferenceDirectory: {
+      active: {
+        connectionId: "snapshot-connection",
+        providerId: "snapshot-provider",
+        modelId: "original-roster-model",
+      },
+      providers: [{
+        connectionId: "snapshot-connection",
+        providerId: "snapshot-provider",
+        label: "Snapshot provider",
+        state: "connected" as const,
+        authority: "none" as const,
+        modelCount: 1,
+        models: [{
+          id: "original-roster-model",
+          inputModalities: ["text"],
+          features: ["tools"],
+        }],
+      }],
+    },
+  };
+}
+
+type DeepMutable<T> = T extends readonly (infer Item)[]
+  ? DeepMutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: DeepMutable<T[Key]> }
+    : T;
+
+function accessorBacked<T>(
+  value: T,
+  path: string,
+  reads: Map<string, number>,
+): T {
+  if (value === null || typeof value !== "object") return value;
+  const target: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : {};
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    const childSnapshot = accessorBacked(child, childPath, reads);
+    reads.set(childPath, 0);
+    Object.defineProperty(target, key, {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        const count = (reads.get(childPath) ?? 0) + 1;
+        reads.set(childPath, count);
+        if (count > 1) throw new Error(`${childPath} was read more than once`);
+        return childSnapshot;
+      },
+    });
+  }
+  return target as unknown as T;
 }

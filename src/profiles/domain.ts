@@ -368,6 +368,18 @@ export async function createProfileRevision(draft: ProfileRevisionDraft): Promis
   return deepFreeze({ ...payload, revision }) as ProfileRevision;
 }
 
+/** Verify a stored revision against one synchronously owned caller snapshot. */
+export async function validateProfileRevision(value: ProfileRevision): Promise<ProfileRevision> {
+  const snapshot = snapshotCallerOwned(value);
+  const expectedRevision = snapshot.revision;
+  const payload = profilePayload(snapshot);
+  const revision = await digestJson(payload);
+  if (revision !== expectedRevision) {
+    throw new Error(`Profile ${payload.profileId} failed its revision check.`);
+  }
+  return deepFreeze({ ...payload, revision }) as ProfileRevision;
+}
+
 /**
  * Resolves the implicit defaults of a historical v1 profile without rewriting
  * its digest. Callers should pin this result, never mutate the legacy object.
@@ -466,7 +478,7 @@ export function resolveSkillDecisions(args: Readonly<{
     });
 }
 
-export async function resolveProfileForSession(args: Readonly<{
+type ProfileResolutionArgs = Readonly<{
   profile: ProfileRevision;
   theme: ThemeManifest;
   skills: readonly SkillRevision[];
@@ -477,30 +489,43 @@ export async function resolveProfileForSession(args: Readonly<{
   browserCapabilities?: readonly ObservedBrowserCapabilityPromptDefinition[];
   /** Credential-free provider/model availability copied into this immutable session prompt. */
   inferenceDirectory?: InferenceDirectoryPromptDefinition;
-}>): Promise<SessionProfilePin> {
-  await verifyProfileRevision(args.profile);
-  await verifyThemeManifest(args.theme);
-  if (args.profile.theme.themeId !== args.theme.themeId || args.profile.theme.digest !== args.theme.digest) {
+}>;
+
+export async function resolveProfileForSession(args: ProfileResolutionArgs): Promise<SessionProfilePin> {
+  /*
+   * This is the admission boundary. Read each supported top-level field once,
+   * then clone the whole reachable graph in one synchronous operation so shared
+   * nested objects are copied once too. Nothing below this line may consult the
+   * caller's mutable objects after SHA-256 yields control.
+   */
+  const snapshot = snapshotProfileResolutionArgs(args);
+
+  await verifyProfileRevision(snapshot.profile);
+  await verifyThemeManifest(snapshot.theme);
+  if (
+    snapshot.profile.theme.themeId !== snapshot.theme.themeId
+    || snapshot.profile.theme.digest !== snapshot.theme.digest
+  ) {
     throw new Error("Profile theme reference does not match the supplied theme revision.");
   }
-  if (args.skills.length > MAX_CATALOG_SKILLS) throw new Error("Skill catalog exceeds the supported limit.");
+  if (snapshot.skills.length > MAX_CATALOG_SKILLS) throw new Error("Skill catalog exceeds the supported limit.");
 
   const skillsById = new Map<string, SkillRevision>();
-  for (const skill of args.skills) {
+  for (const skill of snapshot.skills) {
     await verifySkillRevision(skill);
     if (skillsById.has(skill.skillId)) throw new Error(`Duplicate skill revision for ${skill.skillId}.`);
     skillsById.set(skill.skillId, skill);
   }
 
-  const globalSkills = createGlobalSkillSettings(args.globalSkills);
+  const globalSkills = createGlobalSkillSettings(snapshot.globalSkills);
   assertKnownSkillIds(Object.keys(globalSkills), skillsById, "Global settings");
-  assertKnownSkillIds(Object.keys(args.profile.skillModes), skillsById, "Profile settings");
+  assertKnownSkillIds(Object.keys(snapshot.profile.skillModes), skillsById, "Profile settings");
 
   const orderedSkills = [...skillsById.values()].sort(
     (left, right) => left.promptOrder - right.promptOrder || asciiCompare(left.skillId, right.skillId),
   );
   const decisions = resolveSkillDecisions({
-    skillModes: args.profile.skillModes,
+    skillModes: snapshot.profile.skillModes,
     skills: orderedSkills,
     globalSkills,
   });
@@ -519,14 +544,14 @@ export async function resolveProfileForSession(args: Readonly<{
     promptOrder: skill.promptOrder,
   })));
   const systemPrompt = composeSystemPrompt(
-    args.profile.systemPrompt,
+    snapshot.profile.systemPrompt,
     enabledSkills,
-    args.installedTools ?? [],
-    args.browserCapabilities ?? [],
-    args.inferenceDirectory,
+    snapshot.installedTools ?? [],
+    snapshot.browserCapabilities ?? [],
+    snapshot.inferenceDirectory,
   );
   const systemPromptDigest = asContentDigest(await sha256(systemPrompt));
-  const stored = resolveProfileSilo(args.profile);
+  const stored = resolveProfileSilo(snapshot.profile);
   // The pin carries the boundary the session will be governed by, not the one
   // the revision was written with, so a withdrawn scope is resolved here rather
   // than left for each reader to reinterpret.
@@ -536,11 +561,11 @@ export async function resolveProfileForSession(args: Readonly<{
   });
   const resolutionDigest = await digestJson({
     version: 2,
-    profile: { profileId: args.profile.profileId, revision: args.profile.revision },
-    theme: { themeId: args.theme.themeId, digest: args.theme.digest },
-    providerId: args.profile.providerId,
-    model: args.profile.model,
-    minimumPosture: args.profile.minimumPosture,
+    profile: { profileId: snapshot.profile.profileId, revision: snapshot.profile.revision },
+    theme: { themeId: snapshot.theme.themeId, digest: snapshot.theme.digest },
+    providerId: snapshot.profile.providerId,
+    model: snapshot.profile.model,
+    minimumPosture: snapshot.profile.minimumPosture,
     workspaceBinding: silo.workspaceBinding,
     /*
      * The STORED scope, deliberately, where the pin field above carries the
@@ -569,11 +594,11 @@ export async function resolveProfileForSession(args: Readonly<{
 
   return deepFreeze({
     version: 2,
-    profile: { profileId: args.profile.profileId, revision: args.profile.revision },
-    theme: { themeId: args.theme.themeId, digest: args.theme.digest },
-    providerId: args.profile.providerId,
-    model: args.profile.model,
-    minimumPosture: args.profile.minimumPosture,
+    profile: { profileId: snapshot.profile.profileId, revision: snapshot.profile.revision },
+    theme: { themeId: snapshot.theme.themeId, digest: snapshot.theme.digest },
+    providerId: snapshot.profile.providerId,
+    model: snapshot.profile.model,
+    minimumPosture: snapshot.profile.minimumPosture,
     workspaceBinding: silo.workspaceBinding,
     memoryScope: silo.memoryScope,
     approvalMode: silo.approvalMode,
@@ -587,6 +612,44 @@ export async function resolveProfileForSession(args: Readonly<{
   }) as SessionProfilePin;
 }
 
+function snapshotProfileResolutionArgs(args: ProfileResolutionArgs): ProfileResolutionArgs {
+  // Capture only supported fields. This avoids invoking unrelated accessors on
+  // an object supplied by an embedding caller while still reading each field
+  // in this contract exactly once.
+  const profile = args.profile;
+  const theme = args.theme;
+  const skills = args.skills;
+  const globalSkills = args.globalSkills;
+  const installedTools = args.installedTools;
+  const browserCapabilities = args.browserCapabilities;
+  const inferenceDirectory = args.inferenceDirectory;
+
+  /*
+   * Clone the whole supported graph at once. This preserves aliases and means
+   * a nested accessor shared by two fields is invoked once, not once per field.
+   */
+  return snapshotCallerOwned({
+    profile,
+    theme,
+    skills,
+    globalSkills,
+    installedTools,
+    browserCapabilities,
+    inferenceDirectory,
+  });
+}
+
+/**
+ * Takes one synchronous, deeply owned snapshot of a caller graph.
+ *
+ * `structuredClone` reads each enumerable accessor once and preserves aliases.
+ * Freezing the clone, rather than the source, keeps caller state untouched and
+ * makes every later await safe to cross.
+ */
+function snapshotCallerOwned<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
 function composeSystemPrompt(
   basePrompt: string,
   skills: readonly SkillRevision[],
@@ -598,20 +661,23 @@ function composeSystemPrompt(
 }
 
 async function verifyThemeManifest(theme: ThemeManifest): Promise<void> {
-  const expected = await createThemeManifest(theme);
-  if (expected.digest !== theme.digest) throw new Error(`Theme ${theme.themeId} failed its content-digest check.`);
+  const snapshot = snapshotCallerOwned(theme);
+  const expectedDigest = snapshot.digest;
+  const themeId = snapshot.themeId;
+  const expected = await createThemeManifest(snapshot);
+  if (expected.digest !== expectedDigest) throw new Error(`Theme ${themeId} failed its content-digest check.`);
 }
 
 async function verifySkillRevision(skill: SkillRevision): Promise<void> {
-  const expected = await createSkillRevision(skill);
-  if (expected.digest !== skill.digest) throw new Error(`Skill ${skill.skillId} failed its content-digest check.`);
+  const snapshot = snapshotCallerOwned(skill);
+  const expectedDigest = snapshot.digest;
+  const skillId = snapshot.skillId;
+  const expected = await createSkillRevision(snapshot);
+  if (expected.digest !== expectedDigest) throw new Error(`Skill ${skillId} failed its content-digest check.`);
 }
 
 async function verifyProfileRevision(profile: ProfileRevision): Promise<void> {
-  const expected = await createProfileRevision(profile);
-  if (expected.revision !== profile.revision) {
-    throw new Error(`Profile ${profile.profileId} failed its revision check.`);
-  }
+  await validateProfileRevision(profile);
 }
 
 function themePayload(draft: ThemeManifestDraft): Omit<ThemeManifest, "digest"> {
