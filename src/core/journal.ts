@@ -119,7 +119,7 @@ export class EventJournal {
    * `JournalConflictError`. Refusing the loser is *correct* between clients —
    * it is how a stale tab is stopped from forking a history — but inside one
    * page both writers are ours, and the refusal surfaced to the user as a
-   * failed turn when model auto-naming appended `session.renamed` beside the
+   * failed turn when an in-page rename appended `session.renamed` beside a
    * turn still streaming into the same session.
    *
    * Chaining makes the second in-page writer wait for the first head instead
@@ -150,11 +150,15 @@ export class EventJournal {
       session: Readonly<SessionRecord>,
     ) => readonly EventDraft[] | Promise<readonly EventDraft[]>,
   ): Promise<SessionRecord> {
+    // Own the caller's manifest before the first await. The backend record and
+    // `session.created` must describe one snapshot even if the caller mutates
+    // its manifest while creation is in flight.
+    const manifestSnapshot = structuredClone(manifest);
     const createdAt = this.now();
     const session: SessionRecord = {
       id: this.id(),
       title,
-      manifest,
+      manifest: manifestSnapshot,
       createdAt,
       updatedAt: createdAt,
       headSequence: 0,
@@ -162,17 +166,21 @@ export class EventJournal {
     };
     // Resolve destination-bound initial records before the first backend
     // mutation, then commit creation and initialization in one append batch.
-    const initialized = initialize ? [...await initialize(structuredClone(session))] : [];
+    const initialized = initialize
+      ? snapshotEventDrafts(await initialize(structuredClone(session)))
+      : [];
     if (initialized.some((event) => event.type === "session.created")) {
       throw new TypeError("Session initialization cannot provide a second creation event.");
     }
-    await this.backend.createSession(session);
+    // A backend is an asynchronous port. Give it its own copy so it cannot
+    // mutate the journal-owned manifest later used by session.created.
+    await this.backend.createSession(structuredClone(session));
     await this.append(session.id, [
       {
         type: "session.created",
         payload: {
           title,
-          manifest: manifest as unknown as JsonValue,
+          manifest: manifestSnapshot as unknown as JsonValue,
         },
       },
       ...initialized,
@@ -198,16 +206,20 @@ export class EventJournal {
     expectedHead: { sequence: number; digest: string },
     signal?: AbortSignal,
   ): Promise<void> {
+    const head = snapshotJournalHead(expectedHead);
     const previous = this.appendQueue.get(sessionId) ?? Promise.resolve();
     const link = previous
       .catch(() => undefined)
-      .then(() => this.backend.deleteSession(sessionId, expectedHead, signal));
-    this.appendQueue.set(sessionId, link.catch(() => undefined));
+      .then(() => this.backend.deleteSession(sessionId, head, signal));
+    const tail = link.catch(() => undefined);
+    this.appendQueue.set(sessionId, tail);
     try {
       await link;
     } finally {
-      // The session is gone; its queue slot would otherwise outlive it.
-      if (this.appendQueue.get(sessionId) !== undefined) this.appendQueue.delete(sessionId);
+      // An append can chain behind this delete while its promise is settling.
+      // Clear only this exact tail or that later append becomes untracked and a
+      // following writer can enter the backend beside it on the same stale head.
+      if (this.appendQueue.get(sessionId) === tail) this.appendQueue.delete(sessionId);
     }
   }
 
@@ -296,10 +308,14 @@ export class EventJournal {
 
   append(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
     if (!drafts.length) return Promise.resolve([]);
+    // Snapshot before even looking at the queue. A queued write can wait across
+    // arbitrary caller work, so retaining its drafts would let later mutation
+    // change what is hashed and committed after `append` has already returned.
+    const snapshots = snapshotEventDrafts(drafts);
     const pending = this.appendQueue.get(sessionId);
     const result = pending
-      ? this.commitAfter(pending, sessionId, drafts, signal)
-      : this.commit(sessionId, drafts, signal);
+      ? this.commitAfter(pending, sessionId, snapshots, signal)
+      : this.commit(sessionId, snapshots, signal);
     return this.trackAppend(sessionId, pending, result);
   }
 
@@ -324,10 +340,15 @@ export class EventJournal {
     if (!drafts.length) {
       return Promise.reject(new TypeError("A fenced append requires at least one event."));
     }
+    // Own both caller-controlled inputs before a predecessor can make this
+    // operation wait. In particular, the head used to seal the digest must be
+    // the same head later handed to the backend compare-and-set.
+    const head = snapshotJournalHead(expectedHead);
+    const snapshots = snapshotEventDrafts(drafts);
     const pending = this.appendQueue.get(sessionId);
     const result = pending
-      ? this.commitAtHeadAfter(pending, sessionId, expectedHead, drafts, signal)
-      : this.commitAtHead(sessionId, expectedHead, drafts, signal, signal);
+      ? this.commitAtHeadAfter(pending, sessionId, head, snapshots, signal)
+      : this.commitAtHead(sessionId, head, snapshots, signal, signal);
     return this.trackAppend(sessionId, pending, result);
   }
 
@@ -407,11 +428,19 @@ export class EventJournal {
   ): Promise<JournalAppendCommit> {
     preAdmissionSignal?.throwIfAborted();
 
-    let sequence = expectedHead.sequence;
-    let previousDigest = expectedHead.digest;
+    const head = snapshotJournalHead(expectedHead);
+    let sequence = head.sequence;
+    let previousDigest = head.digest;
     const events: DurableEvent[] = [];
 
     for (const draft of drafts) {
+      // These are plain, journal-owned snapshots. Keep the exact same values in
+      // the digest preimage and the durable event instead of spreading and
+      // rereading a caller object after SHA-256 yields.
+      const type = draft.type;
+      const turnId = draft.turnId;
+      const operationId = draft.operationId;
+      const payload = draft.payload;
       sequence += 1;
       const eventId = this.id();
       const recordedAt = this.now();
@@ -422,14 +451,17 @@ export class EventJournal {
         sequence,
         recordedAt,
         previousDigest,
-        type: draft.type,
-        turnId: draft.turnId ?? null,
-        operationId: draft.operationId ?? null,
-        payload: draft.payload,
+        type,
+        turnId: turnId ?? null,
+        operationId: operationId ?? null,
+        payload,
       };
       const digest = await sha256(stableStringify(digestInput));
       events.push({
-        ...draft,
+        type,
+        ...(turnId !== undefined ? { turnId } : {}),
+        ...(operationId !== undefined ? { operationId } : {}),
+        payload,
         version: 1,
         eventId,
         sessionId,
@@ -444,12 +476,88 @@ export class EventJournal {
     preAdmissionSignal?.throwIfAborted();
     const session = await this.backend.append(
       sessionId,
-      expectedHead,
+      head,
       events,
       backendSignal,
     );
     return { events, session };
   }
+}
+
+/** Capture a compare-and-set boundary without retaining caller accessors. */
+function snapshotJournalHead(
+  head: Readonly<{ sequence: number; digest: string }>,
+): Readonly<{ sequence: number; digest: string }> {
+  const sequence = head.sequence;
+  const digest = head.digest;
+  return { sequence, digest };
+}
+
+/**
+ * Turn caller-owned drafts into plain journal-owned values synchronously.
+ *
+ * Each top-level field is read exactly once. `structuredClone` owns the whole
+ * payload graph at that instant, and the JSON check keeps values that cannot be
+ * represented by the digest format (cycles, undefined, bigint, non-finite
+ * numbers, and non-JSON containers) out of the durable chain.
+ */
+function snapshotEventDrafts(drafts: readonly EventDraft[]): EventDraft[] {
+  return drafts.map((draft) => {
+    const type = draft.type;
+    const turnId = draft.turnId;
+    const operationId = draft.operationId;
+    const callerPayload: unknown = draft.payload;
+    let payload: unknown;
+    try {
+      payload = structuredClone(callerPayload);
+    } catch {
+      throw new TypeError("Journal event payload must be a valid JSON value.");
+    }
+    if (!isJsonValue(payload)) {
+      throw new TypeError("Journal event payload must be a valid JSON value.");
+    }
+    return {
+      type,
+      ...(turnId !== undefined ? { turnId } : {}),
+      ...(operationId !== undefined ? { operationId } : {}),
+      payload,
+    };
+  });
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  type Visit = Readonly<{ value: unknown; exit?: object }>;
+  const pending: Visit[] = [{ value }];
+  const ancestors = new WeakSet<object>();
+  while (pending.length > 0) {
+    const visit = pending.pop()!;
+    if (visit.exit) {
+      ancestors.delete(visit.exit);
+      continue;
+    }
+    const candidate = visit.value;
+    if (
+      candidate === null
+      || typeof candidate === "string"
+      || typeof candidate === "boolean"
+    ) continue;
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) return false;
+      continue;
+    }
+    if (!candidate || typeof candidate !== "object" || ancestors.has(candidate)) return false;
+    const prototype = Object.getPrototypeOf(candidate);
+    if (!Array.isArray(candidate) && prototype !== Object.prototype && prototype !== null) return false;
+    ancestors.add(candidate);
+    pending.push({ value: null, exit: candidate });
+    const children: unknown[] = Array.isArray(candidate)
+      ? [...candidate]
+      : Object.values(candidate);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      pending.push({ value: children[index] });
+    }
+  }
+  return true;
 }
 
 /**
@@ -505,7 +613,7 @@ function raceAbort(pending: Promise<unknown>, signal: AbortSignal): Promise<void
  * reading, three times in a row, directly above the composer.
  *
  * They remain fully journaled, digest-chained and auditable: the head still
- * advances, `session-audit.ts` still names the type, and the Proof route still
+ * advances, `session-audit.ts` still names the type, and local session inspection still
  * lists every one of them. This changes where they are read, never whether
  * they were recorded.
  */

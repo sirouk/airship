@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createSessionManifest } from "./agent";
-import { EventJournal, JournalConflictError, type JournalBackend } from "./journal";
+import { EventJournal, JournalConflictError, type EventDraft, type JournalBackend } from "./journal";
 import { MemoryJournalBackend } from "./memory-journal";
 
 /*
- * Model auto-naming appends `session.renamed` while the turn that provoked it
- * is still streaming events into the same session. Both writers live in one
+ * A local rename can append `session.renamed` while a turn is still streaming
+ * events into the same session. Both writers live in one
  * page, and an append is a read-head / hash / compare-and-set sequence, so
  * before the per-session queue the second CAS lost and the *turn* failed with a
  * conflict the user had no way to understand or avoid.
@@ -98,6 +98,149 @@ describe("EventJournal concurrent in-page writers", () => {
     expect((await journal.readEvents(session.id)).map((event) => event.type))
       .toEqual(["session.created", "message.user"]);
   });
+
+  it.each(["append", "appendAtHead"] as const)(
+    "reads caller draft accessors exactly once for %s",
+    async (method) => {
+      const { journal, session } = await seed();
+      const reads = { type: 0, turnId: 0, operationId: 0, payload: 0 };
+      const draft = Object.defineProperties({} as EventDraft, {
+        type: {
+          enumerable: true,
+          get: () => (++reads.type === 1 ? "message.user" : "message.assistant"),
+        },
+        turnId: {
+          enumerable: true,
+          get: () => (++reads.turnId === 1 ? "turn-safe" : "turn-mutated"),
+        },
+        operationId: {
+          enumerable: true,
+          get: () => (++reads.operationId === 1 ? "operation-safe" : "operation-mutated"),
+        },
+        payload: {
+          enumerable: true,
+          get: () => (++reads.payload === 1
+            ? { nested: { content: "safe" } }
+            : { nested: { content: "mutated" } }),
+        },
+      });
+
+      const event = method === "append"
+        ? (await journal.append(session.id, [draft]))[0]!
+        : (await journal.appendAtHead(
+          session.id,
+          (() => {
+            const head = session;
+            return { sequence: head.headSequence, digest: head.headDigest };
+          })(),
+          [draft],
+        )).events[0]!;
+
+      expect(reads).toEqual({ type: 1, turnId: 1, operationId: 1, payload: 1 });
+      expect(event).toMatchObject({
+        type: "message.user",
+        turnId: "turn-safe",
+        operationId: "operation-safe",
+        payload: { nested: { content: "safe" } },
+      });
+    },
+  );
+
+  it.each(["append", "appendAtHead"] as const)(
+    "owns nested caller payloads when %s returns its promise",
+    async (method) => {
+      const { journal, session } = await seed();
+      const payload = { nested: { content: "before" } };
+      const draft: EventDraft = { type: "message.user", payload };
+      const head = (await journal.getSession(session.id))!;
+      const pending = method === "append"
+        ? journal.append(session.id, [draft]).then((events) => events[0]!)
+        : journal.appendAtHead(
+          session.id,
+          { sequence: head.headSequence, digest: head.headDigest },
+          [draft],
+        ).then((commit) => commit.events[0]!);
+
+      payload.nested.content = "after";
+
+      await expect(pending).resolves.toMatchObject({
+        type: "message.user",
+        payload: { nested: { content: "before" } },
+      });
+    },
+  );
+
+  it("owns the manifest before a stalled create backend can retain caller mutation", async () => {
+    const inner = new MemoryJournalBackend();
+    let release!: () => void;
+    let markEntered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+    const backend: JournalBackend = {
+      async createSession(record) {
+        markEntered();
+        await gate;
+        return inner.createSession(record);
+      },
+      getSession: (sessionId) => inner.getSession(sessionId),
+      listSessions: () => inner.listSessions(),
+      readEvents: (sessionId, afterSequence) => inner.readEvents(sessionId, afterSequence),
+      append: (sessionId, expectedHead, events) => inner.append(sessionId, expectedHead, events),
+      deleteSession: (sessionId, expectedHead) => inner.deleteSession(sessionId, expectedHead),
+    };
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({
+      systemPrompt: "test",
+      providerId: "local",
+      model: "safe-model",
+      tools: [{
+        name: "lookup",
+        description: "Lookup",
+        effect: "read",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      }],
+      workspaceId: "workspace",
+    });
+
+    const creating = journal.createSession("Snapshot", manifest);
+    await entered;
+    manifest.model = "mutated-model";
+    const inputSchema = manifest.tools[0]!.inputSchema as {
+      properties: { query: { type: string } };
+    };
+    inputSchema.properties.query.type = "number";
+    release();
+
+    const created = await creating;
+    const record = (await journal.getSession(created.id))!;
+    const createdEvent = (await journal.readEvents(created.id))[0]!;
+    const createdManifest = (createdEvent.payload as unknown as { manifest: typeof manifest }).manifest;
+    expect(record.manifest.model).toBe("safe-model");
+    expect(createdManifest.model).toBe("safe-model");
+    expect((record.manifest.tools[0]!.inputSchema as typeof inputSchema).properties.query.type).toBe("string");
+    expect((createdManifest.tools[0]!.inputSchema as typeof inputSchema).properties.query.type).toBe("string");
+  });
+
+  it("snapshots delete head accessors before the backend queue turn", async () => {
+    const { journal, session } = await seed();
+    const head = (await journal.getSession(session.id))!;
+    let sequence = head.headSequence;
+    let digest = head.headDigest;
+    let sequenceReads = 0;
+    let digestReads = 0;
+    const expectedHead = Object.defineProperties({} as { sequence: number; digest: string }, {
+      sequence: { enumerable: true, get: () => { sequenceReads += 1; return sequence; } },
+      digest: { enumerable: true, get: () => { digestReads += 1; return digest; } },
+    });
+
+    const deletion = journal.deleteSession(session.id, expectedHead);
+    sequence = 0;
+    digest = "genesis";
+
+    await expect(deletion).resolves.toBeUndefined();
+    expect({ sequenceReads, digestReads }).toEqual({ sequenceReads: 1, digestReads: 1 });
+    expect(await journal.getSession(session.id)).toBeUndefined();
+  });
 });
 
 /*
@@ -112,7 +255,9 @@ describe("EventJournal append queue under a stalled backend", () => {
   function stalling() {
     const inner = new MemoryJournalBackend();
     let release!: () => void;
+    let markEntered!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
     let stallNextAppend = false;
     const backend: JournalBackend = {
       createSession: (session) => inner.createSession(session),
@@ -123,13 +268,122 @@ describe("EventJournal append queue under a stalled backend", () => {
       async append(sessionId, expectedHead, events) {
         if (stallNextAppend) {
           stallNextAppend = false;
+          markEntered();
           await gate;
         }
         return inner.append(sessionId, expectedHead, events);
       },
     };
-    return { backend, release: () => release(), stall: () => { stallNextAppend = true; } };
+    return { backend, entered, release: () => release(), stall: () => { stallNextAppend = true; } };
   }
+
+  it("keeps a later append tracked when a stale same-journal delete settles", async () => {
+    const { backend, entered, release, stall } = stalling();
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({ systemPrompt: "test", providerId: "local", model: "demo", tools: [], workspaceId: "workspace" });
+    const session = await journal.createSession("Delete tail", manifest);
+    const staleHead = { sequence: session.headSequence, digest: session.headDigest };
+    await journal.append(session.id, [{ type: "message.user", payload: { content: "made delete stale" } }]);
+    stall();
+
+    const deletion = journal.deleteSession(session.id, staleHead);
+    const first = journal.append(session.id, [
+      { type: "message.user", payload: { content: "first after delete" } },
+    ]);
+    await expect(deletion).rejects.toBeInstanceOf(JournalConflictError);
+    await entered;
+
+    // This writer arrives after the delete's `finally`, while the append that
+    // chained behind that delete is still held inside the backend CAS.
+    const second = journal.append(session.id, [
+      { type: "message.user", payload: { content: "second after delete" } },
+    ]);
+    release();
+
+    const results = await Promise.allSettled([first, second]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect((await journal.readEvents(session.id)).map((event) => (
+      event.payload as { content?: string }
+    ).content)).toEqual([
+      undefined,
+      "made delete stale",
+      "first after delete",
+      "second after delete",
+    ]);
+  });
+
+  it("owns a queued append payload before waiting for its predecessor", async () => {
+    const { backend, entered, release, stall } = stalling();
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({ systemPrompt: "test", providerId: "local", model: "demo", tools: [], workspaceId: "workspace" });
+    const session = await journal.createSession("Queued snapshot", manifest);
+    stall();
+    const blocked = journal.append(session.id, [
+      { type: "message.user", payload: { content: "blocked" } },
+    ]);
+    await entered;
+    const payload = { nested: { content: "before" } };
+    const queued = journal.append(session.id, [{ type: "message.user", payload }]);
+
+    payload.nested.content = "after";
+    release();
+
+    await blocked;
+    await expect(queued).resolves.toMatchObject([
+      { payload: { nested: { content: "before" } } },
+    ]);
+  });
+
+  it("snapshots a fenced head and draft before a conflicting delete queue wait", async () => {
+    const inner = new MemoryJournalBackend();
+    let release!: () => void;
+    let markEntered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
+    const backend: JournalBackend = {
+      createSession: (session) => inner.createSession(session),
+      getSession: (sessionId) => inner.getSession(sessionId),
+      listSessions: () => inner.listSessions(),
+      readEvents: (sessionId, afterSequence) => inner.readEvents(sessionId, afterSequence),
+      append: (sessionId, expectedHead, events) => inner.append(sessionId, expectedHead, events),
+      async deleteSession(sessionId, expectedHead) {
+        markEntered();
+        await gate;
+        return inner.deleteSession(sessionId, expectedHead);
+      },
+    };
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({ systemPrompt: "test", providerId: "local", model: "demo", tools: [], workspaceId: "workspace" });
+    const session = await journal.createSession("Fenced snapshot", manifest);
+    const audited = (await journal.getSession(session.id))!;
+    const deletion = journal.deleteSession(session.id, { sequence: 0, digest: "genesis" });
+    await entered;
+
+    let sequence = audited.headSequence;
+    let digest = audited.headDigest;
+    let sequenceReads = 0;
+    let digestReads = 0;
+    const expectedHead = Object.defineProperties({} as { sequence: number; digest: string }, {
+      sequence: { enumerable: true, get: () => { sequenceReads += 1; return sequence; } },
+      digest: { enumerable: true, get: () => { digestReads += 1; return digest; } },
+    });
+    const payload = { nested: { content: "before" } };
+    const fenced = journal.appendAtHead(
+      session.id,
+      expectedHead,
+      [{ type: "message.user", payload }],
+    );
+    sequence = 999;
+    digest = "mutated";
+    payload.nested.content = "after";
+    release();
+
+    await expect(deletion).rejects.toBeInstanceOf(JournalConflictError);
+    await expect(fenced).resolves.toMatchObject({
+      events: [{ payload: { nested: { content: "before" } } }],
+    });
+    expect({ sequenceReads, digestReads }).toEqual({ sequenceReads: 1, digestReads: 1 });
+  });
 
   it("lets a queued append honour its own abort instead of waiting out the stall", async () => {
     const { backend, release, stall } = stalling();
