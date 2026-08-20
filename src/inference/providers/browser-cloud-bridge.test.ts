@@ -222,7 +222,7 @@ describe("browser cloud transports and the extension bridge", () => {
     expect(bridge.posted).toHaveLength(0);
   });
 
-  it("reports Anthropic OAuth as unavailable, with the cause named, when no bridge exists", async () => {
+  it("reports Anthropic OAuth as typed unavailable without retaining relay prose", async () => {
     const fetch = vi.fn<ProviderFetch>(async () => new Response("{}", { status: 200 }));
     const transport = new AnthropicBrowserTransport({
       connectionId: "anthropic-connection",
@@ -236,7 +236,8 @@ describe("browser cloud transports and the extension bridge", () => {
     const failure = await transport.listModels().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ProviderTransportError);
     expect(failure).toMatchObject({ code: "bridge-unavailable" });
-    expect((failure as Error).message).toContain("Airship browser extension");
+    expect((failure as Error).message).toBe("Inference provider relay is unavailable.");
+    expect((failure as Error & { cause?: unknown }).cause).toBeUndefined();
     // Fail closed: no silent fallback to a direct request that would be refused.
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -266,7 +267,8 @@ describe("browser cloud transports and the extension bridge", () => {
     const failure = await transport.listModels().catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: "bridge-unavailable" });
     expect((failure as ProviderTransportError).code).not.toBe("network-or-cors");
-    expect((failure as Error).message).toMatch(/answered the bridge handshake/u);
+    expect((failure as Error).message).toBe("Inference provider relay is unavailable.");
+    expect((failure as Error & { cause?: unknown }).cause).toBeUndefined();
     expect(silent.posted).toHaveLength(0);
   });
 

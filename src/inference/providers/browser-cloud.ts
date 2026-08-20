@@ -8,11 +8,17 @@ import type {
   ToolDefinition,
 } from "../../core/contracts";
 import {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
   MAX_MODEL_OUTPUT_TOKENS,
+  type ApiKeyAuthMethod,
+  type InferenceAuthMethod,
   type InferenceModelDescriptor,
+  type InferenceProviderDescriptor,
   type ModelCapability,
   type ModelCapabilityEvidence,
 } from "./contracts";
+import { buildOpenAiPayload, OpenAiStreamAssembler } from "../openai-wire/chat";
+import { OpenAiWireError } from "../openai-wire/errors";
 import type { InferenceConnectionRegistry } from "./connection-registry";
 import { ExtensionBridgeClient, pageExtensionBridge } from "../bridge/client";
 import {
@@ -33,6 +39,11 @@ export type ProviderFetch = (input: RequestInfo | URL, init?: RequestInit) => Pr
 type LeasedCredential = Readonly<{
   kind: "api-key" | "oauth-access-token";
   value: string;
+}>;
+
+type SelectedConnectionAuth = Readonly<{
+  authMethodId: string;
+  authKind: InferenceAuthMethod["kind"];
 }>;
 
 export type BrowserCloudTransportOptions = Readonly<{
@@ -112,6 +123,126 @@ export class ProviderTransportError extends Error {
   }
 }
 
+const PROVIDER_TRANSPORT_MESSAGES: Readonly<
+  Record<ProviderTransportErrorCode, string>
+> = Object.freeze({
+  cancelled: "Inference provider request was cancelled.",
+  timeout: "Inference provider request timed out.",
+  "network-or-cors": "Inference provider request failed before a response was accepted.",
+  http: "Inference provider rejected the request.",
+  "invalid-content-type": "Inference provider returned an unsupported response type.",
+  "response-too-large": "Inference provider response exceeded a client limit.",
+  "invalid-response": "Inference provider returned an invalid streaming response.",
+  "stream-truncated": "Inference provider stream ended before completion.",
+  "tool-call-invalid": "Inference provider returned an invalid tool call.",
+  "bridge-unavailable": "Inference provider relay is unavailable.",
+  "bridge-refused": "Inference provider relay refused the request.",
+  "bridge-protocol": "Inference provider relay returned an invalid response.",
+});
+
+function providerTransportMessage(
+  code: ProviderTransportErrorCode,
+  status?: number,
+): string {
+  return code === "http" && status !== undefined
+    ? `Inference provider rejected the request with HTTP ${status}.`
+    : PROVIDER_TRANSPORT_MESSAGES[code];
+}
+
+/**
+ * Construct the only provider failure shape allowed to escape a stream or a
+ * credential lease. Messages are fixed, status is numeric, Retry-After is
+ * syntax-checked, and the untrusted cause is deliberately not retained.
+ */
+function publicProviderTransportError(
+  error: ProviderTransportError,
+  credential?: string,
+): ProviderTransportError {
+  const status = Number.isInteger(error.status)
+    && error.status! >= 100
+    && error.status! <= 599
+    ? error.status
+    : undefined;
+  const retryAfter = safeRetryAfter(error.retryAfter);
+  const exposeRetryAfter = retryAfter !== undefined
+    && (credential === undefined || !retryAfter.includes(credential));
+  return new ProviderTransportError(
+    error.code,
+    providerTransportMessage(error.code, status),
+    status,
+    exposeRetryAfter ? { retryAfter } : {},
+  );
+}
+
+function providerStreamingFailure(error: unknown): Error {
+  if (error instanceof ProviderTransportError) {
+    return publicProviderTransportError(error);
+  }
+  if (error instanceof OpenAiWireError) {
+    const mapped = chatWireFailure(error);
+    if (mapped instanceof ProviderTransportError) return mapped;
+  }
+  // Request construction and operator declarations fail before provider bytes
+  // are consumed. Keep those local TypeErrors useful, but clone them without a
+  // cause or custom fields so they cannot act as an error-data side channel.
+  if (error instanceof TypeError) {
+    return new TypeError(boundedLocalFailureMessage(error.message));
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new ProviderTransportError(
+      "cancelled",
+      providerTransportMessage("cancelled"),
+    );
+  }
+  return new ProviderTransportError(
+    "invalid-response",
+    providerTransportMessage("invalid-response"),
+  );
+}
+
+function credentialLeaseFailure(error: unknown, credential: string): Error {
+  if (error instanceof ProviderTransportError) {
+    return publicProviderTransportError(error, credential);
+  }
+  if (!(error instanceof Error)) {
+    return new ProviderTransportError(
+      "invalid-response",
+      providerTransportMessage("invalid-response"),
+    );
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new ProviderTransportError(
+      "cancelled",
+      providerTransportMessage("cancelled"),
+    );
+  }
+  // Local configuration TypeErrors remain useful, but clone them without
+  // custom fields/cause/stack and replace any exact leased secret with a fixed
+  // sentence before the registry callback returns.
+  const safeMessage = error.message.includes(credential)
+    ? "Inference provider request failed inside the credential boundary."
+    : boundedLocalFailureMessage(error.message);
+  return error instanceof TypeError
+    ? new TypeError(safeMessage)
+    : new Error(safeMessage);
+}
+
+function boundedLocalFailureMessage(value: string): string {
+  const clean = value
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!clean) return "Inference provider request failed.";
+  return clean.length <= 256 ? clean : `${clean.slice(0, 255)}…`;
+}
+
+function safeRetryAfter(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw || raw.length > 64 || /[\u0000-\u001f\u007f]/u.test(raw)) return undefined;
+  if (/^\d{1,9}$/u.test(raw)) return raw;
+  return Number.isFinite(Date.parse(raw)) ? raw : undefined;
+}
+
 type ResolvedBrowserOptions = Readonly<{
   connectionId: string;
   connectionGeneration: number;
@@ -119,6 +250,7 @@ type ResolvedBrowserOptions = Readonly<{
     signal: AbortSignal,
     use: (credential: LeasedCredential) => Promise<T>,
   ) => Promise<T>;
+  getConnectionAuth?: () => SelectedConnectionAuth;
   bridge?: ExtensionBridgeClient;
   fetch: ProviderFetch;
   totalTimeoutMs: number;
@@ -227,6 +359,313 @@ export class XaiBrowserTransport implements InferenceTransport {
   }
 }
 
+/**
+ * An OpenAI-compatible chat-completions cloud service the page reaches
+ * directly with a bearer API key.
+ *
+ * This is the generic cloud lane: nothing in the class is specific to one
+ * vendor beyond the exact URLs the descriptor names, so any future
+ * OpenAI-compatible host is one descriptor away rather than one transport
+ * away. It shares the wire helpers (`openai-wire/`) with the browser-local
+ * loopback transport, so both lanes parse the same protocol with the same
+ * bounds.
+ */
+export type ChatCompletionsProviderDefinition = Readonly<{
+  providerId: string;
+  displayName: string;
+  transportId: string;
+  modelsUrl: string;
+  chatUrl: string;
+  oauth: InferenceProviderDescriptor["oauth"];
+  authMethods: InferenceProviderDescriptor["authMethods"];
+}>;
+
+function chatCompletionsDefinitionFromDescriptor(
+  provider: InferenceProviderDescriptor,
+): ChatCompletionsProviderDefinition {
+  if (provider.transportBoundary !== "provider-tls") {
+    throw new TypeError(`${provider.label} is not a remote browser-cloud provider.`);
+  }
+  if (provider.protocol !== "openai-compatible" && provider.protocol !== "openai-chat-completions") {
+    throw new TypeError(`${provider.label} does not use the OpenAI-compatible chat-completions wire.`);
+  }
+  const baseUrl = directoryUrl(provider.baseUrl);
+  return Object.freeze({
+    providerId: provider.id,
+    displayName: provider.label,
+    transportId: `${transportToken(provider.id)}-openai-compatible-v1`,
+    modelsUrl: provider.modelsUrl ?? new URL("models", baseUrl).toString(),
+    chatUrl: new URL("chat/completions", baseUrl).toString(),
+    oauth: provider.oauth,
+    authMethods: provider.authMethods,
+  });
+}
+
+function isApiKeyAuthMethod(method: InferenceAuthMethod): method is ApiKeyAuthMethod {
+  return method.kind === "api-key";
+}
+
+function onlyApiKeyAuthMethod(provider: ChatCompletionsProviderDefinition): ApiKeyAuthMethod {
+  const methods = provider.authMethods.filter(isApiKeyAuthMethod);
+  if (methods.length !== 1) {
+    throw new TypeError(
+      `${provider.displayName} use with getApiKey() requires exactly one registered API-key auth method.`,
+    );
+  }
+  return methods[0]!;
+}
+
+function apiKeyHeaders(method: ApiKeyAuthMethod, credential: string): Readonly<Record<string, string>> {
+  return Object.freeze({
+    [method.header.name]: method.header.scheme === "bearer" ? `Bearer ${credential}` : credential,
+  });
+}
+
+function openAiCompatibleAuthHeaders(
+  provider: ChatCompletionsProviderDefinition,
+  options: ResolvedBrowserOptions,
+  credential: LeasedCredential,
+): Readonly<Record<string, string>> {
+  const selected = options.getConnectionAuth?.();
+  if (!selected) {
+    if (credential.kind !== "api-key") {
+      throw new TypeError(`${provider.displayName} getApiKey() cannot supply an OAuth access token.`);
+    }
+    return apiKeyHeaders(onlyApiKeyAuthMethod(provider), credential.value);
+  }
+  const method = provider.authMethods.find((candidate) => candidate.id === selected.authMethodId);
+  if (!method || method.kind !== selected.authKind) {
+    throw new TypeError(
+      `${provider.displayName} connection metadata names an unavailable authentication method.`,
+    );
+  }
+  if (credential.kind === "oauth-access-token") {
+    if (selected.authKind !== "oauth-public-pkce") {
+      throw new TypeError(
+        `${provider.displayName} connection metadata is incompatible with an OAuth access token.`,
+      );
+    }
+    if (
+      provider.oauth.state !== "configured-public-pkce"
+      || provider.oauth.authMethodId !== selected.authMethodId
+    ) {
+      throw new TypeError(
+        `${provider.displayName} connection metadata requires configured reviewed OAuth metadata.`,
+      );
+    }
+    return Object.freeze({ authorization: `Bearer ${credential.value}` });
+  }
+  if (selected.authKind !== "api-key" || method.kind !== "api-key") {
+    throw new TypeError(
+      `${provider.displayName} connection metadata is incompatible with an API-key credential.`,
+    );
+  }
+  return apiKeyHeaders(method, credential.value);
+}
+
+export class OpenAiCompatibleBrowserTransport implements InferenceTransport {
+  readonly id: string;
+  readonly posture = "plaintext-remote" as const;
+  private readonly delegate: OpenAiChatCompletionsBrowserTransport;
+
+  constructor(
+    provider: InferenceProviderDescriptor,
+    options: BrowserCloudTransportOptions,
+  ) {
+    this.delegate = new OpenAiChatCompletionsBrowserTransport(
+      chatCompletionsDefinitionFromDescriptor(provider),
+      options,
+    );
+    this.id = this.delegate.id;
+  }
+
+  listModels(signal?: AbortSignal): Promise<readonly InferenceModelDescriptor[]> {
+    return this.delegate.listModels(signal);
+  }
+
+  stream(request: InferenceRequest, signal: AbortSignal): AsyncIterable<InferenceEvent> {
+    return this.delegate.stream(request, signal);
+  }
+}
+
+export class OpenAiChatCompletionsBrowserTransport implements InferenceTransport {
+  readonly id: string;
+  readonly posture = "plaintext-remote" as const;
+  private readonly options: ResolvedBrowserOptions;
+
+  constructor(
+    private readonly provider: ChatCompletionsProviderDefinition,
+    options: BrowserCloudTransportOptions,
+  ) {
+    this.id = provider.transportId;
+    this.options = resolveOptions(options);
+  }
+
+  async listModels(
+    parentSignal: AbortSignal = new AbortController().signal,
+  ): Promise<readonly InferenceModelDescriptor[]> {
+    const lifetime = new RequestLifetime(parentSignal, this.options.totalTimeoutMs);
+    try {
+      const response = await this.request(
+        this.provider.modelsUrl,
+        { method: "GET" },
+        lifetime.signal,
+        false,
+      );
+      const payload = await readJson(response, this.options.maxJsonBytes, this.provider.displayName);
+      const observedAt = new Date(this.options.now()).toISOString();
+      const sourceUrl = this.provider.modelsUrl;
+      return Object.freeze(
+        recordArray(payload, "data").slice(0, 2_048).flatMap((record) => {
+          const id = boundedString(record.id, 512);
+          if (!id) return [];
+          return [
+            Object.freeze({
+              version: 1 as const,
+              connectionId: this.options.connectionId,
+              connectionGeneration: this.options.connectionGeneration,
+              providerId: this.provider.providerId,
+              id,
+              label: id,
+              capabilities: chatDirectoryCapabilities(record, observedAt),
+              availability: Object.freeze({
+                state: "unknown" as const,
+                source: "provider-directory" as const,
+                observedAt,
+              }),
+              ...directoryTokenLimits(record),
+              source: Object.freeze({
+                kind: "provider-directory" as const,
+                observedAt,
+                sourceUrl,
+              }),
+            }),
+          ];
+        }),
+      );
+    } finally {
+      lifetime.dispose();
+    }
+  }
+
+  async *stream(
+    request: InferenceRequest,
+    parentSignal: AbortSignal,
+  ): AsyncIterable<InferenceEvent> {
+    const lifetime = new RequestLifetime(parentSignal, this.options.totalTimeoutMs);
+    try {
+      const response = await this.request(
+        this.provider.chatUrl,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "text/event-stream" },
+          body: JSON.stringify(buildOpenAiPayload(request)),
+        },
+        lifetime.signal,
+        true,
+      );
+      requireEventStream(response, this.provider.displayName);
+      const assembler = new OpenAiStreamAssembler({
+        maxToolCalls: this.options.maxToolCalls,
+        maxToolArgumentsChars: this.options.maxToolArgumentChars,
+      });
+      let sawDone = false;
+      for await (const message of parseSse(
+        response,
+        lifetime.signal,
+        this.options.maxSseEventChars,
+        this.provider.displayName,
+      )) {
+        if (sawDone) {
+          throw new ProviderTransportError(
+            "invalid-response",
+            `${this.provider.displayName} sent data after its completion marker.`,
+          );
+        }
+        if (chatStreamReportedFailure(message)) {
+          throw new ProviderTransportError(
+            "invalid-response",
+            "Inference provider returned an invalid streaming response.",
+          );
+        }
+        if (message.data.trim() === "[DONE]") {
+          sawDone = true;
+          continue;
+        }
+        yield* this.consume(assembler, message.data);
+      }
+      if (!sawDone && !assembler.hasFinishReason) {
+        throw new ProviderTransportError(
+          "stream-truncated",
+          `${this.provider.displayName} ended its response before a completion marker.`,
+        );
+      }
+      const final = this.finalize(assembler);
+      for (const call of final.toolCalls) yield { type: "tool-call", call };
+      yield { type: "completed", finishReason: final.finishReason };
+    } catch (error) {
+      throw providerStreamingFailure(error);
+    } finally {
+      lifetime.dispose();
+    }
+  }
+
+  /** One frame through the shared assembler, re-spoken in this family's codes. */
+  private consume(assembler: OpenAiStreamAssembler, data: string): InferenceEvent[] {
+    try {
+      return assembler.consume(data);
+    } catch (error) {
+      throw chatWireFailure(error);
+    }
+  }
+
+  private finalize(assembler: OpenAiStreamAssembler): ReturnType<OpenAiStreamAssembler["finalize"]> {
+    try {
+      return assembler.finalize();
+    } catch (error) {
+      throw chatWireFailure(error);
+    }
+  }
+
+  private async request(
+    url: string,
+    init: RequestInit,
+    signal: AbortSignal,
+    streaming: boolean,
+  ): Promise<Response> {
+    return this.options.withCredential(signal, async (credential) => {
+      /*
+       * This lane stays direct-browser for both API keys and OAuth, but the
+       * header contract comes from the selected provider metadata rather than
+       * from a hard-coded bearer assumption.
+       */
+      const headers = {
+        ...objectHeaders(init.headers),
+        ...openAiCompatibleAuthHeaders(this.provider, this.options, credential),
+      };
+      const response = await sendProviderRequest({
+        options: this.options,
+        displayName: this.provider.displayName,
+        url,
+        init,
+        headers,
+        signal,
+        streaming,
+      });
+      if (!response.ok) {
+        await discardBounded(response, this.options.maxErrorBytes);
+        throw new ProviderTransportError(
+          "http",
+          `${this.provider.displayName} rejected the request with HTTP ${response.status}.`,
+          response.status,
+          retryAfterOption(response),
+        );
+      }
+      return response;
+    });
+  }
+}
+
 class OpenAiResponsesBrowserTransport implements InferenceTransport {
   readonly id: string;
   readonly posture = "plaintext-remote" as const;
@@ -328,6 +767,8 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
           `${this.provider.displayName} ended its response before a terminal event.`,
         );
       }
+    } catch (error) {
+      throw providerStreamingFailure(error);
     } finally {
       lifetime.dispose();
     }
@@ -486,6 +927,8 @@ export class AnthropicBrowserTransport implements InferenceTransport {
           "Anthropic ended its response before message_stop.",
         );
       }
+    } catch (error) {
+      throw providerStreamingFailure(error);
     } finally {
       lifetime.dispose();
     }
@@ -862,10 +1305,10 @@ function buildResponsesPayload(request: InferenceRequest): Record<string, unknow
      * them with `tools: []` is one OpenAI or xAI would be entitled to refuse.
      * Whether either actually refuses it has never been observed here (no
      * vendor key exists in this repository), which is precisely why the whole
-     * tool block is omitted rather than left to chance: the fabric's mandatory
-     * activation probe (fabric.ts verifyInvocation) is exactly such a request.
-     * This is the same boundary the proven Chutes payload builder already
-     * enforces (chutes/openai.ts).
+     * tool block is omitted rather than left to chance: a valid user turn can
+     * be toolless and must not carry a selection for tools it did not declare.
+     * This is the same boundary the chat-completions payload builder already
+     * enforces (openai-wire/chat.ts).
      */
     ...(tools.length ? { tools, tool_choice: "auto", parallel_tool_calls: true } : {}),
   };
@@ -937,8 +1380,7 @@ function buildAnthropicPayload(
     stream: true,
     /*
      * Messages requests validate `tool_choice` against the declared tool list,
-     * so a toolless turn — including the fabric's mandatory activation probe
-     * (fabric.ts verifyInvocation) — must send neither field.
+     * so a toolless turn must send neither field.
      */
     ...(tools.length ? { tools, tool_choice: { type: "auto" } } : {}),
   };
@@ -1013,6 +1455,99 @@ function xaiCapabilities(
   return Object.freeze(capabilities);
 }
 
+/**
+ * Capability evidence from an OpenAI-compatible model directory that publishes
+ * modality and feature arrays alongside the ids (Chutes' llm.chutes.ai does;
+ * plain OpenAI does not). Absent fields stay unknown rather than guessed, so a
+ * bare `{ id }` record produces the same empty evidence the OpenAI lane emits.
+ */
+function chatDirectoryCapabilities(
+  record: Record<string, unknown>,
+  observedAt: string,
+): Readonly<Partial<Record<ModelCapability, ModelCapabilityEvidence>>> {
+  const capabilities: Partial<Record<ModelCapability, ModelCapabilityEvidence>> = {};
+  const input = stringArray(record.input_modalities);
+  const output = stringArray(record.output_modalities);
+  const features = stringArray(record.supported_features);
+  if (input) {
+    capabilities["text-input"] = capabilityEvidence(input.includes("text"), observedAt);
+    capabilities["image-input"] = capabilityEvidence(input.includes("image"), observedAt);
+    capabilities["audio-input"] = capabilityEvidence(input.includes("audio"), observedAt);
+  }
+  if (output) {
+    capabilities["text-output"] = capabilityEvidence(output.includes("text"), observedAt);
+    capabilities["audio-output"] = capabilityEvidence(output.includes("audio"), observedAt);
+  }
+  if (features) {
+    capabilities["tool-calling"] = capabilityEvidence(features.includes("tools"), observedAt);
+    capabilities["reasoning"] = capabilityEvidence(features.includes("reasoning"), observedAt);
+    capabilities["structured-output"] = capabilityEvidence(
+      features.includes("structured_outputs"),
+      observedAt,
+    );
+  }
+  return Object.freeze(capabilities);
+}
+
+/**
+ * Directory-published token limits, adopted only as exact safe integers under
+ * the same ceilings the model catalog validates against. vLLM-style
+ * directories publish `context_length`/`max_model_len` and
+ * `max_output_length`; a directory that omits them leaves both fields absent
+ * rather than defaulted, exactly like the OpenAI and Anthropic lanes.
+ */
+function directoryTokenLimits(
+  record: Record<string, unknown>,
+): Readonly<{ contextWindowTokens?: number; maxOutputTokens?: number }> {
+  const context = directoryTokenLimit(record.context_length)
+    ?? directoryTokenLimit(record.max_model_len);
+  const output = directoryTokenLimit(record.max_output_length);
+  return Object.freeze({
+    ...(context !== undefined && context <= MAX_MODEL_CONTEXT_WINDOW_TOKENS
+      ? { contextWindowTokens: context }
+      : {}),
+    ...(output !== undefined && output <= MAX_MODEL_OUTPUT_TOKENS
+      ? { maxOutputTokens: output }
+      : {}),
+  });
+}
+
+function directoryTokenLimit(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+    ? value
+    : undefined;
+}
+
+/**
+ * The provider's own diagnosis inside an HTTP-200 stream, which would
+ * otherwise fall through the assembler and surface as a framing complaint.
+ * The text is untrusted output placed in front of a person, so control
+ * characters go and the length is bounded.
+ */
+function chatStreamReportedFailure(message: SseMessage): boolean {
+  const payload = message.data.trim();
+  if (message.event === "error") return true;
+  if (payload === "[DONE]" || !payload.startsWith("{")) return false;
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    return isRecord(parsed) && parsed.error !== undefined;
+  } catch {
+    // Not JSON: the assembler owns the fixed framing verdict on it.
+    return false;
+  }
+}
+
+/** Re-speak shared-wire parse verdicts without provider bytes or identifiers. */
+function chatWireFailure(error: unknown): unknown {
+  if (!(error instanceof OpenAiWireError)) return error;
+  const code = error.code === "tool-call-invalid"
+    ? "tool-call-invalid" as const
+    : error.code === "sse-limit"
+      ? "response-too-large" as const
+      : "invalid-response" as const;
+  return new ProviderTransportError(code, providerTransportMessage(code));
+}
+
 function capabilityEvidence(
   supported: boolean,
   observedAt: string,
@@ -1069,6 +1604,19 @@ function resolveRequestOutputTokens(
  * to settle that on. The stated limit must also be strictly below what was
  * asked, which is what makes the single retry terminate.
  */
+function directoryUrl(input: string): URL {
+  const url = new URL(input);
+  if (!url.pathname.endsWith("/")) url.pathname = `${url.pathname}/`;
+  return url;
+}
+
+function transportToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, "-")
+    .replace(/^-+|-+$/gu, "") || "provider";
+}
+
 function anthropicStatedOutputCeiling(body: string, requested: number): number | undefined {
   let parsed: unknown;
   try {
@@ -1101,19 +1649,42 @@ function resolveOptions(options: BrowserCloudTransportOptions): ResolvedBrowserO
     ? async (signal, use) => options.connections!.useCredential(
         connectionId,
         { expectedGeneration: connectionGeneration, signal },
-        (leased) => {
+        async (leased) => {
           if (leased.kind === "local-none") {
             throw new TypeError(
               `Inference connection ${connectionId} does not contain a cloud credential.`,
             );
           }
-          return use(Object.freeze({ kind: leased.kind, value: leased.value }));
+          const credential = Object.freeze({ kind: leased.kind, value: leased.value });
+          try {
+            return await use(credential);
+          } catch (error) {
+            // The exact string exists only inside this registry callback. Any
+            // provider/fetch error is rebuilt here before the lease ends.
+            throw credentialLeaseFailure(error, credential.value);
+          }
         },
       )
-    : async (signal, use) => use(Object.freeze({
-        kind: "api-key",
-        value: await resolveApiKey(options.getApiKey!, signal),
-      }));
+    : async (signal, use) => {
+        const credential = Object.freeze({
+          kind: "api-key" as const,
+          value: await resolveApiKey(options.getApiKey!, signal),
+        });
+        try {
+          return await use(credential);
+        } catch (error) {
+          throw credentialLeaseFailure(error, credential.value);
+        }
+      };
+  const getConnectionAuth: ResolvedBrowserOptions["getConnectionAuth"] = options.connections
+    ? () => {
+        const metadata = options.connections!.require(connectionId);
+        return Object.freeze({
+          authMethodId: metadata.authMethodId,
+          authKind: metadata.authKind,
+        });
+      }
+    : undefined;
   if (!globalThis.fetch && !options.fetch) throw new TypeError("Fetch is unavailable.");
   /*
    * `undefined` means "use whatever relay this page has"; `null` means "no
@@ -1127,6 +1698,7 @@ function resolveOptions(options: BrowserCloudTransportOptions): ResolvedBrowserO
     connectionId,
     connectionGeneration,
     withCredential,
+    ...(getConnectionAuth ? { getConnectionAuth } : {}),
     ...(bridge ? { bridge } : {}),
     fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
     totalTimeoutMs: positiveInteger(options.totalTimeoutMs ?? DEFAULTS.totalTimeoutMs, "totalTimeoutMs"),
@@ -1355,8 +1927,8 @@ function normalizeFetchFailure(
  * not delay-seconds or an HTTP-date.
  */
 function retryAfterOption(response: Response): { retryAfter?: string } {
-  const value = response.headers.get("retry-after")?.trim();
-  return value ? { retryAfter: value.slice(0, 64) } : {};
+  const value = safeRetryAfter(response.headers.get("retry-after") ?? undefined);
+  return value === undefined ? {} : { retryAfter: value };
 }
 
 function normalizedAbort(signal: AbortSignal): ProviderTransportError {
