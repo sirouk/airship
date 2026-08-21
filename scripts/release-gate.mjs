@@ -190,15 +190,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // renders.
   // B gzip.
   // gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 386,011 B raw / 119,757 B gzip.
-  // Reviewed reading (Google-Drive-configured): 386,006 B raw / 119,768 B gzip.
-  // Reviewed reading (Pages): 385,801 B raw / 119,667 B gzip.
-  // Reviewed reading (canonical config-free): 385,780 B raw / 119,657 B gzip.
-  // Reviewed reading (Docker defaults): 385,785 B raw / 119,661 B gzip.
-  // Previous reading: 385,641 B raw / 119,617 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 386,021 B raw / 119,757 B gzip.
+  // Reviewed reading (Google-Drive-configured): 386,016 B raw / 119,760 B gzip.
+  // Reviewed reading (Pages): 385,811 B raw / 119,658 B gzip.
+  // Reviewed reading (canonical config-free): 385,790 B raw / 119,648 B gzip.
+  // Reviewed reading (Docker defaults): 385,795 B raw / 119,655 B gzip.
+  // Previous reading: 386,011 B raw / 119,768 B gzip.
   // Ceiling: 377 KiB raw is a declared absolute backstop, not a headroom
-  // claim; 117 KiB gzip would have left 40 B, under the 512 B a compressor
-  // change moves on its own, so gzip takes the 118 KiB step and leaves 1,064
+  // claim; 117 KiB gzip would have left 48 B, under the 512 B a compressor
+  // change moves on its own, so gzip takes the 118 KiB step and leaves 1,072
   // B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
@@ -323,12 +323,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // chunks included.
   // B gzip.
   // gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 502,378 B raw / 163,227 B gzip.
-  // Reviewed reading (Google-Drive-configured): 502,373 B raw / 163,251 B gzip.
-  // Reviewed reading (Pages): 502,168 B raw / 163,145 B gzip.
-  // Reviewed reading (canonical config-free): 502,147 B raw / 163,126 B gzip.
-  // Reviewed reading (Docker defaults): 502,152 B raw / 163,140 B gzip.
-  // Previous reading: 502,228 B raw / 163,144 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 502,388 B raw / 163,229 B gzip.
+  // Reviewed reading (Google-Drive-configured): 502,383 B raw / 163,223 B gzip.
+  // Reviewed reading (Pages): 502,178 B raw / 163,124 B gzip.
+  // Reviewed reading (canonical config-free): 502,157 B raw / 163,125 B gzip.
+  // Reviewed reading (Docker defaults): 502,162 B raw / 163,135 B gzip.
+  // Previous reading: 502,378 B raw / 163,251 B gzip.
   // Ceiling: 491 KiB raw is a declared absolute backstop, not a headroom
   // claim; 160 KiB gzip is the smallest whole-KiB step that clears the
   // reading and leaves 575 B.
@@ -431,12 +431,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gzip.
   // B gzip.
   // / 68,323 B gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 233,018 B raw / 68,316 B gzip.
-  // Reviewed reading (Google-Drive-configured): 233,018 B raw / 68,320 B gzip.
-  // Reviewed reading (Pages): 232,946 B raw / 68,270 B gzip.
-  // Reviewed reading (canonical config-free): 232,946 B raw / 68,267 B gzip.
-  // Reviewed reading (Docker defaults): 232,946 B raw / 68,267 B gzip.
-  // Previous reading: 233,243 B raw / 68,318 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 233,184 B raw / 68,379 B gzip.
+  // Reviewed reading (Google-Drive-configured): 233,184 B raw / 68,377 B gzip.
+  // Reviewed reading (Pages): 233,112 B raw / 68,330 B gzip.
+  // Reviewed reading (canonical config-free): 233,112 B raw / 68,330 B gzip.
+  // Reviewed reading (Docker defaults): 233,112 B raw / 68,333 B gzip.
+  // Previous reading: 233,018 B raw / 68,320 B gzip.
   // Ceiling: 292 KiB raw and 87 KiB gzip, each the reading plus twice its
   // headroom (32,768 B and 10,256 B) rounded up to a whole KiB, leaving
   // 65,691 B and 20,713 B.
@@ -604,12 +604,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 632,943 B gzip.
   // gzip.
   // gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 2,020,703 B raw / 632,867 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,020,698 B raw / 632,922 B gzip.
-  // Reviewed reading (Pages): 2,020,204 B raw / 632,647 B gzip.
-  // Reviewed reading (canonical config-free): 2,020,126 B raw / 632,554 B gzip.
-  // Reviewed reading (Docker defaults): 2,020,131 B raw / 632,610 B gzip.
-  // Previous reading: 2,020,947 B raw / 632,621 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 2,021,675 B raw / 633,305 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,021,670 B raw / 633,276 B gzip.
+  // Reviewed reading (Pages): 2,021,176 B raw / 633,013 B gzip.
+  // Reviewed reading (canonical config-free): 2,021,098 B raw / 633,026 B gzip.
+  // Reviewed reading (Docker defaults): 2,021,103 B raw / 633,059 B gzip.
+  // Previous reading: 2,020,703 B raw / 632,922 B gzip.
   // Ceiling: 2039 KiB raw and 683 KiB gzip, each the reading plus twice its
   // headroom (32,768 B and 32,768 B) rounded up to a whole KiB, leaving
   // 66,506 B and 66,449 B.
@@ -815,12 +815,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 828,011 B gzip.
   // gzip.
   // gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 2,721,901 B raw / 827,938 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,721,896 B raw / 827,993 B gzip.
-  // Reviewed reading (Pages): 2,721,402 B raw / 827,719 B gzip.
-  // Reviewed reading (canonical config-free): 2,721,324 B raw / 827,624 B gzip.
-  // Reviewed reading (Docker defaults): 2,721,329 B raw / 827,683 B gzip.
-  // Previous reading: 2,722,145 B raw / 827,690 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 2,722,873 B raw / 828,377 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,722,868 B raw / 828,345 B gzip.
+  // Reviewed reading (Pages): 2,722,374 B raw / 828,081 B gzip.
+  // Reviewed reading (canonical config-free): 2,722,296 B raw / 828,098 B gzip.
+  // Reviewed reading (Docker defaults): 2,722,301 B raw / 828,133 B gzip.
+  // Previous reading: 2,721,901 B raw / 827,993 B gzip.
   // Ceiling: 2723 KiB raw and 873 KiB gzip, each the reading plus twice its
   // headroom (32,768 B and 32,768 B) rounded up to a whole KiB, leaving
   // 65,724 B and 65,941 B.
@@ -944,13 +944,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // startup.
   //
   // Class 2 — on demand: fetched with the tool surface, never at first paint.
-  // Reviewed reading (Pages Google-Drive-configured): 47,285 B raw / 13,976 B
   // gzip.
-  // Reviewed reading (Pages): 47,285 B raw / 13,971 B gzip.
-  // Reviewed reading (canonical config-free): 47,269 B raw / 13,973 B gzip.
-  // Reviewed reading (Docker defaults): 47,269 B raw / 13,971 B gzip.
-  // Reviewed reading (Google-Drive-configured): 47,269 B raw / 13,970 B gzip.
-  // Previous reading: 47,285 B raw / 13,943 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 47,527 B raw / 14,100 B gzip.
+  // Reviewed reading (Google-Drive-configured): 47,527 B raw / 14,100 B gzip.
+  // Reviewed reading (Pages): 47,527 B raw / 14,099 B gzip.
+  // Reviewed reading (canonical config-free): 47,511 B raw / 14,099 B gzip.
+  // Reviewed reading (Docker defaults): 47,511 B raw / 14,098 B gzip.
+  // Previous reading: 47,285 B raw / 13,973 B gzip.
   // Ceiling: 61 KiB raw and 18 KiB gzip, each the reading plus twice its
   // headroom (7,093 B and 2,096 B) rounded up to a whole KiB, leaving 15,179
   // B and 4,456 B.
@@ -980,11 +980,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // Class 2 — on demand: fetched only when the Node/WebContainer runtime is
   // chosen.
-  // Reviewed reading (canonical config-free, Docker defaults,
   // Google-Drive-configured, Pages Google-Drive-configured): 40,224 B raw /
   // 14,337 B gzip.
-  // Reviewed reading (Pages): 40,224 B raw / 14,336 B gzip.
-  // Previous reading: none recorded before this pass.
+  // Reviewed reading (Pages Google-Drive-configured): 40,510 B raw / 14,458 B gzip.
+  // Reviewed reading (Google-Drive-configured): 40,510 B raw / 14,457 B gzip.
+  // Reviewed reading (Pages): 40,510 B raw / 14,457 B gzip.
+  // Reviewed reading (canonical config-free): 40,510 B raw / 14,459 B gzip.
+  // Reviewed reading (Docker defaults): 40,510 B raw / 14,459 B gzip.
+  // Previous reading: 40,224 B raw / 14,336 B gzip.
   // Ceiling: 52 KiB raw and 19 KiB gzip, each the reading plus twice its
   // headroom (6,034 B and 2,151 B) rounded up to a whole KiB, leaving 13,024
   // B and 5,119 B.
@@ -997,12 +1000,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // Class 2 — on demand: fetched the first time somebody runs a shell
   // command.
-  // Reviewed reading (Pages Google-Drive-configured): 97,041 B raw / 28,632 B
   // gzip.
-  // Reviewed reading (canonical config-free, Docker defaults, Pages): 97,041
   // B raw / 28,631 B gzip.
-  // Reviewed reading (Google-Drive-configured): 97,041 B raw / 28,630 B gzip.
-  // Previous reading: none recorded before this pass.
+  // Reviewed reading (Pages Google-Drive-configured): 97,309 B raw / 28,770 B gzip.
+  // Reviewed reading (Google-Drive-configured): 97,309 B raw / 28,770 B gzip.
+  // Reviewed reading (Pages): 97,309 B raw / 28,769 B gzip.
+  // Reviewed reading (canonical config-free): 97,309 B raw / 28,769 B gzip.
+  // Reviewed reading (Docker defaults): 97,309 B raw / 28,770 B gzip.
+  // Previous reading: 97,041 B raw / 28,630 B gzip.
   // Ceiling: 124 KiB raw and 37 KiB gzip, each the reading plus twice its
   // headroom (14,556 B and 4,295 B) rounded up to a whole KiB, leaving 29,935
   // B and 9,256 B.
@@ -3466,6 +3471,56 @@ export const RELEASE_ARTIFACT_CLASSES = Object.freeze([
   }),
 ]);
 
+/**
+ * A shipped stylesheet or WebAssembly artifact is loaded by something, or it is
+ * not reviewed.
+ *
+ * `RELEASE_ARTIFACT_CLASSES` is a shape test, and for JavaScript a shape is
+ * enough because `assertExclusiveArtifactClassifications` then makes every
+ * `.js` name exactly one owner. Nothing did that for the other two shapes under
+ * `assets/`. Measured against this build: a 512 KiB `assets/bloat.css` and an
+ * `assets/payload.wasm` were both dropped into `dist` and the gate printed
+ * "Release gate passed" and wrote them into `release-manifest.json` with a
+ * checksum — inventoried as reviewed artifacts that no class owns, no ceiling
+ * charges, and, for the stylesheet, nothing measures at all: only the one
+ * HTML-referenced entry stylesheet has a budget.
+ *
+ * Ownership by name is not available here — Vite hashes both — so the rule is
+ * reachability, which is the property that makes a lazily fetched stylesheet a
+ * Class 2 artifact in the first place: the entry document or some shipped
+ * JavaScript artifact names it. A file nothing loads has no reason to ship.
+ */
+export function assertEveryAssetIsReachable(paths, referrerTexts) {
+  const orphans = paths
+    .filter((path) => /^assets\/[A-Za-z0-9_.-]+\.(?:css|wasm)$/u.test(path))
+    .filter((path) => !referrerTexts.some((text) => text.includes(path.slice("assets/".length))));
+  if (orphans.length > 0) {
+    throw new Error(
+      `Release ships stylesheet or WebAssembly artifacts nothing loads: ${orphans.sort().join(", ")}. `
+      + `Every shipped asset must be referenced by index.html or by a shipped JavaScript artifact.`,
+    );
+  }
+}
+
+/**
+ * The pinned Pyodide distribution is exactly its five pinned files.
+ *
+ * `PYODIDE_ASSET_PATHS` was a *requirement* list — every name in it must exist —
+ * and its artifact class matches `execution-packs/pyodide/<anything>`, so an
+ * extra file in that directory was classified, shipped, and written into the
+ * manifest. Measured: a 2 MiB `execution-packs/pyodide/extra.bin` passed, and it
+ * did not even move the Optional Python pack reading, because that measurement
+ * matches the pinned names too. "Pinned" has to forbid as well as require.
+ */
+export function assertExactPyodideInventory(paths) {
+  const prefix = "execution-packs/pyodide/";
+  assertExactInventory(
+    "Pinned Pyodide distribution",
+    paths.filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)),
+    PYODIDE_ASSET_PATHS.map((path) => path.slice(prefix.length)),
+  );
+}
+
 export function assertEveryArtifactIsClassified(paths) {
   const unclassified = paths.filter((path) =>
     !RELEASE_ARTIFACT_CLASSES.some((artifactClass) => artifactClass.pattern.test(path)));
@@ -3866,6 +3921,14 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
   assertExtensionReleaseMetadata(fileMap);
   assertEveryArtifactIsClassified(files.map((file) => file.path));
+  assertExactPyodideInventory(releasableFiles.map((file) => file.path));
+  assertEveryAssetIsReachable(
+    releasableFiles.map((file) => file.path),
+    releasableFiles
+      .filter((file) => file.path === "index.html" || /\.m?js$/u.test(file.path))
+      .filter((file) => !isOptionalSemanticPackPath(file.path) && !isOptionalPythonPackPath(file.path))
+      .map((file) => file.payload.toString("utf8")),
+  );
   assertExactDocumentInventory(releasableFiles.map((file) => file.path));
   assertFallbackDocumentIsIndex(fileMap);
   assertStockReleaseExcludesLocalLab(releasableFiles);

@@ -3,7 +3,13 @@ import type { JsonValue } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
+import {
+  isLocalFolderMountPath,
+  isWorkspaceControlPlanePath,
+  normalizeWorkspacePath,
+  WorkspaceConflictError,
+  type WorkspacePort,
+} from "../workspace/contracts";
 import { emitExecutionOutput, type ExecutionAdapter, type ExecutionRequest, type ExecutionResult } from "./runtime-registry";
 
 const MAX_FILES = 2_048;
@@ -358,6 +364,9 @@ async function snapshotWorkspace(workspace: WorkspacePort, root: string): Promis
   const entries = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    // A folder attached from this device is not workspace state; see
+    // `collectWorkspaceChanges`.
+    .filter(({ path }) => !isLocalFolderMountPath(path))
     .filter(({ path }) => !relativeSegments(path, root).some((segment) => EXCLUDED_SEGMENTS.has(segment)));
   if (entries.length > MAX_FILES) throw new Error(`Node workspace snapshot exceeds ${MAX_FILES} files.`);
   const declaredBytes = entries.reduce((total, entry) => total + entry.size, 0);
@@ -398,6 +407,7 @@ async function assertWorkspaceSnapshotCurrent(
   const current = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    .filter(({ path }) => !isLocalFolderMountPath(path))
     .filter(({ path }) => !relativeSegments(path, root).some((segment) => EXCLUDED_SEGMENTS.has(segment)))
     .map((entry) => [relativePath(entry.path, root), entry.revision] as const)
     .filter(([path]) => path.length > 0)
@@ -423,6 +433,15 @@ function collectWorkspaceChanges(
   let changedBytes = 0;
   for (const [relative, content] of exported) {
     if (relative.split("/").some((segment) => EXCLUDED_SEGMENTS.has(segment))) continue;
+    // Same rule, same reason as `ATTACHED_FOLDER_EXCLUSION` in the shell pack.
+    // Nothing under the folder was mounted, so this can only be output the
+    // process addressed *into* it, and it never reaches the port.
+    if (isLocalFolderMountPath(normalizeWorkspacePath(`${root}/${relative}`))) {
+      throw new Error(
+        "This runtime does not carry the folder you attached from this device: it copies files and writes them back"
+        + ` with no approval request, and that folder is written in place. Refused: ${root}/${relative}`,
+      );
+    }
     const original = snapshot.files.get(relative);
     if (original?.content === content) continue;
     const size = workspaceContentByteLength(content);

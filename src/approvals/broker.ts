@@ -18,13 +18,15 @@ export type ApprovalRisk = "observe" | "change" | "communicate" | "execute" | "i
  * a decision on the record; an expiry is the absence of one, and the record is
  * not entitled to invent the difference.
  *
- * `withdrawn` is the same defect one step earlier. Three page events take a
+ * `withdrawn` is the same defect one step earlier. Four page events take a
  * live request off the table without anybody being asked anything: the
- * approval dialog's chunk fails to load, the shell unmounts, and a
- * conversation's approval mode changes under an outstanding prompt. All three
- * called the page-wide settle helper the person's own Deny button calls, so
- * the journal read `source: "human"` and "Denied without approval" for a
- * question that was never answered — and, for the failed chunk, never shown.
+ * approval dialog's chunk fails to load, the shell unmounts, a conversation's
+ * approval mode changes under an outstanding prompt, and the turn that raised
+ * the request is aborted — by Stop, by a profile switch, or by a storage
+ * transition. All four called the page-wide settle helper the person's own
+ * Deny button calls, so the journal read `source: "human"` and "Denied without
+ * approval" for a question that was never answered — and, for the failed chunk,
+ * never shown.
  *
  * `ApprovalDecision` stays two-valued on purpose: it is the gate every caller
  * fails closed on, and an expiry or a withdrawal must keep failing closed
@@ -112,10 +114,11 @@ const MAX_SETTLED_OUTCOMES = 256;
  *
  * The reason string is what the journal keeps and what Memory and the message
  * transcript read back, so two writers of it drift into two accounts of the
- * same event. The `deny` sentence names no author because this broker denies
- * for two reasons — the person pressed Deny, or the turn aborted — and only
- * the first is a person refusing. Expiry, withdrawal and a full queue each say
- * plainly that nobody answered, and which of the three it was.
+ * same event. The `deny` sentence still names no author, because the same word
+ * is what the person's own Deny button and their "deny everything waiting"
+ * control both file, and both are a person refusing. Expiry, withdrawal and a
+ * full queue each say plainly that nobody answered, and which of the three it
+ * was.
  */
 export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
   if (outcome === "allow") return "Allowed once by the user.";
@@ -258,7 +261,9 @@ export class ApprovalBroker {
   request(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision> {
     const id = approvalRequestId(context);
     if (context.signal.aborted) {
-      this.remember(id, "deny");
+      // The turn is already gone, so nobody will be shown this question. Same
+      // reason as the `abort` listener below: see `ApprovalOutcome`.
+      this.remember(id, "withdrawn");
       return Promise.resolve("deny");
     }
     /*
@@ -294,7 +299,17 @@ export class ApprovalBroker {
     } satisfies PendingApproval);
 
     return new Promise<ApprovalDecision>((resolve) => {
-      const abort = () => this.settle(id, "deny");
+      /*
+       * A cancelled turn takes the question away; it does not answer it.
+       *
+       * This settled `deny`, which `approvalWasAnswered` reads as a person
+       * having decided, so `createApprovalModePolicy` journaled `source:
+       * "human"` and "Denied without approval" for a request nobody was ever
+       * shown — the same defect the three page paths above were fixed for, on
+       * the one path a person reaches by pressing Stop. The gate is unchanged:
+       * `withdrawn` still resolves `deny` below.
+       */
+      const abort = () => this.settle(id, "withdrawn");
       // Not `deny`: the clock running out is the absence of a decision, and the
       // record that reads this must not report it as one the person made.
       const timer = setTimeout(() => this.settle(id, "expired"), this.decisionTimeoutMs);

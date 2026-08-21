@@ -46,6 +46,8 @@ import {
   resolveOptionalSourceSelectionDelivery,
   assertDocumentedBudgetMeasurements,
   assertEveryArtifactIsClassified,
+  assertEveryAssetIsReachable,
+  assertExactPyodideInventory,
   RELEASE_ARTIFACT_CLASSES,
   RELEASE_BUDGET_CLASSES,
   REVIEWED_BUILD_VARIANTS,
@@ -473,7 +475,7 @@ describe("release gate", () => {
       expect(variant.environment, variant.name).toContain("npm run build:static");
     }
     const droppedFromEntry = source.replace(
-      "// Reviewed reading (Pages Google-Drive-configured): 386,011 B raw / 119,757 B gzip.\n",
+      "// Reviewed reading (Pages Google-Drive-configured): 386,021 B raw / 119,757 B gzip.\n",
       "",
     );
     expect(droppedFromEntry).not.toBe(source);
@@ -503,10 +505,10 @@ describe("release gate", () => {
       .toThrow(/entryJavaScript: the 119\.00 KiB gzip ceiling is above the smallest whole-KiB step/u);
 
     // Remove the arithmetic that pays for the step this file does take.
-    const untripped = source.replace("117 KiB gzip would have left 40 B", "117 KiB gzip would have left 999 B");
+    const untripped = source.replace("117 KiB gzip would have left 48 B", "117 KiB gzip would have left 999 B");
     expect(untripped).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(untripped))
-      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 40 B"/u);
+      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 48 B"/u);
 
     for (const [ceiling, expected] of [
       ["raw: 64 * 1024", /optionalApprovalDock: the 64\.00 KiB raw ceiling is outside the Class 2 headroom band/u],
@@ -1129,6 +1131,46 @@ describe("release gate", () => {
       expect(() => assertEveryArtifactIsClassified([...shipped, stray]), stray)
         .toThrow(/Release contains files no artifact class reviews/u);
     }
+  });
+
+  /*
+   * The class test is a shape test, and for `.css` and `.wasm` a shape was the
+   * whole review: a 512 KiB `assets/bloat.css` and an `assets/payload.wasm`
+   * were dropped into a real `dist` and the gate printed "Release gate passed"
+   * and inventoried both with a checksum. Only the one HTML-referenced entry
+   * stylesheet has a ceiling, so the stylesheet was not even measured.
+   */
+  it("refuses a stylesheet or WebAssembly artifact nothing loads", () => {
+    const shipped = ["assets/index-DEADBEEF.css", "assets/tree-sitter-DEADBEEF.wasm", "assets/index-DEADBEEF.js"];
+    const referrers = [
+      '<link rel="stylesheet" href="/assets/index-DEADBEEF.css">',
+      'const w=new URL("/assets/tree-sitter-DEADBEEF.wasm",import.meta.url)',
+    ];
+    expect(() => assertEveryAssetIsReachable(shipped, referrers)).not.toThrow();
+    expect(() => assertEveryAssetIsReachable([...shipped, "assets/bloat-DEADBEEF.css"], referrers))
+      .toThrow(/Release ships stylesheet or WebAssembly artifacts nothing loads: assets\/bloat-DEADBEEF\.css/u);
+    expect(() => assertEveryAssetIsReachable([...shipped, "assets/payload-CAFEBABE.wasm"], referrers))
+      .toThrow(/assets\/payload-CAFEBABE\.wasm/u);
+  });
+
+  /*
+   * "Pinned" required five names and forbade nothing, while the artifact class
+   * matched `execution-packs/pyodide/<anything>`. Measured: a 2 MiB
+   * `extra.bin` shipped and did not move the Optional Python pack reading.
+   */
+  it("refuses an extra file inside the pinned Pyodide distribution", () => {
+    const pinned = [
+      "execution-packs/pyodide/pyodide.mjs",
+      "execution-packs/pyodide/pyodide.asm.mjs",
+      "execution-packs/pyodide/pyodide.asm.wasm",
+      "execution-packs/pyodide/pyodide-lock.json",
+      "execution-packs/pyodide/python_stdlib.zip",
+    ];
+    expect(() => assertExactPyodideInventory(["index.html", ...pinned])).not.toThrow();
+    expect(() => assertExactPyodideInventory([...pinned, "execution-packs/pyodide/extra.bin"]))
+      .toThrow(/Pinned Pyodide distribution inventory mismatch \(unexpected: extra\.bin\)/u);
+    expect(() => assertExactPyodideInventory(pinned.slice(1)))
+      .toThrow(/Pinned Pyodide distribution inventory mismatch/u);
   });
 
   /*

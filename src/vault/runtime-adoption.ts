@@ -201,7 +201,7 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
       // person met an empty conversation where their work should have been.
       const finished = existing.headSequence === session.headSequence
         && existing.headDigest === session.headDigest;
-      if (!sameSessionRecord(existing, finished ? session : replayedRecord(session, events.slice(0, replayed)))) {
+      if (!sameSessionRecord(existing, finished ? session : replayedRecord(session, events.slice(0, replayed), existing))) {
         throw new Error(`Encrypted vault contains a conflicting session ${session.id}.`);
       }
       if (finished) continue;
@@ -339,21 +339,50 @@ function journalHead(session: SessionRecord): JournalHead {
  * Every field is the one the backends themselves derive: the title from the
  * same `projectedSessionTitle` walk, the recency from the same
  * `lastRecencyAdvancingEvent` walk over the events written so far, and the head
- * from the last of them. A replay grants no pin, so the pins are still the ones
- * `createSession` was handed. Comparing against this — rather than against a
- * few fields — is what keeps "resume the replay" from becoming "accept a
- * different conversation under the same id".
+ * from the last of them. Comparing against this — rather than against a few
+ * fields — is what keeps "resume the replay" from becoming "accept a different
+ * conversation under the same id".
+ *
+ * The name and the three device-granted pins are read from `held`, the record
+ * the target already carries, and not from the source. A replay grants no pin,
+ * so `held` still has the ones `createSession` was handed; and between an
+ * interrupted replay and its retry the person is back on the source, where
+ * renaming the thread or moving it to Auto Approve or to another model is an
+ * ordinary act. Comparing those against the source's current values re-created
+ * the exact defect this resume exists to close: measured, one rename after one
+ * dropped connection refused every later attempt by name — "contains a
+ * conflicting session" — forever, and with it the whole Vault adoption, leaving
+ * the conversation's title on a stub with no messages. None of the four is what
+ * makes this a different conversation, and each of them converges: the title
+ * from the `session.renamed` event the replay is about to write, the pins from
+ * the person's own next choice on the adopted journal.
  */
-function replayedRecord(session: SessionRecord, prefix: readonly DurableEvent[]): SessionRecord {
+function replayedRecord(
+  session: SessionRecord,
+  prefix: readonly DurableEvent[],
+  held: SessionRecord,
+): SessionRecord {
   const last = prefix.at(-1);
-  return {
+  const replayed: SessionRecord = {
     ...session,
-    title: projectedSessionTitle(prefix, session.title),
+    title: projectedSessionTitle(prefix, held.title),
     updatedAt: lastRecencyAdvancingEvent(prefix)?.recordedAt ?? session.createdAt,
     headSequence: last?.sequence ?? 0,
     headDigest: last?.digest ?? "genesis",
   };
+  for (const pin of REPLAY_HELD_PINS) {
+    if (held[pin] === undefined) delete replayed[pin];
+    else Object.assign(replayed, { [pin]: held[pin] });
+  }
+  return replayed;
 }
+
+/** The device-granted pins a part-way target owns; see `replayedRecord`. */
+const REPLAY_HELD_PINS = Object.freeze([
+  "approvalModeOverride",
+  "modelOverride",
+  "contextPolicyOverride",
+] as const);
 
 function sameSessionRecord(left: SessionRecord, right: SessionRecord): boolean {
   const portableLeft = structuredClone(left);
