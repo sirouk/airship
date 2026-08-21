@@ -40,12 +40,12 @@ ceiling.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 375 KiB | 117 KiB |
-| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 488 KiB | 159 KiB |
+| HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
+| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 490 KiB | 160 KiB |
 | Deferred advanced capability bundle | 229 KiB | 68 KiB |
-| First-party and other non-vendor JS/workers | 1968 KiB | 617 KiB |
-| Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
-| Absolute installed JavaScript/worker backstop | 2652 KiB | 807 KiB |
+| First-party and other non-vendor JS/workers | 1972 KiB | 618 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 686 KiB | 192 KiB |
+| Absolute installed JavaScript/worker backstop | 2657 KiB | 809 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -54,10 +54,10 @@ ceiling.
 | Optional agent runtime / tool bundle | 57 KiB / 126 KiB | 18 KiB / 40 KiB |
 | Optional Workspace / Source Control / browser Git | 86 KiB / 40 KiB / 262 KiB | 28 KiB / 13 KiB / 80 KiB |
 | Optional folder on this device | 16 KiB | 6 KiB |
-| Optional move-work bundle pack | 17 KiB | 6 KiB |
+| Optional move-work bundle pack | 19 KiB | 6 KiB |
 | Optional Sessions / Memory / Memory support | 66 KiB / 64 KiB / 3 KiB | 20 KiB / 21 KiB / 2 KiB |
 | Optional Skills route / skill editor | 8 KiB / 4 KiB | 4 KiB / 2 KiB |
-| Optional Terminal | 425 KiB | 112 KiB |
+| Optional Terminal | 425 KiB | 113 KiB |
 | Optional semantic worker | 16 KiB | 6 KiB |
 | Optional inference/provider + Companion protocol packs | 141 KiB | 42 KiB |
 | Optional prime runtime pack | 236 KiB | 72 KiB |

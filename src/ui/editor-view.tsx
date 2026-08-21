@@ -174,7 +174,7 @@ export function EditorView(props: EditorViewProps) {
       status={<WorkbenchDurabilityChip state={props.durability.state} detail={props.durability.detail} />}
     />
     {props.onLocalFolderChanged ? LocalFolder
-      ? <LocalFolder onFolderChanged={props.onLocalFolderChanged} />
+      ? <LocalFolder profileId={props.profileId} onFolderChanged={props.onLocalFolderChanged} />
       : <p class="editor-route__loading" role={localFolderError ? "alert" : "status"}>{localFolderError ?? "Loading the folder controls…"}</p>
       : null}
     <div class="editor-route__panel" data-mode="files" role="group" aria-labelledby="workbench-route-title">

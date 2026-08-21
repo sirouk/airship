@@ -152,6 +152,45 @@ describe("terminal workspace synchronization", () => {
     await syncTerminalWorkspace(host, workspace, baseline);
     expect([...decodeWorkspaceBytes((await workspace.read("asset.bin"))!.content)]).toEqual([0, 255, 9, 2, 128, 64]);
   });
+
+  /*
+   * F4. The Terminal copies the workspace into a WebContainer and writes the
+   * result back through `workspace.write` — outside the approval broker. When
+   * a folder from this device is composed into `/workspace/local`, that copy
+   * was the person's own directory going into a Node sandbox, and the write
+   * back was shell output landing on their real files with nothing to approve.
+   */
+  it("never mounts the folder attached from this device, and refuses shell output addressed to it", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("README.md", "before\n", { expectedRevision: null });
+    await workspace.write("local/airship/secrets.env", "OPENAI_API_KEY=real\n", { expectedRevision: null });
+    let mounted: FileSystemTree = {};
+    let exported: FileSystemTree = {};
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { mounted = {}; } },
+      async mount(tree: FileSystemTree, _options: { mountPoint: string }) { mounted = structuredClone(tree); },
+      async export(_path: string, _options: { format: "json"; excludes: string[] }) { return structuredClone(exported); },
+    };
+
+    const baseline = await mountTerminalWorkspace(host, workspace);
+    // The real folder is not copied into the sandbox at all.
+    expect(mounted).toHaveProperty("README.md");
+    expect(mounted).not.toHaveProperty("local");
+    expect([...baseline.files.keys()]).toEqual(["README.md"]);
+
+    // And a command that writes into it is refused rather than applied.
+    exported = { ...mounted, local: { directory: { "airship": { directory: { "secrets.env": { file: { contents: "OPENAI_API_KEY=stolen\n" } } } } } } };
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/does not carry the folder you attached from this device/u);
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/Work on it in the Workspace or the editor, where every write to it is reviewed/u);
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/Refused: \/workspace\/local\/airship\/secrets\.env/u);
+    // The real file is untouched.
+    await expect(workspace.read("local/airship/secrets.env")).resolves.toMatchObject({
+      content: encodeWorkspaceBytes(new TextEncoder().encode("OPENAI_API_KEY=real\n")),
+    });
+  });
 });
 
 function mountedText(tree: FileSystemTree, path: string): string {

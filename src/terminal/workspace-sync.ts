@@ -1,5 +1,11 @@
 import type { FileSystemTree } from "@webcontainer/api";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
+import {
+  isLocalFolderMountPath,
+  isWorkspaceControlPlanePath,
+  normalizeWorkspacePath,
+  WorkspaceConflictError,
+  type WorkspacePort,
+} from "../workspace/contracts";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import { TERMINAL_WORKSPACE_MOUNT } from "./contracts";
 
@@ -9,6 +15,23 @@ const MAX_TOTAL_BYTES = 16 * 1_024 * 1_024;
 const MAX_CHANGES = 512;
 const MAX_CHANGED_BYTES = 8 * 1_024 * 1_024;
 const EXCLUDED = new Set([".git", ".airship", "node_modules"]);
+/**
+ * The Terminal never carries an attached folder, in either direction.
+ *
+ * A mount is a *copy*: every listed file is read out of the workspace port and
+ * written into the WebContainer, and every changed file is written back
+ * afterwards through `workspace.write`. For `/workspace` that is a copy of a
+ * browser-managed store into a sandbox and back. For a path under the reserved
+ * mount it is a person's own directory copied into a Node runtime, and then
+ * shell output written onto their real files — with no approval request
+ * anywhere on that path, because `syncTerminalWorkspace` writes through the
+ * port rather than through the tool broker. So the folder is not mounted, and
+ * output addressed to it is refused rather than written.
+ */
+export const ATTACHED_FOLDER_REFUSAL =
+  "The Terminal does not carry the folder you attached from this device: it copies files into a sandbox and writes"
+  + " them back with no approval request, and that folder is written in place. Work on it in the Workspace or the"
+  + " editor, where every write to it is reviewed. Nothing on your device was changed.";
 
 type Host = Readonly<{
   fs: Readonly<{
@@ -29,7 +52,7 @@ export async function mountTerminalWorkspace(host: Host, workspace: WorkspacePor
   const normalizedRoot = normalizeWorkspacePath(root);
   const entries = (await workspace.list(normalizedRoot))
     .filter((entry) => entry.path === normalizedRoot || entry.path.startsWith(`${normalizedRoot}/`))
-    .filter((entry) => !isWorkspaceControlPlanePath(entry.path))
+    .filter((entry) => !isWorkspaceControlPlanePath(entry.path) && !isLocalFolderMountPath(entry.path))
     .filter((entry) => !relative(entry.path, normalizedRoot).split("/").some((part) => EXCLUDED.has(part)));
   if (entries.length > MAX_FILES) throw new Error(`Terminal workspace exceeds ${MAX_FILES} files.`);
   const tree: FileSystemTree = Object.create(null) as FileSystemTree;
@@ -64,6 +87,13 @@ export async function syncTerminalWorkspace(
   const exported = new Map<string, string>();
   flatten(tree, [], exported);
   if (exported.size > MAX_FILES) throw new Error(`Terminal output exceeds ${MAX_FILES} workspace files.`);
+  for (const path of exported.keys()) {
+    // Nothing under the mount was ever mounted, so this can only be output the
+    // shell addressed *into* the attached folder. It never reaches the port.
+    if (isLocalFolderMountPath(`${baseline.root}/${path}`)) {
+      throw new Error(`${ATTACHED_FOLDER_REFUSAL} Refused: ${baseline.root}/${path}`);
+    }
+  }
   const changes: Array<Readonly<{ path: string; relative: string; content?: string; expected?: string; kind: "create" | "modify" | "delete" }>> = [];
   let bytes = 0;
   for (const [path, content] of exported) {

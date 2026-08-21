@@ -34,6 +34,18 @@ export type SessionRecord = {
    */
   headIncarnation?: string;
   /**
+   * When this device took the conversation in from a bundle file.
+   *
+   * Set by the import, never by the file: `REFUSED_BUNDLE_PINS` in
+   * `src/sessions/work-bundle.ts` rejects a bundle that states it, so a file
+   * can neither claim to be native nor forge a date. It is what separates a
+   * conversation this browser composed from one whose whole manifest —
+   * including the `systemPrompt` sent to the provider on every turn — was
+   * written somewhere else. Such a conversation is readable in full and
+   * continues by Fork, which is the same rule a Vault adoption already states.
+   */
+  importedAt?: string;
+  /**
    * The conversation's own approval policy, carried beside the pinned manifest
    * like title is. The manifest names the policy the conversation was created
    * under; this is what the person asked for in-flight, on the same thread,

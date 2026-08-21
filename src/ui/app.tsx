@@ -106,6 +106,7 @@ import {
 import {
   forkActivationManifestMatches,
   inferenceBindingsMatch,
+  IMPORTED_CONVERSATION_REFUSAL,
   profileManifestResumeRefusal,
   profileOwnedSessions,
   profileOwnsSession,
@@ -139,7 +140,7 @@ import {
   type LocalDeviceVaultHandle,
   type LocalDeviceVaultStatus,
 } from "../vault/local-device";
-import { LOCAL_FOLDER_ATTACHMENT_KEY, isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
+import { localFolderAttachmentKey, isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
 import type { LocalFolderWorkspacePort } from "../workspace/local-folder";
 import { MemoryWorkspace } from "../workspace/memory";
 import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentity } from "../workspace/profile-scope";
@@ -4287,7 +4288,7 @@ export function App() {
       // Git and the bootstrap seed above own the page workspace; the runtime
       // below owns the composed one, so a folder remembered from a previous
       // visit is present for the agent before the Workspace route is opened.
-      const mountedWorkspace = await mountRememberedLocalFolder(workspace);
+      const mountedWorkspace = await mountRememberedLocalFolder(workspace, profile.profileId);
       const tools = await createAirshipToolRegistry({
         workspace: mountedWorkspace,
         journal,
@@ -8486,10 +8487,12 @@ export function App() {
        */
       const held = fresh.compatibility?.action === "resume"
         ? undefined
-        : profileManifestResumeRefusal(
-            fresh.session.manifest,
-            authoritySession.current?.manifest ?? fresh.session.manifest,
-          );
+        : fresh.session.importedAt
+          ? IMPORTED_CONVERSATION_REFUSAL
+          : profileManifestResumeRefusal(
+              fresh.session.manifest,
+              authoritySession.current?.manifest ?? fresh.session.manifest,
+            );
       const audited = await loadAuditedSessionSnapshot(fresh.session.id);
       if (sessionAuditRefusesResume(audited.report)) {
         throw new Error("This conversation's journal failed its local integrity audit and cannot be reopened.");
@@ -10777,7 +10780,7 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
     },
   ));
   return Object.freeze({
-    workspace: await mountRememberedLocalFolder(workspace),
+    workspace: await mountRememberedLocalFolder(workspace, input.profile.profileId),
     workspaceId: profileWorkspaceIdentity(input.storageId, input.profile.profileId),
     git,
     adoptedLegacyPaths,
@@ -10795,11 +10798,11 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
  * Workspace route's panel — which asks the same question with a button behind
  * it — is what states the refusal and offers Reconnect.
  */
-async function mountRememberedLocalFolder(workspace: WorkspacePort): Promise<WorkspacePort> {
+async function mountRememberedLocalFolder(workspace: WorkspacePort, profileId: string): Promise<WorkspacePort> {
   try {
-    if (globalThis.localStorage?.getItem(LOCAL_FOLDER_ATTACHMENT_KEY) !== "attached") return workspace;
+    if (globalThis.localStorage?.getItem(localFolderAttachmentKey(profileId)) !== "attached") return workspace;
     const { MountedLocalFolderWorkspace, restoreLocalFolder } = await import("../workspace/local-folder");
-    const restored = await restoreLocalFolder();
+    const restored = await restoreLocalFolder(profileId);
     if (restored.state !== "attached") return workspace;
     // Read it once before binding it, for the reason `local-folder-panel.tsx`
     // states: a folder past its listing bound, or one that moved, must not be

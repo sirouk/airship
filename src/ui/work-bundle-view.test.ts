@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { planSentence, resultSentence, untouchedSentence } from "./work-bundle-view";
 import type { WorkBundleImportPlan, WorkBundleImportResult } from "../sessions/work-bundle";
@@ -46,8 +47,8 @@ describe("what the move-work panel says before it writes anything", () => {
     expect(planSentence(plan({ conversations: Object.freeze([entry("new", "a")]) }))).not.toContain("Memory:");
     expect(planSentence(plan({
       conversations: Object.freeze([entry("new", "a")]),
-      memory: Object.freeze({ offered: 3, add: 2, present: 1, conflict: 0, overflow: 0 }),
-    }))).toContain("Memory: 3 records offered, 2 new, 1 already present.");
+      memory: Object.freeze({ offered: 3, add: 2, present: 1, conflict: 0, overflow: 0, foreign: 0 }),
+    }))).toContain("Memory: 3 records offered, 2 new, 1 already present. Memory is added only if you ask for it.");
   });
 
   it("names what is left alone, including the key a bundle is not", () => {
@@ -57,10 +58,10 @@ describe("what the move-work panel says before it writes anything", () => {
     expect(untouched).toContain("your workspace files");
     expect(untouched).toContain("your Vault key");
     expect(untouchedSentence(plan())).toContain("no other conversation is here");
-    // Memory travelling means memory is no longer in the untouched list.
-    expect(untouchedSentence(plan({
-      memory: Object.freeze({ offered: 1, add: 1, present: 0, conflict: 0, overflow: 0 }),
-    }))).not.toContain("your memory records");
+    // Memory travelling is not enough: it is untouched until the person asks.
+    const withMemory = plan({ memory: Object.freeze({ offered: 1, add: 1, present: 0, conflict: 0, overflow: 0, foreign: 0 }) });
+    expect(untouchedSentence(withMemory)).toContain("your memory records");
+    expect(untouchedSentence(withMemory, true)).not.toContain("your memory records");
   });
 
   it("reports the outcome in the same vocabulary as the plan", () => {
@@ -69,11 +70,42 @@ describe("what the move-work panel says before it writes anything", () => {
       imported: 2,
       skipped: 1,
       refused: 1,
-      memory: Object.freeze({ added: 3, present: 1, conflict: 1, overflow: 0 }),
+      memory: Object.freeze({ added: 3, present: 1, conflict: 1, overflow: 0, foreign: 2 }),
     });
     expect(resultSentence(result)).toBe(
       "2 conversations added. 1 skipped as already present. 1 refused and left alone."
-      + " Memory: 3 records added, 1 already present, 1 refused.",
+      + " Memory: 3 records added, 1 already present, 3 refused.",
     );
+  });
+});
+
+/*
+ * F2(b), second half. The panel decided for the person: `includeMemory` was
+ * `Boolean(incoming.bundle.memory && workspace)` — true whenever the file
+ * happened to carry records — while the only control on screen said
+ * "Add N conversations". Asserted against the module's own source for the
+ * reason `connection-continuity.test.ts` states: this is a wiring contract
+ * between a control and a call, and a renderer-free assertion on the call is
+ * what keeps the two from drifting apart again.
+ */
+describe("bringing memory in is a decision the person makes", () => {
+  const source = readFileSync(new URL("./work-bundle-view.tsx", import.meta.url), "utf8");
+
+  it("passes the checkbox to the import rather than the presence of records", () => {
+    expect(source).toContain("includeMemory: addMemory");
+    expect(source).not.toContain("includeMemory: Boolean(incoming.bundle.memory");
+    // Unchecked on every file, including a second one inspected after a first.
+    expect(source).toContain("const [addMemory, setAddMemory] = useState(false);");
+    expect(source).toContain("setAddMemory(false);");
+  });
+
+  it("names the memory records on the button that adds them", () => {
+    expect(source).toContain("` and ${String(addableMemory)} memory records`");
+    expect(source).toContain("const addableMemory = addMemory ? offeredMemory?.add ?? 0 : 0;");
+  });
+
+  it("imports memory into the profile this panel names, and no other", () => {
+    expect(source).toContain("planWorkBundleImport({ bundle, journal, chain, workspace, profileId })");
+    expect(source).toContain("profileId,\n        includeMemory: addMemory,");
   });
 });

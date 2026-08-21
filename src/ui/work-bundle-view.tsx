@@ -77,6 +77,14 @@ export function WorkBundleView({
   const [chosen, setChosen] = useState<readonly string[]>();
   const selected = chosen ?? conversations.map((row) => row.id);
   const [withMemory, setWithMemory] = useState(false);
+  /*
+   * Bringing memory in is a second decision, and it starts as "no".
+   *
+   * The button says how many conversations will be added. It used to add every
+   * memory record in the file as well, whatever it said, because the caller
+   * passed `includeMemory` whenever the file had a memory section at all.
+   */
+  const [addMemory, setAddMemory] = useState(false);
   const [sealed, setSealed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -135,7 +143,8 @@ export function WorkBundleView({
         ? await openSealedWorkBundle(seal, new TextEncoder().encode(text))
         : parseWorkBundle(text);
       const chain = await verifyWorkBundleChain(bundle);
-      const plan = await planWorkBundleImport({ bundle, journal, chain, workspace });
+      const plan = await planWorkBundleImport({ bundle, journal, chain, workspace, profileId });
+      setAddMemory(false);
       setIncoming(Object.freeze({ name: file.name, sealed: isSealed, bundle, plan }));
       setAnnouncement(planSentence(plan));
     } catch (failure) {
@@ -159,7 +168,8 @@ export function WorkBundleView({
         target,
         migrate: migrateJournalState,
         workspace,
-        includeMemory: Boolean(incoming.bundle.memory && workspace),
+        profileId,
+        includeMemory: addMemory,
       });
       setOutcome(result);
       setIncoming(undefined);
@@ -173,6 +183,8 @@ export function WorkBundleView({
   }
 
   const importable = incoming?.plan.conversations.filter((entry) => entry.state === "new").length ?? 0;
+  const offeredMemory = incoming?.plan.memory;
+  const addableMemory = addMemory ? offeredMemory?.add ?? 0 : 0;
 
   return (
     <section class="work-bundle" aria-labelledby={headingId}>
@@ -286,9 +298,27 @@ export function WorkBundleView({
                   </li>
                 ))}
               </ul>
-              <p class="work-bundle__note">{untouchedSentence(incoming.plan)}</p>
-              <button class="primary" type="button" disabled={busy || importable === 0} onClick={() => void runImport()}>
-                {importable === 0 ? "Nothing here to add" : `Add ${countLabel(importable)}`}
+              {offeredMemory ? (
+                <label class="work-bundle__check work-bundle__check--wide">
+                  <input type="checkbox" checked={addMemory} onChange={() => setAddMemory((current) => !current)} />
+                  <span>
+                    Also add {String(offeredMemory.add)} of this file&rsquo;s memory records to {profileName}
+                    {offeredMemory.foreign > 0
+                      ? `. ${String(offeredMemory.foreign)} are written for another profile and cannot be added here.`
+                      : "."}
+                  </span>
+                </label>
+              ) : null}
+              <p class="work-bundle__note">{untouchedSentence(incoming.plan, addMemory)}</p>
+              <button
+                class="primary"
+                type="button"
+                disabled={busy || (importable === 0 && addableMemory === 0)}
+                onClick={() => void runImport()}
+              >
+                {importable === 0 && addableMemory === 0
+                  ? "Nothing here to add"
+                  : `Add ${countLabel(importable)}${addableMemory > 0 ? ` and ${String(addableMemory)} memory records` : ""}`}
               </button>
             </div>
           ) : null}
@@ -330,17 +360,25 @@ export function planSentence(plan: WorkBundleImportPlan): string {
       `Memory: ${String(plan.memory.offered)} records offered, ${String(plan.memory.add)} new`
       + `, ${String(plan.memory.present)} already present`
       + `${plan.memory.conflict > 0 ? `, ${String(plan.memory.conflict)} refused as different work under the same id` : ""}`
-      + `${plan.memory.overflow > 0 ? `, ${String(plan.memory.overflow)} over the 512-record limit` : ""}.`,
+      + `${plan.memory.foreign > 0 ? `, ${String(plan.memory.foreign)} refused as written for another profile` : ""}`
+      + `${plan.memory.overflow > 0 ? `, ${String(plan.memory.overflow)} over the 512-record limit` : ""}.`
+      + " Memory is added only if you ask for it.",
     );
   }
   return parts.join(" ");
 }
 
-/** What this import will leave exactly as it is. */
-export function untouchedSentence(plan: WorkBundleImportPlan): string {
+/**
+ * What this import will leave exactly as it is.
+ *
+ * `includeMemory` is the checkbox, not the file: a bundle that carries memory
+ * records still touches none of yours until you ask, and this sentence has to
+ * agree with the button beside it.
+ */
+export function untouchedSentence(plan: WorkBundleImportPlan, includeMemory = false): string {
   const others = plan.untouchedConversations;
   return `Not touched: ${others === 0 ? "no other conversation is here" : countLabel(others) + " already here"}`
-    + `${plan.memory ? "" : ", your memory records"}`
+    + `${plan.memory && includeMemory ? "" : ", your memory records"}`
     + ", your workspace files, your profiles and skills, and your Vault key.";
 }
 
@@ -348,7 +386,12 @@ export function resultSentence(result: WorkBundleImportResult): string {
   const parts = [`${countLabel(result.imported)} added.`];
   if (result.skipped > 0) parts.push(`${String(result.skipped)} skipped as already present.`);
   if (result.refused > 0) parts.push(`${String(result.refused)} refused and left alone.`);
-  if (result.memory) parts.push(`Memory: ${String(result.memory.added)} records added, ${String(result.memory.present)} already present, ${String(result.memory.conflict)} refused.`);
+  if (result.memory) {
+    parts.push(
+      `Memory: ${String(result.memory.added)} records added, ${String(result.memory.present)} already present`
+      + `, ${String(result.memory.conflict + result.memory.foreign)} refused.`,
+    );
+  }
   return parts.join(" ");
 }
 

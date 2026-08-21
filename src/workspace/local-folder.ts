@@ -1,7 +1,7 @@
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "./content-codec";
 import {
   isLocalFolderMountPath,
-  LOCAL_FOLDER_ATTACHMENT_KEY,
+  localFolderAttachmentKey,
   LOCAL_FOLDER_MOUNT_ROOT,
   normalizeWorkspacePath,
   WorkspaceConflictError,
@@ -459,25 +459,48 @@ export type LocalFolderRecord = Readonly<{
   name: string;
   mountPath: string;
   attachedAt: string;
+  /**
+   * The Profile that opened it.
+   *
+   * Stored beside the handle, and compared on the way back out, so a record
+   * written under one Profile cannot be mounted under another even if the key
+   * it was filed under were ever reached by the wrong reader.
+   */
+  profileId: string;
 }>;
 
 const HANDLE_DATABASE = "airship-local-folder";
 const HANDLE_STORE = "attachments";
-const HANDLE_KEY = "attached-folder-v1";
+
+/**
+ * One attachment per Profile, under a key that names it.
+ *
+ * The store held a single `attached-folder-v1` record, so the second Profile
+ * to boot recalled the first one's directory handle and composed it into its
+ * own `/workspace`. An attachment made before this key existed is not adopted
+ * by whichever Profile happens to open next: it names no Profile, so no
+ * Profile may claim it, and the Workspace panel asks for the folder again.
+ */
+function handleKey(profileId: string): string {
+  return `attached-folder-v2:${profileId}`;
+}
 
 export async function rememberLocalFolder(record: LocalFolderRecord, factory = indexedDbFactory()): Promise<void> {
-  await withHandleStore(factory, "readwrite", (store) => store.put(record, HANDLE_KEY));
-  markAttached(true);
+  await withHandleStore(factory, "readwrite", (store) => store.put(record, handleKey(record.profileId)));
+  markAttached(record.profileId, true);
 }
 
-export async function recallLocalFolder(factory = indexedDbFactory()): Promise<LocalFolderRecord | undefined> {
-  const record = await withHandleStore(factory, "readonly", (store) => store.get(HANDLE_KEY));
-  return isLocalFolderRecord(record) ? record : undefined;
+export async function recallLocalFolder(
+  profileId: string,
+  factory = indexedDbFactory(),
+): Promise<LocalFolderRecord | undefined> {
+  const record = await withHandleStore(factory, "readonly", (store) => store.get(handleKey(profileId)));
+  return isLocalFolderRecord(record) && record.profileId === profileId ? record : undefined;
 }
 
-export async function forgetLocalFolder(factory = indexedDbFactory()): Promise<void> {
-  markAttached(false);
-  await withHandleStore(factory, "readwrite", (store) => store.delete(HANDLE_KEY));
+export async function forgetLocalFolder(profileId: string, factory = indexedDbFactory()): Promise<void> {
+  markAttached(profileId, false);
+  await withHandleStore(factory, "readwrite", (store) => store.delete(handleKey(profileId)));
 }
 
 /**
@@ -488,18 +511,19 @@ export async function forgetLocalFolder(factory = indexedDbFactory()): Promise<v
  * is a hint, never an authority: a `true` that IndexedDB cannot honour ends in
  * the same stated refusal as a revoked grant.
  */
-export function localFolderAttachmentRecorded(): boolean {
+export function localFolderAttachmentRecorded(profileId: string): boolean {
   try {
-    return globalThis.localStorage?.getItem(LOCAL_FOLDER_ATTACHMENT_KEY) === "attached";
+    return globalThis.localStorage?.getItem(localFolderAttachmentKey(profileId)) === "attached";
   } catch {
     return false;
   }
 }
 
-function markAttached(attached: boolean): void {
+function markAttached(profileId: string, attached: boolean): void {
+  const key = localFolderAttachmentKey(profileId);
   try {
-    if (attached) globalThis.localStorage?.setItem(LOCAL_FOLDER_ATTACHMENT_KEY, "attached");
-    else globalThis.localStorage?.removeItem(LOCAL_FOLDER_ATTACHMENT_KEY);
+    if (attached) globalThis.localStorage?.setItem(key, "attached");
+    else globalThis.localStorage?.removeItem(key);
   } catch {
     // A browser that refuses storage still attaches for this page's lifetime.
   }
@@ -513,9 +537,11 @@ function markAttached(attached: boolean): void {
  * and it is reported as one.
  */
 export async function openLocalFolder(options: Readonly<{
+  /** The Profile that will hold this attachment, and the only one that may. */
+  profileId: string;
   scope?: { showDirectoryPicker?: (init?: unknown) => Promise<LocalDirectoryHandleLike> };
   indexedDB?: IDBFactory;
-}> = {}): Promise<LocalFolderWorkspacePort> {
+}>): Promise<LocalFolderWorkspacePort> {
   const scope = options.scope ?? (globalThis as { showDirectoryPicker?: (init?: unknown) => Promise<LocalDirectoryHandleLike> });
   if (typeof scope.showDirectoryPicker !== "function") {
     throw new LocalFolderAccessError("unsupported", LOCAL_FOLDER_UNSUPPORTED_NOTICE);
@@ -542,6 +568,7 @@ export async function openLocalFolder(options: Readonly<{
     name: handle.name,
     mountPath,
     attachedAt: new Date().toISOString(),
+    profileId: options.profileId,
   });
   await rememberLocalFolder(record, options.indexedDB ?? indexedDbFactory());
   return new LocalFolderWorkspacePort(handle, mountPath);
@@ -555,14 +582,14 @@ export async function openLocalFolder(options: Readonly<{
  * only reports what the grant already is; the panel turns a `prompt` into one
  * button the person presses.
  */
-export async function restoreLocalFolder(factory = indexedDbFactory()): Promise<
+export async function restoreLocalFolder(profileId: string, factory = indexedDbFactory()): Promise<
   | Readonly<{ state: "attached"; port: LocalFolderWorkspacePort; record: LocalFolderRecord }>
   | Readonly<{ state: "absent" }>
   | Readonly<{ state: "blocked"; record: LocalFolderRecord; reason: LocalFolderAccessError }>
 > {
-  const record = await recallLocalFolder(factory);
+  const record = await recallLocalFolder(profileId, factory);
   if (!record) {
-    markAttached(false);
+    markAttached(profileId, false);
     return Object.freeze({ state: "absent" as const });
   }
   const permission = await localFolderPermission(record.handle);
@@ -656,6 +683,7 @@ function isLocalFolderRecord(value: unknown): value is LocalFolderRecord {
   return Boolean(record
     && typeof record.name === "string"
     && typeof record.mountPath === "string"
+    && typeof record.profileId === "string"
     && record.handle
     && (record.handle as LocalDirectoryHandleLike).kind === "directory");
 }

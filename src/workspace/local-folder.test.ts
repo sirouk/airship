@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { isLocalFolderMountPath, LOCAL_FOLDER_MOUNT_ROOT, WorkspaceConflictError } from "./contracts";
+import {
+  isLocalFolderMountPath,
+  localFolderAttachmentKey,
+  LOCAL_FOLDER_ATTACHMENT_KEY,
+  LOCAL_FOLDER_MOUNT_ROOT,
+  WorkspaceConflictError,
+} from "./contracts";
 import { MemoryWorkspace } from "./memory";
 import {
   LocalFolderAccessError,
@@ -7,6 +13,7 @@ import {
   LocalFolderWorkspacePort,
   MountedLocalFolderWorkspace,
   forgetLocalFolder,
+  localFolderAttachmentRecorded,
   localFolderMountPath,
   localFolderPermission,
   localFolderPermissionRefusal,
@@ -324,16 +331,17 @@ describe("the remembered folder", () => {
       name: root.name,
       mountPath: localFolderMountPath(root.name),
       attachedAt: new Date(0).toISOString(),
+      profileId: "general",
     }, factory);
 
-    expect((await recallLocalFolder(factory))?.name).toBe("airship");
-    const restored = await restoreLocalFolder(factory);
+    expect((await recallLocalFolder("general", factory))?.name).toBe("airship");
+    const restored = await restoreLocalFolder("general", factory);
     expect(restored.state).toBe("attached");
     if (restored.state !== "attached") throw new Error("unreachable");
     expect((await restored.port.list()).length).toBe(2);
 
     root.permissionState = "prompt";
-    const blocked = await restoreLocalFolder(factory);
+    const blocked = await restoreLocalFolder("general", factory);
     expect(blocked.state).toBe("blocked");
     if (blocked.state !== "blocked") throw new Error("unreachable");
     expect(blocked.reason.code).toBe("permission-required");
@@ -343,9 +351,9 @@ describe("the remembered folder", () => {
     expect(root.requested).toBe(1);
     expect(reconnected.mountPath).toBe("/workspace/local/airship");
 
-    await forgetLocalFolder(factory);
-    expect(await recallLocalFolder(factory)).toBeUndefined();
-    expect((await restoreLocalFolder(factory)).state).toBe("absent");
+    await forgetLocalFolder("general", factory);
+    expect(await recallLocalFolder("general", factory)).toBeUndefined();
+    expect((await restoreLocalFolder("general", factory)).state).toBe("absent");
   });
 
   it("refuses to reconnect a folder whose grant is denied", async () => {
@@ -356,6 +364,7 @@ describe("the remembered folder", () => {
       name: root.name,
       mountPath: localFolderMountPath(root.name),
       attachedAt: new Date(0).toISOString(),
+      profileId: "general",
     })).rejects.toMatchObject({ code: "permission-denied" });
   });
 });
@@ -364,12 +373,13 @@ describe("opening a folder", () => {
   it("tells a browser without the API the truth, once", async () => {
     expect(localFolderPickerAvailable({})).toBe(false);
     expect(localFolderPickerAvailable({ showDirectoryPicker: () => undefined })).toBe(true);
-    await expect(openLocalFolder({ scope: {} })).rejects.toMatchObject({ code: "unsupported" });
-    await expect(openLocalFolder({ scope: {} })).rejects.toThrow(/only Chromium browsers/u);
+    await expect(openLocalFolder({ profileId: "general", scope: {} })).rejects.toMatchObject({ code: "unsupported" });
+    await expect(openLocalFolder({ profileId: "general", scope: {} })).rejects.toThrow(/only Chromium browsers/u);
   });
 
   it("treats a cancelled picker as a decision, not a failure", async () => {
     await expect(openLocalFolder({
+      profileId: "general",
       scope: { showDirectoryPicker: async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); } },
     })).rejects.toMatchObject({ code: "cancelled" });
   });
@@ -379,20 +389,92 @@ describe("opening a folder", () => {
     root.permissionState = "prompt";
     const factory = fakeIndexedDb();
     const opened = await openLocalFolder({
+      profileId: "general",
       scope: { showDirectoryPicker: async () => root as unknown as LocalDirectoryHandleLike },
       indexedDB: factory,
     });
     expect(root.requested).toBe(1);
     expect(opened.mountPath).toBe("/workspace/local/airship");
-    expect((await recallLocalFolder(factory))?.mountPath).toBe("/workspace/local/airship");
+    expect((await recallLocalFolder("general", factory))?.mountPath).toBe("/workspace/local/airship");
   });
 
   it("refuses to attach a folder whose grant was refused", async () => {
     const root = fakeTree();
     root.permissionState = "denied";
     await expect(openLocalFolder({
+      profileId: "general",
       scope: { showDirectoryPicker: async () => root as unknown as LocalDirectoryHandleLike },
       indexedDB: fakeIndexedDb(),
     })).rejects.toMatchObject({ code: "permission-denied" });
+  });
+});
+
+/*
+ * F5. Every other storage tier a Profile has is siloed to it — its workspace
+ * subtree, its Git object database, its memory scope, its terminal metadata.
+ * The attached folder was not: one IndexedDB key and one `localStorage` marker
+ * meant a folder opened while reading under one Profile was composed into
+ * `/workspace/local` for every other Profile in the browser.
+ */
+describe("a folder belongs to the Profile that opened it", () => {
+  /** The marker store the shell reads synchronously on every boot. */
+  function stubLocalStorage(): void {
+    const entries = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => entries.get(key) ?? null,
+        setItem: (key: string, value: string) => { entries.set(key, value); },
+        removeItem: (key: string) => { entries.delete(key); },
+      },
+    });
+  }
+
+  it("is not recalled, restored or forgotten by another Profile", async () => {
+    stubLocalStorage();
+    const factory = fakeIndexedDb();
+    const root = fakeTree();
+    await rememberLocalFolder({
+      handle: root as unknown as LocalDirectoryHandleLike,
+      name: root.name,
+      mountPath: localFolderMountPath(root.name),
+      attachedAt: new Date(0).toISOString(),
+      profileId: "general",
+    }, factory);
+
+    expect((await recallLocalFolder("general", factory))?.name).toBe("airship");
+    expect((await restoreLocalFolder("general", factory)).state).toBe("attached");
+
+    // The second Profile in the same browser sees no folder at all.
+    expect(await recallLocalFolder("research", factory)).toBeUndefined();
+    expect((await restoreLocalFolder("research", factory)).state).toBe("absent");
+
+    // And the marker the shell reads synchronously is per Profile too, so a
+    // Profile that never attached one never fetches this pack.
+    expect(localFolderAttachmentRecorded("general")).toBe(true);
+    expect(localFolderAttachmentRecorded("research")).toBe(false);
+    expect(globalThis.localStorage.getItem(localFolderAttachmentKey("general"))).toBe("attached");
+    // The one shared marker the shell used to read for every Profile.
+    expect(globalThis.localStorage.getItem(LOCAL_FOLDER_ATTACHMENT_KEY)).toBeNull();
+
+    // Forgetting is scoped as well: one Profile cannot drop another's folder.
+    await forgetLocalFolder("research", factory);
+    expect((await recallLocalFolder("general", factory))?.name).toBe("airship");
+    expect(localFolderAttachmentRecorded("general")).toBe(true);
+  });
+
+  it("refuses a stored record that names a different Profile", async () => {
+    const factory = fakeIndexedDb();
+    const root = fakeTree();
+    await rememberLocalFolder({
+      handle: root as unknown as LocalDirectoryHandleLike,
+      name: root.name,
+      mountPath: localFolderMountPath(root.name),
+      attachedAt: new Date(0).toISOString(),
+      profileId: "research",
+    }, factory);
+    // Written under `research`'s own key, so `general` cannot reach it — and
+    // the record names its Profile as well, so a reader that did would refuse.
+    expect(await recallLocalFolder("general", factory)).toBeUndefined();
   });
 });

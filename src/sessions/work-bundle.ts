@@ -108,12 +108,7 @@ export async function collectWorkBundle(args: Readonly<{
       ? events.length === 0 && session.headDigest === "genesis"
       : last?.sequence === session.headSequence && last?.digest === session.headDigest;
     if (!headMatches) throw new Error(`That conversation changed while it was being read: ${sessionId}.`);
-    const portable = structuredClone(session);
-    // Storage incarnation is a fence owned by one backend. It is authority
-    // metadata about where the record lives, never portable conversation
-    // content, so it must not travel to another device inside a file.
-    delete portable.headIncarnation;
-    conversations.push(Object.freeze({ session: portable, events: Object.freeze(events) }));
+    conversations.push(Object.freeze({ session: withoutCarriedPins(session), events: Object.freeze(events) }));
   }
   return Object.freeze({
     format: WORK_BUNDLE_FORMAT,
@@ -122,6 +117,40 @@ export async function collectWorkBundle(args: Readonly<{
     conversations: Object.freeze(conversations),
     memory: args.memory ? await readProfileMemory(args.memory.workspace, args.memory.profileId) : null,
   });
+}
+
+/**
+ * Fields a bundle may neither carry out nor bring in.
+ *
+ * A digest chain certifies itself and nothing else. Any file can mint a
+ * consistent one, so a verified chain is evidence that the events were not
+ * edited after they were written — never evidence of who wrote them or of what
+ * this device agreed to. Every field below is the opposite kind of fact: each
+ * is authority a *device* grants. Three of them are read back by the journal
+ * projection with the record's own value as the fallback
+ * (`projectedSessionApprovalMode` and its peers in `src/core/journal.ts`), so a
+ * record that arrives with one set keeps it for every later append — a crafted
+ * bundle could land `full-access` on a conversation nobody put in that mode,
+ * and a model route nobody chose. `importedAt` is the stamp the importing
+ * device writes, so a file may neither claim to be native nor forge a date.
+ *
+ * `headIncarnation` was already refused for the same reason and is kept in the
+ * list rather than checked separately, so a pin added to `SessionRecord` later
+ * has one obvious place to be declared.
+ */
+export const REFUSED_BUNDLE_PINS = Object.freeze([
+  "headIncarnation",
+  "approvalModeOverride",
+  "modelOverride",
+  "contextPolicyOverride",
+  "importedAt",
+] as const);
+
+/** The record without any device-granted pin, which is all a file may carry. */
+function withoutCarriedPins(session: SessionRecord): SessionRecord {
+  const portable = structuredClone(session);
+  for (const pin of REFUSED_BUNDLE_PINS) delete portable[pin];
+  return portable;
 }
 
 async function readProfileMemory(workspace: WorkspacePort, profileId: string): Promise<WorkBundleMemory> {
@@ -196,8 +225,14 @@ function parseConversation(value: unknown): WorkBundleConversation {
   ) {
     throw new Error("That bundle contains a conversation record Airship cannot read.");
   }
-  if (session.headIncarnation !== undefined) {
-    throw new Error(`A bundle must not carry a storage fence: ${session.id}.`);
+  for (const pin of REFUSED_BUNDLE_PINS) {
+    if (session[pin] !== undefined) {
+      throw new Error(
+        `That bundle carries ${pin} on conversation ${session.id}. An approval mode, a model, a context policy and a`
+        + " storage fence are granted by the device that runs the conversation, never by a file, so nothing was"
+        + " written. Delete that field and choose the file again; its messages and digests import unchanged.",
+      );
+    }
   }
   const events = value.events.map((event) => {
     if (
@@ -247,6 +282,25 @@ export async function verifyWorkBundleChain(bundle: WorkBundle): Promise<readonl
 }
 
 async function verifyOneChain(entry: WorkBundleConversation): Promise<Readonly<{ verified: boolean; reason?: string }>> {
+  /*
+   * The pinned system prompt, against the digest the manifest states for it.
+   *
+   * The record is not covered by the chain — only the events are — and this
+   * prompt is sent to the provider on every turn the conversation ever takes
+   * (`src/core/agent.ts`). Resume compares the digest, so a file whose prompt
+   * and digest disagree would present one text for checking and send another.
+   * The journal's own audit already treats this as an invariant
+   * (`SYSTEM_PROMPT_DIGEST_MISMATCH`); import must not be the one door that
+   * skips it.
+   */
+  const { systemPrompt, systemPromptDigest } = entry.session.manifest;
+  if (typeof systemPrompt !== "string" || (await sha256(systemPrompt)) !== systemPromptDigest) {
+    return {
+      verified: false,
+      reason: "its pinned system prompt is not the one its own digest names, so the instructions in the file are not"
+        + " the ones it commits to. Ask the device that holds it to write the bundle again",
+    };
+  }
   let previousDigest = "genesis";
   let sequence = 0;
   for (const event of entry.events) {
@@ -280,6 +334,14 @@ export type WorkBundleMemoryPlan = Readonly<{
   conflict: number;
   /** Records that would push memory.json past the limit its parser enforces. */
   overflow: number;
+  /**
+   * Records scoped to some other profile, or to no profile at all.
+   *
+   * Export narrows to the exporting profile; import narrowed to nothing, so a
+   * file could write records into a silo the person reading it never chose —
+   * and `scopedMemories` would then serve them to that profile's turns.
+   */
+  foreign: number;
 }>;
 
 export type WorkBundleImportPlan = Readonly<{
@@ -303,6 +365,8 @@ export async function planWorkBundleImport(args: Readonly<{
   journal: JournalStateSource;
   chain: readonly WorkBundleChainReport[];
   workspace?: WorkspacePort;
+  /** The profile whose memory.json this is, and the only silo import may write. */
+  profileId?: string;
 }>): Promise<WorkBundleImportPlan> {
   const existing = await args.journal.listSessions();
   const byId = new Map(existing.map((session) => [session.id, session]));
@@ -321,8 +385,8 @@ export async function planWorkBundleImport(args: Readonly<{
   return Object.freeze({
     exportedAt: args.bundle.exportedAt,
     conversations: Object.freeze(conversations),
-    ...(args.bundle.memory && args.workspace
-      ? { memory: await planMemoryMerge(args.bundle.memory, args.workspace) }
+    ...(args.bundle.memory && args.workspace && args.profileId
+      ? { memory: await planMemoryMerge(args.bundle.memory, args.workspace, args.profileId) }
       : {}),
     untouchedConversations: existing.filter((session) => !named.has(session.id)).length,
   });
@@ -350,21 +414,28 @@ function plan(
  * The plan is advisory; the primitive stays the authority, and it re-checks.
  */
 function samePortableSession(left: SessionRecord, right: SessionRecord): boolean {
-  const portableLeft = structuredClone(left);
-  const portableRight = structuredClone(right);
-  delete portableLeft.headIncarnation;
-  delete portableRight.headIncarnation;
-  return stableStringify(portableLeft as unknown as JsonValue) === stableStringify(portableRight as unknown as JsonValue);
+  // Every device-granted pin is dropped from both sides, not just the storage
+  // fence: the conversation already here may have been put in Auto Approve or
+  // moved to another model on this device, and neither decision makes it a
+  // *different* conversation from the one in the file. Comparing them would
+  // report an identical thread as a conflict and refuse to skip it.
+  return stableStringify(withoutCarriedPins(left) as unknown as JsonValue)
+    === stableStringify(withoutCarriedPins(right) as unknown as JsonValue);
 }
 
-async function planMemoryMerge(memory: WorkBundleMemory, workspace: WorkspacePort): Promise<WorkBundleMemoryPlan> {
-  const merge = await mergeMemoryRecords(memory, workspace);
+async function planMemoryMerge(
+  memory: WorkBundleMemory,
+  workspace: WorkspacePort,
+  profileId: string,
+): Promise<WorkBundleMemoryPlan> {
+  const merge = await mergeMemoryRecords(memory, workspace, profileId);
   return Object.freeze({
     offered: memory.records.length,
     add: merge.added.length,
     present: merge.present,
     conflict: merge.conflicts.length,
     overflow: merge.overflow,
+    foreign: merge.foreign,
   });
 }
 
@@ -374,10 +445,28 @@ type MemoryMerge = Readonly<{
   present: number;
   conflicts: readonly string[];
   overflow: number;
+  foreign: number;
   revision: string | null;
 }>;
 
-async function mergeMemoryRecords(memory: WorkBundleMemory, workspace: WorkspacePort): Promise<MemoryMerge> {
+/**
+ * Merge a file's memory records into one profile's memory.json.
+ *
+ * `profileId` is the silo this merge may write, and it is not advisory: a
+ * record carries its own scope, `readProfileMemory` narrows an export to the
+ * exporting profile, and every reader of memory.json narrows on the pinned
+ * profile. Import used to narrow on nothing, so a file could deposit records
+ * addressed to a profile the person had not chosen — including one this
+ * browser has never had — and `scopedMemories` would hand them to that
+ * profile's turns as its own notes. A record for anyone else is counted and
+ * dropped here rather than rewritten to fit: rescoping someone else's note
+ * would forge its provenance instead of refusing it.
+ */
+async function mergeMemoryRecords(
+  memory: WorkBundleMemory,
+  workspace: WorkspacePort,
+  profileId: string,
+): Promise<MemoryMerge> {
   const file = await workspace.read(MEMORY_PATH);
   const existing = file ? parseMemoryDocument(file.content).records : [];
   const byId = new Map(existing.map((item) => [item.id, item]));
@@ -385,7 +474,12 @@ async function mergeMemoryRecords(memory: WorkBundleMemory, workspace: Workspace
   const conflicts: string[] = [];
   let present = 0;
   let overflow = 0;
+  let foreign = 0;
   for (const record of memory.records) {
+    if (record.scope.kind !== "profile" || record.scope.profileId !== profileId) {
+      foreign += 1;
+      continue;
+    }
     const held = byId.get(record.id);
     if (held) {
       if (stableStringify(held as unknown as JsonValue) === stableStringify(record as unknown as JsonValue)) present += 1;
@@ -404,6 +498,7 @@ async function mergeMemoryRecords(memory: WorkBundleMemory, workspace: Workspace
     present,
     conflicts: Object.freeze(conflicts),
     overflow,
+    foreign,
     revision: file?.revision ?? null,
   });
 }
@@ -420,7 +515,7 @@ export type WorkBundleImportResult = Readonly<{
   imported: number;
   skipped: number;
   refused: number;
-  memory?: Readonly<{ added: number; present: number; conflict: number; overflow: number }>;
+  memory?: Readonly<{ added: number; present: number; conflict: number; overflow: number; foreign: number }>;
 }>;
 
 /**
@@ -440,8 +535,21 @@ export async function applyWorkBundleImport(args: Readonly<{
   target: JournalBackend;
   migrate: MigrateJournalState;
   workspace?: WorkspacePort;
+  /** The one memory silo this import may write; see `mergeMemoryRecords`. */
+  profileId?: string;
+  /**
+   * Memory is opt-in and stays that way.
+   *
+   * The panel used to pass `true` whenever the file happened to contain
+   * records, while its button read "Add N conversations" — so a person who
+   * agreed to conversations also got someone else's notes, permanently, with
+   * no sentence anywhere that said so.
+   */
   includeMemory?: boolean;
+  /** Stamped on every record this import writes; defaults to now. */
+  importedAt?: string;
 }>): Promise<WorkBundleImportResult> {
+  const importedAt = args.importedAt ?? new Date().toISOString();
   const outcomes: WorkBundleImportOutcome[] = [];
   for (const entry of args.bundle.conversations) {
     const planned = args.plan.conversations.find((candidate) => candidate.sessionId === entry.session.id);
@@ -456,7 +564,18 @@ export async function applyWorkBundleImport(args: Readonly<{
     }
     try {
       const before = await args.target.getSession(entry.session.id);
-      await args.migrate(oneConversationSource(entry), args.target);
+      /*
+       * A conversation already here keeps the pins this device gave it.
+       *
+       * `migrateJournalState` compares the whole record and refuses any
+       * difference, and every field in `REFUSED_BUNDLE_PINS` is one this
+       * device may legitimately have set — a mode chosen here, a model chosen
+       * here, an earlier import stamp. Handing it the file's blank values
+       * would report an identical conversation as a conflict and refuse to
+       * skip it; handing it this device's own values leaves the comparison
+       * meaningful for everything a file actually carries.
+       */
+      await args.migrate(oneConversationSource(entry, before ? devicePins(before) : { importedAt }), args.target);
       outcomes.push(Object.freeze({
         sessionId: entry.session.id,
         title: entry.session.title,
@@ -472,8 +591,8 @@ export async function applyWorkBundleImport(args: Readonly<{
       }));
     }
   }
-  const memory = args.includeMemory && args.bundle.memory && args.workspace
-    ? await commitMemoryMerge(args.bundle.memory, args.workspace)
+  const memory = args.includeMemory && args.bundle.memory && args.workspace && args.profileId
+    ? await commitMemoryMerge(args.bundle.memory, args.workspace, args.profileId)
     : undefined;
   return Object.freeze({
     conversations: Object.freeze(outcomes),
@@ -487,8 +606,9 @@ export async function applyWorkBundleImport(args: Readonly<{
 async function commitMemoryMerge(
   memory: WorkBundleMemory,
   workspace: WorkspacePort,
-): Promise<Readonly<{ added: number; present: number; conflict: number; overflow: number }>> {
-  const merge = await mergeMemoryRecords(memory, workspace);
+  profileId: string,
+): Promise<Readonly<{ added: number; present: number; conflict: number; overflow: number; foreign: number }>> {
+  const merge = await mergeMemoryRecords(memory, workspace, profileId);
   if (merge.added.length > 0) {
     const next = serializeMemoryDocument([...merge.existing, ...merge.added]);
     // Re-read through the product's own parser before the write, so a merge can
@@ -501,12 +621,35 @@ async function commitMemoryMerge(
     present: merge.present,
     conflict: merge.conflicts.length,
     overflow: merge.overflow,
+    foreign: merge.foreign,
   });
 }
 
+/** The device-granted pins on a record this journal already holds. */
+function devicePins(session: SessionRecord): Partial<SessionRecord> {
+  const pins: Record<string, unknown> = {};
+  for (const pin of REFUSED_BUNDLE_PINS) {
+    if (session[pin] !== undefined) pins[pin] = session[pin];
+  }
+  return pins as Partial<SessionRecord>;
+}
+
 /** What `migrateJournalState` reads from a source; see `JournalStateSource`. */
-function oneConversationSource(entry: WorkBundleConversation): JournalStateSource {
-  const session = structuredClone(entry.session);
+function oneConversationSource(entry: WorkBundleConversation, device: Partial<SessionRecord>): JournalStateSource {
+  /*
+   * The record is stamped as arriving from a file, here, by the device that
+   * took it in.
+   *
+   * Everything else about the conversation is the source device's: its title,
+   * its events, and its manifest — which pins the `systemPrompt` sent to the
+   * provider on every turn it ever takes. A verified digest chain says those
+   * bytes were not edited after they were written; it cannot say this browser
+   * agreed to them, because any file can carry a chain that verifies. So the
+   * conversation arrives readable and complete, and continues by Fork under a
+   * profile resolved here — the same rule `adoptionCarriedNote` states for
+   * work carried into a Vault.
+   */
+  const session = { ...structuredClone(entry.session), ...device };
   const events = structuredClone(entry.events) as DurableEvent[];
   return {
     listSessions: async () => [structuredClone(session)],

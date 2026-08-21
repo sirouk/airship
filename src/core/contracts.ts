@@ -311,7 +311,13 @@ export type ApprovalDecision = "allow" | "deny";
 
 export type ApprovalProvenance = Readonly<{
   mode: "ask-first" | "auto-approve" | "full-access";
-  source: "automatic-read" | "human" | "model-review" | "human-fallback" | "bounded-browser-sandbox";
+  /**
+   * `unattended` is the gate closing with nobody asked — see `ApprovalOutcome`.
+   * It is a separate word from `human` because a record that says a person
+   * denied an effect, when the page simply had no room to ask them, is the
+   * journal inventing a decision.
+   */
+  source: "automatic-read" | "human" | "model-review" | "human-fallback" | "bounded-browser-sandbox" | "unattended";
   reason: string;
   reviewRequestId?: string;
   reviewModel?: string;

@@ -36,8 +36,11 @@ describe("the folder tier's wording", () => {
 
   it("says that an agent write into a folder is still an approved write", () => {
     const summary = localFolderAttachedSummary("airship", "/workspace/local/airship");
-    expect(summary).toContain("“airship” is open at /workspace/local/airship.");
+    expect(summary).toContain("“airship” is open at /workspace/local/airship for this profile only.");
     expect(summary).toContain("Every agent write still goes through approvals");
+    // Wording matches behaviour: the mode fence and the Terminal fence are real.
+    expect(summary).toContain("reviewed in every approval mode");
+    expect(summary).toContain("The Terminal does not carry it at all.");
   });
 
   it("says what forgetting does and, exactly, what it does not do", () => {

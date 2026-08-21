@@ -162,7 +162,9 @@ const EFFECTS = new Set(["read", "write", "network", "execute", "identity"]);
 const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-heavy"]);
 const POSTURES = new Set(["local", "plaintext-remote"]);
 /** The closed authority vocabulary of `ApprovalProvenance`; see approvalProvenanceIssue. */
-const APPROVAL_SOURCES = new Set(["automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox"]);
+const APPROVAL_SOURCES = new Set([
+  "automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox", "unattended",
+]);
 const APPROVAL_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
 const FINISH_REASONS = new Set(["stop", "tool-calls", "length"]);
 const encoder = new TextEncoder();

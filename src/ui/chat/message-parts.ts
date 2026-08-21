@@ -118,6 +118,7 @@ export const TOOL_AUTHORITY_LABELS: Readonly<Record<ApprovalProvenance["source"]
   "model-review": "Model review",
   "bounded-browser-sandbox": "Full Access",
   "automatic-read": "Read-only, automatic",
+  unattended: "Refused, nobody asked",
 });
 
 const TOOL_AUTHORITY_MODES: ReadonlySet<string> = new Set<ApprovalProvenance["mode"]>([

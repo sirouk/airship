@@ -138,6 +138,14 @@ export type SessionPinnedProfile = Readonly<{
 
 export type SessionPins = Readonly<{
   protocolVersion: number;
+  /**
+   * Set when this device took the conversation in from a bundle file.
+   *
+   * Kept beside the pins rather than inside them because it is not a pin: it
+   * is where the pins came from, and no pin can answer that question — a file
+   * carries a digest chain that verifies its own bytes, never their author.
+   */
+  importedAt?: string;
   providerId: string;
   model: string;
   inferenceBinding?: SessionManifest["inferenceBinding"];
@@ -883,6 +891,7 @@ export function extractSessionPins(
   const lineage = session.manifest.lineage;
   return deepFreeze({
     protocolVersion: session.manifest.protocolVersion,
+    ...(session.importedAt ? { importedAt: boundedText(session.importedAt, 128) ?? "[invalid time]" } : {}),
     providerId: boundedText(canonicalSessionInferenceProviderId(session.manifest), 256) ?? "[invalid provider]",
     model: boundedText(session.modelOverride ?? session.manifest.model, 512) ?? "[invalid model]",
     ...(session.manifest.inferenceBinding?.version === 1
@@ -1005,6 +1014,14 @@ export function decideSessionResume(
   }
 
   compareProfiles(pins.profile, runtime.profile, add);
+  if (pins.importedAt) {
+    add({
+      code: "ARRIVED_IN_A_BUNDLE",
+      severity: "warning",
+      message: "This conversation arrived in a bundle file, so its pinned instructions, model and tool set were"
+        + " composed on another device. Read it here; fork it to continue.",
+    });
+  }
   const blocked = reasons.some((reason) => reason.severity === "error");
   // The requirement is the reasons, and nothing beside them. `status ===
   // "incomplete"` used to force a fork independently of whether any reason

@@ -149,6 +149,20 @@ export const LOCAL_FOLDER_MOUNT_ROOT = "/workspace/local";
  */
 export const LOCAL_FOLDER_ATTACHMENT_KEY = "airship.workspace.local-folder.v1";
 
+/**
+ * The marker, per Profile.
+ *
+ * Every other storage tier is siloed by Profile — the workspace subtree, the
+ * Git object database, the memory scope, the terminal metadata — and this one
+ * was not: one `localStorage` key and one IndexedDB record meant a folder
+ * opened while reading under one Profile was mounted into `/workspace/local`
+ * for every other Profile in the browser, including ones created afterwards.
+ * The Profile is part of the key so that crossing cannot be expressed.
+ */
+export function localFolderAttachmentKey(profileId: string): string {
+  return `${LOCAL_FOLDER_ATTACHMENT_KEY}.${profileId}`;
+}
+
 /** True for the reserved mount root itself and for anything inside it. */
 export function isLocalFolderMountPath(path: string): boolean {
   const normalized = normalizeWorkspacePath(path);

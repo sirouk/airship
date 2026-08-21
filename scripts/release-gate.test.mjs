@@ -519,13 +519,13 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "382,595 B raw / 118,539 B gzip",
-      "382,595 B raw / 117.60 KiB gzip",
+      "384,421 B raw / 119,166 B gzip",
+      "384,421 B raw / 117.60 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 382595, gzip: 118539 },
+      entryJavaScript: { raw: 384421, gzip: 119166 },
     })).toThrow(
       /entryJavaScript: its comment claims 117\.60 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );

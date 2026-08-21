@@ -263,13 +263,15 @@ export async function resumableProfileConversationCandidates(
     : undefined;
   if (requested) return Object.freeze([requested]);
   const byRecency = owned
-    .filter((session) => resumableProfileManifestMatches(session.manifest, expectedManifest))
+    .filter((session) => !importedConversation(session)
+      && resumableProfileManifestMatches(session.manifest, expectedManifest))
     .sort((left, right) =>
       Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
     );
   // With nothing asked for by name, the durable pointer leads, then recency.
   const lead = pointer.state === "selected"
       && pointer.session
+      && !importedConversation(pointer.session)
       && resumableProfileManifestMatches(pointer.session.manifest, expectedManifest)
     ? pointer.session
     : undefined;
@@ -320,6 +322,28 @@ export function resumableProfileManifestMatches(
   expected: SessionManifest,
 ): boolean {
   return profileManifestResumeMismatches(actual, expected).length === 0;
+}
+
+/**
+ * What a conversation that arrived in a bundle file is told instead.
+ *
+ * Deliberately *not* a manifest comparison. The prompt a resumed conversation
+ * sends is its own pinned one — that is the immutability the comparison above
+ * exists to preserve, and why it does not compare `systemPromptDigest`: live
+ * browser and provider observations legitimately move the composed prompt for
+ * a *new* session without making an existing one incompatible. That rule is
+ * safe exactly while every pinned prompt was composed here. A file's was not,
+ * and a verified digest chain cannot say otherwise, so the fence belongs on
+ * where the record came from rather than on what it says.
+ */
+export const IMPORTED_CONVERSATION_REFUSAL =
+  "This conversation arrived in a bundle file, so its pinned instructions were composed on another device and were"
+  + " never agreed to here. It cannot take another turn. Every message is readable."
+  + " Fork it to continue under this profile.";
+
+/** True for a record this device took in from a file rather than composed. */
+export function importedConversation(session: SessionRecord): boolean {
+  return typeof session.importedAt === "string";
 }
 
 /**

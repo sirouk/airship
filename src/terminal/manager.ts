@@ -1,7 +1,7 @@
 import type { WebContainer, WebContainerProcess } from "@webcontainer/api";
 import type { NodeWebContainerLifecycleEvent } from "../execution/node-webcontainer-pack";
 import { randomUuid } from "../core/id";
-import { normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
+import { isLocalFolderMountPath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import {
   TERMINAL_METADATA_PATH,
   TERMINAL_WORKSPACE_MOUNT,
@@ -15,6 +15,7 @@ import {
 } from "./contracts";
 import { publishTerminalAuditRecord } from "./audit-sink";
 import {
+  ATTACHED_FOLDER_REFUSAL,
   mountTerminalWorkspace,
   reconcileTerminalWorkspace,
   syncTerminalWorkspace,
@@ -300,13 +301,17 @@ export class BrowserTerminalManager {
     if (this.sessions.size >= MAX_STORED_SESSIONS) throw new Error(`Terminal metadata supports at most ${MAX_STORED_SESSIONS} retained sessions across profiles. Export or clear older terminal lineage before creating another tab.`);
     const now = new Date().toISOString();
     const id = randomUuid();
+    const cwd = normalizeWorkspacePath(args.cwd ?? "/workspace");
+    // The attached folder is never in the mount, so a tab opened inside it
+    // would start in a directory the shell cannot enter. Say so instead.
+    if (isLocalFolderMountPath(cwd)) throw new Error(`${ATTACHED_FOLDER_REFUSAL} Refused: ${cwd}`);
     const session: MutableSession = {
       id,
       name: boundedName(args.name ?? `Terminal ${scoped.length + 1}`),
       ...(profileId ? { profileId } : {}),
       ...(args.threadId ? { threadId: boundedThread(args.threadId) } : {}),
       origin: boundedOrigin(args.origin ?? { kind: args.threadId ? "conversation" : "terminal-route" }),
-      cwd: normalizeWorkspacePath(args.cwd ?? "/workspace"),
+      cwd,
       status: "idle",
       createdAt: now,
       updatedAt: now,

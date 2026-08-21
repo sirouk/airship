@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ToolContext, ToolDefinition } from "../core/contracts";
+import type { JsonValue, ToolContext, ToolDefinition } from "../core/contracts";
 import { ApprovalBroker } from "./broker";
 import { approvalProvenance, createApprovalModePolicy } from "./modes";
 
@@ -125,5 +125,88 @@ describe("approval modes", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /*
+   * F3. Auto Approve and Full Access answer for the browser workspace. Neither
+   * of them was ever shown a path that is a real directory on a real disk: the
+   * mount is composed under `WorkspacePort`, and no tool in `src/tools`
+   * distinguishes the two, so a `write_file` to `/workspace/local/…` ran
+   * unprompted, in place, with no undo, and was journaled as being "inside its
+   * declared browser tool boundary".
+   */
+  it("reviews a write to an attached folder in every automatic mode, and says why", async () => {
+    for (const mode of ["auto-approve", "full-access"] as const) {
+      const broker = new ApprovalBroker();
+      const policy = createApprovalModePolicy({ mode, broker });
+      const toolContext = context(`folder-${mode}`);
+      const decision = policy.review(writeTool, { path: "/workspace/local/airship/src/main.ts", content: "x" }, toolContext);
+      await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+      broker.decide(broker.snapshot().pending[0]!.id, "deny");
+      await expect(decision).resolves.toBe("deny");
+      const provenance = approvalProvenance(policy, toolContext);
+      expect(provenance).toMatchObject({ mode, source: "human-fallback" });
+      expect(provenance?.reason).toContain("folder on your own device");
+      expect(provenance?.reason).toContain("nothing here can undo it");
+      expect(provenance?.reason).toContain("every approval mode reviews it");
+      expect(provenance?.reason).not.toContain("browser tool boundary");
+    }
+  });
+
+  it("finds the folder path wherever the tool spells it, and leaves workspace paths alone", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const asked = async (argumentsValue: JsonValue, operationId: string): Promise<boolean> => {
+      const toolContext = context(operationId);
+      const decision = policy.review(writeTool, argumentsValue, toolContext);
+      // `review` reaches the broker synchronously up to its first await, so one
+      // settled microtask is enough to see whether a request was filed at all.
+      await Promise.resolve();
+      const pending = broker.snapshot().pending;
+      if (pending.length > 0) broker.decide(pending[0]!.id, "allow");
+      await expect(decision).resolves.toBe("allow");
+      return pending.length > 0;
+    };
+
+    // Relative, and normalised: `local/x` is the same directory as the absolute form.
+    expect(await asked({ path: "local/notes.md", content: "x" }, "relative")).toBe(true);
+    // A doubled separator normalises into the mount too, and must not slip past.
+    expect(await asked({ path: "/workspace//local/notes.md", content: "x" }, "doubled")).toBe(true);
+    expect(await asked({ sourcePath: "/workspace/a.md", destinationPath: "/workspace/local/a.md" }, "move")).toBe(true);
+    expect(await asked({ edits: [{ path: "/workspace/local/a.md", newText: "x" }] }, "batch")).toBe(true);
+    expect(await asked({ path: "/workspace/notes.md", content: "x" }, "ordinary")).toBe(false);
+  });
+
+  it("still reads an attached folder without asking, because reading it changes nothing", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const toolContext = context("folder-read");
+    await expect(policy.review({ ...writeTool, effect: "read" }, { path: "/workspace/local/a.md" }, toolContext))
+      .resolves.toBe("allow");
+    expect(broker.snapshot().pending).toHaveLength(0);
+    expect(approvalProvenance(policy, toolContext)).toMatchObject({ source: "automatic-read" });
+  });
+
+  /*
+   * A page-wide cap that background conversations can fill without the person
+   * seeing anything was journaled as a refusal the person made.
+   */
+  it("never records a queue-full refusal as a decision a person made", async () => {
+    const broker = new ApprovalBroker({ maxPending: 1 });
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const first = policy.review(writeTool, { path: "a.md" }, context("first"));
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    const blockedContext = context("second");
+    await expect(policy.review(writeTool, { path: "b.md" }, blockedContext)).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, blockedContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "unattended" });
+    expect(provenance?.reason).toContain("Nobody was asked");
+    expect(provenance?.reason).toContain("most approval requests it allows at once");
+    expect(provenance?.reason).toContain("Answer the requests that are waiting");
+    expect(provenance?.reason).not.toContain("Denied without approval");
+
+    broker.decide(broker.snapshot().pending[0]!.id, "deny");
+    await first;
   });
 });

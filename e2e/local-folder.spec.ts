@@ -89,8 +89,9 @@ test("opens a folder on this device, reads it, has the agent edit it with approv
     .toBeGreaterThanOrEqual(44);
 
   await open.click();
-  await expect(panel).toContainText(`“${FOLDER}” is open at /workspace/local/${FOLDER}.`);
+  await expect(panel).toContainText(`“${FOLDER}” is open at /workspace/local/${FOLDER} for this profile only.`);
   await expect(panel).toContainText("Every agent write still goes through approvals");
+  await expect(panel).toContainText("reviewed in every approval mode");
 
   // The folder's own file, in the Explorer, read through the workspace port.
   await revealFolderFile(page);
@@ -120,7 +121,7 @@ test("opens a folder on this device, reads it, has the agent edit it with approv
   await page.goto("/#workspace");
   await waitForShellSettled(page);
   await expect(page.getByRole("region", { name: "Folder on this device" }))
-    .toContainText(`“${FOLDER}” is open at /workspace/local/${FOLDER}.`, { timeout: 20_000 });
+    .toContainText(`“${FOLDER}” is open at /workspace/local/${FOLDER} for this profile only.`, { timeout: 20_000 });
   await revealFolderFile(page);
   const reopened = page.getByRole("treeitem", { name: /^NOTES\.md/u });
   await expect(reopened).toBeVisible({ timeout: 20_000 });

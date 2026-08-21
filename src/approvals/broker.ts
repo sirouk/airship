@@ -23,7 +23,7 @@ export type ApprovalRisk = "observe" | "change" | "communicate" | "execute" | "i
  * The outcome is the wider fact, kept beside the decision rather than folded
  * into it, so no reader can count an expiry as a denial without saying so.
  */
-export type ApprovalOutcome = ApprovalDecision | "expired";
+export type ApprovalOutcome = ApprovalDecision | "expired" | "unavailable";
 
 export type PendingApproval = Readonly<{
   id: string;
@@ -111,6 +111,10 @@ const MAX_SETTLED_OUTCOMES = 256;
 export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
   if (outcome === "allow") return "Allowed once by the user.";
   if (outcome === "expired") return "No decision was recorded; the request expired before the user answered it.";
+  if (outcome === "unavailable") {
+    return "Nobody was asked: this page already held the most approval requests it allows at once, so the effect did"
+      + " not run. Answer the requests that are waiting, then ask for this one again.";
+  }
   return "Denied without approval; the effect did not run.";
 }
 
@@ -225,8 +229,22 @@ export class ApprovalBroker {
 
   request(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision> {
     const id = approvalRequestId(context);
-    if (context.signal.aborted || this.entries.size >= this.maxPending || this.entries.has(id)) {
+    if (context.signal.aborted) {
       this.remember(id, "deny");
+      return Promise.resolve("deny");
+    }
+    /*
+     * The gate closes, and the record says nobody was asked.
+     *
+     * A full queue and a repeated operation identity both refuse without ever
+     * putting a request on screen, and both used to be remembered as `deny` —
+     * which the mode policy then journaled with `source: "human"` and the
+     * sentence "Denied without approval". Background conversations can fill
+     * this cap without the person seeing any of it, so that record was a
+     * refusal attributed to someone who was never shown the question.
+     */
+    if (this.entries.size >= this.maxPending || this.entries.has(id)) {
+      this.remember(id, "unavailable");
       return Promise.resolve("deny");
     }
 
@@ -293,9 +311,9 @@ export class ApprovalBroker {
     clearTimeout(entry.timer);
     entry.signal.removeEventListener("abort", entry.abort);
     this.remember(id, outcome);
-    // An expiry still fails closed at the gate — only the record it leaves
-    // behind distinguishes it from a refusal.
-    entry.resolve(outcome === "expired" ? "deny" : outcome);
+    // Everything but an explicit allow fails closed at the gate — only the
+    // record each one leaves behind distinguishes it from a refusal.
+    entry.resolve(outcome === "allow" ? "allow" : "deny");
     this.emit();
     const settlement = Object.freeze({ request: entry.request, outcome });
     for (const listener of this.settleListeners) notifyObserver(listener, settlement);

@@ -62,8 +62,10 @@ export const LOCAL_FOLDER_FACT_ROWS: readonly (readonly [keyof typeof LOCAL_FOLD
 
 /** What Airship does with an attached folder, in the words the route uses. */
 export function localFolderAttachedSummary(name: string, mountPath: string): string {
-  return `“${name}” is open at ${mountPath}. The Explorer, the editor, the terminal and the agent read and write it `
-    + "through the permission you granted this browser. Every agent write still goes through approvals, exactly as a workspace write does.";
+  return `“${name}” is open at ${mountPath} for this profile only. The Explorer, the editor and the agent read and `
+    + "write it through the permission you granted this browser. Every agent write still goes through approvals, and "
+    + "this folder is reviewed in every approval mode — Auto Approve and Full Access included — because a write here "
+    + "lands on your own disk and cannot be undone. The Terminal does not carry it at all.";
 }
 
 export const LOCAL_FOLDER_FORGET_NOTE =
@@ -84,6 +86,14 @@ export function localFolderFailureNotice(error: unknown): string {
 
 export type LocalFolderPanelProps = Readonly<{
   /**
+   * The Profile this panel opens, remembers and forgets a folder for.
+   *
+   * A folder is a Profile's attachment, exactly like its workspace subtree and
+   * its Git object database. Passing it here is what keeps one Profile's
+   * folder out of another's `/workspace`.
+   */
+  profileId: string;
+  /**
    * Publishes the folder to the shell, which rebinds the workspace authority
    * every consumer reads — Explorer, editor, terminal and the agent's tools.
    * `undefined` detaches it.
@@ -99,7 +109,7 @@ export type LocalFolderPanelProps = Readonly<{
  * gesture. Restoring a remembered folder deliberately does not prompt: it
  * reports what the grant already is, and the person presses one button.
  */
-export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
+export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPanelProps) {
   const [state, setState] = useState<LocalFolderState>(() =>
     localFolderPickerAvailable() ? { kind: "absent" } : { kind: "unsupported" });
   const [notice, setNotice] = useState<string>();
@@ -109,11 +119,11 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
   const noticeId = useId();
 
   useEffect(() => {
-    if (!localFolderPickerAvailable() || !localFolderAttachmentRecorded()) return;
+    if (!localFolderPickerAvailable() || !localFolderAttachmentRecorded(profileId)) return;
     let current = true;
     void (async () => {
       try {
-        const restored = await restoreLocalFolder();
+        const restored = await restoreLocalFolder(profileId);
         if (!current) return;
         if (restored.state === "attached") {
           await restored.port.list();
@@ -133,7 +143,7 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
       }
     })();
     return () => { current = false; };
-  }, []);
+  }, [profileId]);
 
   async function run(verb: () => Promise<void>): Promise<void> {
     setBusy(true);
@@ -200,7 +210,7 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
         disabled={busy}
         data-local-folder-open
         onClick={() => run(async () => {
-          const port = await openLocalFolder();
+          const port = await openLocalFolder({ profileId });
           await attach(port)();
         })}
       >Open a folder…</button> : null}
@@ -219,7 +229,7 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
         disabled={busy}
         data-local-folder-change
         onClick={() => run(async () => {
-          const port = await openLocalFolder();
+          const port = await openLocalFolder({ profileId });
           await attach(port)();
         })}
       >Open a different folder…</button> : null}
@@ -228,7 +238,7 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
         disabled={busy}
         data-local-folder-forget
         onClick={() => run(async () => {
-          await forgetLocalFolder();
+          await forgetLocalFolder(profileId);
           setState({ kind: "absent" });
           live.current = "The folder was forgotten. Nothing on this device was changed.";
           await onFolderChanged(undefined);

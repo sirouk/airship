@@ -6,11 +6,50 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "../core/contracts";
+import { isLocalFolderMountPath } from "../workspace/contracts";
 import { approvalOutcomeReason, approvalRequestId, type ApprovalBroker } from "./broker";
 
 export type ApprovalMode = ApprovalProvenance["mode"];
 
 const MAX_PROVENANCE = 512;
+
+/**
+ * Why a write to an attached folder is reviewed in every mode.
+ *
+ * The other two automatic reasons in this file both end in a confinement that
+ * is true — "its declared browser tool boundary", "its workspace path
+ * confinement" — and neither of them holds here. A folder the person opened
+ * from their own device is written in place: no copy, no Vault, no Git object
+ * database, and nothing Airship can undo. The mode still governs everything
+ * else; this one class of effect asks.
+ */
+const ATTACHED_FOLDER_REVIEW_REASON =
+  "This call names a folder on your own device, not the browser workspace. Airship writes such a folder in place,"
+  + " so nothing here can undo it — every approval mode reviews it.";
+
+/**
+ * True when these arguments name a path inside the folder mount.
+ *
+ * The question is asked of the arguments because no tool can answer it: every
+ * tool in `src/tools` takes one `/workspace`-rooted path and hands it to a
+ * `WorkspacePort`, and it is the composed port — not the tool — that decides a
+ * path under the reserved mount belongs to a real directory. `path`,
+ * `sourcePath`, `destinationPath` and `edits[].path` are four spellings
+ * already, so every string is normalised rather than a list of key names
+ * maintained here. A string that is not a workspace path at all throws in
+ * normalisation and is simply not one.
+ */
+function namesAttachedFolder(value: JsonValue): boolean {
+  if (typeof value === "string") {
+    try {
+      return isLocalFolderMountPath(value);
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) return value.some(namesAttachedFolder);
+  return typeof value === "object" && value !== null && Object.values(value).some(namesAttachedFolder);
+}
 
 function automaticReadProvenance(mode: ApprovalMode): ApprovalProvenance {
   return {
@@ -38,6 +77,18 @@ export function createApprovalModePolicy(options: Readonly<{
         return "allow";
       }
 
+      // Ask First already asks, and its record already says a person answered.
+      if (options.mode !== "ask-first" && namesAttachedFolder(argumentsValue)) {
+        const decision = await options.broker.request(tool, argumentsValue, context);
+        const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
+        remember(context, {
+          mode: options.mode,
+          source: outcome === "unavailable" ? "unattended" : "human-fallback",
+          reason: `${ATTACHED_FOLDER_REVIEW_REASON} ${approvalOutcomeReason(outcome)}`,
+        });
+        return decision;
+      }
+
       if (options.mode === "full-access") {
         remember(context, {
           mode: options.mode,
@@ -62,7 +113,8 @@ export function createApprovalModePolicy(options: Readonly<{
         const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
-          source: "human",
+          // Never `human` for a request no person was shown; see `ApprovalOutcome`.
+          source: outcome === "unavailable" ? "unattended" : "human",
           reason: approvalOutcomeReason(outcome),
         });
         return decision;
@@ -85,7 +137,7 @@ export function createApprovalModePolicy(options: Readonly<{
       const fallbackOutcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
       remember(context, {
         mode: options.mode,
-        source: "human-fallback",
+        source: fallbackOutcome === "unavailable" ? "unattended" : "human-fallback",
         reason: `Auto Approve requires a person for ${tool.effect} effects. ${approvalOutcomeReason(fallbackOutcome)}`,
       });
       return decision;
@@ -161,7 +213,7 @@ export async function decideHumanIntent(options: Readonly<{
     decision,
     provenance: Object.freeze({
       mode: options.mode,
-      source: "human" as const,
+      source: outcome === "unavailable" ? "unattended" as const : "human" as const,
       // The allow sentence stays its own: this is the one path where the person
       // proposed the effect as well as permitting it, and the record says so.
       reason: outcome === "allow"
