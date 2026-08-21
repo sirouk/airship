@@ -34,12 +34,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // inference-route admission and post-turn naming removed the last authority
   // races. After charging the pre-render navigation boundary to startup and
   // compacting duplicated UI policy, the canonical config-free artifact measures
-  // 384,807 B raw / 119,179 B gzip. The reviewed origin-inlined variant measures
-  // 384,809 B raw / 119,186 B gzip, and the reviewed Pages variant measures
-  // 384,825 B raw / 119,190 B gzip. Pages sets the current raw maximum; the
-  // earlier 119,196 B gzip reading remains the documented gzip maximum. 376 KiB
-  // raw would have left 199 B and 117 KiB gzip would have left 612 B, both below
-  // the tripwire floor. The tight 377/118 KiB steps leave 1,223 / 1,636 B.
+  // 384,807 B raw / 119,184 B gzip. The reviewed Docker-defaults variant measures
+  // 384,809 B raw / 119,185 B gzip, the reviewed Pages variant measures
+  // 384,825 B raw / 119,187 B gzip, and the reviewed Google-Drive-configured
+  // variant measures 385,033 B raw / 119,291 B gzip. A configured client ID is
+  // a supported deployment of both Pages and Docker, and it is the largest of
+  // the four, so it sets both maxima. 376 KiB raw is 9 B below that artifact,
+  // so raw takes the tight 377 KiB step and leaves 1,015 B. 117 KiB gzip would
+  // have left 517 B, below the tripwire floor, so gzip keeps 118 KiB and leaves
+  // 1,541 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -47,11 +50,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Re-measured at 504,247 B raw / 163,264 B gzip after exact inference-route
   // admission and post-turn naming removed the last authority races. With the
   // pre-render controlled-navigation chunk now counted, the canonical config-free
-  // artifact measures 505,168 B raw / 163,903 B gzip. The reviewed origin-inlined
-  // variant measures 505,170 B raw / 163,895 B gzip, and the reviewed Pages
-  // variant measures 505,186 B raw / 163,912 B gzip. Pages sets both maxima.
-  // 493 KiB raw is 354 B below the artifact and 160 KiB gzip is 72 B below it.
-  // The tight 494/161 KiB steps leave 670 / 952 B.
+  // artifact measures 505,168 B raw / 163,904 B gzip. The reviewed Docker-defaults
+  // variant measures 505,170 B raw / 163,913 B gzip, the reviewed Pages variant
+  // measures 505,186 B raw / 163,917 B gzip, and the reviewed
+  // Google-Drive-configured variant measures 505,394 B raw / 164,008 B gzip and
+  // sets both maxima. 493 KiB raw is 562 B below that artifact and 160 KiB gzip
+  // is 168 B below it. The tight 494/161 KiB steps leave 462 / 856 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -80,13 +84,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The strict shared execution worker and bridge-drain boundary later took the
   // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
   // unchanged. After charging the pre-render navigation chunk and compacting
-  // duplicated UI policy, the canonical config-free artifact measures 2,007,602 B
-  // raw / 626,707 B gzip. The reviewed origin-inlined variant measures 2,007,601 B
-  // raw / 626,661 B gzip, and the reviewed Pages variant measures 2,007,666 B raw /
-  // 626,716 B gzip. Pages sets both maxima. The Pages artifact is 626 B over
-  // 1960 KiB raw and 28 B over 612 KiB gzip, so both ceilings are already the
-  // smallest whole-KiB step that clears them: 1961/613 KiB leave 398 / 996 B.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1961 * 1024, gzip: 613 * 1024 }),
+  // duplicated UI policy, the canonical config-free artifact measures 2,007,676 B
+  // raw / 626,729 B gzip. The reviewed Docker-defaults variant measures 2,007,675 B
+  // raw / 626,742 B gzip, the reviewed Pages variant measures 2,007,740 B raw /
+  // 626,755 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 2,008,241 B raw / 626,987 B gzip.
+  //
+  // That fourth variant is why raw reads 1962 KiB again. A configured client ID
+  // is a supported deployment — GitHub Pages builds one when the repository
+  // variable is set, and `./deploy.sh` builds one from `.env` — and it was never
+  // measured, so 1961 KiB was a ceiling justified by three variants out of four
+  // and it refused an honest build of the fourth. 1961 KiB raw is 177 B below
+  // that artifact; the tight 1962 KiB step leaves 847 B. 612 KiB gzip is 299 B
+  // below it, so gzip keeps its tight 613 KiB step and leaves 725 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -129,14 +140,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
   // 1,717 / 1,194 B.
   // After charging the pre-render navigation chunk and compacting duplicated UI
-  // policy, the canonical config-free artifact measures 2,708,294 B raw /
-  // 821,502 B gzip. The reviewed origin-inlined variant measures 2,708,293 B raw /
-  // 821,450 B gzip, and the reviewed Pages variant measures 2,708,358 B raw /
-  // 821,509 B gzip. Pages sets both maxima. The Pages artifact is 902 B over
-  // 2644 KiB raw and 261 B over 802 KiB gzip, so both ceilings are already the
-  // smallest whole-KiB step that clears them: 2645/803 KiB leave 122 / 763 B
-  // without granting a padding step.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2645 * 1024, gzip: 803 * 1024 }),
+  // policy, the canonical config-free artifact measures 2,708,368 B raw /
+  // 821,521 B gzip. The reviewed Docker-defaults variant measures 2,708,367 B raw /
+  // 821,535 B gzip, the reviewed Pages variant measures 2,708,432 B raw /
+  // 821,547 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 2,708,933 B raw / 821,776 B gzip and sets both maxima. Raw reads 2646 KiB
+  // for the same reason as the first-party graph above: the configured-client-ID
+  // deployment is supported, larger, and was never measured. 2645 KiB raw is
+  // 453 B below that artifact; the tight 2646 KiB step leaves 571 B. 802 KiB
+  // gzip is 528 B below it, so gzip keeps its tight 803 KiB step and leaves
+  // 496 B, without granting a padding step.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -805,6 +819,13 @@ export const RELEASE_BUDGETS = Object.freeze({
  * `sk-` prefix: OpenAI keys carry `T3BlbkFJ` ("OpenAI" in base64) in both the
  * classic and project forms. All of them were checked for false positives
  * across every artifact of a full build.
+ *
+ * What this cannot do is stated plainly rather than implied: a vendor whose key
+ * is bare hex or bare base64 with no issued prefix — DeepSeek, Together,
+ * Mistral, Cerebras, Cohere among them — has no shape to anchor on, and a
+ * pattern loose enough to catch one would flag hashes, digests and asset names
+ * throughout the build. Those keys are caught by the rule that no credential
+ * belongs in a build input, not by this scanner.
  */
 const secretPatterns = Object.freeze([
   ["Chutes API key", /\bcpk_[A-Za-z0-9_-]{16,}\b/u],
@@ -814,6 +835,13 @@ const secretPatterns = Object.freeze([
   ["Google OAuth client secret", /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/u],
   ["Hugging Face token", /\bhf_[A-Za-z0-9]{30,}\b/u],
   ["AWS secret access key", /\baws_secret_access_key\b\s*[=:]\s*["']?[A-Za-z0-9/+]{40}\b/iu],
+  ["xAI API key", /\bxai-[A-Za-z0-9]{40,}\b/u],
+  ["Anthropic OAuth credential", /\bsk-ant-(?:oat|sid)\d\d-[A-Za-z0-9_-]{32,}\b/u],
+  ["OpenRouter API key", /\bsk-or-v1-[A-Za-z0-9]{32,}\b/u],
+  ["Groq API key", /\bgsk_[A-Za-z0-9]{40,}\b/u],
+  ["Fireworks API key", /\bfw_[A-Za-z0-9]{24,}\b/u],
+  ["Perplexity API key", /\bpplx-[A-Za-z0-9]{32,}\b/u],
+  ["NVIDIA API key", /\bnvapi-[A-Za-z0-9_-]{32,}\b/u],
   ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/u],
   ["GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/u],
   ["npm token", /\bnpm_[A-Za-z0-9]{24,}\b/u],
@@ -1014,11 +1042,15 @@ const MEASUREMENT_TIGHTNESS_EXEMPT_ROLES = Object.freeze({
 
 const RELEASE_BUDGET_ROLES = Object.freeze(["raw", "gzip"]);
 /**
- * How far a supported build may sit above every recorded reading before the
- * comment counts as stale. Measured drift between the three reviewed variants
- * of this commit: 167 B on the largest aggregate, 0 B on hashed optional packs.
+ * How far a supported build may sit from the readings its comment records.
+ *
+ * Measured spread across the four reviewed variants of this commit — config
+ * free, Docker defaults, Pages, and Google-Drive-configured — is 565 B on the
+ * largest aggregate and 0 B on a hashed optional pack. The allowance is the
+ * tripwire floor this file already uses for margins, which covers that spread
+ * with room for a minifier rename and nothing like a whole KiB.
  */
-const DOCUMENTED_VARIANT_ALLOWANCE = 256;
+const DOCUMENTED_VARIANT_ALLOWANCE = 768;
 const TRIPWIRE_MARGIN_CLAIM =
   /(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\s(raw|gzip)\swould have left\s(\d[\d,]*)\s(?:B|bytes)\b/gu;
 
@@ -1162,39 +1194,91 @@ export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
     if (RELEASE_BUDGET_ROLES.some((role) => !documented[role])) continue;
     for (const role of RELEASE_BUDGET_ROLES) {
       /*
-       * One distance, checked in both directions, against the largest reading
-       * the comment records.
+       * Two questions, and they need different reference points.
        *
-       * Only "documented larger than the build, in a higher whole-KiB bucket"
-       * used to fail, and that left two real holes. A comment that UNDERSTATES
-       * its artifact reads as headroom nobody has: four readings here described
-       * chunks 78-647 B smaller than the bytes on disk, one of them leaving
-       * 94 B under its ceiling while its comment implied ~700. And an exact
-       * bucket comparison failed honest builds: the unconfigured Docker variant
-       * landed 1 B below a whole-KiB line that the Pages variant sits 19 B
-       * above, so a documented Pages maximum reported a supported deployment as
-       * stale and broke `./deploy.sh`.
+       * "Is this comment stale-high?" must be asked of the reading that
+       * describes THIS build, because a comment records several reviewed
+       * variants and they can straddle a whole-KiB line — the unconfigured
+       * Docker build lands 1 B below a line the Pages build sits above, and
+       * asking the Pages figure about the Docker build reported a supported
+       * deployment as stale and broke `./deploy.sh`. So the nearest recorded
+       * reading answers it, with no tolerance: a build a whole bucket below
+       * every reading it could plausibly be is a comment nobody re-took.
        *
-       * Supported variants of one commit differ by at most 167 B in the largest
-       * aggregate and by 0 B in a hashed pack, so a build further than
-       * DOCUMENTED_VARIANT_ALLOWANCE from the largest recorded reading — in
-       * either direction — is not variance. It is a comment describing a build
-       * that no longer exists.
+       * "Does this comment understate the artifact?" must be asked of the
+       * LARGEST reading, because that is the one a ceiling is derived from.
+       * Four readings here described chunks 78-647 B smaller than the bytes on
+       * disk, one leaving 94 B under a ceiling its comment implied was ~700 B
+       * away, and nothing failed.
+       *
+       * Applying one tolerance to both questions was worse than either: it let
+       * a comment name a figure just above a KiB line the artifact sits below
+       * and buy a full unreviewed KiB, which the previous rule caught.
        */
       const figure = documented[role];
-      if (Math.abs(measured[role] - figure.bytes) <= DOCUMENTED_VARIANT_ALLOWANCE) continue;
-      if (measured[role] > figure.bytes) {
+      if (measured[role] - figure.bytes > DOCUMENTED_VARIANT_ALLOWANCE) {
         failures.push(
           `${entry.name}: its comment records at most ${formatBytes(figure.bytes)} ${role}, but this build measures ${formatBytes(measured[role])} (${measured[role]} B). Re-take the reading; a comment that understates the artifact reports headroom the build does not have.`,
         );
         continue;
       }
-      const written = figure.written;
-      const documentedBucket = Math.floor(figure.bytes / 1024);
+      const nearest = entry.measured.reduce((closest, pair) => (
+        !closest || Math.abs(pair[role] - measured[role]) < Math.abs(closest[role] - measured[role]) ? pair : closest
+      ), null);
       const measuredBucket = Math.floor(measured[role] / 1024);
-      if (documentedBucket > measuredBucket) {
+      if (Math.floor(nearest[role] / 1024) > measuredBucket) {
+        const written = nearest.written[role];
         failures.push(
           `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B), in a lower whole-KiB budget bucket. Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
+        );
+        continue;
+      }
+      /*
+       * And the ceiling itself, against measured bytes rather than a claim.
+       * The tightness rule that runs before the build can only compare a
+       * ceiling with what the comment SAYS, so an inflated extra reading buys
+       * a whole-KiB step no artifact needs. Here the artifact is in hand.
+       */
+      if (MEASUREMENT_TIGHTNESS_EXEMPT_ROLES[entry.name]?.includes(role)) continue;
+      /*
+       * A recorded reading that no other recorded reading stands near is not a
+       * variant of this build — it is a figure on its own, and the ceiling is
+       * derived from the largest one. Reviewed variants cluster inside the
+       * allowance; a claim that sits a kilobyte above the cluster is the
+       * crossed-maxima inflation this guard was written for.
+       */
+      if (figure.bytes - nearest[role] > DOCUMENTED_VARIANT_ALLOWANCE) {
+        failures.push(
+          `${entry.name}: its comment claims ${figure.written.text} ${role}, but no reviewed variant it records comes within ${DOCUMENTED_VARIANT_ALLOWANCE} B of that figure, and this build measures ${formatBytes(measured[role])} (${measured[role]} B). Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
+        );
+        continue;
+      }
+      /*
+       * The step is taken over the larger of what this build measures and what
+       * the comment records, because a ceiling has to clear the largest
+       * reviewed variant and only one of them is in front of this run.
+       *
+       * The residual is stated rather than hidden: an author who adds an
+       * inflated reading BESIDE an honest one, within the allowance above, can
+       * still buy one whole-KiB step. Closing that needs the gate to measure
+       * every reviewed variant in a single run; until then the understatement
+       * check, the nearest-variant bucket check and the recorded-variant list
+       * bound how far a comment can drift from the artifact.
+       */
+      const firstStep = (Math.floor(Math.max(measured[role], figure.bytes) / 1024) + 1) * 1024;
+      // The tripwire sentence is checked against the reading it was written
+      // for, because the margin it states moves by a few bytes between reviewed
+      // variants; the STEP is computed from the artifact in hand, which is what
+      // an inflated extra reading was buying.
+      const documentedStep = (Math.floor(figure.bytes / 1024) + 1) * 1024;
+      const tripwire = parseTripwireMarginClaims(entry.prose).some((claim) =>
+        claim.role === role
+        && claim.ceiling === documentedStep
+        && Math.abs(claim.remaining - (documentedStep - figure.bytes)) <= writtenTolerance(figure.written));
+      const allowed = firstStep + (tripwire ? 1024 : 0);
+      if (entry.budget[role] > allowed) {
+        failures.push(
+          `${entry.name}: the ${formatBytes(entry.budget[role])} ${role} ceiling is above the smallest whole-KiB step that clears the ${formatBytes(measured[role])} this build measures; take the tighter step, or record the matching tripwire arithmetic "${firstStep / 1024} KiB ${role} would have left ${firstStep - measured[role]} B"`,
         );
       }
     }
@@ -1390,21 +1474,46 @@ export function assertExactChunkStems(label, paths, expectedStems) {
  * reviewed. The rest of the release is inventoried exactly; documents are the
  * one artifact class where a stray file executes.
  */
-export const RELEASE_HTML_DOCUMENTS = Object.freeze([
+export const RELEASE_DOCUMENTS = Object.freeze([
   "404.html",
   "extension/index.html",
   "extension/privacy.html",
+  "favicon.svg",
   "index.html",
 ]);
 
-export function assertExactHtmlInventory(paths) {
-  const documents = paths.filter((path) => path.endsWith(".html")).sort();
-  const unexpected = documents.filter((path) => !RELEASE_HTML_DOCUMENTS.includes(path));
+/*
+ * Every extension a browser will render as a document on this origin, matched
+ * without case. `.html` alone was not the class: `evil.htm`, `EVIL.HTML`,
+ * `evil.xhtml` and a `<script>`-carrying `evil.svg` all shipped past a suffix
+ * test, and each of them runs script on the app origin inside the release
+ * worker's scope on a host that serves no headers.
+ */
+const RELEASE_DOCUMENT_EXTENSIONS = /\.(?:x?html?|shtml|svg|xml)$/iu;
+
+export function assertExactDocumentInventory(paths) {
+  const documents = paths.filter((path) => RELEASE_DOCUMENT_EXTENSIONS.test(path)).sort();
+  const unexpected = documents.filter((path) => !RELEASE_DOCUMENTS.includes(path));
   if (unexpected.length > 0) {
     throw new Error(
-      `Release contains unreviewed HTML documents: ${unexpected.join(", ")}. `
-      + `Only ${RELEASE_HTML_DOCUMENTS.join(", ")} may ship.`,
+      `Release contains unreviewed documents: ${unexpected.join(", ")}. `
+      + `Only ${RELEASE_DOCUMENTS.join(", ")} may ship.`,
     );
+  }
+}
+
+/**
+ * `404.html` is on the allowlist because Pages and Docker create it from the
+ * index after the build. Being on a list is not a review: only a byte copy of
+ * the reviewed index carries the reviewed policy, so anything else that arrives
+ * under that name is an unreviewed document with a permitted name.
+ */
+export function assertFallbackDocumentIsIndex(fileMap) {
+  const fallback = fileMap.get("404.html");
+  if (!fallback) return;
+  const index = fileMap.get("index.html");
+  if (!index || !fallback.payload.equals(index.payload)) {
+    throw new Error("404.html must be a byte copy of the reviewed index.html.");
   }
 }
 
@@ -1707,7 +1816,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     if (!fileMap.has(path)) throw new Error(`Required static artifact is missing: ${path}.`);
   }
   assertExtensionReleaseMetadata(fileMap);
-  assertExactHtmlInventory(releasableFiles.map((file) => file.path));
+  assertExactDocumentInventory(releasableFiles.map((file) => file.path));
+  assertFallbackDocumentIsIndex(fileMap);
 
   await validatePublicCopies(
     output,

@@ -12,6 +12,10 @@ export interface CapturedRequest {
   url: string;
   method: string;
   headers: Record<string, string>;
+  /** Redirect, credential and referrer policy, which are credential boundaries. */
+  redirect: RequestRedirect | undefined;
+  credentials: RequestCredentials | undefined;
+  referrerPolicy: ReferrerPolicy | undefined;
   /** Parsed JSON body when it parses, otherwise the raw string. */
   body: unknown;
   rawBody: string;
@@ -41,6 +45,9 @@ export function stubFetch(handler: FetchHandler): FetchStub {
       url,
       method: init?.method ?? "GET",
       headers: (init?.headers ?? {}) as Record<string, string>,
+      redirect: init?.redirect,
+      credentials: init?.credentials,
+      referrerPolicy: init?.referrerPolicy,
       body,
       rawBody,
       signal: init?.signal ?? undefined,

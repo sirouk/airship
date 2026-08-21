@@ -12,7 +12,10 @@ import {
   assertOptionalPacksAreNotPreloaded,
   createReleaseManifest,
   inspectPayload,
+  assertExactDocumentInventory,
   assertExactExtensionReleaseInventory,
+  assertFallbackDocumentIsIndex,
+  RELEASE_DOCUMENTS,
   inspectExtensionArchive,
   isOptionalExecutionPackPath,
   isOptionalExecutionEnginePath,
@@ -221,6 +224,13 @@ describe("release gate", () => {
       ["Google OAuth client secret", `GOCSPX-${"e".repeat(28)}`],
       ["Hugging Face token", `hf_${"f".repeat(34)}`],
       ["AWS secret access key", `aws_secret_access_key = "${"g".repeat(40)}"`],
+      ["xAI API key", `xai-${"h".repeat(48)}`],
+      ["Anthropic OAuth credential", `sk-ant-oat01-${"i".repeat(40)}`],
+      ["OpenRouter API key", `sk-or-v1-${"j".repeat(48)}`],
+      ["Groq API key", `gsk_${"k".repeat(48)}`],
+      ["Fireworks API key", `fw_${"l".repeat(30)}`],
+      ["Perplexity API key", `pplx-${"m".repeat(40)}`],
+      ["NVIDIA API key", `nvapi-${"n".repeat(48)}`],
     ];
     for (const [label, value] of leaks) {
       expect(inspectPayload("assets/index-A.js", Buffer.from(`const leaked = ${value};`)), value)
@@ -500,15 +510,15 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "384,807 B raw / 119,179 B gzip",
+      "384,807 B raw / 119,184 B gzip",
       "384,807 B raw / 117.68 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 384807, gzip: 119179 },
+      entryJavaScript: { raw: 384807, gzip: 119184 },
     })).toThrow(
-      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.39 KiB \(119179 B\), in a lower whole-KiB budget bucket/u,
+      /entryJavaScript: its comment claims 117\.68 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
@@ -543,12 +553,12 @@ describe("release gate", () => {
      * up to the reviewed variant allowance and refused past it.
      */
     const drifted = Object.fromEntries(
-      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 200, gzip: pair.gzip + 128 }]),
+      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 600, gzip: pair.gzip + 128 }]),
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, drifted)).not.toThrow();
 
     const grown = Object.fromEntries(
-      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 512, gzip: pair.gzip + 512 }]),
+      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 1024, gzip: pair.gzip + 1024 }]),
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, grown))
       .toThrow(/records at most .* but this build measures .* understates the artifact/u);
@@ -604,51 +614,88 @@ describe("release gate", () => {
     )).toThrow(/Request failure chunks do not match the required stems/u);
   });
 
-  it("accepts reviewed variants that straddle a whole-KiB line, and still refuses a stale reading", () => {
+  it("judges staleness against the nearest reviewed variant, not the largest", () => {
     const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
+    const entry = parseDocumentedBudgets(source).find((budget) => budget.name === "allJavaScriptAndWorkers");
     const asDocumented = Object.fromEntries(
       MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
-        const entry = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
+        const budget = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
         return [name, Object.fromEntries(["raw", "gzip"].map((role) => [
           role,
-          entry.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
+          budget.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
         ]))];
       }),
     );
-    const largest = asDocumented.allJavaScriptAndWorkers.gzip;
-    /*
-     * The documented maximum sits above a whole-KiB line and the unconfigured
-     * Docker variant of the same commit lands below it — measured at 163,839 B
-     * against a documented 163,859 B, one byte under the 160 KiB line. Both are
-     * supported builds of one tree, and rejecting the smaller one broke
-     * `./deploy.sh` on a green commit.
-     */
-    const justBelowTheLine = Math.floor(largest / 1024) * 1024 - 1;
-    expect(largest - justBelowTheLine).toBeLessThanOrEqual(256);
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+    const withGzip = (gzip) => ({
       ...asDocumented,
-      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: justBelowTheLine },
-    })).not.toThrow();
+      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip },
+    });
 
-    for (const drift of [0, -4, -20, -24]) {
-      expect(() => assertDocumentedMeasurementsMatchBuild(source, {
-        ...asDocumented,
-        allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest + drift },
-      }), `drift ${drift}`).not.toThrow();
+    /*
+     * Every recorded variant is a legal build of this commit, including ones a
+     * whole-KiB line apart: the unconfigured Docker build once landed 1 B below
+     * a line the Pages build sat above, and judging it by the Pages figure
+     * reported a supported deployment as stale and broke `./deploy.sh`.
+     */
+    const current = entry.measured.filter(
+      (pair) => asDocumented.allJavaScriptAndWorkers.gzip - pair.gzip <= 768,
+    );
+    expect(current.length).toBeGreaterThan(1);
+    for (const variant of current) {
+      expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(variant.gzip)), `${variant.gzip}`)
+        .not.toThrow();
     }
 
-    // Far below every current reading is a comment nobody re-took.
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
-      ...asDocumented,
-      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest - 2048 },
-    })).toThrow(/allJavaScriptAndWorkers: its comment claims .* in a lower whole-KiB budget bucket/u);
+    // A build a bucket below every reading it could be is a comment nobody re-took.
+    const smallest = current.reduce((least, pair) => Math.min(least, pair.gzip), Number.POSITIVE_INFINITY);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(Math.floor(smallest / 1024) * 1024 - 1)))
+      .toThrow(/allJavaScriptAndWorkers: its comment claims .* in a lower whole-KiB budget bucket/u);
 
-    // Far above every current reading is a comment that reports headroom the
-    // build does not have.
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
-      ...asDocumented,
-      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest + 700 },
-    })).toThrow(/allJavaScriptAndWorkers: its comment records at most .* but this build measures/u);
+    // A build above every reading is a comment that reports headroom nobody has.
+    const largest = asDocumented.allJavaScriptAndWorkers.gzip;
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(largest + 769)))
+      .toThrow(/records at most .* but this build measures/u);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(largest + 768))).not.toThrow();
+  });
+
+  /*
+   * A document is anything a browser will render as one. A suffix test for
+   * `.html` shipped `evil.htm`, `EVIL.HTML`, `evil.xhtml` and a script-carrying
+   * `evil.svg`, each of them same-origin script inside the release worker's
+   * scope on a host that serves no headers.
+   */
+  it("ships only the reviewed documents, whatever they are called", () => {
+    expect(() => assertExactDocumentInventory([...RELEASE_DOCUMENTS, "assets/index-A.js", "manifest.webmanifest"]))
+      .not.toThrow();
+    for (const stray of [
+      "legacy-console.html",
+      "legacy-console.htm",
+      "LEGACY-CONSOLE.HTML",
+      "legacy.xhtml",
+      "legacy.shtml",
+      "assets/evil.svg",
+      "sitemap.xml",
+    ]) {
+      expect(() => assertExactDocumentInventory([...RELEASE_DOCUMENTS, stray]), stray)
+        .toThrow(/Release contains unreviewed documents/u);
+    }
+  });
+
+  /*
+   * Being on the allowlist is not a review. `404.html` is created from the
+   * index after the build, so only a byte copy of the reviewed index carries
+   * the reviewed policy.
+   */
+  it("requires the fallback document to be the reviewed index", () => {
+    const index = { path: "index.html", payload: Buffer.from("<!doctype html><title>Airship</title>") };
+    const asMap = (files) => new Map(files.map((file) => [file.path, file]));
+    expect(() => assertFallbackDocumentIsIndex(asMap([index]))).not.toThrow();
+    expect(() => assertFallbackDocumentIsIndex(asMap([index, { path: "404.html", payload: index.payload }])))
+      .not.toThrow();
+    expect(() => assertFallbackDocumentIsIndex(asMap([
+      index,
+      { path: "404.html", payload: Buffer.from("<!doctype html><script>fetch('https://evil.example')</script>") },
+    ]))).toThrow(/404\.html must be a byte copy/u);
   });
 
   it("charges every dynamic import awaited before first render to the baseline", () => {

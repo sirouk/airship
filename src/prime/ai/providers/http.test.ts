@@ -34,6 +34,27 @@ describe("fetchWithRetry", () => {
     }
   });
 
+  /*
+   * Provider credentials travel in these headers. `redirect: "follow"` would
+   * replay `authorization`/`x-api-key` at whatever host the reply names — the
+   * browser strips `authorization` across origins but not `x-api-key` — and
+   * ambient cookies have no business on an API call. Every other credentialed
+   * fetch seam in this repo asserts this; this one did not.
+   */
+  it("refuses redirects and sends no ambient credential", async () => {
+    const stub = stubFetch(() => jsonResponse({ ok: true }));
+    try {
+      await fetchWithRetry({ url: "https://example.com", headers: { "x-api-key": "secret" }, body: {} });
+      expect(stub.requests[0]).toMatchObject({
+        redirect: "error",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+    } finally {
+      stub.restore();
+    }
+  });
+
   it("retries retryable statuses and honors retry-after-ms", async () => {
     let calls = 0;
     const stub = stubFetch(() => {

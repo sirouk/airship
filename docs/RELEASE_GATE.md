@@ -6,7 +6,13 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 ## The release gate blocks on
 
 - source maps or stray source-map directives;
-- credential-shaped payloads in shipped artifacts, including decompressed Companion ZIP members;
+- credential-shaped payloads in shipped artifacts, including decompressed
+  Companion ZIP members. Vendor keys are matched on the literal each vendor
+  issues; a key that is bare hex or bare base64 has no shape to match, and no
+  credential belongs in a build input in the first place;
+- any document the release did not review: `.html`, `.htm`, `.xhtml`, `.shtml`,
+  `.svg` and `.xml` ship only from an exact list, and `404.html` must be a byte
+  copy of the reviewed index;
 - missing reviewed public files or broken static-host assumptions;
 - missing security headers or service-worker boundary regressions;
 - asset budget overruns;
@@ -33,9 +39,9 @@ ceiling.
 | HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
 | Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 494 KiB | 161 KiB |
 | Deferred advanced capability bundle | 246 KiB | 72 KiB |
-| First-party and other non-vendor JS/workers | 1961 KiB | 613 KiB |
+| First-party and other non-vendor JS/workers | 1962 KiB | 613 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
-| Absolute installed JavaScript/worker backstop | 2645 KiB | 803 KiB |
+| Absolute installed JavaScript/worker backstop | 2646 KiB | 803 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
