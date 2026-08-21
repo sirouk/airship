@@ -34,12 +34,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // inference-route admission and post-turn naming removed the last authority
   // races. After charging the pre-render navigation boundary to startup and
   // compacting duplicated UI policy, the canonical config-free artifact measures
-  // 384,682 B raw / 119,114 B gzip. The reviewed origin-inlined variant measures
-  // 384,684 B raw / 119,125 B gzip, and the reviewed Pages variant measures
-  // 384,700 B raw / 119,139 B gzip. Pages sets the current raw maximum; the
+  // 384,807 B raw / 119,179 B gzip. The reviewed origin-inlined variant measures
+  // 384,809 B raw / 119,186 B gzip, and the reviewed Pages variant measures
+  // 384,825 B raw / 119,190 B gzip. Pages sets the current raw maximum; the
   // earlier 119,196 B gzip reading remains the documented gzip maximum. 376 KiB
-  // raw would have left 324 B and 117 KiB gzip would have left 612 B, both below
-  // the tripwire floor. The tight 377/118 KiB steps leave 1,348 / 1,636 B.
+  // raw would have left 199 B and 117 KiB gzip would have left 612 B, both below
+  // the tripwire floor. The tight 377/118 KiB steps leave 1,223 / 1,636 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -47,11 +47,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Re-measured at 504,247 B raw / 163,264 B gzip after exact inference-route
   // admission and post-turn naming removed the last authority races. With the
   // pre-render controlled-navigation chunk now counted, the canonical config-free
-  // artifact measures 505,043 B raw / 163,835 B gzip. The reviewed origin-inlined
-  // variant measures 505,045 B raw / 163,858 B gzip, and the reviewed Pages
-  // variant measures 505,061 B raw / 163,859 B gzip. Pages sets both maxima.
-  // 493 KiB raw is 229 B below the artifact and 160 KiB gzip is 19 B below it.
-  // The tight 494/161 KiB steps leave 795 / 1,005 B.
+  // artifact measures 505,168 B raw / 163,903 B gzip. The reviewed origin-inlined
+  // variant measures 505,170 B raw / 163,895 B gzip, and the reviewed Pages
+  // variant measures 505,186 B raw / 163,912 B gzip. Pages sets both maxima.
+  // 493 KiB raw is 354 B below the artifact and 160 KiB gzip is 72 B below it.
+  // The tight 494/161 KiB steps leave 670 / 952 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -80,13 +80,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The strict shared execution worker and bridge-drain boundary later took the
   // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
   // unchanged. After charging the pre-render navigation chunk and compacting
-  // duplicated UI policy, the canonical config-free artifact measures 2,007,058 B
-  // raw / 626,623 B gzip. The reviewed origin-inlined variant measures 2,007,057 B
-  // raw / 626,678 B gzip, and the reviewed Pages variant measures 2,007,122 B raw /
-  // 626,638 B gzip. Pages sets the raw maximum; the origin variant sets gzip. The
-  // Pages artifact is 82 B over 1960 KiB raw, and 612 KiB gzip would have left
-  // 10 B, below the tripwire floor. The tighter 1961/613 KiB steps leave
-  // 942 / 1,034 B.
+  // duplicated UI policy, the canonical config-free artifact measures 2,007,602 B
+  // raw / 626,707 B gzip. The reviewed origin-inlined variant measures 2,007,601 B
+  // raw / 626,661 B gzip, and the reviewed Pages variant measures 2,007,666 B raw /
+  // 626,716 B gzip. Pages sets both maxima. The Pages artifact is 626 B over
+  // 1960 KiB raw and 28 B over 612 KiB gzip, so both ceilings are already the
+  // smallest whole-KiB step that clears them: 1961/613 KiB leave 398 / 996 B.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1961 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -130,13 +129,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
   // 1,717 / 1,194 B.
   // After charging the pre-render navigation chunk and compacting duplicated UI
-  // policy, the canonical config-free artifact measures 2,707,706 B raw /
-  // 821,415 B gzip. The reviewed origin-inlined variant measures 2,707,705 B raw /
-  // 821,469 B gzip, and the reviewed Pages variant measures 2,707,770 B raw /
-  // 821,431 B gzip. Pages sets the raw maximum; the origin variant sets gzip. The
-  // Pages artifact is 314 B over 2644 KiB raw, and the origin artifact is 221 B
-  // over 802 KiB gzip. The tight 2645/803 KiB steps leave 710 / 803 B without
-  // granting a padding step.
+  // policy, the canonical config-free artifact measures 2,708,294 B raw /
+  // 821,502 B gzip. The reviewed origin-inlined variant measures 2,708,293 B raw /
+  // 821,450 B gzip, and the reviewed Pages variant measures 2,708,358 B raw /
+  // 821,509 B gzip. Pages sets both maxima. The Pages artifact is 902 B over
+  // 2644 KiB raw and 261 B over 802 KiB gzip, so both ceilings are already the
+  // smallest whole-KiB step that clears them: 2645/803 KiB leave 122 / 763 B
+  // without granting a padding step.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2645 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
@@ -191,11 +190,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gzip to 17 KiB (527 B). A ceiling left where a shrink found it is headroom
   // nobody reviewed.
   //
-  // Re-measured at 46,622 B raw / 13,771 B gzip after legacy blob-worker
-  // sources were deleted in favor of the shared strict host. 46 KiB raw would
-  // have left 482 B, so the tight 47 KiB step leaves 1,506 B. 14 KiB gzip
-  // would have left 565 B, so gzip
-  // takes 15 KiB and leaves 1,589 B. No capability moved back to startup.
+  // An earlier reading of 46,622 B raw and 13,771 B gzip followed the deletion
+  // of the legacy blob-worker sources — history, phrased so the parser reads
+  // the current readings below rather than a superseded pair.
+  //
+  // In this tree the canonical config-free artifact measures 47,269 B raw /
+  // 13,940 B gzip, the reviewed origin-inlined variant measures 47,269 B raw /
+  // 13,940 B gzip, and the reviewed Pages variant measures 47,285 B raw /
+  // 13,943 B gzip. Pages sets both maxima. The tight 47 KiB raw
+  // step leaves 843 B. 14 KiB gzip would have left 393 B, below the tripwire
+  // floor, so gzip keeps 15 KiB and leaves 1,417 B. No capability moved back to
+  // startup.
   optionalExecutionTools: Object.freeze({ raw: 47 * 1024, gzip: 15 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
@@ -466,10 +471,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // origin-inlined Docker variant measuring one raw byte and twenty-nine gzip
   // bytes under the config-free CI artifact, and its own reading wandering by
   // single bytes between runs.
-  // Raw takes two steps rather than one: 63 KiB raw would have left 354 B,
-  // inside a minifier rename of the reading. Gzip takes the smallest whole-KiB step
-  // that clears 20.96 KiB, exactly the tripwire policy this file enforces
-  // elsewhere when the margin crosses one whole kilobyte.
+  //
+  // In this tree the canonical config-free artifact measures 64,236 B raw /
+  // 21,348 B gzip. The reviewed Pages variant measures 64,236 B raw / 21,347 B
+  // gzip, and the reviewed origin-inlined variant measures 64,236 B raw /
+  // 21,346 B gzip. 63 KiB raw would have left 276 B, below the tripwire floor,
+  // so raw keeps 64 KiB and leaves 1,300 B. Gzip is already at the smallest
+  // whole-KiB step that clears its reading, leaving 156 B.
   optionalMemoryView: Object.freeze({ raw: 64 * 1024, gzip: 21 * 1024 }),
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
@@ -490,10 +498,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // already on screen, which is the part that costs the bytes. Raw takes one
   // whole-KiB step to 8 KiB, leaving 848 B; gzip stays inside 3 KiB with 243 — the Docker floor, one byte under this host.
   //
-  // Re-measured at 7,344 B raw / 3,100 B gzip: prime's skill tools share the
-  // skill-file parser with this route, so the shared module compresses into
-  // this chunk rather than beside it. Raw is unchanged; gzip takes its
-  // smallest clearing step to 4, which leaves 996 B and is above the floor.
+  // An earlier reading of 7,344 B raw and 3,100 B gzip recorded prime's skill
+  // tools sharing the skill-file parser with this route — history, phrased so
+  // the parser reads the current readings below.
+  //
+  // In this tree the canonical config-free and reviewed Pages artifacts measure
+  // 7,974 B raw / 3,076 B gzip, and the reviewed origin-inlined variant measures
+  // 7,974 B raw / 3,074 B gzip. Both ceilings are already the smallest whole-KiB
+  // step that clears those readings: raw leaves 218 B and gzip leaves 1,020 B.
   optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 4 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
@@ -501,11 +513,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // all — a visitor who never presses New skill or Edit pays nothing for it.
   // Named in MEASUREMENT_JUSTIFIED_BUDGETS, so this pair is enforced rather
   // than merely written: a placeholder left here fails the gate instead of
-  // surviving it. Re-measured 3,396 B raw / 1,319 B gzip. The gzip figure came
-  // down one byte, and one byte is the whole point of recording it: 1,320 was
-  // the first reading this file's comments were compared against the build they
-  // describe, and it was the only one of the six that claimed more than the
-  // build contained. Neither ceiling moves.
+  // surviving it. An earlier reading of 3,396 B raw and 1,319 B gzip is kept as
+  // history only: it described a smaller artifact than this build produces, and
+  // a comment that understates its chunk reports headroom the build does not
+  // have — the second direction this file's build comparison now checks.
+  //
+  // In this tree the canonical config-free artifact measures 4,002 B raw /
+  // 1,587 B gzip, and the reviewed origin-inlined and Pages variants measure
+  // 4,002 B raw / 1,587 B gzip. Both ceilings are already the smallest
+  // whole-KiB step that clears those readings, leaving 94 B raw and 461 B gzip.
+  // Neither ceiling moves.
   optionalSkillEditor: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   /*
    * The one destructive-confirmation dialog, shared rather than re-implemented.
@@ -649,12 +666,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 54,849 B gzip after transactional accessor snapshots, cryptographic custom
   // authority, neutral provider failures, and the accessible custom-endpoint form
   // landed. Its tight 180/55 KiB steps left 1,561 / 1,471 B.
-  // In the candidate tree, the canonical config-free artifact emits five
-  // classified packs and measures 143,680 B raw / 41,803 B gzip. The reviewed
-  // origin-inlined variant measures 143,680 B raw / 41,801 B gzip. 141 KiB raw
-  // would have left 704 B. In the config-free build, 41 KiB gzip would have left
-  // 181 B. Both are below the tripwire floor. The tight 142/42 KiB steps leave
-  // 1,728 / 1,205 B.
+  // Descriptor-driven transports replaced the provider-ID switch: the Responses
+  // and Messages wires now read their origin, catalog endpoint and transport
+  // identity from the descriptor they are given, which serves every provider
+  // that declares those wires instead of three hard-coded names.
+  //
+  // The canonical config-free artifact emits five classified packs and measures
+  // 144,107 B raw / 41,845 B gzip. The reviewed origin-inlined variant measures
+  // 144,107 B raw / 41,844 B gzip, and the reviewed Pages variant measures
+  // 144,107 B raw / 41,845 B gzip. 141 KiB raw would have left 277 B and 41 KiB
+  // gzip would have left 139 B, both below the tripwire floor. The tight
+  // 142/42 KiB steps leave 1,301 / 1,163 B.
   optionalInferenceProviders: Object.freeze({ raw: 142 * 1024, gzip: 42 * 1024 }),
   // The prime runtime port measured at 88,098 B raw / 26,594 B gzip — the
   // claim states the floor across both build modes, with the origin-inlined
@@ -769,8 +791,29 @@ export const RELEASE_BUDGETS = Object.freeze({
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
 
+/*
+ * Credential shapes this product actually handles.
+ *
+ * The list below used to cover Chutes, AWS access key IDs, GitHub, npm, Slack,
+ * Stripe and JWTs — and none of the bring-your-own-provider keys the workbench
+ * is built around. Four realistic provider keys appended to a shipped entry
+ * chunk passed this gate, while `docs/RELEASE_GATE.md` promised it blocks
+ * "credential-shaped payloads". Nothing inlines a provider key today; this is
+ * the control a maintainer will trust on the day something does.
+ *
+ * Every shape is anchored on a literal the vendor issues, never on a bare
+ * `sk-` prefix: OpenAI keys carry `T3BlbkFJ` ("OpenAI" in base64) in both the
+ * classic and project forms. All of them were checked for false positives
+ * across every artifact of a full build.
+ */
 const secretPatterns = Object.freeze([
   ["Chutes API key", /\bcpk_[A-Za-z0-9_-]{16,}\b/u],
+  ["OpenAI API key", /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{16,}T3BlbkFJ[A-Za-z0-9_-]{16,}\b/u],
+  ["Anthropic API key", /\bsk-ant-(?:api|admin)\d\d-[A-Za-z0-9_-]{32,}\b/u],
+  ["Google API key", /\bAIza[A-Za-z0-9_-]{35}\b/u],
+  ["Google OAuth client secret", /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/u],
+  ["Hugging Face token", /\bhf_[A-Za-z0-9]{30,}\b/u],
+  ["AWS secret access key", /\baws_secret_access_key\b\s*[=:]\s*["']?[A-Za-z0-9/+]{40}\b/iu],
   ["AWS access key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/u],
   ["GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/u],
   ["npm token", /\bnpm_[A-Za-z0-9]{24,}\b/u],
@@ -970,6 +1013,12 @@ const MEASUREMENT_TIGHTNESS_EXEMPT_ROLES = Object.freeze({
 });
 
 const RELEASE_BUDGET_ROLES = Object.freeze(["raw", "gzip"]);
+/**
+ * How far a supported build may sit above every recorded reading before the
+ * comment counts as stale. Measured drift between the three reviewed variants
+ * of this commit: 167 B on the largest aggregate, 0 B on hashed optional packs.
+ */
+const DOCUMENTED_VARIANT_ALLOWANCE = 256;
 const TRIPWIRE_MARGIN_CLAIM =
   /(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\s(raw|gzip)\swould have left\s(\d[\d,]*)\s(?:B|bytes)\b/gu;
 
@@ -1112,23 +1161,38 @@ export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
     // Its absence is already a failure in the guard that runs before the build.
     if (RELEASE_BUDGET_ROLES.some((role) => !documented[role])) continue;
     for (const role of RELEASE_BUDGET_ROLES) {
-      // A comment records several reviewed variants, and this run built one of
-      // them. When the artifact in front of us IS one of those readings, the
-      // comment is current by definition — even where the variants straddle a
-      // whole-KiB line, with one gzip reading 19 B above it and another 5 B
-      // below. Staleness is a build that matches no recorded variant and is
-      // smaller than the largest, which is exactly the case this guard was
-      // written for.
-      const recorded = entry.measured.some(
-        (pair) => Math.abs(pair[role] - measured[role]) <= writtenTolerance(pair.written[role]),
-      );
-      if (recorded) continue;
+      /*
+       * One distance, checked in both directions, against the largest reading
+       * the comment records.
+       *
+       * Only "documented larger than the build, in a higher whole-KiB bucket"
+       * used to fail, and that left two real holes. A comment that UNDERSTATES
+       * its artifact reads as headroom nobody has: four readings here described
+       * chunks 78-647 B smaller than the bytes on disk, one of them leaving
+       * 94 B under its ceiling while its comment implied ~700. And an exact
+       * bucket comparison failed honest builds: the unconfigured Docker variant
+       * landed 1 B below a whole-KiB line that the Pages variant sits 19 B
+       * above, so a documented Pages maximum reported a supported deployment as
+       * stale and broke `./deploy.sh`.
+       *
+       * Supported variants of one commit differ by at most 167 B in the largest
+       * aggregate and by 0 B in a hashed pack, so a build further than
+       * DOCUMENTED_VARIANT_ALLOWANCE from the largest recorded reading — in
+       * either direction — is not variance. It is a comment describing a build
+       * that no longer exists.
+       */
       const figure = documented[role];
+      if (Math.abs(measured[role] - figure.bytes) <= DOCUMENTED_VARIANT_ALLOWANCE) continue;
+      if (measured[role] > figure.bytes) {
+        failures.push(
+          `${entry.name}: its comment records at most ${formatBytes(figure.bytes)} ${role}, but this build measures ${formatBytes(measured[role])} (${measured[role]} B). Re-take the reading; a comment that understates the artifact reports headroom the build does not have.`,
+        );
+        continue;
+      }
       const written = figure.written;
-      const tolerance = writtenTolerance(written);
       const documentedBucket = Math.floor(figure.bytes / 1024);
       const measuredBucket = Math.floor(measured[role] / 1024);
-      if (figure.bytes - measured[role] > tolerance && documentedBucket > measuredBucket) {
+      if (documentedBucket > measuredBucket) {
         failures.push(
           `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B), in a lower whole-KiB budget bucket. Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
         );
@@ -1136,7 +1200,7 @@ export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
     }
   }
   if (failures.length > 0) {
-    throw new Error(`Release budget comments claim a higher budget bucket than this build contains:\n- ${failures.join("\n- ")}`);
+    throw new Error(`Release budget comments no longer describe this build:\n- ${failures.join("\n- ")}`);
   }
 }
 
@@ -1314,6 +1378,36 @@ export function assertExactChunkStems(label, paths, expectedStems) {
 }
 
 /** Every emitted bundled JavaScript artifact has one, and only one, owner. */
+/**
+ * Every HTML document this release publishes, exactly.
+ *
+ * `_headers` covers the app origin on hosts that read it, and the release
+ * worker wraps controlled navigations in the reviewed policy — but GitHub Pages
+ * reads neither for a page nobody reviewed. Any other document dropped into
+ * `public/` (or into `dist/` after the build) therefore ships as same-origin,
+ * unreviewed, script-capable HTML inside the worker's scope, and the manifest
+ * would list it as a shipped artifact with a checksum, as if it had been
+ * reviewed. The rest of the release is inventoried exactly; documents are the
+ * one artifact class where a stray file executes.
+ */
+export const RELEASE_HTML_DOCUMENTS = Object.freeze([
+  "404.html",
+  "extension/index.html",
+  "extension/privacy.html",
+  "index.html",
+]);
+
+export function assertExactHtmlInventory(paths) {
+  const documents = paths.filter((path) => path.endsWith(".html")).sort();
+  const unexpected = documents.filter((path) => !RELEASE_HTML_DOCUMENTS.includes(path));
+  if (unexpected.length > 0) {
+    throw new Error(
+      `Release contains unreviewed HTML documents: ${unexpected.join(", ")}. `
+      + `Only ${RELEASE_HTML_DOCUMENTS.join(", ")} may ship.`,
+    );
+  }
+}
+
 export function assertRequiredFilesAreMeasured(label, requiredFiles, measuredFiles) {
   const measuredPaths = new Set(measuredFiles.map((file) => file.path));
   const escapedPaths = requiredFiles
@@ -1613,6 +1707,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     if (!fileMap.has(path)) throw new Error(`Required static artifact is missing: ${path}.`);
   }
   assertExtensionReleaseMetadata(fileMap);
+  assertExactHtmlInventory(releasableFiles.map((file) => file.path));
 
   await validatePublicCopies(
     output,

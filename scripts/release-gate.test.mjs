@@ -206,6 +206,39 @@ describe("release gate", () => {
     expect(inspectPayload("assets/main.js", Buffer.from('const help = "cak_ or cpk_"'))).toEqual([]);
   });
 
+  /*
+   * The keys this product is actually built around. A bring-your-own-provider
+   * client whose S3 vault also takes AWS secrets shipped a scanner that knew
+   * none of these shapes, so four realistic provider keys appended to the entry
+   * chunk passed the gate while the documentation promised they could not.
+   */
+  it("rejects the provider credential shapes this workbench handles", () => {
+    const leaks = [
+      ["OpenAI API key", `sk-proj-${"a".repeat(20)}T3BlbkFJ${"b".repeat(20)}`],
+      ["OpenAI API key", `sk-${"a".repeat(20)}T3BlbkFJ${"b".repeat(20)}`],
+      ["Anthropic API key", `sk-ant-api03-${"c".repeat(40)}`],
+      ["Google API key", `AIza${"D".repeat(35)}`],
+      ["Google OAuth client secret", `GOCSPX-${"e".repeat(28)}`],
+      ["Hugging Face token", `hf_${"f".repeat(34)}`],
+      ["AWS secret access key", `aws_secret_access_key = "${"g".repeat(40)}"`],
+    ];
+    for (const [label, value] of leaks) {
+      expect(inspectPayload("assets/index-A.js", Buffer.from(`const leaked = ${value};`)), value)
+        .toContain(label);
+    }
+
+    // Ordinary shipped prose and identifiers are not credentials. `sk-` alone
+    // is a documentation string, and a base64-looking word is not a key.
+    for (const benign of [
+      'const doc = "paste your sk-... key";',
+      'const provider = { id: "anthropic", label: "Anthropic" };',
+      'const hint = "hf_ tokens start with hf_";',
+      'const sample = "AIzaSy";',
+    ]) {
+      expect(inspectPayload("assets/index-A.js", Buffer.from(benign)), benign).toEqual([]);
+    }
+  });
+
   it("decompresses exact Companion ZIP members before applying release scans", () => {
     const entries = (background = "export {}") => EXTENSION_PACKAGE_MEMBERS.map((path) => ({
       path,
@@ -396,12 +429,12 @@ describe("release gate", () => {
       );
     }
     const falseTripwire = source.replace(
-      "63 KiB raw would have left 354 B",
+      "63 KiB raw would have left 276 B",
       "63 KiB raw would have left 999 B",
     );
     expect(falseTripwire).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(falseTripwire))
-      .toThrow(/optionalMemoryView: .* matching tripwire arithmetic "63 KiB raw would have left 354 B"/u);
+      .toThrow(/optionalMemoryView: .* matching tripwire arithmetic "63 KiB raw would have left 276 B"/u);
 
     expect(() => assertDocumentedBudgetMeasurements(source.replace(/^  optionalMemoryView: .*$/mu, "  optionalMemoryViewX: Object.freeze({ raw: 1, gzip: 1 }),")))
       .toThrow(/optionalMemoryView: named as measurement-justified but no such release budget was found/u);
@@ -467,15 +500,15 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "384,682 B raw / 119,114 B gzip",
-      "384,682 B raw / 117.68 KiB gzip",
+      "384,807 B raw / 119,179 B gzip",
+      "384,807 B raw / 117.68 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 384682, gzip: 119114 },
+      entryJavaScript: { raw: 384807, gzip: 119179 },
     })).toThrow(
-      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.32 KiB \(119114 B\), in a lower whole-KiB budget bucket/u,
+      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.39 KiB \(119179 B\), in a lower whole-KiB budget bucket/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
@@ -498,34 +531,47 @@ describe("release gate", () => {
       .toThrow(/optionalMemoryView: its comment claims .* gzip, but this build measures only .* in a lower whole-KiB budget bucket/u);
 
     /*
-     * Growth is not a failure, and it must not be, or six comments change on
-     * every pull request that moves a shared chunk by a byte — which is how a
-     * rule gets deleted. Understatement is bracketed from the other side: the
-     * tightness rule pulls the ceiling down to one step above the claim, and
-     * `assertWithinBudget` then refuses a build that no longer fits under it.
+     * Byte-level growth is not a failure, and it must not be, or six comments
+     * change on every pull request that moves a shared chunk by a byte — which
+     * is how a rule gets deleted.
+     *
+     * Unbounded growth WAS accepted here, and that was wrong: four readings in
+     * this file ended up 78-647 B below the chunks they described, one leaving
+     * 94 B under a ceiling its comment implied was ~700 B away. The tightness
+     * rule cannot catch that — it pulls the ceiling toward the CLAIM, so an
+     * understated claim tightens nothing that reality needs. Growth is allowed
+     * up to the reviewed variant allowance and refused past it.
      */
-    const grown = Object.fromEntries(
-      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 512, gzip: pair.gzip + 128 }]),
+    const drifted = Object.fromEntries(
+      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 200, gzip: pair.gzip + 128 }]),
     );
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, grown)).not.toThrow();
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, drifted)).not.toThrow();
+
+    const grown = Object.fromEntries(
+      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 512, gzip: pair.gzip + 512 }]),
+    );
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, grown))
+      .toThrow(/records at most .* but this build measures .* understates the artifact/u);
 
     /*
      * A figure is held only to the precision it was written at, and same-bucket
      * drift remains harmless at that precision. Crossing into the lower bucket
      * is still material and still fails.
      */
-    const coarse = source.replace(/Re-measured 3,396 B raw \/ 1,319 B gzip/u, "Re-measured 3.32 KiB raw / 1.29 KiB gzip");
+    const coarse = source
+      .replaceAll("4,002 B raw", "3.91 KiB raw")
+      .replaceAll("1,587 B gzip", "1.55 KiB gzip");
     expect(coarse).not.toBe(source);
-    const withinPrecision = { ...asDocumented, optionalSkillEditor: { raw: 3396, gzip: 1319 } };
+    const withinPrecision = { ...asDocumented, optionalSkillEditor: { raw: 4002, gzip: 1587 } };
     expect(() => assertDocumentedMeasurementsMatchBuild(coarse, withinPrecision)).not.toThrow();
     expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
       ...withinPrecision,
-      optionalSkillEditor: { raw: 3396, gzip: 1219 },
+      optionalSkillEditor: { raw: 4002, gzip: 1500 },
     })).not.toThrow();
     expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
       ...withinPrecision,
-      optionalSkillEditor: { raw: 3396, gzip: 1000 },
-    })).toThrow(/optionalSkillEditor: its comment claims 1\.29 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
+      optionalSkillEditor: { raw: 4002, gzip: 1000 },
+    })).toThrow(/optionalSkillEditor: its comment claims 1\.55 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
   });
 
   it("classifies only the current deferred route, download, and semantic stems", () => {
@@ -558,37 +604,51 @@ describe("release gate", () => {
     )).toThrow(/Request failure chunks do not match the required stems/u);
   });
 
-  it("accepts reviewed variants that straddle a whole-KiB line, and still refuses a shrunk build", () => {
+  it("accepts reviewed variants that straddle a whole-KiB line, and still refuses a stale reading", () => {
     const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
-    const entry = parseDocumentedBudgets(source).find((budget) => budget.name === "allJavaScriptAndWorkers");
-    expect(entry).toBeDefined();
     const asDocumented = Object.fromEntries(
       MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
-        const budget = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
-        const largest = Object.fromEntries(["raw", "gzip"].map((role) => [
+        const entry = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
+        return [name, Object.fromEntries(["raw", "gzip"].map((role) => [
           role,
-          budget.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
-        ]));
-        return [name, largest];
+          entry.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
+        ]))];
       }),
     );
-
-    // Each recorded variant is a legal build of this commit, including the ones
-    // below the whole-KiB line that the largest recorded variant sits above.
-    for (const variant of entry.measured) {
-      expect(() => assertDocumentedMeasurementsMatchBuild(source, {
-        ...asDocumented,
-        allJavaScriptAndWorkers: { raw: variant.raw, gzip: variant.gzip },
-      })).not.toThrow();
-    }
-
-    // A build that matches no recorded variant and is a bucket below the
-    // largest one is the stale comment this guard exists for.
-    const smallest = entry.measured.reduce((least, pair) => Math.min(least, pair.gzip), Number.POSITIVE_INFINITY);
+    const largest = asDocumented.allJavaScriptAndWorkers.gzip;
+    /*
+     * The documented maximum sits above a whole-KiB line and the unconfigured
+     * Docker variant of the same commit lands below it — measured at 163,839 B
+     * against a documented 163,859 B, one byte under the 160 KiB line. Both are
+     * supported builds of one tree, and rejecting the smaller one broke
+     * `./deploy.sh` on a green commit.
+     */
+    const justBelowTheLine = Math.floor(largest / 1024) * 1024 - 1;
+    expect(largest - justBelowTheLine).toBeLessThanOrEqual(256);
     expect(() => assertDocumentedMeasurementsMatchBuild(source, {
       ...asDocumented,
-      allJavaScriptAndWorkers: { raw: entry.measured[0].raw, gzip: smallest - 2048 },
+      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: justBelowTheLine },
+    })).not.toThrow();
+
+    for (const drift of [0, -4, -20, -24]) {
+      expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+        ...asDocumented,
+        allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest + drift },
+      }), `drift ${drift}`).not.toThrow();
+    }
+
+    // Far below every current reading is a comment nobody re-took.
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...asDocumented,
+      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest - 2048 },
     })).toThrow(/allJavaScriptAndWorkers: its comment claims .* in a lower whole-KiB budget bucket/u);
+
+    // Far above every current reading is a comment that reports headroom the
+    // build does not have.
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...asDocumented,
+      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip: largest + 700 },
+    })).toThrow(/allJavaScriptAndWorkers: its comment records at most .* but this build measures/u);
   });
 
   it("charges every dynamic import awaited before first render to the baseline", () => {

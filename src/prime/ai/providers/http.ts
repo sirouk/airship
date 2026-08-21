@@ -205,6 +205,13 @@ export async function fetchWithRetry(request: ProviderHttpRequest): Promise<Resp
         headers: request.headers,
         body,
         signal: scope.signal,
+        // Provider credentials travel in these headers. `redirect: "follow"`
+        // would replay `authorization`/`x-api-key` at whatever host the reply
+        // named — the browser strips `authorization` across origins but not
+        // `x-api-key` — and ambient cookies have no business on an API call.
+        redirect: "error",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
       });
     } catch (error) {
       networkError = error;

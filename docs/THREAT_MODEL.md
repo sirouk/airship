@@ -45,7 +45,7 @@ These are the only inference postures Airship currently claims.
 | --- | --- | --- |
 | Provider reads prompts | explicit provider choice; local providers for sensitive work | a connected remote provider sees plaintext |
 | Storage reads durable state | client encryption, opaque object IDs, key separation | sizes and timing still leak |
-| Storage rollback or fork | authenticated heads, immutable objects, conflict visibility | an isolated device may not notice immediately |
+| Storage rollback or fork | authenticated heads, immutable objects, conflict visibility | heads are authenticated, not fresh: a hostile store can serve an older authentic head or omit objects, and an isolated device may not notice |
 | Credential leakage | page-memory custody, no URL/storage/log persistence | a compromised runtime can still read live secrets |
 | Tool prompt injection | typed tools, approval policy, origin labeling, least privilege | a user can still approve a bad action |
 | Model-written JavaScript escapes its kernel | dedicated worker-only eval CSP, private controller closure, per-generation capability, ambient-channel scrubbing, strict host frame/state/budget checks | CPU and memory denial remain bounded mainly by worker termination; approved tool effects still have their declared authority |
