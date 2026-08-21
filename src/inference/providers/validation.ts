@@ -1,5 +1,17 @@
 const IDENTIFIER = /^[a-z0-9][a-z0-9._:/-]{0,127}$/u;
-const OPAQUE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,511}$/u;
+/*
+ * A provider's own name for a model, kept as the provider spells it.
+ *
+ * `@` is here because LM Studio spells a model `name@quantization` the moment
+ * a person holds more than one quantization of it — `gemma-4-12b@q4_k_m` and
+ * `gemma-4-12b@q8_0` — and Hugging Face spells a pinned revision the same way.
+ * Excluding it did not make anything safer: this string is a JSON field and a
+ * catalog key, never a URL path segment, a header, or a shell word. What it
+ * did was refuse every model a person had downloaded twice, and because the
+ * directory write refuses the whole batch on the first bad row, one such model
+ * emptied the entire list.
+ */
+const OPAQUE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,511}$/u;
 const HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,127}$/u;
 const SCOPE = /^[A-Za-z0-9][A-Za-z0-9:._/-]{0,127}$/u;
 const SAFE_CODE = /^[a-z0-9][a-z0-9._:-]{0,127}$/u;
