@@ -180,23 +180,20 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
    * or explains is one press away, on the same surface.
    */
   return <section class="local-folder" aria-labelledby={headingId}>
+    {/*
+      * The action stays on the surface; only the explanation folds away. A
+      * control a person cannot see is not a tier they can choose.
+      */}
     <details class="local-folder__disclosure">
       <summary>
         <span class="local-folder__title" id={headingId}>{LOCAL_FOLDER_TIER.title}</span>
         <span class="local-folder__summary-state">{state.kind === "attached"
           ? state.name
           : state.kind === "blocked" ? "Reconnect needed" : "None open"}</span>
-      </summary>
-    <p class="local-folder__note">{LOCAL_FOLDER_TIER.note}</p>
-    <p class="local-folder__status" role="status" aria-live="polite" id={noticeId}>
-      {state.kind === "attached"
-        ? localFolderAttachedSummary(state.name, state.mountPath)
-        : state.kind === "blocked"
-          ? state.reason
-          : "No folder is open. Nothing on this device is readable by Airship until you open one."}
-    </p>
-    {notice ? <p class="local-folder__notice" role="alert">{notice}</p> : null}
-    <div class="local-folder__actions">
+        <span
+          class="local-folder__actions"
+          onClick={(event) => event.stopPropagation()}
+        >
       {state.kind === "absent" ? <button
         type="button"
         class="primary"
@@ -237,7 +234,18 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
           await onFolderChanged(undefined);
         })}
       >Forget folder</button>}
-    </div>
+        </span>
+      </summary>
+    <p class="local-folder__note">{LOCAL_FOLDER_TIER.note}</p>
+    <p class="local-folder__status" role="status" aria-live="polite" id={noticeId}>
+      {state.kind === "attached"
+        ? localFolderAttachedSummary(state.name, state.mountPath)
+        : state.kind === "blocked"
+          ? state.reason
+          : "No folder is open. Nothing on this device is readable by Airship until you open one."}
+    </p>
+    {notice ? <p class="local-folder__notice" role="alert">{notice}</p> : null}
+
     <p class="local-folder__note">{state.kind === "absent" ? LOCAL_FOLDER_BOUNDS_NOTE : LOCAL_FOLDER_FORGET_NOTE}</p>
     {/*
       * The same six answers every storage tier gives, behind the disclosure
