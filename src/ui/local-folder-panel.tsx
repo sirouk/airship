@@ -170,8 +170,23 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
     </section>;
   }
 
+  /*
+   * The tier is a disclosure, not a banner.
+   *
+   * Open on the route it changes, it pushed the workbench past a third of a
+   * phone's height — measured at 653px of 844 — and the workbench is what this
+   * route is for. The summary states the tier and its current state in one
+   * line, which is the whole answer most of the time; everything that decides
+   * or explains is one press away, on the same surface.
+   */
   return <section class="local-folder" aria-labelledby={headingId}>
-    <h3 class="local-folder__title" id={headingId}>{LOCAL_FOLDER_TIER.title}</h3>
+    <details class="local-folder__disclosure">
+      <summary>
+        <span class="local-folder__title" id={headingId}>{LOCAL_FOLDER_TIER.title}</span>
+        <span class="local-folder__summary-state">{state.kind === "attached"
+          ? state.name
+          : state.kind === "blocked" ? "Reconnect needed" : "None open"}</span>
+      </summary>
     <p class="local-folder__note">{LOCAL_FOLDER_TIER.note}</p>
     <p class="local-folder__status" role="status" aria-live="polite" id={noticeId}>
       {state.kind === "attached"
@@ -224,11 +239,22 @@ export function LocalFolderPanel({ onFolderChanged }: LocalFolderPanelProps) {
       >Forget folder</button>}
     </div>
     <p class="local-folder__note">{state.kind === "absent" ? LOCAL_FOLDER_BOUNDS_NOTE : LOCAL_FOLDER_FORGET_NOTE}</p>
-    <dl class="local-folder__facts">
-      {LOCAL_FOLDER_FACT_ROWS.map(([key, label]) => <div class="local-folder__fact" key={key}>
-        <dt>{label}</dt>
-        <dd>{LOCAL_FOLDER_TIER.facts[key]}</dd>
-      </div>)}
-    </dl>
+    {/*
+      * The same six answers every storage tier gives, behind the disclosure
+      * this product already uses for exactly this. Open on the route, they
+      * pushed the workbench past a third of a phone's height — measured, and
+      * the workbench is what the route is for. Closed, the answers are one
+      * press away and still on the surface that changes them.
+      */}
+    <details class="local-folder__more">
+      <summary>What opening a folder means</summary>
+      <dl class="local-folder__facts">
+        {LOCAL_FOLDER_FACT_ROWS.map(([key, label]) => <div class="local-folder__fact" key={key}>
+          <dt>{label}</dt>
+          <dd>{LOCAL_FOLDER_TIER.facts[key]}</dd>
+        </div>)}
+      </dl>
+    </details>
+    </details>
   </section>;
 }

@@ -168,8 +168,12 @@
  * they hand a real directory to an agent.
  */
 .local-folder {
-  margin: var(--sp-3) var(--sp-6) 0;
-  padding: var(--sp-3) var(--sp-4);
+  /*
+   * Collapsed, this is one 44px row: the padding belongs to the disclosure so
+   * a closed tier costs the workbench a row and not a panel.
+   */
+  margin: var(--sp-2) var(--sp-6) 0;
+  padding: 0 var(--sp-4) 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   background: var(--surface);
@@ -179,6 +183,24 @@
   margin: 0;
   font-size: var(--fs-caption);
   font-weight: var(--fw-strong);
+}
+
+.local-folder__disclosure[open] {
+  padding-bottom: var(--sp-3);
+}
+
+.local-folder__disclosure > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--touch-target);
+  cursor: pointer;
+}
+
+.local-folder__summary-state {
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
 }
 
 .local-folder__note,
@@ -233,4 +255,16 @@
 
 @media (max-width: 760px) {
   .local-folder { margin: var(--sp-3) var(--sp-4) 0; }
+}
+
+/*
+ * The disclosure is a control, so it carries the coarse-pointer floor its own
+ * route states rather than inheriting one that a route selector outranks.
+ */
+.local-folder__more > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch-target);
+  font-size: var(--fs-caption);
+  cursor: pointer;
 }
