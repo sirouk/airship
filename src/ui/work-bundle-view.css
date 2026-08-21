@@ -1,0 +1,174 @@
+/*
+ * The move-work panel. Two columns on a desk, one on a phone; every control
+ * that a finger has to hit is floored at 44px on both axes, and the checkbox
+ * rows are labels wide enough that the whole row is the target.
+ */
+.work-bundle {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-soft);
+}
+
+.work-bundle__lede,
+.work-bundle__note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.55;
+}
+
+.work-bundle__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-3);
+}
+
+.work-bundle__column {
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+}
+
+.work-bundle__heading {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.work-bundle__subhead {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.work-bundle__set {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+
+.work-bundle__set > legend {
+  padding: 0 var(--sp-1);
+}
+
+.work-bundle__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.work-bundle__list {
+  display: grid;
+  gap: 2px;
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.work-bundle__list--plain > li {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+}
+
+.work-bundle__check {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.work-bundle__check--wide {
+  border: 1px solid var(--line);
+}
+
+.work-bundle__check input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  accent-color: var(--v-verified);
+}
+
+.work-bundle__title {
+  overflow: hidden;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-bundle__check small,
+.work-bundle__list--plain small {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.work-bundle__file {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--touch-target);
+  padding: var(--sp-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.work-bundle__file input {
+  min-height: var(--touch-target);
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+}
+
+.work-bundle__preview {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.work-bundle__preview p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Refusal is stated in words first; the metal only agrees with them. */
+.work-bundle__refused {
+  margin: 0;
+  color: var(--v-failed);
+  font-size: var(--fs-caption);
+}
+
+.work-bundle__status {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.55;
+}
+
+@media (pointer: coarse) {
+  .work-bundle__check,
+  .work-bundle__file,
+  .work-bundle__file input {
+    min-height: var(--touch-target);
+  }
+}

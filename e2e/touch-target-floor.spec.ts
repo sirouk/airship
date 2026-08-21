@@ -104,6 +104,21 @@ const STATES_A_GOTO_NEVER_REACHES = [
     },
   },
   {
+    route: "sessions",
+    state: "the move-work panel open",
+    async enter(page: Page) {
+      /*
+       * The panel is a separate chunk behind a control, so a `goto` sweep can
+       * never reach it — and it is dense with targets a thumb has to find: a
+       * checkbox row per conversation, two format radios, a memory toggle, a
+       * file picker and two buttons. Exactly the class of surface this file
+       * exists to measure rather than assume.
+       */
+      await page.getByRole("button", { name: "Move work" }).click();
+      await expect(page.getByRole("heading", { name: "Move work in or out" })).toBeVisible({ timeout: 30_000 });
+    },
+  },
+  {
     route: "terminal",
     state: "a running shell",
     async enter(page: Page) {

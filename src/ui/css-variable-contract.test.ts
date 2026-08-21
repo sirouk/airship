@@ -404,6 +404,10 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   // failed hue, so it is held to the same 4.5:1 word floor as every other
   // site named above.
   "ui/vault-view.css .vault-danger__action --v-failed",
+  // The move-work panel's one refusal voice: a conversation or memory record
+  // this import will not overwrite, and the error line above the panel. Both
+  // state the refusal in words first; the metal only agrees with them.
+  "ui/work-bundle-view.css .work-bundle__refused --v-failed",
   /*
    * Source Control's status letters. The workbench rail printed all five
    * deltas in the same brass, so "deleted" and "added" were one glyph apart

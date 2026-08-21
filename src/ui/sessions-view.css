@@ -2252,3 +2252,15 @@
     opacity: 1;
   }
 }
+
+/*
+ * The move-work panel's own loading and failure line. The panel itself is a
+ * separate chunk; these two sentences are what the route says while it is on
+ * its way, and if it never arrives.
+ */
+.session-library-move-status {
+  margin: 0;
+  padding: var(--sp-2) 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}

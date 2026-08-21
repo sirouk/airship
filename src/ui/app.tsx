@@ -9500,6 +9500,16 @@ export function App() {
             quarantine={quarantinedSession}
             focusSessionId={sessionsFocusId}
             onFocusSessionConsumed={() => setSessionsFocusId(undefined)}
+            /* Export reads the journal; import merges through its backend,
+               because a merge writes events that are already sealed. The
+               storage authority is passed as itself: a Vault-backed one can
+               seal a bundle, page memory has no key and cannot. */
+            bundleSources={runtime.current ? Object.freeze({
+              journal: runtime.current.journal,
+              journalStorage: runtime.current.journal.storage,
+              workspace: runtime.current.workspace,
+              storage: runtime.current.storage,
+            }) : undefined}
           />
         ) : sessionsViewError ? (
           <DeferredRouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />

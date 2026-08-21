@@ -53,13 +53,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 867 B, above the tripwire floor, so gzip takes that tight step.
   //
   // Re-measured after the development lab left the stock build and the local
-  // folder joined it. The canonical config-free artifact measures 382,042 B raw /
-  // 118,288 B gzip; the reviewed Docker-defaults variant measures 382,047 B raw /
-  // 118,273 B gzip; the reviewed Pages variant measures 382,063 B raw /
-  // 118,293 B gzip; and the reviewed Google-Drive-configured variant measures
-  // 382,268 B raw / 118,395 B gzip. 374 KiB raw would have left 708 B
-  // and 116 KiB gzip would have left 389 B, both below the tripwire floor, so the
-  // 375/117 KiB steps leave 1,732 / 1,413 B.
+  // folder and work bundle joined it. The canonical config-free artifact measures
+  // 382,287 B raw / 118,354 B gzip; the reviewed Docker-defaults variant measures
+  // 382,292 B raw / 118,348 B gzip; the reviewed Pages variant measures
+  // 382,308 B raw / 118,365 B gzip; and the reviewed Google-Drive-configured
+  // variant measures 382,513 B raw / 118,451 B gzip. 374 KiB raw would have left
+  // 463 B and 116 KiB gzip would have left 333 B; the 375/117 KiB steps leave
+  // 1,487 / 1,357 B.
   entryJavaScript: Object.freeze({ raw: 375 * 1024, gzip: 117 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -84,13 +84,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 716 B, below the tripwire floor, so gzip takes 159 KiB and leaves 1,740 B.
   //
   // Re-measured after the development lab left the stock build and the local
-  // folder joined it. The canonical config-free artifact measures 497,739 B raw /
-  // 161,555 B gzip; the reviewed Docker-defaults variant measures 497,744 B raw /
-  // 161,542 B gzip; the reviewed Pages variant measures 497,760 B raw /
-  // 161,554 B gzip; and the reviewed Google-Drive-configured variant measures
-  // 497,965 B raw / 161,663 B gzip. 487 KiB raw would have left 723 B
-  // and 158 KiB gzip would have left 129 B, both below the tripwire floor, so the
-  // 488/159 KiB steps leave 1,747 / 1,153 B.
+  // folder and work bundle joined it. The canonical config-free artifact measures
+  // 497,984 B raw / 161,619 B gzip; the reviewed Docker-defaults variant measures
+  // 497,989 B raw / 161,622 B gzip; the reviewed Pages variant measures
+  // 498,005 B raw / 161,634 B gzip; and the reviewed Google-Drive-configured
+  // variant measures 498,210 B raw / 161,711 B gzip. 487 KiB raw would have left
+  // 478 B and 158 KiB gzip would have left 81 B; the 488/159 KiB steps leave
+  // 1,502 / 1,105 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 488 * 1024, gzip: 159 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -114,13 +114,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // steps leave 1,479 / 1,393 B. None of this bundle is fetched on first paint.
   //
   // Re-measured after the development lab left the stock build and the local
-  // folder joined it. The canonical config-free artifact measures 232,945 B raw /
-  // 68,183 B gzip; the reviewed Docker-defaults variant measures 232,945 B raw /
-  // 68,182 B gzip; the reviewed Pages variant measures 232,945 B raw /
-  // 68,181 B gzip; and the reviewed Google-Drive-configured variant measures
-  // 233,017 B raw / 68,242 B gzip. 228 KiB raw would have left 455 B
-  // and 67 KiB gzip would have left 366 B, both below the tripwire floor, so the
-  // 229/68 KiB steps leave 1,479 / 1,390 B.
+  // folder and work bundle joined it. The canonical config-free artifact measures
+  // 233,208 B raw / 68,245 B gzip; the reviewed Docker-defaults variant measures
+  // 233,208 B raw / 68,245 B gzip; the reviewed Pages variant measures
+  // 233,208 B raw / 68,246 B gzip; and the reviewed Google-Drive-configured
+  // variant measures 233,280 B raw / 68,303 B gzip. 228 KiB raw would have left
+  // 192 B and 67 KiB gzip would have left 305 B; the 229/68 KiB steps leave
+  // 1,216 / 1,329 B.
   deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -157,14 +157,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // floor, so gzip takes that tight step.
   //
   // Re-measured after the development lab left the stock build and the local
-  // folder joined it. The canonical config-free artifact measures 1,994,856 B raw /
-  // 623,705 B gzip; the reviewed Docker-defaults variant measures 1,994,861 B raw /
-  // 623,702 B gzip; the reviewed Pages variant measures 1,994,934 B raw /
-  // 623,712 B gzip; and the reviewed Google-Drive-configured variant measures
-  // 1,995,423 B raw / 624,008 B gzip. 1949 KiB raw would have left 353 B
-  // and 610 KiB gzip would have left 632 B, both below the tripwire floor, so the
-  // 1950/611 KiB steps leave 1,377 / 1,656 B.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1950 * 1024, gzip: 611 * 1024 }),
+  // folder and work bundle joined it. The canonical config-free artifact measures
+  // 2,012,792 B raw / 629,760 B gzip; the reviewed Docker-defaults variant measures
+  // 2,012,797 B raw / 629,784 B gzip; the reviewed Pages variant measures
+  // 2,012,870 B raw / 629,808 B gzip; and the reviewed Google-Drive-configured
+  // variant measures 2,013,363 B raw / 630,030 B gzip. 1967 KiB raw would have left
+  // 845 B and 616 KiB gzip would have left 754 B; the 1967/617 KiB steps leave
+  // 845 / 1,778 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1967 * 1024, gzip: 617 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -219,14 +219,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // tripwire floor, so the 2618/795 KiB steps leave 1,342 / 1,670 B.
   //
   // Re-measured after the development lab left the stock build and the local
-  // folder joined it. The canonical config-free artifact measures 2,695,560 B raw /
-  // 818,523 B gzip; the reviewed Docker-defaults variant measures 2,695,565 B raw /
-  // 818,518 B gzip; the reviewed Pages variant measures 2,695,638 B raw /
-  // 818,530 B gzip; and the reviewed Google-Drive-configured variant measures
-  // 2,696,127 B raw / 818,824 B gzip. 2633 KiB raw would have left 65 B
-  // and 800 KiB gzip would have left 376 B, both below the tripwire floor, so the
-  // 2634/801 KiB steps leave 1,089 / 1,400 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2634 * 1024, gzip: 801 * 1024 }),
+  // folder and work bundle joined it. The canonical config-free artifact measures
+  // 2,713,496 B raw / 824,579 B gzip; the reviewed Docker-defaults variant measures
+  // 2,713,501 B raw / 824,602 B gzip; the reviewed Pages variant measures
+  // 2,713,574 B raw / 824,626 B gzip; and the reviewed Google-Drive-configured
+  // variant measures 2,714,067 B raw / 824,844 B gzip. 2651 KiB raw would have left
+  // 557 B and 806 KiB gzip would have left 500 B; the 2652/807 KiB steps leave
+  // 1,581 / 1,524 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2652 * 1024, gzip: 807 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -520,7 +520,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and 19 KiB gzip would have left 169 B, both below the tripwire floor, so the
   // existing 64/20 KiB ceilings stand and leave 596 / 1,193 B. None of it is in
   // first paint.
-  optionalSessionLibrary: Object.freeze({ raw: 64 * 1024, gzip: 20 * 1024 }),
+  optionalSessionLibrary: Object.freeze({ raw: 66 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,
   // separately named chunks under this unchanged aggregate ceiling.
@@ -604,7 +604,39 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalMemoryView: Object.freeze({ raw: 64 * 1024, gzip: 21 * 1024 }),
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
-  optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // Memory's small shared modules: the kind glyphs, and now the memory.json
+  // document schema itself. The schema was reachable only through
+  // `memory-tools.ts`, which also carries the tool definitions, the dedup
+  // rankers and the registry — so any surface that merely needed to read or
+  // write the file pulled all of it: the work bundle's memory merge measured
+  // 35 KiB of chunk for a parser worth about two. Split out, it is one shared
+  // chunk the agent tool bundle, the Memory route and the work bundle each
+  // point at instead of each carrying a copy; `tool-bundle` gave up 2,019 B in
+  // the same build. Measured together 2,604 B raw / 1,105 B gzip
+  // (kind-visual 432/213, memory-document 2,172/892); both ceilings take the
+  // smallest whole-KiB step above that reading. Fetched with the Memory route,
+  // an agent turn or the move-work panel — never at first paint.
+  optionalMemorySupport: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
+  /*
+   * Taking work out of Airship, and bringing it back in.
+   *
+   * `downloadBytes` had exactly two callers — one workspace file and the whole
+   * encrypted Vault — so `docs/PRODUCT_SPEC.md`'s "fork, resume, export, or
+   * delete work without vendor lock-in" was three verbs out of four. This pack
+   * is the fourth: the bundle reader and writer, the digest re-verification
+   * that makes "the digests survived" a checked claim, the import plan that
+   * states what will happen before anything is written, and the panel that
+   * says it. The merge itself is `migrateJournalState`, which already exists
+   * in the deferred capability pack and is fetched only when an import runs.
+   *
+   * Measured 16,173 B raw / 5,114 B gzip. 16 KiB raw would have left 211 B and
+   * 5 KiB gzip would have left 6 B, both far below the tripwire floor this
+   * file uses for a margin a minifier rename could move, so each ceiling takes
+   * one further step: 17 KiB raw leaves 1,235 B and 6 KiB gzip leaves 1,030 B.
+   * Nothing here is fetched until someone presses "Move work", so first paint,
+   * the Chat route and the Sessions route are all unchanged by it.
+   */
+  optionalWorkBundle: Object.freeze({ raw: 17 * 1024, gzip: 6 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch
   // refusal. It is fetched only for `#skills`; the authoring form remains the
@@ -1194,6 +1226,10 @@ export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
   "optionalSkillsManagerView",
   "optionalSkillEditor",
   "optionalTerminal",
+  // Self-contained: two first-party modules and no build-time configuration in
+  // either, so its reading is the same in every reviewed variant and there is
+  // no reason for its ceiling to be justified by anything looser.
+  "optionalWorkBundle",
 ]);
 
 /*
@@ -1840,6 +1876,7 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
     label: "Optional Sessions / Memory / Memory support",
     budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport"]),
   }),
+  Object.freeze({ label: "Optional move-work bundle pack", budgets: Object.freeze(["optionalWorkBundle"]) }),
   Object.freeze({
     label: "Optional Skills route / skill editor",
     budgets: Object.freeze(["optionalSkillsManagerView", "optionalSkillEditor"]),
@@ -2271,11 +2308,19 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory view; found ${optionalMemoryViewPacks.length}.`);
   }
   const optionalMemoryViewMeasurement = measure(optionalMemoryViewPacks[0].payload);
+  // Two chunks today, and the ceiling governs their sum: whichever surface
+  // opens first fetches both, and Rollup is free to inline one of them into a
+  // consumer without that being a capability moving anywhere.
   const optionalMemorySupportPacks = javaScriptFiles.filter((file) => isOptionalMemorySupportPath(file.path));
-  if (optionalMemorySupportPacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
+  if (optionalMemorySupportPacks.length === 0) {
+    throw new Error("Production must contain the optional Memory support chunk; found none.");
   }
-  const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalMemorySupportMeasurement = sumMeasurements(optionalMemorySupportPacks.map((file) => measure(file.payload)));
+  const optionalWorkBundlePacks = javaScriptFiles.filter((file) => isOptionalWorkBundlePath(file.path));
+  if (optionalWorkBundlePacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional move-work pack; found ${optionalWorkBundlePacks.length}.`);
+  }
+  const optionalWorkBundleMeasurement = measure(optionalWorkBundlePacks[0].payload);
   const optionalSkillsManagerViewPacks = javaScriptFiles.filter((file) => isOptionalSkillsManagerViewPath(file.path));
   if (optionalSkillsManagerViewPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional Skills route; found ${optionalSkillsManagerViewPacks.length}.`);
@@ -2520,6 +2565,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "work-bundle", paths: optionalWorkBundlePacks.map((file) => file.path) },
       { name: "skills-manager-view", paths: optionalSkillsManagerViewPacks.map((file) => file.path) },
       { name: "skill-editor", paths: optionalSkillEditorPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
@@ -2625,6 +2671,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Optional move-work pack", optionalWorkBundleMeasurement, RELEASE_BUDGETS.optionalWorkBundle);
   assertWithinBudget("Optional Skills route", optionalSkillsManagerViewMeasurement, RELEASE_BUDGETS.optionalSkillsManagerView);
   assertWithinBudget("Optional skill editor", optionalSkillEditorMeasurement, RELEASE_BUDGETS.optionalSkillEditor);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
@@ -2704,6 +2751,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalSkillsManagerView: optionalSkillsManagerViewMeasurement,
     optionalSkillEditor: optionalSkillEditorMeasurement,
     optionalTerminal: optionalTerminalMeasurement,
+    optionalWorkBundle: optionalWorkBundleMeasurement,
   });
 
 
@@ -2823,6 +2871,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalMemorySupport: Object.freeze({
         path: optionalMemorySupportPacks[0].path,
         ...optionalMemorySupportMeasurement,
+      }),
+      optionalWorkBundle: Object.freeze({
+        path: optionalWorkBundlePacks[0].path,
+        ...optionalWorkBundleMeasurement,
       }),
       optionalSkillsManagerView: Object.freeze({
         path: optionalSkillsManagerViewPacks[0].path,
@@ -3052,6 +3104,7 @@ export function isBaselineJavaScriptPath(path) {
     && !isOptionalBrowserCapabilityPath(path)
     && !isOptionalMemoryViewPath(path)
     && !isOptionalMemorySupportPath(path)
+    && !isOptionalWorkBundlePath(path)
     && !isOptionalSkillsManagerViewPath(path)
     && !isOptionalSkillEditorPath(path)
     && !isOptionalTerminalPath(path)
@@ -3136,7 +3189,22 @@ export function isOptionalMemoryViewPath(path) {
 }
 
 export function isOptionalMemorySupportPath(path) {
-  return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
+  // `memory-document` joined `kind-visual` when the memory.json schema was
+  // split out of the tool surface: it is the one shared chunk the agent tool
+  // bundle, the Memory route and the move-work panel all point at, so it is
+  // Memory support by definition rather than by convenience.
+  return /^assets\/(?:kind-visual|memory-document)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The move-work pack: the bundle reader/writer, the digest re-verification and
+ * the panel that states an import before it runs. See `optionalWorkBundle`.
+ *
+ * Fetched on the first press of "Move work" and never before, which is why it
+ * is excluded from the pre-render baseline below rather than counted in it.
+ */
+export function isOptionalWorkBundlePath(path) {
+  return /^assets\/work-bundle-view-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 /** The complete route-local Skills manager; see `optionalSkillsManagerView`. */
@@ -3341,7 +3409,7 @@ export function assertOptionalSemanticPackIntegrity(files, manifest, declaredAva
 }
 
 export function assertOptionalPacksAreNotPreloaded(index) {
-  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|client|request-state|terminal-view|manager|terminal-dock-state|semantic\.worker|fabric|openai|provider-connections-view|providers|session-route|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
+  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|memory-document|work-bundle-view|client|request-state|terminal-view|manager|terminal-dock-state|semantic\.worker|fabric|openai|provider-connections-view|providers|session-route|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
     throw new Error("Production HTML must not preload deferred capability or optional execution packs.");
   }
 }
@@ -3642,6 +3710,9 @@ function printResult(result) {
   );
   console.log(
     `Optional Memory support ${formatBytes(measurements.optionalMemorySupport.raw)} raw / ${formatBytes(measurements.optionalMemorySupport.gzip)} gzip`,
+  );
+  console.log(
+    `Optional move-work pack ${formatBytes(measurements.optionalWorkBundle.raw)} raw / ${formatBytes(measurements.optionalWorkBundle.gzip)} gzip`,
   );
   console.log(
     `Optional Skills route ${formatBytes(measurements.optionalSkillsManagerView.raw)} raw / ${formatBytes(measurements.optionalSkillsManagerView.gzip)} gzip`,

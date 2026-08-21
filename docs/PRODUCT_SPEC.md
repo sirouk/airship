@@ -19,7 +19,8 @@ an application server.
 3. Work in a durable virtual workspace with explicit tool approvals.
 4. Keep encrypted state on infrastructure the user controls.
 5. Inspect exact provider/model provenance for every turn.
-6. Fork, resume, export, or delete work without vendor lock-in.
+6. Fork, resume, export, or delete work without vendor lock-in. Export and
+   import are one file — a work bundle — described in `docs/WORK_BUNDLE.md`.
 
 ## Required product properties
 

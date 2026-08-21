@@ -1,6 +1,6 @@
 import type { JsonValue } from "../core/contracts";
 import { stableStringify } from "../core/hash";
-import type { EventJournal, JournalBackend, SessionRecord } from "../core/journal";
+import type { EventJournal, JournalBackend, JournalStateSource, SessionRecord } from "../core/journal";
 import { createBuiltInProfileCatalog, reconcileBuiltInSkills, reconcileBuiltInThemes } from "../profiles/catalog";
 import {
   ProfileCatalogConflictError,
@@ -134,8 +134,16 @@ export function adoptionCarriedNote(carried: AdoptionCarriedWork | undefined): s
     + " They continue with Fork to continue rather than in place: a conversation stays pinned to the storage it was started on, and this Vault is a different one.";
 }
 
-/** Preserve exact session IDs, event bytes, sequence numbers, and digest heads. */
-export async function migrateJournalState(source: EventJournal, target: JournalBackend): Promise<void> {
+/**
+ * Preserve exact session IDs, event bytes, sequence numbers, and digest heads.
+ *
+ * The source is `JournalStateSource` rather than `EventJournal` because this is
+ * a merge, not a vault-only move: a bundle read from a file supplies the same
+ * three reads and nothing else, and typing the parameter as the class made the
+ * class the only possible source. The behaviour is unchanged — skip a session
+ * already present, refuse a conflicting one, never overwrite.
+ */
+export async function migrateJournalState(source: JournalStateSource, target: JournalBackend): Promise<void> {
   const sessions = await source.listSessions();
   for (const session of sessions) {
     const events = await source.readEvents(session.id);

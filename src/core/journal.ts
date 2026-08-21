@@ -118,6 +118,18 @@ export interface JournalBackend {
   ): Promise<void>;
 }
 
+/**
+ * The read side of a journal, as a migration needs it.
+ *
+ * `migrateJournalState` only ever reads three things from its source, and
+ * typing the parameter as the whole `EventJournal` class made that class the
+ * only possible source — its private fields make it nominal. A bundle read
+ * from a file is a legitimate source of exactly these three reads and of
+ * nothing else, so the contract is named for what it is. Types only: nothing
+ * is added to any chunk.
+ */
+export type JournalStateSource = Pick<EventJournal, "listSessions" | "readEvents" | "getSession">;
+
 export class JournalConflictError extends Error {
   constructor(message = "The session head changed while appending events.") {
     super(message);
@@ -206,6 +218,20 @@ export class EventJournal {
 
   getSession(sessionId: string, signal?: AbortSignal) {
     return this.backend.getSession(sessionId, signal);
+  }
+
+  /**
+   * The backend this journal commits through.
+   *
+   * A migration writes events that are already sealed — same ids, sequences,
+   * `recordedAt` stamps and digests — so it cannot go through `append`, which
+   * mints new ones. `migrateJournalState` therefore takes a `JournalBackend`,
+   * and this is how a caller holding only the journal names the same one. It
+   * is not a general escape hatch: every ordinary write must keep using the
+   * append queue above, which is what makes two in-page writers orderable.
+   */
+  get storage(): JournalBackend {
+    return this.backend;
   }
 
   /**

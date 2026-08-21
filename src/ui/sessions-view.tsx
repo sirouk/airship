@@ -1,5 +1,5 @@
 import type { SessionManifest } from "../core/contracts";
-import type { SessionRecord } from "../core/journal";
+import type { JournalBackend, JournalStateSource, SessionRecord } from "../core/journal";
 import {
   type ActiveSessionRuntime,
   type SessionListItem,
@@ -11,6 +11,7 @@ import {
   type SessionForkResult,
   type SessionLibraryDetail,
 } from "../sessions/library";
+import type { WorkspacePort } from "../workspace/contracts";
 import { forkLibraryAnnouncement } from "./chat/fork-notice";
 import { ReceiptTraceDetails, receiptOriginLabel } from "./chat/run-details";
 import { Icon } from "./icons";
@@ -97,6 +98,22 @@ export type SessionsViewProps = Readonly<{
    * rail selection.
    */
   onFocusSessionConsumed?: () => void;
+  /**
+   * What a work bundle is exported from and imported into.
+   *
+   * `journal` is the read side and `journalStorage` the write side, because a
+   * merge writes events that are already sealed and cannot go through the
+   * journal's own append. `workspace` is the active profile's namespace, which
+   * is where memory.json lives, and `storage` is the storage authority — a
+   * Vault-backed one can seal a bundle, page memory cannot. Absent means the
+   * host has no journal to move, and the control is not offered.
+   */
+  bundleSources?: Readonly<{
+    journal: JournalStateSource;
+    journalStorage: JournalBackend;
+    workspace?: WorkspacePort;
+    storage?: unknown;
+  }>;
 }>;
 
 /** The journal-adapter sentence, chosen by the adapter that is live. */
@@ -172,6 +189,7 @@ export function SessionsView({
   quarantine,
   focusSessionId,
   onFocusSessionConsumed,
+  bundleSources,
 }: SessionsViewProps) {
   const [draftSearch, setDraftSearch] = useState("");
   const [search, setSearch] = useState("");
@@ -236,6 +254,16 @@ export function SessionsView({
    */
   const [depth, setDepth] = useState<Readonly<{ key: string; pages: number }>>(() => Object.freeze({ key: "", pages: 1 }));
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  /*
+   * The whole move-work surface, fetched the first time someone asks for it.
+   *
+   * It is not route chrome and it is not first paint: a person who never moves
+   * work never downloads the bundle reader, the digest verifier or the merge
+   * plan. `undefined` is "not asked for yet"; `null` is "asked for and the
+   * chunk did not arrive", which is a state the route has to be able to say.
+   */
+  const [MovePanel, setMovePanel] = useState<typeof import("./work-bundle-view").WorkBundleView | null>();
   const toolbarId = useId();
 
   /** The identity of the list being asked for; changing it is a different list. */
@@ -678,7 +706,51 @@ export function SessionsView({
             <DurabilityIndicator state={durability.state} detail={durability.detail} />
           </Popover>
         }
+        actions={bundleSources ? (
+          <button
+            class="small-button"
+            type="button"
+            aria-expanded={moveOpen}
+            aria-controls={`${toolbarId}-move`}
+            onClick={() => {
+              setMoveOpen((open) => !open);
+              if (MovePanel === undefined) {
+                void import("./work-bundle-view").then(
+                  (module) => setMovePanel(() => module.WorkBundleView),
+                  () => setMovePanel(null),
+                );
+              }
+            }}
+          >Move work</button>
+        ) : undefined}
       />
+
+      {moveOpen && bundleSources ? (
+        <div id={`${toolbarId}-move`}>
+          {MovePanel ? (
+            <MovePanel
+              journal={bundleSources.journal}
+              target={bundleSources.journalStorage}
+              conversations={(page?.items ?? []).map((item) => Object.freeze({
+                id: item.id,
+                title: item.title,
+                events: item.headSequence,
+              }))}
+              profileId={scopeProfileId}
+              profileName={scopeProfileName}
+              workspace={bundleSources.workspace}
+              storage={bundleSources.storage}
+              onImported={() => setRefresh((value) => value + 1)}
+            />
+          ) : (
+            <p class="session-library-move-status" role="status">
+              {MovePanel === null
+                ? "The move-work panel could not be loaded. No conversation, memory record or journal state changed."
+                : "Loading the move-work panel."}
+            </p>
+          )}
+        </div>
+      ) : null}
 
       {/* Every accessible name on this route says "conversation", because the
           route is called "All conversations" and its heading counts

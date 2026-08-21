@@ -59,6 +59,26 @@ export interface ClientEncryptedWorkspacePort extends WorkspacePort {
   readonly encryptionBoundary: "airship-client-envelope-v1";
 }
 
+/**
+ * A workspace that can also seal bytes the caller owns, under the same key it
+ * already encrypts its own objects with — without handing that key out.
+ *
+ * This exists so a person can take a *sealed* work bundle off this device. The
+ * alternative was to give a route the Vault's `WorkspaceRootKey`, and the key
+ * custody rule in this product is that the key stays inside the object that
+ * holds it. The caller supplies a namespace so two unrelated sealed artifacts
+ * can never be opened as one another, and receives ordinary bytes back.
+ *
+ * Only a Vault-backed workspace implements it. Page memory has no key, so the
+ * sealed choice is simply unavailable there, and the surface says so rather
+ * than implying an encryption that is not happening.
+ */
+export interface PortableSealPort {
+  sealPortable(namespace: string, plaintext: Uint8Array): Promise<Uint8Array>;
+  openPortable(namespace: string, sealed: Uint8Array): Promise<Uint8Array>;
+}
+
+
 export class WorkspaceConflictError extends Error {
   constructor(message = "The workspace file changed before this operation completed.") {
     super(message);

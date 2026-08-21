@@ -519,15 +519,15 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "382,042 B raw /\n  // 118,288 B gzip",
-      "382,042 B raw /\n  // 116.30 KiB gzip",
+      "382,287 B raw / 118,354 B gzip",
+      "382,287 B raw / 117.60 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 382042, gzip: 118288 },
+      entryJavaScript: { raw: 382287, gzip: 118354 },
     })).toThrow(
-      /entryJavaScript: its comment claims 116\.30 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
+      /entryJavaScript: its comment claims 117\.60 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
