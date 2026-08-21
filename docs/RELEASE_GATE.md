@@ -6,7 +6,7 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 ## The release gate blocks on
 
 - source maps or stray source-map directives;
-- credential-shaped payloads in shipped artifacts;
+- credential-shaped payloads in shipped artifacts, including decompressed Companion ZIP members;
 - missing reviewed public files or broken static-host assumptions;
 - missing security headers or service-worker boundary regressions;
 - asset budget overruns;

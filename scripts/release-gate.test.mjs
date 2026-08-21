@@ -11,6 +11,8 @@ import {
   assertOptionalPacksAreNotPreloaded,
   createReleaseManifest,
   inspectPayload,
+  assertExactExtensionReleaseInventory,
+  inspectExtensionArchive,
   isOptionalExecutionPackPath,
   isOptionalExecutionEnginePath,
   isOptionalExecutionSupportPath,
@@ -62,6 +64,11 @@ import {
   serializeReleaseManifest,
   validateBuiltCsp,
 } from "./release-gate.mjs";
+import {
+  EXTENSION_PACKAGE_MEMBERS,
+  EXTENSION_RELEASE_FILES,
+  createExtensionArchive,
+} from "../extension/release-archive.mjs";
 
 describe("release gate", () => {
   it("discloses only the embedding origin required by the WebContainer frame", () => {
@@ -194,6 +201,54 @@ describe("release gate", () => {
       "Chutes API key",
     );
     expect(inspectPayload("assets/main.js", Buffer.from('const help = "cak_ or cpk_"'))).toEqual([]);
+  });
+
+  it("decompresses exact Companion ZIP members before applying release scans", () => {
+    const entries = (background = "export {}") => EXTENSION_PACKAGE_MEMBERS.map((path) => ({
+      path,
+      payload: Buffer.from(path === "background.js" ? background : "reviewed fixture"),
+    }));
+    const clean = createExtensionArchive(entries());
+    expect(inspectExtensionArchive("extension/releases/fixture.zip", clean)).toEqual([]);
+
+    const synthetic = `AKIA${"Z".repeat(16)}`;
+    const hostile = createExtensionArchive(entries(
+      `const key = "${synthetic}";\n//# sourceMappingURL=background.js.map\n`,
+    ));
+    expect(hostile.includes(Buffer.from(synthetic))).toBe(false);
+    expect(inspectExtensionArchive("extension/releases/fixture.zip", hostile)).toEqual([
+      "background.js: sourceMappingURL directive",
+      "background.js: AWS access key",
+    ]);
+
+    // A source-map member is not one of the ten reviewed package members.
+    const renamed = Buffer.from(clean);
+    const from = Buffer.from("popup.js");
+    const to = Buffer.from("x.js.map");
+    let replacements = 0;
+    for (let offset = renamed.indexOf(from); offset >= 0; offset = renamed.indexOf(from, offset + to.length)) {
+      to.copy(renamed, offset);
+      replacements += 1;
+    }
+    expect(replacements).toBe(2); // local header and central directory
+    expect(() => inspectExtensionArchive("extension/releases/fixture.zip", renamed))
+      .toThrow(/member order\/inventory differs/u);
+
+    expect(() => inspectExtensionArchive(
+      "extension/releases/fixture.zip",
+      Buffer.concat([clean, Buffer.from("unlisted trailing bytes")]),
+    )).toThrow(/end signature|exact archive tail/u);
+    const corrupt = Buffer.from(clean);
+    corrupt[30 + Buffer.byteLength("background.js")] ^= 0xff;
+    expect(() => inspectExtensionArchive("extension/releases/fixture.zip", corrupt))
+      .toThrow(/invalid compressed data|checksum does not match/u);
+  });
+
+  it("requires the exact eight-file Companion release directory", () => {
+    const exact = EXTENSION_RELEASE_FILES.map((path) => `extension/releases/${path}`);
+    expect(() => assertExactExtensionReleaseInventory(exact)).not.toThrow();
+    expect(() => assertExactExtensionReleaseInventory([...exact, "extension/releases/orphan.zip"]))
+      .toThrow(/unexpected: orphan\.zip/u);
   });
 
   it("fails either raw or compressed budget overruns without echoing payloads", () => {

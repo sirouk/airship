@@ -4,6 +4,12 @@ import { dirname, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import {
+  EXTENSION_RELEASE_ARCHIVES,
+  EXTENSION_RELEASE_FILES,
+  assertExactInventory,
+  readExtensionArchive,
+} from "../extension/release-archive.mjs";
+import {
   duplicatePolicyDirectiveNames,
   parsePolicy,
   validateConnectSources,
@@ -790,6 +796,87 @@ export function inspectPayload(path, payload) {
   return Object.freeze(findings);
 }
 
+const EXTENSION_RELEASE_PREFIX = "extension/releases/";
+const extensionArchivePaths = new Set(
+  EXTENSION_RELEASE_ARCHIVES.map(({ file }) => `${EXTENSION_RELEASE_PREFIX}${file}`),
+);
+
+export function assertExactExtensionReleaseInventory(paths) {
+  const actual = paths
+    .filter((path) => path.startsWith(EXTENSION_RELEASE_PREFIX))
+    .map((path) => path.slice(EXTENSION_RELEASE_PREFIX.length));
+  assertExactInventory("Companion release directory", actual, EXTENSION_RELEASE_FILES);
+}
+
+export function inspectExtensionArchive(path, payload) {
+  const findings = [];
+  for (const member of readExtensionArchive(path, payload)) {
+    for (const finding of inspectPayload(`${path}!/${member.path}`, member.payload)) {
+      findings.push(`${member.path}: ${finding}`);
+    }
+  }
+  return Object.freeze(findings);
+}
+
+
+export function assertExtensionReleaseMetadata(fileMap) {
+  const metadataFile = fileMap.get(`${EXTENSION_RELEASE_PREFIX}release.json`);
+  const sumsFile = fileMap.get(`${EXTENSION_RELEASE_PREFIX}SHA256SUMS`);
+  const installHub = fileMap.get("extension/index.html");
+  if (!metadataFile || !sumsFile || !installHub) {
+    throw new Error("Companion release metadata, checksums and install hub must all exist.");
+  }
+  let metadata;
+  try {
+    metadata = JSON.parse(metadataFile.payload.toString("utf8"));
+  } catch {
+    throw new Error("Companion release metadata is not valid JSON.");
+  }
+  if (metadata?.schema !== "airship-companion-release:1"
+    || typeof metadata.version !== "string"
+    || metadata.version.length === 0
+    || !Array.isArray(metadata.artifacts)
+    || metadata.artifacts.length !== EXTENSION_RELEASE_ARCHIVES.length) {
+    throw new Error("Companion release metadata has an unexpected schema, version or artifact count.");
+  }
+
+  const checksumLines = [];
+  for (const [index, expected] of EXTENSION_RELEASE_ARCHIVES.entries()) {
+    const artifact = metadata.artifacts[index];
+    if (artifact?.target !== expected.target
+      || artifact?.channel !== expected.channel
+      || artifact?.file !== expected.file) {
+      throw new Error(`Companion release metadata artifact ${index} does not match ${expected.file}.`);
+    }
+    const archivePath = `${EXTENSION_RELEASE_PREFIX}${expected.file}`;
+    const archive = fileMap.get(archivePath);
+    if (!archive) throw new Error(`Companion archive is missing: ${archivePath}.`);
+    const digest = createHash("sha256").update(archive.payload).digest("hex");
+    if (artifact.bytes !== archive.payload.byteLength || artifact.sha256 !== digest) {
+      throw new Error(`Companion release metadata does not bind the bytes of ${expected.file}.`);
+    }
+    checksumLines.push(`${digest}  ${expected.file}`);
+
+    let manifest;
+    try {
+      const member = readExtensionArchive(archivePath, archive.payload)
+        .find(({ path }) => path === "manifest.json");
+      manifest = JSON.parse(member.payload.toString("utf8"));
+    } catch {
+      throw new Error(`Companion manifest is invalid in ${expected.file}.`);
+    }
+    if (manifest.version !== metadata.version) {
+      throw new Error(`Companion manifest version disagrees with release.json in ${expected.file}.`);
+    }
+  }
+  if (sumsFile.payload.toString("utf8") !== `${checksumLines.join("\n")}\n`) {
+    throw new Error("Companion SHA256SUMS does not exactly match the six release archives.");
+  }
+  if (!installHub.payload.toString("utf8").includes(`Airship Companion · ${metadata.version}`)) {
+    throw new Error("Companion install hub version disagrees with release.json.");
+  }
+}
+
 export function createReleaseManifest(artifacts) {
   return Object.freeze({
     schema: "airship.release-manifest.v1",
@@ -1448,6 +1535,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const files = await collectFiles(output);
   const manifestPath = posix.normalize(RELEASE_MANIFEST_NAME);
   const releasableFiles = files.filter((file) => file.path !== manifestPath);
+  assertExactExtensionReleaseInventory(releasableFiles.map(({ path }) => path));
   const semanticArtifactManifest = JSON.parse(
     await readFile(resolve(root, "src/indexing/semantic-artifact-manifest.json"), "utf8"),
   );
@@ -1466,6 +1554,16 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     for (const finding of inspectPayload(file.path, file.payload)) {
       failures.push(`${redactSensitiveText(file.path)}: ${finding}`);
     }
+    if (extensionArchivePaths.has(file.path)) {
+      try {
+        for (const finding of inspectExtensionArchive(file.path, file.payload)) {
+          failures.push(`${redactSensitiveText(file.path)}!/${redactSensitiveText(finding)}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push(`${redactSensitiveText(file.path)}: ${redactSensitiveText(message)}`);
+      }
+    }
   }
   if (failures.length > 0) {
     throw new Error(`Release payload rejected:\n- ${failures.join("\n- ")}`);
@@ -1482,19 +1580,13 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     "extension/install.css",
     "extension/install.js",
     "extension/privacy.html",
-    "extension/releases/release.json",
-    "extension/releases/SHA256SUMS",
-    "extension/releases/airship-companion-chromium-development.zip",
-    "extension/releases/airship-companion-chromium-release.zip",
-    "extension/releases/airship-companion-firefox-development.zip",
-    "extension/releases/airship-companion-firefox-release.zip",
-    "extension/releases/airship-companion-safari-development.zip",
-    "extension/releases/airship-companion-safari-release.zip",
+    ...EXTENSION_RELEASE_FILES.map((path) => `${EXTENSION_RELEASE_PREFIX}${path}`),
   ];
   const fileMap = new Map(releasableFiles.map((file) => [file.path, file]));
   for (const path of required) {
     if (!fileMap.has(path)) throw new Error(`Required static artifact is missing: ${path}.`);
   }
+  assertExtensionReleaseMetadata(fileMap);
 
   await validatePublicCopies(
     output,

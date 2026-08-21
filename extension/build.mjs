@@ -90,6 +90,7 @@ export async function buildExtension(options) {
   if (!CHANNELS.includes(channel)) throw new TypeError(`Unknown channel ${channel}.`);
   const outDir = resolve(options.outDir ?? resolve(here, "build", channel, target));
   const scratch = resolve(outDir, "..");
+  await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
   const { buildManifest } = await loadManifestModule(scratch);

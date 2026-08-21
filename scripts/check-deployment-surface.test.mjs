@@ -29,6 +29,7 @@ const caddyfile = await read("Caddyfile");
 const compose = await read("docker-compose.yaml");
 const deploy = await read("deploy.sh");
 const dockerfile = await read("Dockerfile");
+const dockerignore = await read(".dockerignore");
 const entrypoint = await read("caddy-entrypoint.sh");
 
 const BASE = "{$AIRSHIP_PUBLIC_BASE_PATH:/}";
@@ -43,6 +44,19 @@ describe("the deployment serves the base path it advertises", () => {
 
   it("regenerates the release inventory after adding the static fallback", () => {
     expect(dockerfile).toMatch(/RUN cp dist\/index\.html dist\/404\.html\n(?:#.*\n)?RUN npm run check:release/u);
+  });
+
+  it("does not send generated output or local state to the Docker builder", () => {
+    const ignored = new Set(dockerignore.split(/\r?\n/u).map((line) => line.trim()));
+    for (const path of [
+      "extension/build",
+      "public/extension/releases",
+      ".env*",
+      ".airship-lab",
+      "test-results",
+      "graphify-out",
+      "docs/_work",
+    ]) expect(ignored).toContain(path);
   });
 
   it("gives Caddy the value at run time, because Caddy is a real process", () => {
