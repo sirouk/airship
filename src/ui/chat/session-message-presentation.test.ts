@@ -115,6 +115,39 @@ describe("presentSessionMessages", () => {
       .toEqual(assistant.turnStartPoint);
   });
 
+  /*
+   * "The command ran" and "the command worked" are different facts. A tool step
+   * that answered `File not found` writes `local.command.completed` with
+   * `isError: true`; reading only the event name badged that turn COMPLETED
+   * after a reload while the live transcript, which reads the result, called it
+   * failed — one turn with two dispositions depending on when you looked.
+   */
+  it("badges an errored local tool result as a failed turn on both rows", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      localDraft("local.command.requested", "local-error", "operation-1", {
+        content: "/read notes/definitely-not-here.md",
+        toolName: "read_file",
+        arguments: { path: "notes/definitely-not-here.md" },
+      }),
+      localDraft("local.command.approved", "local-error", "operation-1", {
+        toolName: "read_file",
+      }),
+      localDraft("local.command.completed", "local-error", "operation-1", {
+        toolName: "read_file",
+        content: "File not found: notes/definitely-not-here.md",
+        isError: true,
+      }),
+    ]);
+    const value = input(events);
+    const view = presentSessionMessages({ ...value, audit: { ...value.audit, status: "incomplete" } });
+
+    for (const role of ["user", "assistant"] as const) {
+      expect(view.rows.find((row) => row.turnId === "local-error" && row.role === role))
+        .toMatchObject({ turnStatus: "failed" });
+    }
+  });
+
   it("replays completed, denied, and failed local commands between ordinary agent turns", () => {
     const events = sequence([
       draft("session.created", undefined, {}),

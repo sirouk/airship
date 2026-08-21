@@ -5221,7 +5221,9 @@ export function App() {
           result.isError ? "failed" : "completed",
           result.content,
         ));
-        setRuntimeStatus("Local command complete; no model request made");
+        setRuntimeStatus(result.isError
+          ? "Local command failed; no model request made"
+          : "Local command complete; no model request made");
       }
     } catch (error) {
       const cancelled = controller.signal.aborted;

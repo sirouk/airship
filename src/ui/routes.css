@@ -1886,7 +1886,9 @@
   }
 
   /* Nothing to say, no band to say it in. The element stays mounted so the
-     live region survives; only its box goes away. */
+     band can fill and empty without the shell grid reflowing; only its box
+     goes away. Announcement belongs to the topbar's sr-only mirror, which
+     honours the turn-narration hold this band used to bypass. */
   .runtime-line--phone[data-empty] {
     min-height: 0;
     padding: 0;

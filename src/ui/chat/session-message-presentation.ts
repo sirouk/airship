@@ -1131,13 +1131,19 @@ function validateTurnReceipt(
 function groupTerminalStatus(group: TurnGroup): SessionPresentationTurnStatus {
   if (group.kind === "agent") return agentTerminalStatus(group.terminal);
   if (!group.terminal) return "incomplete";
-  if (
-    group.terminal.type === "local.command.completed" ||
-    group.terminal.type === "local.command.denied"
-  ) {
-    return "completed";
-  }
   const payload = record(group.terminal.payload);
+  if (group.terminal.type === "local.command.completed") {
+    /*
+     * "The command ran" and "the command worked" are different facts. A tool
+     * step that answered `File not found` writes `local.command.completed` with
+     * `isError: true`, and reading only the event name badged that turn
+     * COMPLETED on a card whose own text said the step failed — while the live
+     * transcript, which reads the result, called it failed. One turn, one
+     * disposition, on both sides of a reload.
+     */
+    return payload?.isError === true ? "failed" : "completed";
+  }
+  if (group.terminal.type === "local.command.denied") return "completed";
   return payload?.cancelled === true ? "cancelled" : "failed";
 }
 
