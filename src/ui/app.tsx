@@ -8490,7 +8490,6 @@ export function App() {
             fresh.session.manifest,
             authoritySession.current?.manifest ?? fresh.session.manifest,
           );
-      if (held) setComposerNotice(held);
       const audited = await loadAuditedSessionSnapshot(fresh.session.id);
       if (sessionAuditRefusesResume(audited.report)) {
         throw new Error("This conversation's journal failed its local integrity audit and cannot be reopened.");
@@ -8534,6 +8533,21 @@ export function App() {
           candidate.profileId === pinnedProfile.profileId && candidate.revision === pinnedProfile.profileRevision,
         ) ?? catalog.profiles.find((candidate) => candidate.profileId === pinnedProfile.profileId);
         if (!profile) throw new Error("The profile this conversation was started in is no longer in this catalog; create a fork instead.");
+        /*
+         * Reading is not a reason to change cockpits.
+         *
+         * A conversation that can resume takes you to the profile it belongs
+         * to, which is what resuming means. A conversation that cannot continue
+         * is being opened for reading only, and moving the active profile to
+         * read it would let an address carry one cockpit's authority into
+         * another — the silo every other surface keeps. The address stays, and
+         * says so.
+         */
+        if (held && profile.profileId !== profileId) {
+          throw new Error(
+            `This conversation belongs to the ${profile.name} profile and cannot continue here. Switch to ${profile.name} to read it, or fork it into this profile.`,
+          );
+        }
         resumedProfileId = profile.profileId;
         if (profile.profileId !== profileId) {
           workspaceRefreshCoordinator.invalidate();
@@ -8541,6 +8555,10 @@ export function App() {
           setProfileCockpitTransition(Object.freeze({ profileId: profile.profileId, name: profile.name }));
         }
       }
+      // Announced only once the conversation is actually being opened: a
+      // refusal above this line must not leave a "you are reading" sentence
+      // standing over a conversation nobody opened.
+      if (held) setComposerNotice(held);
       // One sentence, two carriers: the live region says exactly what the
       // composer band says, rather than a second wording of the same fact.
       await publishAuditedSession(fresh, audited, held ?? "Audited session resumed", undefined, held);

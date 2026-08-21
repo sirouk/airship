@@ -193,7 +193,11 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(page).toHaveURL(new RegExp(`#chat/${alphaSessionId}$`, "u"));
   await expect(shell).toHaveAttribute("data-active-profile", "research");
   await expect(shell).toHaveAttribute("data-session-profile", "research");
-  await expect(page.locator(".composer-notice")).toContainText(/conversation link is not available|Fork required/u);
+  // The silo answers by name now: an address from another cockpit says which
+  // cockpit owns it and what the two ways forward are, rather than reporting a
+  // generic unavailable link.
+  await expect(page.locator(".composer-notice"))
+    .toContainText(/belongs to the General profile|conversation link is not available|Fork required/u);
   await expect(page.locator(".transcript")).not.toContainText("Profile silo transcript turn 1");
   await expect(page.getByText(ALPHA_TITLE, { exact: true })).toHaveCount(0);
 
