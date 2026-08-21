@@ -3627,6 +3627,14 @@
    * enrolled got the floor while the one that was not stayed 38px under the
    * same finger. Enrolled rather than given a seventh number of their own.
    */
+  /*
+   * The two disclosures in this sheet that outrank the product-wide `summary`
+   * floor `tokens.css` now states, because they name their own height. Measured
+   * at 390×844: `.compact-callout > summary` 362×42 on Profiles and on Skills,
+   * `.skill-details > summary` 328×36, six of them, one per skill card.
+   */
+  .compact-callout > summary,
+  .skill-details > summary,
   .toggle-control,
   .profile-hub-scope .menu-select-trigger,
   .skills-toolbar .menu-select-trigger,

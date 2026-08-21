@@ -520,8 +520,30 @@ test("mobile workspace and terminal controls preserve their content lanes", asyn
   // measures the thing that band was costing: the share of a phone viewport
   // spent before the first file row, plus the promise that the route's own
   // sentence is still reachable rather than deleted.
-  const workbenchTop = await page.locator(".workbench-shell").evaluate((shell) => shell.getBoundingClientRect().top);
-  expect(workbenchTop).toBeLessThanOrEqual(844 * .34);
+  //
+  // AMENDED AGAIN, and the number is the honest part of it. The 34% ceiling
+  // left this route 4px of slack, and the folder tier spent those 4px by being
+  // a `<details>` that is closed on load and that nothing ever opened — its
+  // rendered text was 46 characters while its `textContent` was 1,041, and four
+  // e2e assertions about approvals and the Terminal were passing on the
+  // difference. The tier states its own state in rendered text now: "No folder
+  // is open. Nothing on this device is readable by Airship until you open one."
+  // Measured at 390×844, that sentence is 82px and the first file row moves
+  // from 283px to 365px.
+  //
+  // So the ceiling moves and the floor arrives, because "how much chrome" was
+  // only ever a proxy for "how much workbench". A budget with 4px of slack is
+  // what pushed a promise into a fold; a workbench floor is what the budget was
+  // protecting, and it is now asserted directly.
+  const workbench = await page.locator(".workbench-shell").evaluate((shell) => {
+    const box = shell.getBoundingClientRect();
+    return { top: box.top, height: box.height };
+  });
+  expect(workbench.top).toBeLessThanOrEqual(844 * .44);
+  // Measured 374px on this build with no folder open; 360 is that reading with
+  // the slack a font metric can move it by, and nothing like the 82px a
+  // sentence costs.
+  expect(workbench.height).toBeGreaterThanOrEqual(360);
   await expect(page.getByRole("button", { name: /About Workspace/u })).toBeVisible();
   await expect(page.locator(".route-header__status")).toContainText("Ephemeral");
 

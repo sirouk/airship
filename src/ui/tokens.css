@@ -540,13 +540,32 @@ button.primary:disabled {
  * Coarse pointers only: a mouse is precise, and forcing 44px everywhere would
  * inflate dense desktop toolbars for no one's benefit.
  */
+/*
+ * `summary` joined the list from a measurement, like everything else in it.
+ *
+ * The sweep that guards this floor queried
+ * `button,a[href],input,select,textarea,[role=button],[role=tab],[role=option],[role=switch]`
+ * — a list with no `summary` in it — so the one element type this product uses
+ * most for "there is more here" was never measured at all. Measured at 390×844
+ * on the built tree: six disclosures at 308×16 and 364×16 on Providers, seven
+ * at 328×36 and 362×42 on Skills, one at 362×42 on Profiles, two at 312×36 and
+ * 336×40 on All conversations, and the approval modal's own
+ * "Arguments shown to the approval policy" at 360×36. A disclosure is a
+ * control: a thumb has to hit it before any of that text exists.
+ *
+ * `align-content` rather than a flex box, because a `summary` is a list item
+ * and giving it `display: flex` deletes its own marker. Centring the block's
+ * content keeps the marker, the text and the 44px box.
+ */
 @media (pointer: coarse) {
   button.primary,
   .small-button,
   .icon-button,
-  .brand {
+  .brand,
+  summary {
     min-width: var(--touch-target);
     min-height: var(--touch-target);
+    align-content: center;
   }
 }
 

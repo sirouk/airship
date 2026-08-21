@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useState } from "preact/hooks";
 import {
   LOCAL_FOLDER_MAX_ENTRIES,
   forgetLocalFolder,
@@ -115,9 +115,19 @@ export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPane
     localFolderPickerAvailable() ? { kind: "absent" } : { kind: "unsupported" });
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const live = useRef<string>("");
+  /**
+   * True from the press that asks for a folder until one is chosen or the ask
+   * is cancelled.
+   *
+   * This state exists because two contracts meet on this route and only one of
+   * them can have the pixels at rest: the tier has to state its terms in
+   * rendered text, and `e2e/responsive-breakpoints.spec.ts` measures how much
+   * of a phone viewport is spent before the first file row. So the terms are
+   * printed by the gesture that is about to need them. The picker still opens
+   * inside a click — the second one — which is all Chromium requires.
+   */
+  const [deciding, setDeciding] = useState(false);
   const headingId = useId();
-  const noticeId = useId();
 
   useEffect(() => {
     if (!localFolderPickerAvailable() || !localFolderAttachmentRecorded(profileId)) return;
@@ -169,10 +179,15 @@ export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPane
      * workspace files that have nothing to do with the folder.
      */
     await port.list();
+    setDeciding(false);
     setState({ kind: "attached", name: port.folderName, mountPath: port.mountPath });
-    live.current = `${port.folderName} is open at ${port.mountPath}.`;
     await onFolderChanged(port);
   };
+
+  const pick = () => run(async () => {
+    const port = await openLocalFolder({ profileId });
+    await attach(port)();
+  });
 
   if (state.kind === "unsupported") {
     return <section class="local-folder" aria-labelledby={headingId}>
@@ -182,38 +197,52 @@ export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPane
   }
 
   /*
-   * The tier is a disclosure, not a banner.
+   * Nothing here folds away, and nothing here is a disclosure.
    *
-   * Open on the route it changes, it pushed the workbench past a third of a
-   * phone's height — measured at 653px of 844 — and the workbench is what this
-   * route is for. The summary states the tier and its current state in one
-   * line, which is the whole answer most of the time; everything that decides
-   * or explains is one press away, on the same surface.
+   * It used to be one. The whole tier — the mount path, "reviewed in every
+   * approval mode", "The Terminal does not carry it at all", and the six
+   * answers every storage tier gives — sat inside a `<details>` that is closed
+   * on load and that nothing ever opened, including at the one moment it
+   * mattered: after a real directory was attached. Measured on the built tree
+   * at 390×664, the panel's rendered text was `Folder on this device / None
+   * open / Open a folder…` and nothing else, while its `textContent` ran to
+   * 1,041 characters. The e2e specs asserted those promises with
+   * `toContainText`, which reads `textContent`, so they passed on text nobody
+   * could see.
+   *
+   * What a person sees now, decided rather than folded:
+   *
+   * - With no folder open: the tier, its state, and the sentence that is the
+   *   whole truth of that state — nothing on this device is readable. That is
+   *   all, because `e2e/responsive-breakpoints.spec.ts` measures the share of a
+   *   phone spent before the first file row and the workbench is what this
+   *   route is for.
+   * - Asking for a folder prints the terms. "Open a folder…" does not open the
+   *   picker; it renders the tier's promise, its listing bound and the six
+   *   answers, above "Choose a folder…" and "Cancel". The picker opens inside
+   *   that second click, which is still the user gesture Chromium requires. So
+   *   the terms cannot be skipped: they are on screen, unfolded, between the
+   *   intent and the directory handle.
+   * - With a folder open: all of it, for as long as the folder is attached —
+   *   where it is mounted, that every write is reviewed in every approval mode,
+   *   that the Terminal does not carry it, that a file the agent reads is in
+   *   the conversation, what forgetting does, and the six answers. That state
+   *   costs the workbench height, and it is the state in which a person's own
+   *   disk is attached to an agent.
    */
+  const terms = deciding || state.kind !== "absent";
   return <section class="local-folder" aria-labelledby={headingId}>
-    {/*
-      * The action stays on the surface; only the explanation folds away. A
-      * control a person cannot see is not a tier they can choose.
-      */}
-    <details class="local-folder__disclosure">
-      <summary>
-        <span class="local-folder__title" id={headingId}>{LOCAL_FOLDER_TIER.title}</span>
-        <span class="local-folder__summary-state">{state.kind === "attached"
-          ? state.name
-          : state.kind === "blocked" ? "Reconnect needed" : "None open"}</span>
-        <span
-          class="local-folder__actions"
-          onClick={(event) => event.stopPropagation()}
-        >
-      {state.kind === "absent" ? <button
+    <div class="local-folder__head">
+      <h3 class="local-folder__title" id={headingId}>{LOCAL_FOLDER_TIER.title}</h3>
+      <span class="local-folder__state">{state.kind === "attached"
+        ? state.name
+        : state.kind === "blocked" ? "Reconnect needed" : "None open"}</span>
+      <span class="local-folder__actions">
+      {state.kind === "absent" && !deciding ? <button
         type="button"
         class="primary"
         disabled={busy}
-        data-local-folder-open
-        onClick={() => run(async () => {
-          const port = await openLocalFolder({ profileId });
-          await attach(port)();
-        })}
+        onClick={() => setDeciding(true)}
       >Open a folder…</button> : null}
       {state.kind === "blocked" ? <button
         type="button"
@@ -229,10 +258,7 @@ export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPane
         type="button"
         disabled={busy}
         data-local-folder-change
-        onClick={() => run(async () => {
-          const port = await openLocalFolder({ profileId });
-          await attach(port)();
-        })}
+        onClick={pick}
       >Open a different folder…</button> : null}
       {state.kind === "absent" ? null : <button
         type="button"
@@ -241,39 +267,61 @@ export function LocalFolderPanel({ profileId, onFolderChanged }: LocalFolderPane
         onClick={() => run(async () => {
           await forgetLocalFolder(profileId);
           setState({ kind: "absent" });
-          live.current = "The folder was forgotten. Nothing on this device was changed.";
           await onFolderChanged(undefined);
         })}
       >Forget folder</button>}
-        </span>
-      </summary>
-    <p class="local-folder__note">{LOCAL_FOLDER_TIER.note}</p>
-    <p class="local-folder__status" role="status" aria-live="polite" id={noticeId}>
-      {state.kind === "attached"
-        ? localFolderAttachedSummary(state.name, state.mountPath)
-        : state.kind === "blocked"
-          ? state.reason
-          : "No folder is open. Nothing on this device is readable by Airship until you open one."}
-    </p>
-    {notice ? <p class="local-folder__notice" role="alert">{notice}</p> : null}
-
-    <p class="local-folder__note">{state.kind === "absent" ? LOCAL_FOLDER_BOUNDS_NOTE : LOCAL_FOLDER_FORGET_NOTE}</p>
+      </span>
+    </div>
     {/*
-      * The same six answers every storage tier gives, behind the disclosure
-      * this product already uses for exactly this. Open on the route, they
-      * pushed the workbench past a third of a phone's height — measured, and
-      * the workbench is what the route is for. Closed, the answers are one
-      * press away and still on the surface that changes them.
+      * The terms, in a band the workbench can survive.
+      *
+      * `.editor-route` is a fixed frame — `.main` is `overflow: hidden` for it
+      * — so a panel taller than the frame does not scroll the route, it
+      * subtracts from the surface below. Measured at 390×664 with every
+      * sentence rendered at full height: the workbench went to exactly 0px and
+      * the Explorer disappeared. So on a phone the band takes a fifth of the
+      * viewport and scrolls inside itself, and every sentence stays rendered
+      * text that `innerText` returns. That is the trade `chat.css` already
+      * makes for the session bar's instrument strip: a reading you have to
+      * scroll to is still a reading, and one behind a closed disclosure is not.
       */}
-    <details class="local-folder__more">
-      <summary>What opening a folder means</summary>
+    <div class="local-folder__terms">
+      {/*
+        * The one live region, and it is the visible sentence.
+        *
+        * The panel used to hold a `live` ref that was assigned on attach and on
+        * forget and rendered nowhere, and its only `role="status"` was inside
+        * the closed disclosure — so opening or forgetting a folder said nothing
+        * to a screen reader at all. This paragraph is rendered in every state,
+        * so the announcement and the sentence on screen are the same words.
+        */}
+      <p class="local-folder__status" role="status" aria-live="polite">
+        {state.kind === "attached"
+          ? localFolderAttachedSummary(state.name, state.mountPath)
+          : state.kind === "blocked"
+            ? state.reason
+            : "No folder is open. Nothing on this device is readable by Airship until you open one."}
+      </p>
+      {notice ? <p class="local-folder__notice" role="alert">{notice}</p> : null}
+      {terms ? <>
+      <p class="local-folder__note">{LOCAL_FOLDER_TIER.note}</p>
+      <p class="local-folder__note">{state.kind === "absent" ? LOCAL_FOLDER_BOUNDS_NOTE : LOCAL_FOLDER_FORGET_NOTE}</p>
+      {/*
+        * The same six answers every storage tier gives, on the surface that
+        * changes them. On a phone the row scrolls sideways rather than
+        * stacking into six full-width rows, for the reason above.
+        */}
       <dl class="local-folder__facts">
         {LOCAL_FOLDER_FACT_ROWS.map(([key, label]) => <div class="local-folder__fact" key={key}>
           <dt>{label}</dt>
           <dd>{LOCAL_FOLDER_TIER.facts[key]}</dd>
         </div>)}
       </dl>
-    </details>
-    </details>
+      </> : null}
+    </div>
+    {deciding ? <span class="local-folder__decide">
+      <button type="button" class="primary" disabled={busy} data-local-folder-open onClick={pick}>Choose a folder…</button>
+      <button type="button" disabled={busy} onClick={() => setDeciding(false)}>Cancel</button>
+    </span> : null}
   </section>;
 }

@@ -13,6 +13,7 @@ import {
   assertValidSessionInferenceBinding,
   sessionInferenceProviderIdMatches,
 } from "./inference-binding";
+import { lastRecencyAdvancingEvent } from "./journal";
 import type { DurableEvent, SessionRecord } from "./journal";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
@@ -820,7 +821,28 @@ function validateHead(
   if (session.headSequence !== sequence || session.headDigest !== digest) {
     add("SESSION_HEAD_MISMATCH", "chain", "Session head does not match the final audited event.");
   }
-  if (last && session.updatedAt !== last.recordedAt) {
+  /*
+   * `updatedAt` is not a copy of the last event's clock, and comparing it to
+   * one accused every fresh conversation of drift.
+   *
+   * The journals set it from `lastRecencyAdvancingEvent`: selecting a
+   * conversation, reordering a favorite and starring one are journaled but do
+   * not float a thread in "recently active", because reading a thread is not
+   * working in it. The Profile cockpit writes exactly such a record —
+   * `profile.active-conversation.selected` — at startup, so a conversation
+   * nobody has spoken in ends with a bookkeeping event and `updatedAt` stays on
+   * `session.created`. Measured on the built tree: a brand-new empty
+   * conversation reported "1 structural observation · SESSION UPDATED AT
+   * MISMATCH · Session update timestamp does not match the final event." beside
+   * "Nothing recorded yet" and "0 receipts", on a first run, with nothing to
+   * have drifted.
+   *
+   * Comparing against the record that actually sets the field is stricter, not
+   * weaker: a journal whose last event is bookkeeping was previously unable to
+   * pass this check at all, so the finding carried no information there.
+   */
+  const recency = lastRecencyAdvancingEvent(events);
+  if (recency && session.updatedAt !== recency.recordedAt) {
     add("SESSION_UPDATED_AT_MISMATCH", "chain", "Session update timestamp does not match the final event.", undefined, "warning");
   }
 }

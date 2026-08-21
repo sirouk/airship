@@ -9219,7 +9219,10 @@ export function App() {
                     // survives, read from the same derivation the session chip
                     // and the Vault route read.
                     unsaved={sessionDurability.state === "ephemeral"}
-                    onKeepConversations={() => navigate("vault")}
+                    // The sentence promises the destination, so it selects it.
+                    // Nothing is enrolled until the key ceremony there is
+                    // completed, and Ephemeral is one press away in that picker.
+                    onKeepConversations={() => { if (navigate("vault")) void changeVaultProvider("local-device"); }}
                     tier={activeSessionRecord?.manifest.capabilityTier}
                     onOpenCapabilities={() => navigate("capabilities")}
                   />

@@ -1286,6 +1286,73 @@ describe("auditSessionHistory", () => {
   });
 });
 
+describe("the session update timestamp", () => {
+  /*
+   * A conversation nobody has spoken in.
+   *
+   * The Profile cockpit journals `profile.active-conversation.selected` into
+   * the session it opens, at startup, before anyone has typed. That record is
+   * bookkeeping: `SESSION_BOOKKEEPING_EVENT_TYPES` keeps it out of `updatedAt`
+   * on purpose, because reading a thread is not working in it. The audit
+   * compared `updatedAt` with the *last* event regardless, so every fresh
+   * conversation accused itself of drift — measured on the built tree as
+   * "1 structural observation · SESSION UPDATED AT MISMATCH · Session update
+   * timestamp does not match the final event." next to "Nothing recorded yet"
+   * and "0 receipts", on a first run.
+   */
+  it("is not compared against a bookkeeping record that never set it", async () => {
+    const fixture = await bookkeepingFixture();
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+
+    expect(events.at(-1)!.type).toBe("profile.active-conversation.selected");
+    expect(session.updatedAt).not.toBe(events.at(-1)!.recordedAt);
+
+    const report = await auditSessionHistory({ session, events });
+    expect(report.findings.map((finding) => finding.code)).not.toContain("SESSION_UPDATED_AT_MISMATCH");
+    expect(report.findings).toEqual([]);
+  });
+
+  /* The check is stricter, not weaker: real drift on the record that does set
+     the field is still named. */
+  it("still reports a timestamp that does not match the record that set it", async () => {
+    const fixture = await bookkeepingFixture();
+    const stored = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(stored.id);
+    const session: SessionRecord = { ...stored, updatedAt: "2099-01-01T00:00:00.000Z" };
+
+    const report = await auditSessionHistory({ session, events });
+    const drift = report.findings.filter((finding) => finding.code === "SESSION_UPDATED_AT_MISMATCH");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]!.severity).toBe("warning");
+    expect(drift[0]!.message).toBe("Session update timestamp does not match the final event.");
+  });
+});
+
+/**
+ * A conversation whose last durable record is the Profile cockpit's own
+ * active-conversation pointer — which is exactly what a conversation nobody has
+ * spoken in looks like on a first run.
+ */
+async function bookkeepingFixture() {
+  const resolvedSkills: JsonValue = [];
+  const fixture = await createFixture([], {
+    version: 1,
+    profileId: "general",
+    profileRevision: await sha256("profile-bookkeeping"),
+    themeId: "foundry",
+    themeDigest: await sha256("theme-bookkeeping"),
+    resolvedSkills: resolvedSkills as never,
+    skillSetDigest: await sha256(stableStringify(resolvedSkills)),
+    resolutionDigest: await sha256("resolution-bookkeeping"),
+  });
+  await fixture.journal.append(fixture.session.id, [{
+    type: "profile.active-conversation.selected",
+    payload: { version: 1, profileId: "general", sessionId: fixture.session.id, generation: 1 },
+  }]);
+  return fixture;
+}
+
 async function createFixture(tools: ToolDefinition[], profile?: SessionRecord["manifest"]["profile"]) {
   let tick = 0;
   let id = 0;

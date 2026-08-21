@@ -62,7 +62,7 @@ ceiling.
 | Optional inference/provider + Companion protocol packs | 141 KiB | 42 KiB |
 | Optional prime runtime pack | 236 KiB | 72 KiB |
 | Pinned same-origin Pyodide distribution | 16384 KiB | 8192 KiB |
-| HTML-referenced entry CSS | 143 KiB | 26 KiB |
+| HTML-referenced entry CSS | 144 KiB | 26 KiB |
 | General WASM excluding separately capped engine WASM | 1024 KiB / 1024 KiB | 350 KiB / 350 KiB |
 
 ## Main local commands

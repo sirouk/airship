@@ -158,6 +158,89 @@ const STATES_A_GOTO_NEVER_REACHES = [
       await expect(page.getByRole("button", { name: "Interrupt process" })).toBeVisible({ timeout: 30_000 });
     },
   },
+  {
+    route: "chat",
+    state: "a decision waiting in the approval modal",
+    async enter(page: Page) {
+      /*
+       * The modal, open — not escaped.
+       *
+       * The two-decisions state above reaches this dialog and immediately
+       * presses Escape, because what it is measuring is the bar underneath. So
+       * the surface a person actually answers a capability request on has never
+       * been measured, and it carries a `summary` of its own: "Arguments shown
+       * to the approval policy", 360×36 at 390×844.
+       */
+      const composer = page.getByRole("combobox", { name: "Message Airship" });
+      await composer.click();
+      await composer.fill("/write touch/approval.txt payload");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await expect(page.getByRole("dialog", { name: /Allow write_file once/u })).toBeVisible({ timeout: 30_000 });
+    },
+  },
+  {
+    route: "chat",
+    state: "a connected provider",
+    async enter(page: Page) {
+      /*
+       * The one state this file could never have reached by navigating, and the
+       * one that holds the chat route's most-used control.
+       *
+       * Every sweep here has run against a page with no provider, so the
+       * session bar rendered `DemoModelChip` — a `Popover` trigger that carries
+       * its own 44px floor — and the connected chip, which is `MenuSelect`'s
+       * shared trigger inside a strip that took its geometry away, was never on
+       * screen at all. Measured with Ollama connected at 390×844: 100×40, in
+       * every conversation.
+       *
+       * The provider is a loopback endpoint answered by the page's own route
+       * handler, so nothing leaves the browser and no key is typed.
+       */
+      await page.route("http://127.0.0.1:11434/**", async (route) => {
+        const url = new URL(route.request().url());
+        const headers = {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "authorization,content-type",
+          "Content-Type": "application/json",
+        };
+        if (route.request().method() === "OPTIONS") { await route.fulfill({ status: 204, body: "", headers }); return; }
+        if (url.pathname === "/api/version") { await route.fulfill({ status: 200, body: JSON.stringify({ version: "0.12.3" }), headers }); return; }
+        if (url.pathname === "/api/tags") {
+          await route.fulfill({
+            status: 200,
+            headers,
+            body: JSON.stringify({ models: [{
+              name: "gemma3:latest",
+              size: 3_338_801_804,
+              digest: "sha256:touch-target-floor",
+              modified_at: "2026-07-20T00:00:00Z",
+              capabilities: ["completion", "tools"],
+              details: { format: "gguf", family: "gemma3", parameter_size: "4.3B", quantization_level: "Q4_K_M" },
+            }] }),
+          });
+          return;
+        }
+        await route.fulfill({ status: 404, body: "not found", headers });
+      });
+      // The lab namespace lives in the query string, and losing it here would
+      // measure a different browser profile than the one `openRoute` opened.
+      const route = (hash: string) => `${page.url().split("#")[0]!}#${hash}`;
+      await page.goto(route("connection"));
+      // Providers renders no `h1`, so the route's own card is what says it is
+      // mounted. Waiting for a heading here waits for something that never
+      // arrives.
+      const ollama = page.locator('.provider-setup-card.local[data-provider="ollama"]');
+      await expect(ollama).toBeVisible({ timeout: 20_000 });
+      await ollama.getByRole("button", { name: "Check Ollama", exact: true }).click();
+      await expect(
+        page.getByRole("group", { name: "Connected inference providers" })
+          .locator("article.provider-connection").filter({ hasText: "Ollama" }),
+      ).toBeVisible({ timeout: 30_000 });
+      await page.goto(route("chat"));
+      await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout: 30_000 });
+      await expect(page.locator(".session-bar .session-runtime")).toBeVisible({ timeout: 30_000 });
+    },
+  },
 ] as const;
 
 const FLOOR = 44;
@@ -171,7 +254,17 @@ const FLOOR = 44;
  */
 async function undersizedControls(page: Page, floor: number): Promise<string[]> {
   return page.evaluate((limit) => {
-    const INTERACTIVE = "button,a[href],input:not([type=hidden]),select,textarea,[role=button],[role=tab],[role=option],[role=switch]";
+    /*
+     * `summary` is in this list because it was measurably not.
+     *
+     * A disclosure is a control — it is the only thing standing between a
+     * person and everything behind it — and this query had never named one.
+     * Measured at 390×844 on the built tree while this file reported fourteen
+     * clean routes: six at 308×16 and 364×16 on Providers, seven at 328×36 and
+     * 362×42 on Skills, one at 362×42 on Profiles, two at 312×36 and 336×40 on
+     * All conversations, and 360×36 in the approval modal.
+     */
+    const INTERACTIVE = "button,a[href],input:not([type=hidden]),select,textarea,summary,[role=button],[role=tab],[role=option],[role=switch]";
     return [...document.querySelectorAll(INTERACTIVE)].flatMap((element) => {
       const box = element.getBoundingClientRect();
       if (!box.width || !box.height) return [];

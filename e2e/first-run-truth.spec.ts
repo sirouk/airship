@@ -39,6 +39,41 @@ test("a first-ever visit starts a new unsaved conversation without reporting los
   await expect(page.locator(".composer-notice").filter({ hasText: LOST_WORK_NOTICE })).toHaveCount(0);
 });
 
+/**
+ * A first-run promise has to land somewhere that keeps it.
+ *
+ * "Keep it on this device →" navigated to `#vault` and stopped, with Ephemeral
+ * still the selected provider — measured on the built tree, the destination read
+ * "Ephemeral · page memory only / No cloud or device Vault is attached", and the
+ * person still had to find the picker, find Local Device in it, and then find
+ * the ceremony. The sentence named an outcome the destination did not offer.
+ *
+ * Selecting the destination is the whole fix, and it commits nothing: the Local
+ * Device Vault is enrolled by a key ceremony the person completes on that
+ * screen, "nothing is enrolled until you save that key", and Ephemeral is one
+ * press away in the same picker.
+ */
+test("the first-run keep link lands on the destination that keeps it, with its ceremony on screen", async ({ page }, testInfo) => {
+  const namespace = `keep-here-${testInfo.project.name}-${Date.now().toString(36)}`;
+  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}`);
+  await waitForShellSettled(page, { timeout: 30_000 });
+
+  await page.getByRole("region", { name: "About this conversation" })
+    .getByRole("button", { name: /Keep it on this device/u }).click();
+
+  await expect(page).toHaveURL(/#vault$/u);
+  const route = page.getByRole("main");
+  // The destination, selected — not merely offered somewhere on the route.
+  await expect(page.locator(".vault-provider-selector .menu-select-trigger")).toContainText("Local Device");
+  await expect(route).toContainText("Keep this browser’s work on this device");
+  // And the ceremony, on screen, with the two controls that start it.
+  await expect(route.getByRole("button", { name: "Create a device Vault" })).toBeVisible({ timeout: 20_000 });
+  await expect(route.locator("[data-vault-create]")).toBeVisible();
+  // Nothing has been enrolled by the navigation, and the route says so.
+  await expect(route).toContainText("Nothing is enrolled until you save that key");
+  await expect(route).toContainText("Not set up yet");
+});
+
 test("a conversation address that did not come from this tab reports the missing session", async ({ page }, testInfo) => {
   const namespace = `dead-link-${testInfo.project.name}-${Date.now().toString(36)}`;
   // Shaped like a real address and absent from this journal, which is what a

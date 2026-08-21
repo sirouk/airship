@@ -394,6 +394,17 @@
     min-height: var(--touch-target);
     justify-content: center;
   }
+
+  /*
+   * The connected model chip, which is the only one of the bar's five controls
+   * that a disconnected page never renders — so every sweep that has ever run
+   * here measured the demo chip instead and reported the row clean. With a
+   * provider connected it is `MenuSelect`'s shared trigger, whose own recipe
+   * floors at 40px, inside a strip that took its geometry away. Measured at
+   * 390×844 with Ollama connected: 100×40, in every conversation. It keeps its
+   * left-aligned label; only the height is raised.
+   */
+  .session-bar .session-runtime .menu-select-trigger { min-height: var(--touch-target); }
 }
 
 /*

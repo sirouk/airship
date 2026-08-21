@@ -1279,6 +1279,15 @@
   font-size: var(--fs-caption);
 }
 
+/*
+ * This summary names its own 36px, so the product-wide `summary` floor in
+ * `tokens.css` loses the cascade to it and the route has to say the number
+ * itself. Measured at 390×844: 312×36.
+ */
+@media (pointer: coarse) {
+  .session-library-pins-disclosure > summary { min-height: var(--touch-target); }
+}
+
 .session-library-pins-disclosure > summary > strong {
   color: var(--ink-faint);
   font-weight: var(--fw-body);

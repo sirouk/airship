@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { LOCAL_FOLDER_MAX_ENTRIES, LocalFolderAccessError } from "../workspace/local-folder";
 import {
@@ -85,5 +86,78 @@ describe("the folder tier's wording", () => {
     expect(localFolderFailureNotice(refusal)).toBe("Airship needs your permission again.");
     expect(localFolderFailureNotice(new Error("disk went away"))).toBe("Airship could not complete that: disk went away");
     expect(localFolderFailureNotice("nope")).toMatch(/the browser gave no reason/u);
+  });
+});
+
+/*
+ * The panel's own source, because the defect this describes is structural.
+ *
+ * There is no DOM in this suite, so the rendered tree cannot be walked here —
+ * `e2e/local-folder.spec.ts` walks it with `innerText` and with
+ * `expectNothingHiddenFromView`. What can be pinned here is the shape that made
+ * the defect possible: a `<details>` that nothing opens, and a live region that
+ * nothing renders.
+ */
+describe("the folder tier's panel is not a disclosure", () => {
+  const source = readFileSync(new URL("./local-folder-panel.tsx", import.meta.url), "utf8");
+  /*
+   * Comments are prose about the defect and name the very markup the assertions
+   * below refuse, so they are removed before anything is matched. Otherwise the
+   * paragraph explaining why there is no `<details>` is what fails the test.
+   */
+  const code = source.replace(/\{\/\*[\s\S]*?\*\/\}|\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu, "");
+  const render = code.slice(code.indexOf("export function LocalFolderPanel"));
+
+  it("renders no <details>, so nothing it says can be closed on load", () => {
+    /*
+     * Measured before this landed, on the built tree at 390×664: the panel's
+     * `innerText` was "Folder on this device / None open / Open a folder…" — 46
+     * characters — and its `textContent` was 1,041. The mount path, "Every
+     * agent write still goes through approvals", "The Terminal does not carry
+     * it at all" and all six comparison answers were in the second number and
+     * not the first, in every state, including after a real directory was
+     * attached.
+     */
+    expect(render).not.toContain("<details");
+    expect(render).not.toContain("<summary");
+  });
+
+  it("renders exactly one live region, and it is the sentence on screen", () => {
+    // The panel used to hold `const live = useRef<string>("")`, assign it on
+    // attach and on forget, and render it nowhere — so both events were silent.
+    expect(render).not.toContain("useRef");
+    expect(code).not.toContain("live.current");
+    expect(render.match(/role="status"/gu)).toHaveLength(1);
+    expect(render).toContain('<p class="local-folder__status" role="status" aria-live="polite">');
+  });
+
+  it("prints the terms before a folder can be attached, not after", () => {
+    /*
+     * `Open a folder…` sets the state that renders the terms; the picker is
+     * opened by the second button, which is a user gesture of its own. A single
+     * press that reaches `openLocalFolder` would put the promise after the
+     * directory handle, which is where the disclosure had it.
+     */
+    expect(render).toContain("const terms = deciding || state.kind !== \"absent\";");
+    expect(render).toContain("onClick={() => setDeciding(true)}");
+    expect(render).toContain(">Open a folder…</button>");
+    expect(render).toContain("data-local-folder-open onClick={pick}>Choose a folder…</button>");
+    const terms = render.slice(render.indexOf("{terms ? <>"));
+    expect(terms).toContain("{LOCAL_FOLDER_TIER.note}");
+    expect(terms).toContain("LOCAL_FOLDER_FACT_ROWS.map");
+    expect(terms).toContain("LOCAL_FOLDER_BOUNDS_NOTE");
+    expect(terms).toContain("LOCAL_FOLDER_FORGET_NOTE");
+    // Attached and blocked are `state.kind !== "absent"`, so an attached folder
+    // carries every one of them for as long as it is attached.
+    expect(render).not.toContain("deciding && ");
+  });
+
+  it("bounds the terms on a phone by height, never by hiding words", () => {
+    const css = readFileSync(new URL("./editor-view.css", import.meta.url), "utf8");
+    const band = css.slice(css.indexOf(".local-folder__terms {"));
+    expect(band).toContain("max-height: 20vh");
+    expect(band).toContain("overflow-y: auto");
+    // `display: none` and `visibility: hidden` are how text stops being text.
+    expect(band.slice(0, band.indexOf("}"))).not.toContain("display: none");
   });
 });

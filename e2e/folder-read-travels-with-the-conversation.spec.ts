@@ -2,6 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { expectNothingHiddenFromView, expectRenderedText, renderedText } from "./support/rendered-text";
 import { waitForShellSettled } from "./support/settled";
 
 /**
@@ -71,20 +72,33 @@ test("says the folder is not copied, and admits that what the agent reads is in 
   await waitForShellSettled(page);
   const panel = page.getByRole("region", { name: "Folder on this device" });
 
-  // The promise, before anything is opened. Precise about what is not copied.
-  await expect(panel).toContainText("stores no copy of the folder");
-  await expect(panel).toContainText("not in the Vault");
-  await expect(panel).toContainText("not off this device");
-  // And about the door those three do not cover.
-  await expect(panel).toContainText("becomes part of that conversation");
-  await expect(panel).toContainText("readable bundle carries in the clear");
-  // The claim that could not be kept is gone from every surface that made it.
-  await expect(panel).not.toContainText("copies the folder nowhere");
-  await expect(panel).not.toContainText("Airship keeps no copy");
-
+  /*
+   * The promise, before anything is opened, in rendered text.
+   *
+   * Every line below was a `toContainText` — which reads `textContent` — while
+   * the whole tier sat inside a `<details>` that is closed on load. So this
+   * spec asserted the corrected wording against characters nobody saw, which is
+   * the same defect one layer up from the one it was written for. Asking for a
+   * folder is what prints the terms now, and the picker opens on the press
+   * after them.
+   */
   await panel.getByRole("button", { name: "Open a folder…" }).click();
-  await expect(panel).toContainText(`“${FOLDER}” is open at /workspace/local/${FOLDER}`);
-  await expect(panel).toContainText("A file read from here becomes part of that conversation.");
+  await expectRenderedText(panel, "stores no copy of the folder");
+  await expectRenderedText(panel, "not in the Vault");
+  await expectRenderedText(panel, "not off this device");
+  // And about the door those three do not cover.
+  await expectRenderedText(panel, "becomes part of that conversation");
+  await expectRenderedText(panel, "readable bundle carries in the clear");
+  // The claim that could not be kept is gone from every surface that made it.
+  const drawn = await renderedText(panel);
+  expect(drawn).not.toContain("copies the folder nowhere");
+  expect(drawn).not.toContain("Airship keeps no copy");
+  await expectNothingHiddenFromView(panel);
+
+  await panel.getByRole("button", { name: "Choose a folder…" }).click();
+  await expectRenderedText(panel, `“${FOLDER}” is open at /workspace/local/${FOLDER}`, 20_000);
+  await expectRenderedText(panel, "A file read from here becomes part of that conversation.");
+  await expectNothingHiddenFromView(panel);
 
   // The agent reads the file once. Nobody types the token.
   await page.goto("/#chat");
