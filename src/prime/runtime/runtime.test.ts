@@ -573,6 +573,28 @@ describe("PrimeRuntime", () => {
       }),
     ).rejects.toThrow("fork the session to use the PRIME runtime");
 
+    /*
+     * The same refusal without an explicit `runtime`. Reading the pin out of
+     * the journal and calling it the selection made both guards vacuous: the
+     * Prime engine ran on an airship-core session and flipped its durable
+     * runtime kind. Entering this function is the request; the journal either
+     * admits it or refuses it.
+     */
+    const airshipHistoryBefore = await fixture.journal.readEvents(airship.id);
+    await expect(
+      runPrimeTurn({
+        sessionId: airship.id,
+        content: "hi",
+        transport,
+        tools: fixture.registry,
+        journal: fixture.journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("fork the session to use the PRIME runtime");
+    expect(await fixture.journal.readEvents(airship.id)).toEqual(airshipHistoryBefore);
+    expect(sessionRuntimeKind(await fixture.journal.readEvents(airship.id))).toBe("airship-core");
+
     // Provider-pin mismatch names fork the session.
     const wrongTransport: InferenceTransport = { ...transport, id: "not-faux" };
     await expect(

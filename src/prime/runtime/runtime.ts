@@ -334,7 +334,15 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
   // "has history" counted the session.created record every real journal
   // carries, so an explicit `runtime: "prime"` on a fresh session was refused
   // as if it were airship-pinned.
-  const selection = callerRuntime ?? (history === "airship-core" ? "airship-core" : "prime");
+  //
+  // Reaching this function IS the request to run Prime — it has no other
+  // engine to dispatch to. Reading "airship-core" out of the journal here and
+  // calling that the selection made both guards below vacuous, so an omitted
+  // `runtime` on an airship-pinned session ran the Prime engine anyway and
+  // flipped the session's durable runtime kind: the one outcome
+  // docs/PRIME-RUNTIME-GATE.md says cannot happen. The caller's word or Prime;
+  // a conflicting journal is refused two lines below, not accommodated.
+  const selection = callerRuntime ?? "prime";
 
   if (selection === "prime" && history === "airship-core") {
     throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
