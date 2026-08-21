@@ -53,7 +53,7 @@ ceiling.
 | Deferred advanced capability bundle | 229 KiB | 68 KiB |
 | First-party and other non-vendor JS/workers | 1975 KiB | 619 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 686 KiB | 192 KiB |
-| Absolute installed JavaScript/worker backstop | 2659 KiB | 809 KiB |
+| Absolute installed JavaScript/worker backstop | 2660 KiB | 809 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |

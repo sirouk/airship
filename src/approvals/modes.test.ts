@@ -119,9 +119,14 @@ describe("approval modes", () => {
       await vi.advanceTimersByTimeAsync(11);
       // The gate still fails closed; only the record tells the two apart.
       await expect(decision).resolves.toBe("deny");
-      const reason = approvalProvenance(policy, writeContext)?.reason ?? "";
+      const provenance = approvalProvenance(policy, writeContext);
+      const reason = provenance?.reason ?? "";
       expect(reason).not.toMatch(/denied/iu);
       expect(reason).toMatch(/expired/iu);
+      // The structured field has to agree with the sentence beside it. It said
+      // `human` while the reason said no decision was recorded, and `source` is
+      // what `session-audit.ts` reads and what the transcript labels from.
+      expect(provenance?.source).toBe("unattended");
     } finally {
       vi.useRealTimers();
     }

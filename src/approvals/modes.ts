@@ -7,7 +7,7 @@ import type {
   ToolDefinition,
 } from "../core/contracts";
 import { isLocalFolderMountPath } from "../workspace/contracts";
-import { approvalOutcomeReason, approvalRequestId, type ApprovalBroker } from "./broker";
+import { approvalOutcomeReason, approvalRequestId, approvalWasAnswered, type ApprovalBroker } from "./broker";
 
 export type ApprovalMode = ApprovalProvenance["mode"];
 
@@ -83,7 +83,7 @@ export function createApprovalModePolicy(options: Readonly<{
         const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
-          source: outcome === "unavailable" ? "unattended" : "human-fallback",
+          source: approvalWasAnswered(outcome) ? "human-fallback" : "unattended",
           reason: `${ATTACHED_FOLDER_REVIEW_REASON} ${approvalOutcomeReason(outcome)}`,
         });
         return decision;
@@ -113,8 +113,8 @@ export function createApprovalModePolicy(options: Readonly<{
         const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
-          // Never `human` for a request no person was shown; see `ApprovalOutcome`.
-          source: outcome === "unavailable" ? "unattended" : "human",
+          // Never `human` for a request no person answered; see `approvalWasAnswered`.
+          source: approvalWasAnswered(outcome) ? "human" : "unattended",
           reason: approvalOutcomeReason(outcome),
         });
         return decision;
@@ -137,7 +137,7 @@ export function createApprovalModePolicy(options: Readonly<{
       const fallbackOutcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
       remember(context, {
         mode: options.mode,
-        source: fallbackOutcome === "unavailable" ? "unattended" : "human-fallback",
+        source: approvalWasAnswered(fallbackOutcome) ? "human-fallback" : "unattended",
         reason: `Auto Approve requires a person for ${tool.effect} effects. ${approvalOutcomeReason(fallbackOutcome)}`,
       });
       return decision;
@@ -227,8 +227,8 @@ export async function decideHumanIntent(options: Readonly<{
       mode: options.mode,
       // Never `human` for a mode that says it will not ask and then asked: that
       // is the fallback vocabulary the mode policy already uses for this exact
-      // class of effect.
-      source: outcome === "unavailable"
+      // class of effect. And never `human` at all unless a person answered.
+      source: !approvalWasAnswered(outcome)
         ? "unattended" as const
         : folderReview ? "human-fallback" as const : "human" as const,
       // The allow sentence stays its own: this is the one path where the person

@@ -549,6 +549,29 @@ describe("work bundle", () => {
   });
 
   /*
+   * A file that one journal accepts and the other refuses is a file that works
+   * until the person turns durability on.
+   *
+   * `stableStringify` cannot carry an undefined key, so an event that omits
+   * `payload` entirely hashes exactly like one carrying `null`: a crafted or
+   * third-party file passes `verifyWorkBundleChain` and lands in page memory.
+   * The encrypted journal validates the field and refuses — measured, the whole
+   * Vault adoption then failed with "Encrypted journal event payload is
+   * missing", long after the import screen had said the conversation was in.
+   */
+  it("refuses an event with no payload, which only one of the two journals can store", async () => {
+    const laptop = await device();
+    const id = await conversation(laptop.journal, "No payload");
+    const crafted = JSON.parse(serializeWorkBundle(await bundleOf(laptop.journal, [id]))) as {
+      conversations: { events: Record<string, unknown>[] }[];
+    };
+    delete crafted.conversations[0]!.events[0]!.payload;
+
+    expect(() => parseWorkBundle(JSON.stringify(crafted)))
+      .toThrow(/contains an event Airship cannot read/u);
+  });
+
+  /*
    * The allowlist above is only as good as its coverage of the record type, so
    * this is the assertion that fails when a field is added and forgotten.
    * `Required<SessionRecord>` makes the object below a compile error until the

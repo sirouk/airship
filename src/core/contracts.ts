@@ -312,10 +312,12 @@ export type ApprovalDecision = "allow" | "deny";
 export type ApprovalProvenance = Readonly<{
   mode: "ask-first" | "auto-approve" | "full-access";
   /**
-   * `unattended` is the gate closing with nobody asked — see `ApprovalOutcome`.
-   * It is a separate word from `human` because a record that says a person
-   * denied an effect, when the page simply had no room to ask them, is the
-   * journal inventing a decision.
+   * `unattended` is the gate closing with nobody answering — see
+   * `approvalWasAnswered`. It covers both a request the page had no room to put
+   * on screen and one that ran its clock out while the person was away. It is a
+   * separate word from `human` because a record that says a person denied an
+   * effect, when nobody was asked or nobody answered, is the journal inventing
+   * a decision.
    */
   source: "automatic-read" | "human" | "model-review" | "human-fallback" | "bounded-browser-sandbox" | "unattended";
   reason: string;

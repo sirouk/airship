@@ -283,6 +283,15 @@ function parseConversation(value: unknown): WorkBundleConversation {
       || typeof event.sequence !== "number" || typeof event.recordedAt !== "string"
       || typeof event.previousDigest !== "string" || typeof event.digest !== "string"
       || event.sessionId !== session.id
+      // A payload is not optional, even when it is `null`. `stableStringify`
+      // cannot carry an undefined key, so a file that omits the field hashes
+      // identically to one that carries `null` and its chain verifies — but
+      // only the page-memory journal will store it. The encrypted lane refuses
+      // it ("Encrypted journal event payload is missing"), so an import that
+      // looked like it worked would take the whole Vault adoption down with it
+      // later, when the person turned durability on. Refused here, where the
+      // sentence can still name the file.
+      || !("payload" in event)
     ) {
       throw new Error(`That bundle contains an event Airship cannot read: ${session.id}.`);
     }

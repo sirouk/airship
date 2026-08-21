@@ -1,6 +1,14 @@
 import type { JsonValue } from "../core/contracts";
 import { stableStringify } from "../core/hash";
-import type { EventJournal, JournalBackend, JournalStateSource, SessionRecord } from "../core/journal";
+import { lastRecencyAdvancingEvent, projectedSessionTitle } from "../core/journal";
+import type {
+  DurableEvent,
+  EventJournal,
+  JournalBackend,
+  JournalHead,
+  JournalStateSource,
+  SessionRecord,
+} from "../core/journal";
 import { createBuiltInProfileCatalog, reconcileBuiltInSkills, reconcileBuiltInThemes } from "../profiles/catalog";
 import {
   ProfileCatalogConflictError,
@@ -140,8 +148,9 @@ export function adoptionCarriedNote(carried: AdoptionCarriedWork | undefined): s
  * The source is `JournalStateSource` rather than `EventJournal` because this is
  * a merge, not a vault-only move: a bundle read from a file supplies the same
  * three reads and nothing else, and typing the parameter as the class made the
- * class the only possible source. The behaviour is unchanged — skip a session
- * already present, refuse a conflicting one, never overwrite.
+ * class the only possible source. A session already present in full is skipped,
+ * one part-way through this same chain is finished, and a genuinely different
+ * one is refused. Nothing is ever overwritten.
  *
  * The replay grants no pin (`JournalAppendOptions`). The landed record is the
  * one `createSession` was handed, which is how both callers stay correct: a
@@ -170,6 +179,10 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
       throw new Error(`Session ${session.id} changed during vault migration; retry after the turn settles.`);
     }
     const existing = await target.getSession(session.id);
+    // Where this conversation's replay has already reached in the target. A
+    // fresh session starts at zero; a half-finished one resumes at its head.
+    const replayed = existing?.headSequence ?? 0;
+    let landed: SessionRecord;
     if (existing) {
       // The digest head commits the event chain, not the mutable backend row
       // that indexes it. Never treat a matching head as permission to adopt a
@@ -177,34 +190,40 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
       // A Vault transition is an exact copy operation; accepting only a few
       // manifest digests here would let divergent session authority survive
       // under an otherwise valid event head (especially at genesis).
-      if (!sameSessionRecord(existing, session)) {
+      //
+      // A record part-way along this same chain is the one exception, and it
+      // is not a weakening: it is compared against the exact record this
+      // replay would have produced from that prefix, so anything else still
+      // refuses. Without it, one dropped connection during adoption stranded
+      // the conversation forever — the target kept a genesis stub, and every
+      // retry read that stub as a conflicting session and refused to write
+      // the events into it. The stub carries the right title, which is how a
+      // person met an empty conversation where their work should have been.
+      const finished = existing.headSequence === session.headSequence
+        && existing.headDigest === session.headDigest;
+      if (!sameSessionRecord(existing, finished ? session : replayedRecord(session, events.slice(0, replayed)))) {
         throw new Error(`Encrypted vault contains a conflicting session ${session.id}.`);
       }
-      continue;
+      if (finished) continue;
+      landed = existing;
+    } else {
+      const portableSession = structuredClone(session);
+      delete portableSession.headIncarnation;
+      await target.createSession({
+        ...portableSession,
+        updatedAt: session.createdAt,
+        headSequence: 0,
+        headDigest: "genesis",
+      });
+      const created = await target.getSession(session.id);
+      if (!created) throw new Error(`Session ${session.id} disappeared during vault migration.`);
+      landed = created;
     }
-    const portableSession = structuredClone(session);
-    delete portableSession.headIncarnation;
-    await target.createSession({
-      ...portableSession,
-      updatedAt: session.createdAt,
-      headSequence: 0,
-      headDigest: "genesis",
-    });
-    const created = await target.getSession(session.id);
-    if (!created) throw new Error(`Session ${session.id} disappeared during vault migration.`);
-    let expectedHead = {
-      sequence: 0,
-      digest: "genesis",
-      ...(created.headIncarnation ? { incarnation: created.headIncarnation } : {}),
-    };
-    for (let offset = 0; offset < events.length; offset += 4_096) {
+    let expectedHead = journalHead(landed);
+    for (let offset = replayed; offset < events.length; offset += 4_096) {
       const segment = events.slice(offset, offset + 4_096);
       const updated = await target.append(session.id, expectedHead, segment, undefined, { replay: true });
-      expectedHead = {
-        sequence: updated.headSequence,
-        digest: updated.headDigest,
-        ...(updated.headIncarnation ? { incarnation: updated.headIncarnation } : {}),
-      };
+      expectedHead = journalHead(updated);
     }
     if (expectedHead.sequence !== session.headSequence || expectedHead.digest !== session.headDigest) {
       throw new Error(`Session ${session.id} did not preserve its digest head during vault migration.`);
@@ -302,6 +321,38 @@ function sameWorkspaceSnapshot(
   if (before.length !== after.length) return false;
   const revisions = new Map(before.map((entry) => [entry.path, entry.revision]));
   return after.every((entry) => revisions.get(entry.path) === entry.revision);
+}
+
+/** The compare-and-set boundary a record presents to its own backend. */
+function journalHead(session: SessionRecord): JournalHead {
+  return {
+    sequence: session.headSequence,
+    digest: session.headDigest,
+    ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
+  };
+}
+
+/**
+ * The record a target holds after this replay has written `prefix` and nothing
+ * more.
+ *
+ * Every field is the one the backends themselves derive: the title from the
+ * same `projectedSessionTitle` walk, the recency from the same
+ * `lastRecencyAdvancingEvent` walk over the events written so far, and the head
+ * from the last of them. A replay grants no pin, so the pins are still the ones
+ * `createSession` was handed. Comparing against this — rather than against a
+ * few fields — is what keeps "resume the replay" from becoming "accept a
+ * different conversation under the same id".
+ */
+function replayedRecord(session: SessionRecord, prefix: readonly DurableEvent[]): SessionRecord {
+  const last = prefix.at(-1);
+  return {
+    ...session,
+    title: projectedSessionTitle(prefix, session.title),
+    updatedAt: lastRecencyAdvancingEvent(prefix)?.recordedAt ?? session.createdAt,
+    headSequence: last?.sequence ?? 0,
+    headDigest: last?.digest ?? "genesis",
+  };
 }
 
 function sameSessionRecord(left: SessionRecord, right: SessionRecord): boolean {

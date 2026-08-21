@@ -118,6 +118,23 @@ export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
   return "Denied without approval; the effect did not run.";
 }
 
+/**
+ * True only when a person actually answered the question.
+ *
+ * `allow` and `deny` are the two things `decide` can file, and `decide` is
+ * reachable from nothing but a control a person operates. Everything else in
+ * this vocabulary is the absence of an answer: an expiry ran the clock out
+ * while nobody was at the screen, and `unavailable` never put the question on
+ * screen at all. The record's `source` field is the one place that difference
+ * survives into the journal, so it is derived here rather than spelled out at
+ * each of the four writers — three of which read only `unavailable` and so
+ * filed every expiry as a refusal a person made, directly against the sentence
+ * beside it saying that no decision was recorded.
+ */
+export function approvalWasAnswered(outcome: ApprovalOutcome): boolean {
+  return outcome === "allow" || outcome === "deny";
+}
+
 /** The identity a request is filed and settled under, shared so a lookup cannot rebuild it differently. */
 export function approvalRequestId(context: Readonly<Pick<ToolContext, "sessionId" | "turnId" | "operationId">>): string {
   return `${context.sessionId}:${context.turnId}:${context.operationId}`;

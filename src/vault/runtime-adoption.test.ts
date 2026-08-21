@@ -167,8 +167,45 @@ describe("vault runtime adoption", () => {
     expect(await target.readEvents(session.id)).toEqual(await source.readEvents(session.id));
     await expect(migrateJournalState(source, target)).resolves.toBeUndefined();
 
+    /*
+     * The source grew after the copy. That is not a conflicting session — it is
+     * the same digest chain with one more link — and it used to be refused with
+     * a sentence that said otherwise. A target holding a prefix of this exact
+     * chain is finished rather than accused; a target holding something else is
+     * still refused, which the two cases below assert.
+     */
     await source.append(session.id, [{ type: "turn.completed", turnId: "turn-1", payload: { responseDigest: "digest" } }]);
-    await expect(migrateJournalState(source, target)).rejects.toThrow("conflicting session");
+    await migrateJournalState(source, target);
+    expect(await target.readEvents(session.id)).toEqual(await source.readEvents(session.id));
+    expect(await target.getSession(session.id)).toMatchObject((await source.getSession(session.id))!);
+  });
+
+  it("refuses a target whose chain diverges from the source at the same sequence", async () => {
+    const source = new EventJournal(new MemoryJournalBackend());
+    const targetBackend = new MemoryJournalBackend();
+    const target = new EventJournal(targetBackend);
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "test-model",
+      tools: [],
+      workspaceId: "memory://test",
+      now: "2026-07-19T00:00:00.000Z",
+    });
+    const session = await source.createSession("Divergent", manifest);
+    await source.append(session.id, [{ type: "turn.requested", turnId: "turn-1", payload: { content: "mine" } }]);
+    // Same id, same manifest, a different history under it.
+    await targetBackend.createSession({
+      ...structuredClone((await source.getSession(session.id))!),
+      updatedAt: session.createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    await target.append(session.id, [{ type: "turn.requested", turnId: "turn-9", payload: { content: "theirs" } }]);
+
+    await expect(migrateJournalState(source, targetBackend)).rejects.toThrow("conflicting session");
+    expect((await targetBackend.readEvents(session.id)).map((event) => event.payload))
+      .toEqual([{ content: "theirs" }]);
   });
 
   it("restores an exact deleted encrypted ID and appends its preserved history under the new incarnation", async () => {
@@ -298,5 +335,98 @@ describe("vault runtime adoption", () => {
 
     await expect(migrateJournalState(source, target)).rejects.toThrow("changed during vault migration");
     await expect(target.getSession(session.id)).resolves.toBeUndefined();
+  });
+
+  /*
+   * One dropped connection during adoption used to cost the whole conversation.
+   *
+   * Measured against the encrypted lane with a single failed segment publish:
+   * the target kept the genesis stub `migrateJournalState` had just created,
+   * whose head is `0/genesis` while the source's is the real chain — so the
+   * next attempt read it as "a conflicting session" and refused, and so did
+   * every attempt after that. The Vault held an empty conversation carrying the
+   * right title, which is exactly the "my work is gone" screen the adoption
+   * note above exists to prevent, except that here the work really had not
+   * arrived. Adoption is one button on a first-run path; it has to survive the
+   * network.
+   */
+  it("finishes a replay that a storage failure interrupted, instead of refusing it forever", async () => {
+    const sourceBackend = new MemoryJournalBackend();
+    const source = new EventJournal(sourceBackend);
+    const created = await source.createSession("Interrupted adoption", await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "test-model",
+      tools: [],
+      workspaceId: "memory://source",
+      now: "2026-07-19T00:00:00.000Z",
+    }));
+    await source.append(created.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "the work" } },
+    ]);
+    const store = new MemoryObjectStore();
+    const { key } = await WorkspaceRootKey.generate();
+    const vault = new EncryptedObjectJournalBackend(store, key);
+
+    let failed = false;
+    const publish = store.putIfAbsent.bind(store);
+    store.putIfAbsent = async (cloudKey: string, bytes: Uint8Array) => {
+      if (!failed && cloudKey.includes("/session-segments/")) {
+        failed = true;
+        throw new Error("The network dropped.");
+      }
+      return publish(cloudKey, bytes);
+    };
+
+    await expect(migrateJournalState(source, vault)).rejects.toThrow("The network dropped.");
+    // The stub is there, and it is empty. That is the state the retry meets.
+    await expect(vault.getSession(created.id)).resolves.toMatchObject({ headSequence: 0, headDigest: "genesis" });
+
+    await migrateJournalState(source, vault);
+    const landed = await vault.getSession(created.id);
+    expect(landed?.headSequence).toBe(2);
+    const sourceRecord = await sourceBackend.getSession(created.id);
+    expect(landed?.headDigest).toBe(sourceRecord?.headDigest);
+    expect(landed?.title).toBe("Interrupted adoption");
+    expect((await vault.readEvents(created.id)).map((event) => event.type))
+      .toEqual(["session.created", "turn.requested"]);
+    // And it is still idempotent once it has finished.
+    await migrateJournalState(source, vault);
+    expect((await vault.readEvents(created.id))).toHaveLength(2);
+  });
+
+  /*
+   * Resuming may not become a way in for a different conversation. The stub a
+   * failed replay leaves behind is compared against the exact record this
+   * replay would have produced at that point, so a target holding the same id
+   * at genesis under another manifest is still refused.
+   */
+  it("still refuses a genesis record that is not this conversation", async () => {
+    const sourceBackend = new MemoryJournalBackend();
+    const source = new EventJournal(sourceBackend);
+    const target = new MemoryJournalBackend();
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "source-model",
+      tools: [],
+      workspaceId: "memory://source",
+      now: "2026-07-19T00:00:00.000Z",
+    });
+    const created = await source.createSession("Resume fence", manifest);
+    await source.append(created.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "the work" } },
+    ]);
+    const stub = await sourceBackend.getSession(created.id);
+    await target.createSession({
+      ...structuredClone(stub!),
+      manifest: { ...structuredClone(manifest), model: "substituted-model" },
+      updatedAt: stub!.createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+
+    await expect(migrateJournalState(source, target)).rejects.toThrow("conflicting session");
+    await expect(target.readEvents(created.id)).resolves.toEqual([]);
   });
 });
