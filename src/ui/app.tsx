@@ -9472,6 +9472,19 @@ export function App() {
             recallRecords={recallMemoryRecords}
             commitMemory={commitMemoryChange}
             initialTab={view === "context" ? "index" : "search"}
+            /*
+             * Memory is a durability claim more than any other route: it is the
+             * one place a person decides what to rely on later. Chat, Editor
+             * and Terminal are all told where this session is written; Memory
+             * was not, so with an adopted Local Device Vault it answered "Its
+             * backing tier was not supplied to Memory" beside records that
+             * survive a reload.
+             */
+            durability={{
+              state: sessionDurability.state,
+              label: durabilityLabel(sessionDurability.state),
+              detail: sessionDurability.detail,
+            }}
             onOpenSource={(target) => void openMemorySource(target)}
           />
         ) : memoryViewError ? <DeferredRouteFailure title="Memory" message={memoryViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading private memory" /> : null}
