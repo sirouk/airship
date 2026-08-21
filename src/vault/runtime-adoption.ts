@@ -168,6 +168,23 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
       await migrateOneSession(source, target, session);
     } catch (error) {
       /*
+       * An abort is not a refusal, and it never was.
+       *
+       * A conversation this journal refuses is a decision about that
+       * conversation, and the sentence below says so by name. An abort is the
+       * absence of one: `adoptDurableRuntimeExclusive` aborts every turn
+       * before it calls this, and a storage authority that goes away part-way
+       * through raises `AbortError` from the backend without any conversation
+       * being judged at all. Gathered with the refusals, it reached the person
+       * as "Some conversations were refused" — a refusal nobody made, about
+       * conversations nobody looked at — and every conversation still in the
+       * list was then attempted against a backend that was already gone. Same
+       * rule and same spelling as `src/vault/reclamation.ts`, and the same
+       * distinction `ApprovalOutcome` in `src/approvals/broker.ts` keeps
+       * between a denial and the absence of an answer.
+       */
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      /*
        * One conversation may not decide the fate of the others.
        *
        * The refusals here are permanent by design — a genuinely different

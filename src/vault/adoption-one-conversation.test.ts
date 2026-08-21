@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EventJournal } from "../core/journal";
+import { EventJournal, type JournalBackend, type SessionRecord } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { migrateJournalState } from "./runtime-adoption";
 
@@ -40,6 +40,21 @@ async function conversation(journal: EventJournal, title: string): Promise<strin
   return created.id;
 }
 
+/** A real backend with one verb replaced, so the failure is the storage's and not a mock's. */
+function withCreateSession(
+  backend: MemoryJournalBackend,
+  createSession: JournalBackend["createSession"],
+): JournalBackend {
+  return Object.freeze({
+    createSession,
+    getSession: backend.getSession.bind(backend),
+    listSessions: backend.listSessions.bind(backend),
+    readEvents: backend.readEvents.bind(backend),
+    append: backend.append.bind(backend),
+    deleteSession: backend.deleteSession.bind(backend),
+  }) satisfies JournalBackend;
+}
+
 describe("vault adoption with one refused conversation", () => {
   it("finishes every conversation it can and still names the one it refused", async () => {
     const backend = new MemoryJournalBackend();
@@ -75,5 +90,35 @@ describe("vault adoption with one refused conversation", () => {
       await target.createSession({ ...impostor, createdAt: "2020-01-01T00:00:00.000Z", headSequence: 0, headDigest: "genesis" });
     }
     await expect(migrateJournalState(backend, target)).rejects.toThrow(/Some conversations were refused/u);
+  });
+
+  /**
+   * An abort is not a refusal, and the loop that gathers refusals must not
+   * turn one into the other.
+   *
+   * Adoption aborts every turn before it starts, and a Vault whose authority
+   * goes away part-way through raises `AbortError` from the backend. Gathered
+   * with the refusals, that reached the person as "Some conversations were
+   * refused" — naming conversations nobody looked at — and the loop then ran
+   * the rest of the list against a backend that was already gone.
+   */
+  it("stops on an abort instead of filing it as a refusal", async () => {
+    const backend = new MemoryJournalBackend();
+    const journal = new EventJournal(backend);
+    for (let index = 0; index < 4; index += 1) await conversation(journal, `Session ${String(index)}`);
+
+    const inner = new MemoryJournalBackend();
+    let attempts = 0;
+    const target = withCreateSession(inner, async (session: SessionRecord) => {
+      attempts += 1;
+      if (attempts >= 2) throw new DOMException("Vault authority changed.", "AbortError");
+      await inner.createSession(session);
+    });
+
+    await expect(migrateJournalState(backend, target)).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Vault authority changed.",
+    });
+    expect(attempts).toBe(2);
   });
 });
