@@ -1420,9 +1420,22 @@ async function validateProtocol(
             embeddedContextAllowed && contextSelection && contextVerified && contextQueryVerified && contextScopeVerified
           ))) {
         const index = messages.length;
+        /*
+         * The exemption the agent applies when it builds the request it sends
+         * (see `slashLocal` in agent.ts). This copy did not, so a prompt whose
+         * text starts with `/` — including `/reason`, which the demo answer
+         * tells a first-time reader to try — hashed here as the injected form
+         * and there as the raw one. The digests could never agree, and the
+         * conversation quarantined itself on the next open with
+         * INFERENCE_REQUEST_DIGEST_MISMATCH. The agent is the authority on what
+         * it sent; this rebuild has to model it exactly.
+         */
+        const slashLocal = payload.content.trimStart().startsWith("/");
         messages.push({
           role: "user",
-          content: injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection),
+          content: slashLocal
+            ? payload.content
+            : injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection),
           ...(images.length ? { images: [...images] } : {}),
         });
         active.request = {
@@ -1479,13 +1492,16 @@ async function validateProtocol(
         addEventFinding(add, event, "TURN_CONTEXT_LIFECYCLE_INVALID", "Turn context has no matching user request.");
         continue;
       }
-      messages[turn.request.messageIndex] = {
-        ...message,
-        content: injectContextSelection(
-          injectLiveEnvironment(turn.request.content, turn.request.liveEnvironment),
-          selection,
-        ),
-      };
+      // Same exemption as the request site above and as agent.ts.
+      messages[turn.request.messageIndex] = turn.request.content.trimStart().startsWith("/")
+        ? { ...message, content: turn.request.content }
+        : {
+          ...message,
+          content: injectContextSelection(
+            injectLiveEnvironment(turn.request.content, turn.request.liveEnvironment),
+            selection,
+          ),
+        };
       turn.contextSelected = true;
       if (turn.request.liveEnvironment || selection.hits.length) {
         lastContextMessage = { index: turn.request.messageIndex, content: turn.request.content };

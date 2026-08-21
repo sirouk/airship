@@ -208,7 +208,7 @@ describe("a sheet says whose it is, and can be left", () => {
     // Hit-testing a pseudo-element reports its originating element, so
     // `root.contains(target)` answered "inside the menu" for a press on the dim
     // and left the sheet standing over the route with no way out.
-    const dismissal = source.slice(source.indexOf("const handleOutsidePointer"), source.indexOf("const handleSheetEscape"));
+    const dismissal = source.slice(source.indexOf("const handleOutsidePointer"), source.indexOf("const handleEscape"));
     expect(dismissal).toContain("trigger.current?.contains(target)");
     expect(dismissal).toContain("popover.current?.contains(target)");
     expect(dismissal).not.toContain("root.current?.contains(event.target");
@@ -219,13 +219,16 @@ describe("a sheet says whose it is, and can be left", () => {
     expect(styles).toContain("z-index:320;");
   });
 
-  it("lets Escape reach a sheet from anywhere without taking the key from anyone else", () => {
-    const escape = source.slice(source.indexOf("const handleSheetEscape"), source.indexOf('document.addEventListener("pointerdown"'));
-    // Sheets only: an anchored panel sits beside its trigger and takes no room.
-    expect(escape).toContain('if (event.key !== "Escape" || !sheet) return;');
-    // A keypress from inside the menu still belongs to the option handler, which
-    // is the branch that stops propagation and restores focus.
-    expect(escape).toContain("if (root.current?.contains(document.activeElement)) return;");
+  it("lets Escape reach an open menu from anywhere without taking the key from anyone else", () => {
+    const escape = source.slice(source.indexOf("const handleEscape"), source.indexOf('document.addEventListener("pointerdown"'));
+    // Any open menu, anchored or sheet: a pointer click leaves focus on the
+    // trigger, and from there Escape used to reach nothing at all.
+    expect(escape).toContain('if (event.key !== "Escape") return;');
+    expect(escape).not.toContain("!sheet");
+    // A keypress from an option still belongs to the option handler, which is
+    // the branch that stops propagation and restores focus. The trigger is not
+    // an option, so it is handled here.
+    expect(escape).toContain("root.current?.contains(document.activeElement) && document.activeElement !== trigger.current");
     expect(escape).not.toContain("stopPropagation");
     expect(escape).toContain("close(false)");
   });

@@ -560,8 +560,13 @@
    * originating element, so `popover.tsx` asks whether the press landed in the
    * trigger or in the panel rather than anywhere in the host; a press on this
    * is neither, and closes the sheet without reaching the route.
+   *
+   * `[data-intent="commit"]`, like the anchored rule above, because a hover is
+   * a glance: at a sheet breakpoint with a mouse, a 150 ms hover drew this
+   * full-viewport scrim over the very chip that opened it, so the pointerleave
+   * that ends a glance never arrived and the route stayed dimmed until Escape.
    */
-  .popover[data-mode="sheet"][data-open="true"]::before {
+  .popover[data-mode="sheet"][data-open="true"][data-intent="commit"]::before {
     content: "";
     position: fixed;
     z-index: 119;

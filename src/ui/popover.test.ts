@@ -918,7 +918,11 @@ describe("the panel is the width of the box it is pinned to", () => {
      * short tier gives up height precisely so the band survives, so the scrim
      * has to stop where the panel stops or it takes that back.
      */
-    const scrim = nestedBlock(sheet, '.popover[data-mode="sheet"][data-open="true"]::before');
+    // A hover is a glance: only a committed open dims the route, exactly as the
+    // anchored rule already had it. A 150 ms hover at a sheet breakpoint used
+    // to draw this over the chip that opened it and swallow the pointerleave
+    // that ends the glance.
+    const scrim = nestedBlock(sheet, '.popover[data-mode="sheet"][data-open="true"][data-intent="commit"]::before');
     expect(scrim).toContain("position: fixed");
     expect(scrim).toContain("inset: 0");
     // The dim `.mobile-sheet-scrim` already uses, so both overlays read as the

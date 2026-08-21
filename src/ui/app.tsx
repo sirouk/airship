@@ -1059,6 +1059,13 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
       parts: row.parts,
       ...(row.receipt ? { receipt: row.receipt } : {}),
       ...(originatingPrompt ? { originatingPrompt } : {}),
+      /*
+       * A replayed answer to a failed turn is a failed answer. Without this the
+       * card came back after a reload named "Airship message" while its own
+       * badge read FAILED TURN — the exact mismatch the accessible name exists
+       * to prevent, visible only to whoever cannot see the badge.
+       */
+      ...(row.role === "assistant" && row.turnStatus === "failed" ? { error: true } : {}),
       history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
       sourcePoint: row.sourcePoint,
       ...(row.turnStartPoint ? { turnStartPoint: row.turnStartPoint } : {}),
@@ -5281,13 +5288,18 @@ export function App() {
   }
 
   function appendLocalExchange(source: string, response: string, error = false): void {
-    // One turn, one disposition: the prompt row carried a hardcoded "completed"
-    // while the answer beside it could say "failed".
-    const turnStatus = error ? "failed" : "completed";
+    /*
+     * No `history` on either row, because nothing here is durable. This lane
+     * answers from page memory — `/help`, `/models` and the refusals — and
+     * writes no journal record, so a reload shows an empty transcript. The rows
+     * carried a "Durable turn disposition" of COMPLETED TURN anyway: a claim
+     * about a record that does not exist. Making both rows agree, as the
+     * previous fix did, only made the false claim symmetric.
+     */
     setMessages((current) => [
       ...current,
-      { id: randomUuid(), role: "user", content: source, history: { turnStatus, providerContext: "excluded" } },
-      { id: randomUuid(), role: "assistant", content: boundedTranscriptContent(response), error, status: "Local command · excluded from model context", history: { turnStatus, providerContext: "excluded" } },
+      { id: randomUuid(), role: "user", content: source },
+      { id: randomUuid(), role: "assistant", content: boundedTranscriptContent(response), error, status: "Local command · excluded from model context" },
     ]);
     // Every built-in command lands here, and every one of them was silent: a
     // rejected `/nonsense-command` and a full `/help` listing produced the same
