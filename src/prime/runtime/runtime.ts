@@ -344,11 +344,17 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
   // a conflicting journal is refused two lines below, not accommodated.
   const selection = callerRuntime ?? "prime";
 
-  if (selection === "prime" && history === "airship-core") {
-    throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
-  }
   if (selection === "airship-core" && history === "prime") {
     throw new Error(`runtime selection mismatch: this session is prime-pinned; fork the session to use the airship-core runtime.`);
+  }
+  // The mirror of the default above: an explicit `runtime: "airship-core"` on
+  // an unpinned or airship-pinned journal used to fall through both guards and
+  // run Prime anyway, pinning the session to the engine the caller declined.
+  if (selection !== "prime") {
+    throw new Error(`runtime selection mismatch: this entry point runs the PRIME runtime; call the airship-core runtime directly.`);
+  }
+  if (history === "airship-core") {
+    throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
   }
 
   const sessionRecord = await options.journal.getSession(options.sessionId);

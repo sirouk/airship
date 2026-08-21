@@ -595,6 +595,28 @@ describe("PrimeRuntime", () => {
     expect(await fixture.journal.readEvents(airship.id)).toEqual(airshipHistoryBefore);
     expect(sessionRuntimeKind(await fixture.journal.readEvents(airship.id))).toBe("airship-core");
 
+    /*
+     * The mirror case. An explicit `runtime: "airship-core"` on an unpinned
+     * journal fell through both guards and ran the Prime engine anyway, leaving
+     * the session pinned to the engine the caller had just declined.
+     */
+    const declined = await fixture.journal.createSession("declined", manifest);
+    const declinedBefore = await fixture.journal.readEvents(declined.id);
+    await expect(
+      runPrimeTurn({
+        sessionId: declined.id,
+        content: "hi",
+        runtime: "airship-core",
+        transport,
+        tools: fixture.registry,
+        journal: fixture.journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("this entry point runs the PRIME runtime");
+    expect(await fixture.journal.readEvents(declined.id)).toEqual(declinedBefore);
+    expect(sessionRuntimeKind(await fixture.journal.readEvents(declined.id))).toBe("unpinned");
+
     // Provider-pin mismatch names fork the session.
     const wrongTransport: InferenceTransport = { ...transport, id: "not-faux" };
     await expect(
