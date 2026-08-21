@@ -48,7 +48,6 @@ an unrestricted worker.
 - `AIRSHIP_PUBLIC_BASE_PATH`
 - `VITE_AIRSHIP_PUBLIC_ORIGIN`
 - `VITE_GOOGLE_CLIENT_ID` when enabling Drive
-- `VITE_AIRSHIP_EXTENSION_INSTALL_URL` when pointing at a published extension
 - Caddy or host-specific listener/domain values
 
 See the root `Dockerfile`, `docker-compose.yaml`, `.env.sample`, and

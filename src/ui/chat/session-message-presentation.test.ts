@@ -122,6 +122,29 @@ describe("presentSessionMessages", () => {
    * after a reload while the live transcript, which reads the result, called it
    * failed — one turn with two dispositions depending on when you looked.
    */
+  /*
+   * PRIME is the default engine, so this record is on nearly every
+   * conversation. Reaching the unread fallback made every resumed conversation
+   * open by telling its reader that this build cannot replay a record this
+   * build writes itself, one operation before rendering it.
+   */
+  it("says which runtime a conversation is pinned to instead of disowning the record", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("prime.session.runtime.selected", undefined, {
+        runtime: "prime",
+        selectedBy: "runtime-gate",
+        at: "2026-08-21T00:00:00.000Z",
+      }),
+    ]);
+    const value = input(events);
+    const view = presentSessionMessages({ ...value, audit: { ...value.audit, status: "incomplete" } });
+    const marker = view.markers.at(-1);
+
+    expect(marker?.detail).toContain("runtime");
+    expect(marker?.detail).not.toContain("cannot replay");
+  });
+
   it("badges an errored local tool result as a failed turn on both rows", () => {
     const events = sequence([
       draft("session.created", undefined, {}),

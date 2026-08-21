@@ -797,6 +797,23 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
       detail: "Token usage for the inference that named this conversation.",
     });
   }
+  /*
+   * The engine this conversation is pinned to. PRIME is the default, so this
+   * record is on nearly every conversation, and reaching the fallback made
+   * every resumed conversation open by claiming this build cannot replay a
+   * record this build writes itself — the lie of a second kind named above,
+   * shown to a returning reader as the first line of their own transcript.
+   */
+  if (event.type === "prime.session.runtime.selected" || event.type === "prime.session.runtime.seal") {
+    const runtime = typeof payload?.runtime === "string" ? presentableTitle(payload.runtime) : undefined;
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: runtime
+        ? `This conversation runs on the ${runtime} runtime, recorded when its first turn was admitted.`
+        : "The runtime this conversation is pinned to, recorded when its first turn was admitted.",
+    });
+  }
   return Object.freeze({
     ...base,
     presentable: false,

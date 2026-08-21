@@ -48,8 +48,15 @@ export function completeSlashCommandMenu(
     }
   }
 
+  /*
+   * Options are offered when the reader is typing one, not whenever there is
+   * nothing else to say. An empty fragment matched every unused option, so
+   * Enter on `/ls` accepted `--path` and then sent a command with an option and
+   * no value ("Option --path requires a value."), and on `/read` the same reflex
+   * built `--path --offset` and never sent anything at all.
+   */
   const used = new Set(fragments.filter((fragment) => fragment.startsWith("--")).map((fragment) => fragment.split("=", 1)[0]));
-  for (const argument of command.arguments) {
+  for (const argument of current.startsWith("--") ? command.arguments : []) {
     if (used.has(argument.option) || !argument.option.startsWith(current)) continue;
     completions.push(completion(
       "option",

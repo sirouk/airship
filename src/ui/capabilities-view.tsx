@@ -136,7 +136,7 @@ export function CapabilitiesView({ inspect, inspectBrowser, inspectExtension, su
             <div><dt>Provider relay</dt><dd>{extension.providers.length ? extension.providers.join(", ") : "No provider routes"}</dd></div>
             <div><dt>Ciphertext cache</dt><dd>{extension.companion?.storage.state === "available" ? extension.companion.storage.enabled ? "Enabled" : "Available" : "Unavailable"}</dd></div>
             <div><dt>Background compute</dt><dd>{extension.companion?.compute.state === "available" ? extension.companion.compute.operations.join(", ") : "Unavailable"}</dd></div>
-          </dl> : <p>Install or enable the Airship Companion from <code>/extension/</code>, then refresh this probe.</p>}
+          </dl> : <p>Install or enable the Airship Companion from <code>{`${import.meta.env.BASE_URL}extension/`}</code>, then refresh this probe.</p>}
         </DeviceCard>
       </section> : null}
 

@@ -27,16 +27,9 @@ ARG VITE_AIRSHIP_PUBLIC_ORIGIN=
 # strips the Drive connect branch entirely when the Google client ID is empty,
 # which is why the default vault provider below moves with it.
 ARG VITE_GOOGLE_CLIENT_ID=
-# Where the companion extension is published. Empty falls back to the copy this
-# build ships at `<base>extension/index.html`, which is right for a deployment
-# that serves its own; a store listing needs to say so here, because the value
-# is inlined and cannot be supplied at `docker run`.
-ARG VITE_AIRSHIP_EXTENSION_INSTALL_URL=
-
 ENV AIRSHIP_PUBLIC_BASE_PATH=${AIRSHIP_PUBLIC_BASE_PATH} \
     VITE_AIRSHIP_PUBLIC_ORIGIN=${VITE_AIRSHIP_PUBLIC_ORIGIN} \
-    VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID} \
-    VITE_AIRSHIP_EXTENSION_INSTALL_URL=${VITE_AIRSHIP_EXTENSION_INSTALL_URL}
+    VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 # Fail closed on an unconfigured deployment: start in explicit page-memory mode
 # rather than silently creating durable storage the person did not choose.
