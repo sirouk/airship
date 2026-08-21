@@ -20,7 +20,15 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 - missing reviewed public files or broken static-host assumptions;
 - missing security headers or service-worker boundary regressions;
 - asset budget overruns;
-- mismatches between optional static packs and their reviewed manifests.
+- mismatches between optional static packs and their reviewed manifests;
+- documentation that no longer matches the executable: the budget table below
+  must mirror the ceilings `scripts/release-gate.mjs` exports, and
+  `docs/SESSION_LIBRARY.md` must still state the fork contract. A
+  documentation-only change can fail this gate.
+
+The gate writes `release-manifest.json`, a deterministic inventory of the
+artifacts it measured, and prints that the manifest is explicitly unsigned. It
+is an inventory, not a signature, an attestation, or a provenance claim.
 
 ## Executable asset ceilings
 
@@ -86,4 +94,5 @@ both, then builds and gates a stock artifact.
 
 Airship must stay an honest static product. The release gate exists to catch a
 build that quietly grows a hidden backend dependency, leaks sensitive material,
-or weakens the static browser security boundary.
+or weakens the static browser security boundary — and to catch documentation
+that has stopped describing it.

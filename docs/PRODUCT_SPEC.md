@@ -20,7 +20,12 @@ an application server.
 4. Keep encrypted state on infrastructure the user controls.
 5. Inspect exact provider/model provenance for every turn.
 6. Fork, resume, export, or delete work without vendor lock-in. Export and
-   import are one file — a work bundle — described in `docs/WORK_BUNDLE.md`.
+   import are one file — a work bundle — described in `docs/WORK_BUNDLE.md`. A
+   conversation that arrives in such a file is readable and forkable here, and
+   is never resumable: a file grants no approval mode, model route or context
+   policy.
+7. Open a folder on this device, in Chromium browsers, and let the editor and
+   the agent work on those files in place.
 
 ## Required product properties
 
@@ -43,11 +48,16 @@ an application server.
 
 - Airship starts in ephemeral page memory.
 - Durable storage is explicit and client-encrypted.
-- The stock product selector supports Local Device and, in configured builds,
-  Google Drive.
-- S3-compatible storage is a host-composed adapter with a loopback development
-  lab; Walrus is an optional immutable blob transport. Neither is presented as
-  a connected stock Vault destination.
+- The stock product selector supports Ephemeral and Local Device. Google Drive
+  joins them only when the build carries a deployable Google OAuth Web client
+  ID, so an unconfigured build offers two destinations, not three.
+- The S3-compatible adapter reaches a build only under
+  `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1`, for the loopback development lab; the
+  release gate refuses a stock artifact containing it. The Walrus blob
+  transport is repository material with no product wiring. Neither is a stock
+  Vault destination.
+- A folder the user opens on this device is a workspace tier, not a durability
+  level. Its files stay in place, unencrypted, and Airship keeps no copy.
 
 ### Append-only sessions with light model switching
 
@@ -64,6 +74,16 @@ an application server.
 - Global navigation, provider management, and drafting in another conversation
   must stay available while one session is busy.
 - Only actions that mutate the currently busy conversation may be blocked.
+
+### Approvals a person can answer
+
+- Every conversation is pinned to one of `ask-first`, `auto-approve`, or
+  `full-access`, and each decision is journaled with the mode, the authority
+  that decided, and the reason.
+- Auto Approve is deterministic. It never asks a model to authorize an action
+  and never bills a request the person did not ask for.
+- Any non-read effect naming an attached device folder is reviewed in every
+  mode, because such a write cannot be undone.
 
 ### Coding and research workbench
 

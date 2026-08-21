@@ -6,49 +6,69 @@ This document defines the stable shapes the simplified runtime converges on.
 
 ```json
 {
-  "v": 1,
+  "version": 1,
   "eventId": "01...",
   "sessionId": "01...",
   "turnId": "01...",
   "sequence": 42,
   "recordedAt": "2026-07-18T12:00:00.000Z",
-  "type": "assistant.delta",
+  "type": "assistant.completed",
   "payload": {},
-  "previousDigest": "base64url-sha256",
-  "digest": "base64url-sha256"
+  "previousDigest": "sha256:base64url",
+  "digest": "sha256:base64url"
 }
 ```
 
-The digest chain makes tampering and forks visible. It does not by itself prove
-author identity.
+`DurableEvent` in `src/core/journal.ts` is the shape above. A digest is the
+string `sha256:` followed by 43 characters of unpadded base64url; the first
+event's `previousDigest` is the literal `genesis`. The preimage and the
+recomputation rule are written out in [`WORK_BUNDLE.md`](WORK_BUNDLE.md).
+
+The digest chain makes later editing and forks visible. It does not by itself
+prove author identity, and nothing in it is signed.
 
 ## Core event families
 
-- `session.created`, `session.forked`
-- `turn.requested`, `turn.completed`, `turn.failed`, `turn.cancelled`
-- `session.model-changed`
-- `inference.started`, `assistant.delta`, `assistant.completed`, `inference.usage`
-- `tool.requested`, `tool.approved`, `tool.denied`, `tool.resulted`, `tool.failed`
-- `workspace.changed`, `memory.derived`, `sync.committed`
+`KNOWN_EVENT_TYPES` in `src/core/session-audit.ts` is the complete list. The
+families are:
 
-Unknown critical events stop materialization.
+- session: `session.created`, `session.renamed`, `session.favorite.changed`,
+  `session.model-changed`, `session.approval-policy-changed`,
+  `session.fork.context.seeded`
+- turn: `turn.requested`, `turn.context.selected`, `turn.reasoning`,
+  `turn.plan.restated`, `turn.completed`, `turn.failed`, `turn.cancelled`
+- inference: `inference.started`, `assistant.completed`, `inference.usage`
+- tool: `tool.requested`, `tool.approved`, `tool.denied`, `tool.resulted`,
+  `tool.failed`
+- local command, human intent, terminal activity, context summary, profile
+  ordering, and the `prime.*` engine records
+
+Assistant text streams to the screen but is journaled once, as
+`assistant.completed`; there is no per-delta event. A fork is recorded by the
+new session's `lineage` manifest commitment and its
+`session.fork.context.seeded` seed, not by an event on the source. There are no
+`workspace.changed`, `memory.derived` or `sync.committed` events.
+
+An event type this list does not name raises `EVENT_TYPE_UNKNOWN`, which makes
+the history report incomplete and blocks ordinary resume.
 
 ## Inference transport
 
 ```ts
 interface InferenceTransport {
   readonly id: string;
-  stream(request: CanonicalInferenceRequest, signal: AbortSignal): AsyncIterable<InferenceEvent>;
+  readonly posture: SecurityPosture;
+  stream(request: InferenceRequest, signal: AbortSignal): AsyncIterable<InferenceEvent>;
 }
 ```
 
-The canonical request contains:
+`InferenceRequest` in `src/core/contracts.ts` carries:
 
-- target model;
-- byte-stable system prefix;
-- ordered messages;
-- tool schemas;
-- response constraints;
+- request, session, and turn IDs;
+- the target model;
+- the system prompt;
+- ordered canonical messages;
+- tool definitions;
 - an idempotency key.
 
 Transport boundaries are limited to:
@@ -66,7 +86,7 @@ Earlier turns keep their recorded provenance.
 
 ```json
 {
-  "v": 1,
+  "version": 1,
   "suite": "AES-256-GCM/HKDF-SHA-256",
   "workspaceEpoch": 1,
   "objectId": "base64url-hmac-name",
@@ -97,3 +117,7 @@ lengths, and timing, not plaintext filenames or conversation content.
 
 Canonical paths are absolute UTF-8 slash paths under `/workspace`. `.` `..`
 backslashes, NUL, control characters, and escape paths are rejected.
+
+`/workspace/local` is a reserved mount. While a folder on this device is open,
+paths under that mount are served from the real directory by
+`LocalFolderWorkspacePort`, and nothing is copied in either direction.

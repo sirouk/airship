@@ -11,9 +11,25 @@ Thanks for helping improve Airship.
 
 ## Tests and checks
 
+- Run `npx playwright install chromium` once before any browser test.
 - Run focused unit tests with `npm run test -- src/path/to/file.test.ts`.
 - Run focused browser tests with `npx playwright test e2e/name.spec.ts`.
 - Run the full required gate with `npm run check` before you open or merge a pull request.
+- Browser tests bind `127.0.0.1:4173` and `127.0.0.1:4174` with `--strictPort`. Free both ports first.
+
+## Bytes are a gate
+
+`npm run check` ends in `scripts/release-gate.mjs`, which enforces the byte
+ceilings in `RELEASE_BUDGETS` and the table in
+[`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md). Several aggregates have well
+under a kibibyte of headroom, so new code must load lazily and a change that
+moves a ceiling must re-measure every reviewed build variant and say so in the
+comment beside that budget. The gate parses those comments.
+
+The gate also reads documentation: it fails if `docs/RELEASE_GATE.md`'s budget
+table stops mirroring the executable ceilings, or if `docs/SESSION_LIBRARY.md`
+stops stating the fork contract. A documentation-only change can fail the
+release gate.
 
 ## Architecture and boundaries
 

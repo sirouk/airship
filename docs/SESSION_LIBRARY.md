@@ -64,6 +64,8 @@ Render the library and make activation an explicit host action:
 
 `onResume` is only enabled when provider, model, posture, tool manifest, workspace (when supplied), and every profile digest match. A structurally unfinished session or any binding drift requires a fork. A structurally suspect session is blocked from normal resume.
 
+A conversation whose record carries `importedAt` — it arrived in a work bundle — always requires a fork. `decideSessionResume` adds the `ARRIVED_IN_A_BUNDLE` reason, because that conversation's pinned instructions, model and tool set were composed on another device and were never agreed to here. Every message stays readable. The comparison deliberately omits `systemPromptDigest`, because connecting a provider legitimately moves the composed prompt for a *new* session; the fence is on where the record came from, not on what it says. See [`WORK_BUNDLE.md`](WORK_BUNDLE.md).
+
 Pass a fresh `forkManifest` to move a branch onto the active runtime. If it is omitted, the library clones the source runtime configuration. In both cases it creates a new session ID and writes this immutable immediate-ancestor commitment into the new manifest:
 
 ```ts

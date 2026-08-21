@@ -96,11 +96,18 @@ digest = SHA-256( stableStringify({
 }) )
 ```
 
-`stableStringify` is canonical JSON with sorted object keys. Each event's
-`previousDigest` is the digest before it; the first is `"genesis"`; the last
-event's digest is the record's `headDigest`. Airship re-derives the whole chain
-on import and refuses a bundle that does not match — see
-`verifyWorkBundleChain` in `src/sessions/work-bundle.ts`.
+`stableStringify` is canonical JSON with keys sorted by UTF-16 code unit, which
+is what RFC 8785 specifies. The digest is written as the string `sha256:`
+followed by the 32 hash bytes in unpadded base64url — `sha256` in
+`src/core/hash.ts`. Each event's `previousDigest` is the digest before it; the
+first is the literal `"genesis"`; the last event's digest is the record's
+`headDigest`. Airship re-derives the whole chain on import and refuses a bundle
+that does not match — see `verifyWorkBundleChain` in
+`src/sessions/work-bundle.ts`.
+
+A chain that recomputes is not a provenance claim. Nothing here is signed: any
+file can mint a chain that verifies, which is why the fields in the table above
+are refused rather than trusted.
 
 ## The sealed format
 

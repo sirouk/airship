@@ -58,10 +58,30 @@ next turn. It is not a hidden fork.
 ### Storage
 
 Airship starts in ephemeral page memory. The stock selector can adopt Local
-Device storage or Google Drive in a configured build. Durable state is
+Device storage, and Google Drive only in a build that carries a real Google
+OAuth Web client ID; without one, Drive is not offered at all. Durable state is
 client-encrypted before upload. S3-compatible storage remains a host-composed
-adapter (plus the loopback lab), and Walrus remains an optional immutable blob
-transport rather than a selectable Vault.
+adapter, composed in only by `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` for the loopback
+development lab, and Walrus remains an optional immutable blob transport rather
+than a selectable Vault.
+
+### A folder on this device
+
+A Chromium browser can grant Airship one directory of the user's own, mounted
+at the reserved path `/workspace/local` for one profile. Airship reads and
+writes those files in place, stores no copy, and never puts them in a Vault, in
+its Git object database, or in the publishable index. Because such a write
+cannot be undone, any non-read effect naming that mount is reviewed in every
+approval mode, and the Terminal refuses the mount entirely.
+
+### Moving work between devices
+
+Work travels as one file. A readable bundle is plain JSON — every message in it
+is in the clear — and a sealed bundle is the same JSON inside the active Vault's
+envelope. A file is not authority: export strips the conversation's approval
+mode, model route, context policy and storage fence, import refuses a file that
+states them, and a conversation that arrived in a bundle is readable here and
+continues by fork. See [`WORK_BUNDLE.md`](WORK_BUNDLE.md).
 
 ### Workspace and execution
 
@@ -105,4 +125,5 @@ When documents disagree:
 - [`PROTOCOLS.md`](PROTOCOLS.md) — journal, inference, and storage shapes
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — release gates and launch work
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — static hosting guidance
+- [`WORK_BUNDLE.md`](WORK_BUNDLE.md) — the portable work file and its refusals
 - [`SIMPLIFICATION.md`](SIMPLIFICATION.md) — migration summary
