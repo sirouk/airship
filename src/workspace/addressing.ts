@@ -50,10 +50,23 @@ export function terminalShellPath(workspacePath: string): string {
 }
 
 /**
- * One sentence naming both spellings of one directory.
+ * One sentence naming both spellings of one directory, and the one part of it
+ * the shell does not hold.
  *
  * Every surface that shows a shell path and a workspace path in the same frame
  * uses this, so the product cannot grow a second wording for the same identity.
+ *
+ * The identity sentence stopped being true the day a folder could be attached
+ * from this device. `mountTerminalWorkspace` filters every
+ * `isLocalFolderMountPath` entry out of the mount and `syncTerminalWorkspace`
+ * refuses any write-back addressed into one, so `/workspace/local/<folder>` is
+ * listed by Explorer, the Editor and Source Control and does not exist in the
+ * shell at all — measured as `ls: cannot access '/workspace/local/...': No such
+ * file or directory` while the same panel promised the two were one directory.
+ * The fence is right; the sentence was stale, and it is the sentence that a
+ * screen reader is given. So the exception is named in the same sentence as
+ * the identity, and `addressing.test.ts` asserts it against the mount itself
+ * rather than against a copy of the wording.
  */
 export function workspaceAddressNote(workspacePath: string): string {
   let normalized: string;
@@ -62,5 +75,5 @@ export function workspaceAddressNote(workspacePath: string): string {
   } catch {
     normalized = AIRSHIP_WORKSPACE_ROOT;
   }
-  return `${terminalShellPath(normalized)} in the shell is the same directory as ${normalized} in Explorer, the Editor and Source Control.`;
+  return `${terminalShellPath(normalized)} in the shell is the same directory as ${normalized} in Explorer, the Editor and Source Control, except a folder you attached from this device.`;
 }

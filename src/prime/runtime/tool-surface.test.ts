@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ToolRegistry } from "../../tools/registry";
 import type { Tool } from "../../core/contracts";
-import { FakeWorkspacePort } from "../tools/test-utils";
+import { FakeWorkspacePort } from "../tools/test-utils.test-support";
 import { createPrimeToolSurface, primeToolDefinitions } from "./tool-surface";
 
 /**

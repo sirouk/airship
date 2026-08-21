@@ -43,10 +43,10 @@ export const TURN_NARRATION_DWELL_MS = 900;
  * How long the shell's ambient runtime line stays out of the polite channel
  * after this one speaks.
  *
- * "Local kernel ready" is telemetry about the kernel, not news about the turn,
- * and it is set at the same instant the turn settles. It still paints in the
- * topbar — a sighted user keeps it — it simply stops competing for the
- * announcement the person is actually waiting for.
+ * "Airship is ready on this device" is telemetry about the runtime, not news
+ * about the turn, and it is set at the same instant the turn settles. It still
+ * paints in the topbar — a sighted user keeps it — it simply stops competing
+ * for the announcement the person is actually waiting for.
  */
 export const TURN_NARRATION_HOLD_MS = 2_500;
 
@@ -127,7 +127,7 @@ const LOCAL_COMMAND_VERB: Readonly<Record<LocalCommandOutcome, string>> = Object
  *
  * The command is named because this lane routinely runs several in a row, and
  * the detail is the sentence already written into the transcript, so audible
- * proof and durable proof carry the same claim.
+ * audible feedback and the durable record describe the same outcome.
  */
 export function localCommandAnnouncement(
   command: string,

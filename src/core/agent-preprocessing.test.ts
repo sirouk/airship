@@ -291,7 +291,7 @@ async function createFixture(options: Readonly<{
 
 class RecordingTransport implements InferenceTransport {
   readonly id = "preprocessing-test";
-  readonly posture = "encrypted-unattested" as const;
+  readonly posture = "plaintext-remote" as const;
   readonly requests: InferenceRequest[] = [];
 
   constructor(private readonly reasoning: boolean) {}

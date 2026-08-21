@@ -18,9 +18,9 @@ been Python?" Session conformance is validated against
 
 | Area | What lives here |
 |---|---|
-| `ai/` | Ported model/streaming core: message vocabulary, `EventStream` latching terminal stream, provider registry (lazy chunk-per-family), SSE parser, partial-JSON streaming parser, usage/cache cost accounting, overflow detection patterns, schema-lite validator. Providers: `anthropic-messages`, `openai-completions`, `openai-responses`, `faux` (deterministic test provider). |
+| `ai/` | Ported model/streaming core: message vocabulary, terminal-latching `EventStream`, an API registry keyed by wire protocol, usage/cache cost accounting, and schema-lite validation. It carries no built-in provider implementations: the 5,053-line stack that chose behaviour from a provider name was deleted, and `src/prime/provider-stack.contract.test.ts` refuses its return. `faux.test-support.ts` is a deterministic scripted stream for the runtime suites, and is test support by its name. |
 | `agent/` | Ported `packages/agent`: the turn loop state machine with all hook contracts (prepare → validate → beforeToolCall → execute → afterToolCall → finalize), parallel/sequential twins, abort-as-value, Agent wrapper with settlement semantics. |
-| `kernel/` | The persistent RLM execution kernel: a long-lived worker per kernel instance, a serialized REPL job queue, host-attributed streaming, the approval-bound tool bridge (`KernelToolBridge`) that gives sandboxed code exactly the host's tool surface under `prime.kernel.tool.*` identity, and the Pyodide engine path (persistent CPython namespace). |
+| `kernel/` | The RLM execution kernel: a serialized host queue, host-attributed streaming, and the approval-bound tool bridge (`KernelToolBridge`) that gives sandboxed code exactly the host's tool surface under `prime.kernel.tool.*` identity. Stock JavaScript uses one terminated worker per job; only the environment-qualified, non-stock Pyodide engine keeps a kernel-instance namespace. |
 | `subagents/` | `PrimeAgentRegistry`: admission (never awaited), nuclear-family routing, depth gate (chat > global > env > default), rate limits, terminal notices incl. `completed_without_reply`, usage fold-in surface. |
 | `harness/` | The continual harness: entry model, InMemory + IndexedDB stores, optimistic-concurrency + KV adapter, refinement pipeline (validate → atomic apply), exact-restore rollback. Verbatim refine prompts live in `prompt.ts`. |
 | `runtime/` | `types-prime.ts` (the frozen cross-module contract), `prime-events.ts` (the `prime.*` journal vocabulary), and `session.ts` + `runtime.ts`: the turn authority that maps prime agent-loop events into byte-identical Airship turn events, guardrails and receipts included. |
@@ -45,10 +45,11 @@ been Python?" Session conformance is validated against
 
 ## Entry points
 
-- `src/prime/index.ts` re-exports the portable surfaces (`ai/`, `agent/`,
-  the transport adapter). The session runtime joins as `runtime/session.ts`
-  lands.
+- Prime is an application-internal module family, not a published source
+  package. Callers import the exact `ai/`, `agent/`, `runtime/`, or transport
+  module they use; there is no broad production barrel.
 - `src/prime/SRC_PRIME_SPEC.md` — the binding implementation contract for
   the session authority (validate against it; the suite pins it).
-- `scripts/bench/` — Pyodide boot/roundtrip + SSE/stream-json throughput
-  numbers that back `DETERMINATION.md`.
+- `scripts/bench/` — the Pyodide boot/roundtrip numbers that back
+  `DETERMINATION.md`. Its SSE/stream-json bench went with the parsers it
+  measured.

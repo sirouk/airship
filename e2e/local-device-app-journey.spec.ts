@@ -65,6 +65,23 @@ test.describe("Local Device Vault actual-app journey", () => {
       await expectLocalDeviceReady(page);
       await expect(page.getByText("On-device index active", { exact: true })).toBeVisible();
 
+      // The Sessions header must describe the adapter the runtime actually
+      // adopted. Local Device is encrypted browser-managed storage, not the
+      // page-memory fallback that was shown here before enrollment.
+      await navigatePrimary(page, "All conversations");
+      const journalAdapter = page.getByRole("button", {
+        name: /^Current journal adapter\. Encrypted · this device\./u,
+      });
+      await expect(journalAdapter).toBeVisible();
+      await expect(journalAdapter).toContainText("Encrypted · this device");
+      await journalAdapter.click();
+      const journalPanel = page.getByRole("group", { name: "Current journal adapter" });
+      await expect(journalPanel).toContainText(
+        "Encrypted browser-managed storage on this device; no cloud sync is implied.",
+      );
+      await expect(journalPanel).not.toContainText("Page-memory journal");
+      await journalPanel.getByRole("button", { name: "Done" }).click();
+
       await navigatePrimary(page, "Chat");
       await runLocalCommand(page, `/write docs/local-device-context.txt "${marker}"`);
       await navigatePrimary(page, "Vault");
@@ -158,7 +175,7 @@ test.describe("Local Device Vault actual-app journey", () => {
       await restore.getByRole("button", { name: "Verify and restore" }).click();
 
       await expect(page.locator(".local-device-vault__notice"))
-        .toContainText(/Atomic restore verified/u, { timeout: 30_000 });
+        .toContainText(/Atomic restore checked/u, { timeout: 30_000 });
       await expectLocalDeviceReady(page);
       await navigatePrimary(page, "Chat");
       const sourceRead = await runLocalCommand(page, "/read source-marker.txt");
@@ -234,7 +251,7 @@ async function openActualVault(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Vault", level: 1 })).toBeVisible();
 }
 
-async function navigatePrimary(page: Page, name: "Chat" | "Vault"): Promise<void> {
+async function navigatePrimary(page: Page, name: "Chat" | "All conversations" | "Vault"): Promise<void> {
   await page.getByRole("navigation", { name: "Primary" })
     .getByRole("button", { name, exact: true })
     .click();

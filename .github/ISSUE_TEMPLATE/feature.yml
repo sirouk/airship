@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a focused improvement to Airship.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: input
+    id: problem
+    attributes:
+      label: Use case
+      description: What are you trying to do?
+      placeholder: I want to...
+    validations:
+      required: true
+  - type: textarea
+    id: current_gap
+    attributes:
+      label: Current gap
+      description: What is hard or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape
+      description: What would help? Keep it concrete.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundary, security, or storage impact
+      description: Note any browser-boundary, provider, runtime, or storage concerns.

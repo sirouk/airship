@@ -25,8 +25,6 @@ export function parsePresentationDensity(value: unknown): PresentationDensity {
  *
  * - telemetry: counters, timings, token and usage readouts, sync/indexing
  *   status beyond the line that says work is running.
- * - proof: attestation pills and proof chips next to results. The evidence
- *   itself always persists; only its inline echo is density-bound.
  * - suggestion: starter prompts and "try next" offerings.
  * - commentary: interpretation aimed at the interface rather than the work.
  * - chatter: reload/append/reconnect miles readouts inside a transcript.
@@ -34,7 +32,6 @@ export function parsePresentationDensity(value: unknown): PresentationDensity {
  */
 export type DensityTag =
   | "telemetry"
-  | "proof"
   | "suggestion"
   | "commentary"
   | "chatter"

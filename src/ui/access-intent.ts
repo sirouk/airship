@@ -1,25 +1,15 @@
 /**
  * The only URL-carried instruction the Connection route accepts.
  *
- * Credentials never travel here. The values are bounded navigation hints plus
- * the opaque conversation address to re-check after an authority is installed.
- * A caller must still prove that the live provider route exactly resolves the
- * conversation's immutable pin before it may resume it.
+ * Credentials and endpoint URLs never travel here. The values are bounded
+ * navigation hints plus the opaque conversation address to re-check after an
+ * authority is installed. A caller must still resolve the journal's immutable
+ * provider and connection pin before it may resume the conversation.
  */
-export const CONNECT_LANE_IDS = Object.freeze([
-  "chutes",
-  "codex",
-  "claude",
-  "grok",
-  "local",
-  "companion",
-] as const);
-
-export type ConnectLaneId = (typeof CONNECT_LANE_IDS)[number];
 export type AccessReconnectMethod = "oauth-pkce" | "api-key" | "local-none";
 
 export type AccessReconnectIntent = Readonly<{
-  lane: ConnectLaneId;
+  providerId: string;
   method: AccessReconnectMethod;
   model: string;
   connectionId: string;
@@ -30,7 +20,7 @@ export type AccessReconnectIntent = Readonly<{
 export type ReconnectRouteDisposition = "exact" | "replacement" | "unrelated";
 
 export type HeldReconnectRoute = Readonly<{
-  lane?: ConnectLaneId;
+  providerId?: string;
   method: AccessReconnectMethod;
   model: string;
   connectionId: string;
@@ -43,27 +33,40 @@ const ACCESS_METHODS = Object.freeze(new Set<AccessReconnectMethod>([
   "api-key",
   "local-none",
 ]));
-const ACCESS_PARAMETERS = Object.freeze(new Set([
-  "lane",
-  "method",
-  "model",
-  "connection",
-  "generation",
-  "return",
+const ACCESS_PARAMETER_ALIASES = Object.freeze({
+  providerId: ["providerId", "provider"],
+  method: ["method"],
+  model: ["model"],
+  connectionId: ["connectionId", "connection"],
+  connectionGeneration: ["connectionGeneration", "generation"],
+  returnSessionId: ["returnSessionId", "return"],
+} as const);
+const LEGACY_LANE_PARAMETER = "lane";
+const ACCESS_PARAMETERS: ReadonlySet<string> = Object.freeze(new Set([
+  ...Object.values(ACCESS_PARAMETER_ALIASES).flat(),
+  LEGACY_LANE_PARAMETER,
+]));
+const LEGACY_PROVIDER_IDS = Object.freeze(new Map<string, string>([
+  ["codex", "openai"],
+  ["claude", "anthropic"],
+  ["grok", "xai"],
+  ["chutes", "chutes"],
+  ["companion", "companion"],
 ]));
 const MAX_MODEL_ID_LENGTH = 512;
 const MAX_SESSION_ID_LENGTH = 512;
+const AMBIGUOUS_PARAMETER = Symbol("ambiguous access parameter");
 
 /** Canonical address for a validated reconnect instruction. */
 export function accessReconnectHash(intent: AccessReconnectIntent): string {
   const normalized = validateAccessReconnectIntent(intent);
   const parameters = new URLSearchParams({
-    lane: normalized.lane,
+    providerId: normalized.providerId,
     method: normalized.method,
     model: normalized.model,
-    connection: normalized.connectionId,
-    generation: String(normalized.connectionGeneration),
-    return: normalized.returnSessionId,
+    connectionId: normalized.connectionId,
+    connectionGeneration: String(normalized.connectionGeneration),
+    returnSessionId: normalized.returnSessionId,
   });
   return `#connection?${parameters.toString()}`;
 }
@@ -72,8 +75,10 @@ export function accessReconnectHash(intent: AccessReconnectIntent): string {
  * Parses only one complete, unambiguous reconnect instruction.
  *
  * Unknown, duplicate, missing, or malformed fields reduce to no instruction;
- * the Connection route remains usable, but no later provider activation can be
- * redirected by a partly understood URL.
+ * the Connection route remains usable, but no provider activation can be
+ * redirected by a partly understood URL. Legacy vendor lanes are accepted
+ * only when they identify one provider. The old `local` lane fails closed
+ * because it cannot distinguish Ollama, LM Studio, or a custom endpoint.
  */
 export function parseAccessReconnectIntent(hash: string): AccessReconnectIntent | undefined {
   const withoutHash = hash.replace(/^#/u, "");
@@ -82,17 +87,36 @@ export function parseAccessReconnectIntent(hash: string): AccessReconnectIntent 
   if (!ACCESS_ROUTES.has(withoutHash.slice(0, separator))) return undefined;
   const parameters = new URLSearchParams(withoutHash.slice(separator + 1));
   if ([...parameters.keys()].some((key) => !ACCESS_PARAMETERS.has(key))) return undefined;
-  for (const key of ACCESS_PARAMETERS) {
-    if (parameters.getAll(key).length > 1) return undefined;
-  }
-  const lane = parameters.get("lane");
-  const method = parameters.get("method");
-  const model = boundedText(parameters.get("model"), MAX_MODEL_ID_LENGTH);
-  const connectionId = boundedConnectionId(parameters.get("connection"));
-  const connectionGeneration = positiveGeneration(parameters.get("generation"));
-  const returnSessionId = addressableSessionId(parameters.get("return"));
+
+  const currentProvider = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.providerId);
+  const legacyLane = uniqueParameter(parameters, [LEGACY_LANE_PARAMETER]);
+  const method = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.method);
+  const modelValue = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.model);
+  const connectionIdValue = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.connectionId);
+  const generationValue = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.connectionGeneration);
+  const returnSessionIdValue = uniqueParameter(parameters, ACCESS_PARAMETER_ALIASES.returnSessionId);
   if (
-    !isConnectLaneId(lane)
+    currentProvider === AMBIGUOUS_PARAMETER
+    || legacyLane === AMBIGUOUS_PARAMETER
+    || method === AMBIGUOUS_PARAMETER
+    || modelValue === AMBIGUOUS_PARAMETER
+    || connectionIdValue === AMBIGUOUS_PARAMETER
+    || generationValue === AMBIGUOUS_PARAMETER
+    || returnSessionIdValue === AMBIGUOUS_PARAMETER
+    || (currentProvider !== null && legacyLane !== null)
+  ) return undefined;
+
+  const providerId = currentProvider !== null
+    ? boundedProviderId(currentProvider)
+    : legacyLane !== null
+      ? boundedProviderId(LEGACY_PROVIDER_IDS.get(legacyLane) ?? "")
+      : undefined;
+  const model = boundedText(modelValue, MAX_MODEL_ID_LENGTH);
+  const connectionId = boundedConnectionId(connectionIdValue);
+  const connectionGeneration = positiveGeneration(generationValue);
+  const returnSessionId = addressableSessionId(returnSessionIdValue);
+  if (
+    !providerId
     || method === null
     || !isAccessReconnectMethod(method)
     || !model
@@ -101,7 +125,7 @@ export function parseAccessReconnectIntent(hash: string): AccessReconnectIntent 
     || !returnSessionId
   ) return undefined;
   return Object.freeze({
-    lane,
+    providerId,
     method,
     model,
     connectionId,
@@ -116,18 +140,6 @@ export function canonicalAccessHash(hash: string): string {
   return intent ? accessReconnectHash(intent) : "#connection";
 }
 
-/** The Connection lane that owns a provider/transport identifier. */
-export function accessLaneForProvider(providerId: string): ConnectLaneId | undefined {
-  const normalized = providerId.trim().toLowerCase();
-  if (!normalized || normalized.length > 256) return undefined;
-  if (/^chutes(?:[^a-z0-9]|$)/u.test(normalized)) return "chutes";
-  if (/^(?:openai|codex)(?:[^a-z0-9]|$)/u.test(normalized)) return "codex";
-  if (/^(?:anthropic|claude)(?:[^a-z0-9]|$)/u.test(normalized)) return "claude";
-  if (/^(?:xai|grok)(?:[^a-z0-9]|$)/u.test(normalized)) return "grok";
-  if (/^(?:ollama|lm-studio|local)(?:[^a-z0-9]|$)/u.test(normalized)) return "local";
-  return undefined;
-}
-
 export function reconnectMethodTab(method?: AccessReconnectMethod): "oauth" | "api-key" | undefined {
   if (method === "oauth-pkce") return "oauth";
   if (method === "api-key") return "api-key";
@@ -135,17 +147,17 @@ export function reconnectMethodTab(method?: AccessReconnectMethod): "oauth" | "a
 }
 
 /**
- * Classifies a held route without weakening the session-layer proof.
+ * Classifies a held route without weakening the exact session authority match.
  *
- * `exact` is only an affordance decision: the journal/profile/audit/head
- * checks still run before continuation. A same-lane route with any different
- * immutable field is a replacement, never a continuation candidate.
+ * `exact` is only an affordance decision: the journal/profile/integrity/head
+ * checks still run before continuation. A same-provider route with any
+ * different immutable field is a replacement, never a continuation candidate.
  */
 export function reconnectRouteDisposition(
   intent: AccessReconnectIntent,
   route: HeldReconnectRoute,
 ): ReconnectRouteDisposition {
-  if (route.lane !== intent.lane) return "unrelated";
+  if (route.providerId !== intent.providerId) return "unrelated";
   return route.method === intent.method
     && route.model === intent.model
     && route.connectionId === intent.connectionId
@@ -161,7 +173,7 @@ export function reconnectIntentsEqual(
 ): boolean {
   return left !== undefined
     && right !== undefined
-    && left.lane === right.lane
+    && left.providerId === right.providerId
     && left.method === right.method
     && left.model === right.model
     && left.connectionId === right.connectionId
@@ -170,7 +182,8 @@ export function reconnectIntentsEqual(
 }
 
 function validateAccessReconnectIntent(intent: AccessReconnectIntent): AccessReconnectIntent {
-  if (!isConnectLaneId(intent.lane)) throw new TypeError("The reconnect lane is invalid.");
+  const providerId = boundedProviderId(intent.providerId);
+  if (!providerId) throw new TypeError("The reconnect provider is invalid.");
   if (!isAccessReconnectMethod(intent.method)) {
     throw new TypeError("The reconnect authentication method is invalid.");
   }
@@ -183,17 +196,13 @@ function validateAccessReconnectIntent(intent: AccessReconnectIntent): AccessRec
   if (connectionGeneration === undefined) throw new TypeError("The reconnect connection generation is invalid.");
   if (!returnSessionId) throw new TypeError("The reconnect conversation is invalid.");
   return Object.freeze({
-    lane: intent.lane,
+    providerId,
     method: intent.method,
     model,
     connectionId,
     connectionGeneration,
     returnSessionId,
   });
-}
-
-function isConnectLaneId(value: unknown): value is ConnectLaneId {
-  return typeof value === "string" && (CONNECT_LANE_IDS as readonly string[]).includes(value);
 }
 
 function isAccessReconnectMethod(value: string): value is AccessReconnectMethod {
@@ -206,6 +215,12 @@ function boundedText(value: unknown, maximum: number): string | undefined {
     && value.length <= maximum
     && value.trim() === value
     && !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
+}
+
+function boundedProviderId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._:/-]{0,127}$/u.test(value)
     ? value
     : undefined;
 }
@@ -228,4 +243,13 @@ function positiveGeneration(value: unknown): number | undefined {
       ? Number(value)
       : Number.NaN;
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function uniqueParameter(
+  parameters: URLSearchParams,
+  aliases: readonly string[],
+): string | null | typeof AMBIGUOUS_PARAMETER {
+  const values = aliases.flatMap((alias) => parameters.getAll(alias));
+  if (values.length > 1) return AMBIGUOUS_PARAMETER;
+  return values[0] ?? null;
 }

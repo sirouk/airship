@@ -4,26 +4,26 @@ import {
   completedTurnLabel,
   currentDestinationLabel,
   destinationHintForControl,
-  evidenceRecordLabel,
 } from "./mobile-navigation";
 import { MOBILE_MORE_ENTRIES, MOBILE_PRIMARY_CONTROLS, mobilePrimaryControlForView, type NavigationView } from "./navigation-model";
 
 const source = readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8");
 
 describe("mobile navigation badges", () => {
-  it("labels completed work as completed and routes evidence to Trust", () => {
+  it("labels completed work as completed and keeps Providers badge-free", () => {
     expect(completedTurnLabel(1)).toBe("1 completed turn");
     expect(completedTurnLabel(5)).toBe("5 completed turns");
-    expect(evidenceRecordLabel(1)).toBe("1 evidence record");
-    expect(evidenceRecordLabel(5)).toBe("5 evidence records");
     expect(source).not.toContain("pendingLabel(");
-    expect(source).not.toContain('control.id === "more"\n              ? attestationNoticeCount');
+    expect(source).not.toContain("evidenceRecordLabel(");
+    expect(source).not.toContain("proofPresence");
+    expect(source).not.toContain("mobile-nav__badge--presence");
+    expect(source).not.toContain("Proof available");
   });
 
-  it("uses a neutral Proof-presence dot when no evidence record count exists", () => {
-    expect(source).toContain("proofPresence");
-    expect(source).toContain("mobile-nav__badge--presence");
-    expect(source).toContain("Proof available");
+  it("keeps the Providers control current-state only, with no activity badge path", () => {
+    expect(source).toContain('providers: "access"');
+    expect(source).toContain('const notice = control.id === "chat" ? chatNoticeCount : 0;');
+    expect(source).toContain('const noticeLabel = control.id === "chat" ? completedTurnLabel(chatNoticeCount) : undefined;');
   });
 });
 
@@ -66,7 +66,7 @@ describe("every route states its location to assistive tech, including the five 
     expect(source).toContain("const currentDestination = destinationHintForControl(activeControl, view);");
     expect(source).toMatch(/<span id=\{destinationHintId\} class="sr-only">\{`Current page: \$\{currentDestination\}`\}<\/span>/u);
     expect(source).not.toMatch(/<span>\{control\.label\}<\/span>\s*\{currentDestination/u);
-    // The gate that produced "Trust, current page" on three routes.
+    // The gate that produced "Providers, current page" on three routes.
     expect(source).not.toContain('activeControl === "more" ?');
   });
 
@@ -91,21 +91,14 @@ describe("every route states its location to assistive tech, including the five 
 
   it("names the route on every control whose own label is not the route's name", () => {
     /*
-     * Vault, Account and Connection were outside both the fix and its
-     * regression net: on #vault the phone announced "Trust, current page" — a
-     * name no route carries — and tapping the highlighted tab left for Proof.
-     * Desktop states the truth on those same routes (rail.tsx puts
-     * `aria-current="page"` on a row labelled "Vault"), so the phone was the
-     * surface that lied. The description fixed the announcement; the highlight
-     * itself has since moved to More, which is where all three routes live and
-     * the only tab a person can follow back to them. Both halves are read here.
+     * Vault still lives behind More, while Providers owns the fourth fixed
+     * track. The hint is owed only where the control's own label is not the
+     * route's name.
      */
-    const hinted = (["vault", "billing", "access", "sessions", "editor", "terminal"] as const)
+    const hinted = (["vault", "sessions", "editor", "terminal"] as const)
       .map((view) => [view, mobilePrimaryControlForView(view), destinationHintForControl(mobilePrimaryControlForView(view), view)] as const);
     expect(hinted).toEqual([
       ["vault", "more", "Vault"],
-      ["billing", "more", "Account"],
-      ["access", "more", "Connection"],
       ["sessions", "chat", "All conversations"],
       ["editor", "workspace", "Editor"],
       ["terminal", "workspace", "Terminal"],
@@ -123,7 +116,7 @@ describe("every route states its location to assistive tech, including the five 
     // its control or gets a description.
     const views: readonly NavigationView[] = [
       "chat", "sessions", "workspace", "editor", "terminal", "memory", "context",
-      "profiles", "capabilities", "skills", "vault", "billing", "proof", "access",
+      "profiles", "capabilities", "skills", "vault", "access",
     ];
     for (const view of views) {
       const controlId = mobilePrimaryControlForView(view);

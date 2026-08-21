@@ -6,7 +6,7 @@ import type { AttachmentPart, MessagePart, TextPart } from "./message-parts";
  * There was a second constant here — a 20 MiB `COMPOSER_ATTACHMENT_BYTE_LIMIT`
  * — that nothing anywhere read, and it disagreed with the size a person is
  * actually held to: `prepareCanonicalImageInputs` refuses any image over
- * `MAX_CANONICAL_IMAGE_BYTES` (10 MiB) in `core/multimodal.ts`. A declared
+ * `MAX_CANONICAL_IMAGE_BYTES` (10 MiB) in `core/multimodal-contract.ts`. A declared
  * ceiling that never fires and states the wrong number is worse than none, so
  * the byte contract is read from the module that enforces it.
  */
@@ -51,8 +51,7 @@ export function userMessageParts(content: string, attachments: readonly Composer
     mediaType: item.mediaType,
     sizeBytes: item.size,
     ...(item.previewUrl ? { previewUrl: item.previewUrl } : {}),
-    summary: "Included as an inline image inside the encrypted inference request.",
-    reference: "inline-e2ee",
+    summary: "Included as an inline image with this inference request.",
     status: "available" as const,
   }));
   return Object.freeze([text, ...attachmentParts]);

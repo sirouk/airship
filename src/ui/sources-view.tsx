@@ -31,9 +31,9 @@ import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { RouteHeader } from "./route-header";
 import { useScrollEdges } from "./scroll-affordance";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import { Tabs } from "./tabs";
-import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilityStatusMark, type DurabilityState } from "./durability-indicator";
 import "./sources-view.css";
 import { mapUnknownRequestFailure } from "./request-state";
 
@@ -157,7 +157,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const remoteUrlValue = remoteDraft ?? remote?.url ?? "";
   const remoteOperation = repository ? sourceRemoteOperation(repository, remoteUrlValue, remote?.name ?? DEFAULT_REMOTE_NAME) : undefined;
   // Only once what was typed is a URL at all: a half-typed "htt" has no origin,
-  // and answering it with "this build's CSP does not permit htt" would blame
+  // and answering it with "the Git remote policy does not permit htt" would blame
   // the policy for a string the reader has not finished writing.
   const typedRemoteOrigin = remoteOrigin(remoteUrlValue.trim());
   const remoteUrlUnreachable = typedRemoteOrigin !== undefined
@@ -165,7 +165,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
     && !isRemoteOriginPermitted(remoteUrlValue.trim(), client.capabilities.remote.permittedOrigins);
   const hasConflict = selectedStatus.some(isConflicted);
   const posture = useMemo(
-    () => sourcePostureFacts(client.capabilities, workspaceDurability),
+    () => sourceFacts(client.capabilities, workspaceDurability),
     [client.capabilities, workspaceDurability.state, workspaceDurability.detail],
   );
   /*
@@ -459,27 +459,23 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
         </>}
       />
 
-      {/* One posture row at every width. The three trust cards and the two
-          durability pills used to render as a 212px desktop grid *and* a phone
-          disclosure — the same facts twice, in two layouts, with the middle
-          card's 660-character Content-Security-Policy paragraph also printed a
-          second time under Remote boundary. The summary names every fact it
-          holds, so the collapse cannot bury one. */}
+      {/* One facts row at every width. The summary names every fact it holds,
+          so the disclosure cannot bury one or repeat the remote policy. */}
       <details
-        class="git-sources-trust-disclosure"
+        class="git-sources-facts-disclosure"
         ref={postureRef}
         open={postureOpen}
         onToggle={(event) => setPostureOpen(event.currentTarget.open)}
       >
         <summary>
-          <span class="eyebrow">Source posture</span>
-          <span class="git-posture-chips" ref={postureChipsRef}>
-            {posture.map((fact) => <Seal key={fact.id} state={fact.state} label={fact.label} density="chip" />)}
+          <span class="eyebrow">Source facts</span>
+          <span class="git-source-fact-chips" ref={postureChipsRef}>
+            {posture.map((fact) => <StatusMark key={fact.id} state={fact.state} label={fact.label} density="chip" />)}
           </span>
           <small>{posture.length} facts · full detail</small>
         </summary>
-        <div class="git-sources-trust" role="status">
-          <SourceTrustFacts facts={posture} />
+        <div class="git-sources-facts" role="status">
+          <SourceFacts facts={posture} />
         </div>
       </details>
 
@@ -509,7 +505,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
 
       {error ? <div class="git-sources-alert error" role="alert"><Icon name="warning" /><span>{error}</span></div> : null}
       {error?.toLowerCase().includes("version") ? <div class="git-reconcile" role="alert"><strong>Worktree changed since review</strong><span>Refresh this worktree and re-review. Your current path selection stays visible until fresh state arrives.</span><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Refresh this worktree</button></div> : null}
-      {notice ? <div class="git-sources-alert" role="status"><Icon name="proof" /><span>{notice}</span></div> : null}
+      {notice ? <div class="git-sources-alert" role="status"><Icon name="check" /><span>{notice}</span></div> : null}
 
       {!repository || !worktree ? (
         <div class="git-sources-empty">
@@ -690,7 +686,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                   {/*
                     The field the panel never had. Recording a remote is a local
                     config write, so it stays available even for an origin this
-                    build's CSP cannot reach — the refusal belongs to fetch and
+                    build's Git remote policy does not permit — the refusal belongs to fetch and
                     push, which say so themselves, and hiding the control would
                     leave the repository permanently unable to name its upstream.
                   */}
@@ -704,7 +700,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                       onInput={(event) => setRemoteDraft(event.currentTarget.value)}
                     />
                   </label>
-                  {remoteUrlUnreachable ? <p class="git-push-warning" role="status">This build&rsquo;s Content-Security-Policy does not permit {typedRemoteOrigin}. The remote can still be recorded; fetch and push against it are refused before any request is sent.</p> : null}
+                  {remoteUrlUnreachable ? <p class="git-push-warning" role="status">This build&rsquo;s Git remote policy does not permit {typedRemoteOrigin}. The remote can still be recorded; fetch and push against it are refused before any request is sent.</p> : null}
                   <button type="button" disabled={Boolean(busy) || !remoteOperation} onClick={configureRemote}><Icon name="branch" /> {remote ? "Save remote URL" : "Add remote"}</button>
                   {remote ? <button type="button" disabled={Boolean(busy)} onClick={() => setRemovingRemote(remote.name)}>Remove {remote.name}</button> : null}
                   <button type="button" disabled={Boolean(busy) || !remoteReachable || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
@@ -712,12 +708,12 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                   <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
                   {remoteBoundaryParagraphs(client.capabilities, remote).map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
                   {/* The transport's own contract paragraph is stated once, in
-                      Source posture. This is a pointer to it, not a reprint —
-                      and an adapter with no transport has no CSP permission to
+                      Source facts. This is a pointer to them, not a reprint —
+                      and an adapter with no transport has no remote-policy permission to
                       point at, so it gets the pointer without the claim. */}
                   {client.capabilities.remote.transport === "none"
-                    ? <p>This adapter's remote contract is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>
-                    : <p>What this build's Content-Security-Policy permits is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>}
+                    ? <p>This adapter's remote contract is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source facts ↑</button>.</p>
+                    : <p>What this build's Git remote policy permits is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source facts ↑</button>.</p>}
                 </div>
               </details>
           </div>
@@ -1149,31 +1145,31 @@ export function parseUnifiedPatch(patch: string): ParsedPatch {
   return Object.freeze({ header: Object.freeze(header), lines: Object.freeze(lines) });
 }
 
-export type SourcePostureFact = Readonly<{
+export type SourceFact = Readonly<{
   id: string;
-  state: SealState;
+  state: StatusMarkState;
   label: string;
   detail: string;
 }>;
 
 /**
- * Every posture claim this surface makes, computed once and rendered once.
+ * Every source fact this surface shows, computed once and rendered once.
  *
- * Three trust cards, two durability pills and a repeat of the transport
+ * Three summary cards, two durability pills and a repeat of the transport
  * paragraph under Remote boundary were five renderings of four facts. The
  * durability pair merges only while the two scopes agree — a workspace held in
  * a vault behind a page-memory Git index is a real, different state and still
  * renders as two rows.
  */
-export function sourcePostureFacts(
+export function sourceFacts(
   capabilities: BrowserGitClient["capabilities"],
   workspaceDurability: Readonly<{ state: DurabilityState; detail: string }>,
-): readonly SourcePostureFact[] {
+): readonly SourceFact[] {
   const gitDurability: DurabilityState = capabilities.storage.durable ? "synced" : "ephemeral";
-  const durability: readonly SourcePostureFact[] = workspaceDurability.state === gitDurability
+  const durability: readonly SourceFact[] = workspaceDurability.state === gitDurability
     ? [{
       id: "durability",
-      state: durabilitySeal(gitDurability),
+      state: durabilityStatusMark(gitDurability),
       // Scoped even when merged: the Workspace route header states the
       // workspace-files durability on its own, and two chips reading exactly
       // `Ephemeral · this page only` 200px apart is the restatement this
@@ -1185,18 +1181,18 @@ export function sourcePostureFacts(
     : [
       {
         id: "durability-workspace",
-        state: durabilitySeal(workspaceDurability.state),
+        state: durabilityStatusMark(workspaceDurability.state),
         label: `Workspace files · ${durabilityLabel(workspaceDurability.state)}`,
         detail: workspaceDurability.detail,
       },
       {
         id: "durability-git",
-        state: durabilitySeal(gitDurability),
+        state: durabilityStatusMark(gitDurability),
         label: `Git index & refs · ${durabilityLabel(gitDurability)}`,
         detail: capabilities.storage.detail,
       },
     ];
-  const facts: readonly SourcePostureFact[] = [
+  const facts: readonly SourceFact[] = [
     {
       id: "storage",
       // Page memory is `none` — nothing failed, nothing durable was claimed.
@@ -1208,7 +1204,7 @@ export function sourcePostureFacts(
       id: "remote",
       // A transport with no origin it may reach is not "ready", which is what
       // the teal dot said while the paragraph beside it named the two hosts
-      // this build's Content-Security-Policy blocks.
+      // this build's Git remote policy blocks.
       state: capabilities.remote.transport === "none"
         ? "none"
         : capabilities.remote.permittedOrigins.length === 0 ? "attention" : "asserted",
@@ -1217,7 +1213,7 @@ export function sourcePostureFacts(
     },
     {
       id: "version-bound",
-      // Airship enforces this, and nothing external verifies it: `asserted`.
+      // Airship enforces this locally; the status records that fact.
       state: "asserted",
       label: "Version-bound writes",
       detail: "Every mutation is tied to the reviewed worktree generation.",
@@ -1234,10 +1230,10 @@ export function remoteTransportLabel(transport: string, permittedOrigins: number
   return `${name} · ${permittedOrigins} permitted origin${permittedOrigins === 1 ? "" : "s"}`;
 }
 
-function SourceTrustFacts({ facts }: Readonly<{ facts: readonly SourcePostureFact[] }>) {
+function SourceFacts({ facts }: Readonly<{ facts: readonly SourceFact[] }>) {
   return <>
     {facts.map((fact) => <div key={fact.id}>
-      <Seal state={fact.state} label={fact.label} density="chip" />
+      <StatusMark state={fact.state} label={fact.label} density="chip" />
       <small>{fact.detail}</small>
     </div>)}
   </>;
@@ -1257,7 +1253,7 @@ function ImportProgress({ progress }: Readonly<{ progress: RepositoryImportProgr
 function ImportReceipt({ receipt }: Readonly<{ receipt: RepositoryImportResult }>) {
   return (
     <article class="git-import-receipt" aria-label="GitHub snapshot import receipt">
-      <header><Icon name="proof" /><strong>Snapshot admitted</strong><span>workspace + browser Git</span></header>
+      <header><Icon name="check" /><strong>Snapshot admitted</strong><span>workspace + browser Git</span></header>
       <dl>
         <div><dt>Source</dt><dd>{receipt.repository}@{receipt.ref}</dd></div>
         <div><dt>Pinned commit</dt><dd title={receipt.commit}>{receipt.commit}</dd></div>
@@ -1335,8 +1331,7 @@ function gitCredentialBoundary(capabilities: BrowserGitClient["capabilities"]): 
 }
 
 /**
- * The paragraphs under the remote boundary, in order. A remote this build's
- * CSP cannot reach never gets the credential-custody sentence: no request is
+ * The paragraphs under the remote boundary, in order. A remote this build's Git remote policy does not permit never gets the credential-custody sentence: no request is
  * ever sent, so custody is not the thing standing in the way, and saying
  * "anonymous direct push only" would describe a push that cannot happen.
  */
@@ -1347,7 +1342,7 @@ export function remoteBoundaryParagraphs(
   // A transport-less adapter (memory, encrypted workspace) permits no origin
   // because it installs no Git HTTP client at all, not because the page's
   // policy refused one — and it can still carry a real GitHub `origin` that
-  // snapshot import registered. Answering with the CSP sentence there would
+  // snapshot import registered. Answering with the remote-policy sentence there would
   // blame the wrong layer and bury the adapter's own reason, so the adapter
   // speaks first and the policy sentence is kept for builds that do have a
   // transport and a remote that transport may not reach.
@@ -1357,7 +1352,7 @@ export function remoteBoundaryParagraphs(
   if (remote && !isRemoteOriginPermitted(remote.url, capabilities.remote.permittedOrigins)) {
     const origin = remoteOrigin(remote.url) ?? remote.url;
     return [
-      `This build's Content-Security-Policy does not permit ${origin}, so fetch and push against this remote are refused before any request is sent — the adapter's capability flags describe the build, not this remote.`,
+      `This build's Git remote policy does not permit ${origin}, so fetch and push against this remote are refused before any request is sent — the adapter's capability flags describe the build, not this remote.`,
       `Git Smart HTTP may reach ${permittedOriginList(capabilities)} from this page.`,
     ];
   }
@@ -1379,7 +1374,7 @@ export function cloneBoundaryNote(capabilities: BrowserGitClient["capabilities"]
   if (!capabilities.features.clone.available) {
     return `Full-history clone unavailable: ${capabilities.features.clone.reason ?? "no direct adapter is installed"}.`;
   }
-  return `Full-history clone can reach only ${permittedOriginList(capabilities)} — the origins this build's Content-Security-Policy permits Git Smart HTTP to. Every other remote is refused before a request is sent.`;
+  return `Full-history clone can reach only ${permittedOriginList(capabilities)} — the origins this build's Git remote policy permits for Smart HTTP. Every other remote is refused before a request is sent.`;
 }
 
 function permittedOriginList(capabilities: BrowserGitClient["capabilities"]): string {

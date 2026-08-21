@@ -50,12 +50,12 @@ describe("execute_code discriminated contract", () => {
 });
 
 describe("manifest-bound workspace programs", () => {
-  it("rejects unpromoted shell calls and recursive tools", async () => {
+  it("rejects undeclared network calls and recursive tools", async () => {
     const host = new ToolRegistry();
     host.register({
       definition: {
-        name: "execute_wasix_shell",
-        description: "test WASIX boundary",
+        name: "unreviewed_network_tool",
+        description: "test network boundary",
         effect: "network",
         inputSchema: {
           type: "object",
@@ -69,8 +69,8 @@ describe("manifest-bound workspace programs", () => {
 
     await expect(executeExecutionTool("execute_workspace_program", {
       code: "return await airship.call('shell');",
-      calls: [{ id: "shell", tool: "execute_wasix_shell", arguments: { code: "printf ok" } }],
-    }, context, undefined, host)).rejects.toThrow(/cannot invoke execute_wasix_shell/u);
+      calls: [{ id: "shell", tool: "unreviewed_network_tool", arguments: { code: "printf ok" } }],
+    }, context, undefined, host)).rejects.toThrow(/cannot invoke unreviewed_network_tool/u);
 
     host.register({
       definition: {
@@ -87,12 +87,4 @@ describe("manifest-bound workspace programs", () => {
     }, context, undefined, host)).rejects.toThrow(/cannot invoke execute_workspace_program/u);
   });
 
-  it("fails closed for direct calls to the unpromoted WASIX implementation", async () => {
-    await expect(executeExecutionTool("install_execution_runtime", {
-      runtime: "wasix",
-    }, context)).rejects.toThrow(/not promoted.*nonzero Bash status.*mounted-workspace mutations/u);
-    await expect(executeExecutionTool("execute_wasix_shell", {
-      code: "printf ok",
-    }, context)).rejects.toThrow(/not promoted.*Rust compiler remain unavailable/u);
-  });
 });

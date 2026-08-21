@@ -74,16 +74,6 @@ export class ClientContextRuntime {
   get embeddingProviderId(): string { return this.embeddings!.id; }
   getEmbeddingMode(): EmbeddingMode { return this.switchable?.getMode() ?? (this.embeddings?.posture === "local-semantic" ? "semantic" : "bootstrap"); }
   getSemanticState(): SemanticProviderState | undefined { return this.switchable?.getSemanticState(); }
-  /**
-   * Which embedding deployment the confidential engine actually resolved.
-   *
-   * Undefined until discovery answers, and that is the honest state rather than
-   * a gap to paper over: before `prepare()` completes nothing here knows which
-   * chute will serve, so the screen that describes the engine must be able to
-   * say so instead of naming a model from a constant. See
-   * `context-view.tsx` `embeddingEngineNote`.
-   */
-  getConfidentialEmbeddingModelId(): string | undefined { return this.switchable?.getConfidentialReadiness()?.modelId; }
   subscribeSemantic(listener: (state: SemanticProviderState) => void): (() => void) | undefined {
     return this.switchable?.subscribeSemantic(listener);
   }
@@ -97,17 +87,6 @@ export class ClientContextRuntime {
     // An explicit selection settles the question the probe exists to answer,
     // including when it arrives before the first generation.
     this.derivedMode = Promise.resolve();
-    /*
-     * Discovery happens before the switch, not after it.
-     *
-     * The confidential engine has to ask Chutes which chutes embed and how wide
-     * their vectors are before it can hold an index. Doing that here means an
-     * unreadable catalog or a deployment that will not answer a width probe
-     * rejects `setEmbeddingMode` with its own sentence — which the Context view
-     * puts on screen — instead of switching the index into a mode that cannot
-     * embed and discovering it one rebuild later.
-     */
-    await this.switchable.prepare(mode);
     if (this.switchable.getMode() === mode && this.engine.getState().generation) return this.refreshNow();
     try { await this.refreshNow(); } catch { /* A failed old generation does not prevent a clean rebuild. */ }
     this.engine.cancelSearch(new DOMException("Embedding mode changed.", "AbortError"));

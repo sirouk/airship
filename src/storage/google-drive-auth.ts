@@ -87,6 +87,15 @@ type GoogleIdentityNamespace = {
   }};
 };
 
+type GoogleAuthorizationPending = {
+  readonly authorizerGeneration: number;
+  readonly attemptGeneration: number;
+  callbackReceived: boolean;
+  resolve(value: GoogleAccessToken): void;
+  reject(reason: unknown): void;
+  timer: ReturnType<typeof globalThis.setTimeout>;
+};
+
 /** Thin, dependency-free wrapper around the official GIS browser token client. */
 export class GoogleIdentityServicesAuthorizer {
   readonly scope = GOOGLE_ACCOUNT_SCOPES.join(" ");
@@ -97,12 +106,11 @@ export class GoogleIdentityServicesAuthorizer {
    * would construct here and then fail opaquely inside Google's token client.
    */
   readonly #clientId: string;
-  #client?: GoogleTokenClient;
-  #pending?: {
-    resolve(value: GoogleAccessToken): void;
-    reject(reason: unknown): void;
-    timer: ReturnType<typeof globalThis.setTimeout>;
-  };
+  #identityServices?: GoogleIdentityNamespace;
+  #generation = 0;
+  #preparedGeneration?: number;
+  #nextAttemptGeneration = 0;
+  #pending?: GoogleAuthorizationPending;
 
   constructor(
     clientId: string,
@@ -117,30 +125,63 @@ export class GoogleIdentityServicesAuthorizer {
 
   /** Load GIS when the connection surface opens, before a click is required. */
   async prepare(): Promise<void> {
-    await this.tokenClient();
+    const generation = this.#generation;
+    const google = this.#identityServices ?? await this.loadIdentityServices();
+    // The namespace is inert until authorize() creates a token client, so it is
+    // safe to retain across reset. A prepare completion from an older reset
+    // generation must not, however, make that newer generation ready.
+    this.#identityServices ??= google;
+    if (this.#generation === generation) this.#preparedGeneration = generation;
   }
 
   /** Must be invoked synchronously from a click/tap handler after `prepare()`. */
   authorize(options: { selectAccount?: boolean } = {}): Promise<GoogleAccessToken> {
+    // Snapshot the caller-owned options before any callback or promise work can
+    // observe later mutation.
+    const selectAccount = options.selectAccount === true;
+    const authorizerGeneration = this.#generation;
+    const google = this.#identityServices;
+    const clientId = this.#clientId;
+    const scope = this.scope;
     if (this.#pending) throw new Error("Google authorization is already in progress.");
-    const client = this.#client;
-    if (!client) throw new Error("Prepare Google Identity Services before requesting access.");
+    if (!google || this.#preparedGeneration !== authorizerGeneration) {
+      throw new Error("Prepare Google Identity Services before requesting access.");
+    }
+
+    const attemptGeneration = ++this.#nextAttemptGeneration;
     return new Promise<GoogleAccessToken>((resolve, reject) => {
-      const pending = {
+      const pending: GoogleAuthorizationPending = {
+        authorizerGeneration,
+        attemptGeneration,
+        callbackReceived: false,
         resolve,
         reject,
         timer: globalThis.setTimeout(() => {
-          if (this.#pending !== pending) return;
-          this.#pending = undefined;
+          if (!this.clearPending(pending)) return;
           reject(new GoogleDriveAuthorizationRequiredError("Google authorization did not finish. Close any stale account window and try again."));
         }, GOOGLE_AUTHORIZATION_TIMEOUT_MS),
       };
       this.#pending = pending;
+
       try {
-        client.requestAccessToken({ prompt: options.selectAccount ? "select_account" : "" });
+        // GIS has no caller-provided state value. A fresh client gives each
+        // request a callback closure that can only consume its exact pending
+        // generation; cached clients would make late callbacks ambiguous.
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope,
+          callback: (response) => this.acceptTokenResponse(pending, response),
+          error_callback: (error) => {
+            if (!this.isCurrentPending(pending) || pending.callbackReceived) return;
+            if (!this.clearPending(pending)) return;
+            reject(new GoogleDriveAuthorizationRequiredError(
+              boundedMessage(error.message ?? error.type ?? "Google authorization was interrupted."),
+            ));
+          },
+        });
+        client.requestAccessToken({ prompt: selectAccount ? "select_account" : "" });
       } catch (error) {
-        this.#pending = undefined;
-        globalThis.clearTimeout(pending.timer);
+        if (!this.clearPending(pending)) return;
         reject(new GoogleDriveAuthorizationRequiredError(
           error instanceof Error ? boundedMessage(error.message) : "Google authorization could not open.",
         ));
@@ -161,50 +202,60 @@ export class GoogleIdentityServicesAuthorizer {
   }
 
   reset(): void {
-    if (this.#pending) {
-      globalThis.clearTimeout(this.#pending.timer);
-      this.#pending.reject(new GoogleDriveAuthorizationRequiredError("Google authorization was cleared."));
-    }
+    const pending = this.#pending;
     this.#pending = undefined;
-    this.#client = undefined;
+    if (pending) {
+      globalThis.clearTimeout(pending.timer);
+      pending.callbackReceived = true;
+      pending.reject(new GoogleDriveAuthorizationRequiredError("Google authorization was cleared."));
+    }
+    if (this.#generation >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Google authorization generation is exhausted.");
+    }
+    this.#generation += 1;
+    this.#preparedGeneration = undefined;
     this.provider.reset();
   }
 
-  private async tokenClient(): Promise<GoogleTokenClient> {
-    if (this.#client) return this.#client;
-    const google = await this.loadIdentityServices();
-    this.#client = google.accounts.oauth2.initTokenClient({
-      client_id: this.#clientId,
-      scope: this.scope,
-      callback: (response) => {
-        const pending = this.#pending;
-        this.#pending = undefined;
-        if (!pending) return;
-        globalThis.clearTimeout(pending.timer);
-        try {
-          if (response.error || !response.access_token || !response.expires_in) {
-            throw new GoogleDriveAuthorizationRequiredError(
-              response.error_description ? boundedMessage(response.error_description) : "Google did not grant Drive access.",
-            );
-          }
-          this.provider.replace({
-            accessToken: response.access_token,
-            expiresInSeconds: response.expires_in,
-            grantedScopes: (response.scope ?? "").split(/\s+/u).filter(Boolean),
-          });
-          void this.provider.getAccessToken().then(pending.resolve, pending.reject);
-        } catch (error) {
+  private isCurrentPending(pending: GoogleAuthorizationPending): boolean {
+    return this.#pending === pending && pending.authorizerGeneration === this.#generation;
+  }
+
+  private clearPending(pending: GoogleAuthorizationPending): boolean {
+    if (!this.isCurrentPending(pending)) return false;
+    this.#pending = undefined;
+    globalThis.clearTimeout(pending.timer);
+    return true;
+  }
+
+  private acceptTokenResponse(pending: GoogleAuthorizationPending, response: GoogleIdentityTokenResponse): void {
+    if (!this.isCurrentPending(pending) || pending.callbackReceived) return;
+    pending.callbackReceived = true;
+    try {
+      if (response.error || !response.access_token || !response.expires_in) {
+        throw new GoogleDriveAuthorizationRequiredError(
+          response.error_description ? boundedMessage(response.error_description) : "Google did not grant Drive access.",
+        );
+      }
+      this.provider.replace({
+        accessToken: response.access_token,
+        expiresInSeconds: response.expires_in,
+        grantedScopes: (response.scope ?? "").split(/\s+/u).filter(Boolean),
+      });
+      void this.provider.getAccessToken().then(
+        (token) => {
+          if (!this.clearPending(pending)) return;
+          pending.resolve(token);
+        },
+        (error) => {
+          if (!this.clearPending(pending)) return;
           pending.reject(error);
-        }
-      },
-      error_callback: (error) => {
-        const pending = this.#pending;
-        this.#pending = undefined;
-        if (pending) globalThis.clearTimeout(pending.timer);
-        pending?.reject(new GoogleDriveAuthorizationRequiredError(boundedMessage(error.message ?? error.type ?? "Google authorization was interrupted.")));
-      },
-    });
-    return this.#client;
+        },
+      );
+    } catch (error) {
+      if (!this.clearPending(pending)) return;
+      pending.reject(error);
+    }
   }
 }
 

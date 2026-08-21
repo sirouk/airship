@@ -186,39 +186,7 @@
   line-height: 1.5;
 }
 
-/*
- * The egress sentence beside the Confidential engine button.
- *
- * Same shape as `.context-bootstrap-caution` — a rule and a tint, not a card —
- * because it is the same kind of statement: a caveat about how the numbers on
- * screen were produced. The accent rather than the caution colour, because the
- * choice is legitimate and the sentence is a disclosure, not a warning: this
- * screen already reserves `--v-caution` for a degraded index.
- */
-.context-confidential-preflight {
-  margin: 0;
-  padding: var(--sp-2);
-  border-left: 2px solid var(--accent);
-  color: var(--ink-muted);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
-  /* The host name is one long unbreakable token and this row is a flex/grid
-     item on every host that mounts it, including Memory's compact disclosure. */
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/*
- * A refused engine selection, beside the control that was pressed.
- *
- * The pre-flight above is a disclosure and wears `--accent`. This is a failure
- * and wears `--v-caution`, which this screen reserves for a degraded index —
- * which is exactly what an engine that would not switch leaves behind. Measured
- * in a browser before it existed: pressing Confidential with an unreachable
- * chute produced a pause and a button that stayed where it was, with the only
- * evidence in the developer console.
- */
+/* A refused engine selection stays beside the control that requested it. */
 .context-engine-failure {
   margin: 0;
   padding: var(--sp-2);
@@ -252,11 +220,6 @@
 .context-metric:last-child {
   border-right: 0;
 }
-
-/* The metric's label is an eyebrow and takes its type from `.eyebrow` in
-   shell.css; only its caption keeps a local type. Both used to be declared
-   here, which is how the label ended up at .07em tracking while the identical
-   label on Attestations sat at .11em. */
 .context-metric > span,
 .context-metric small {
   overflow: hidden;
@@ -414,8 +377,7 @@
 }
 
 .context-search > div:focus-within,
-.client-context-view button:focus-visible,
-.candidate-chunks summary:focus-visible {
+.client-context-view button:focus-visible {
   outline: 2px solid var(--accent-bright);
   outline-offset: 2px;
 }

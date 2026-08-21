@@ -123,7 +123,7 @@ async function createProfileSession(
     profile: memoryScope
       ? {
         ...base, version: 2, workspaceBinding: { kind: "active-workspace" },
-        memoryScope, approvalMode: "ask-first", minimumPosture: "local",
+        memoryScope, approvalMode: "ask-first",
       }
       : { ...base, version: 1 },
   });

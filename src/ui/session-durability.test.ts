@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { describeSessionDurability } from "./app";
-import { durabilityLabel, durabilitySeal } from "./durability-indicator";
+import { durabilityLabel, durabilityStatusMark } from "./durability-indicator";
 
 describe("session durability derivation", () => {
   it("says an offline Drive vault's sync is paused, in a word that is not the in-progress one", () => {
@@ -27,7 +27,7 @@ describe("session durability derivation", () => {
     expect(label).not.toMatch(/Syncing|synchronizing|synced/u);
     expect(label).toContain("sync paused");
     // Not `verified` either: a paused sync is a state that needs the reader.
-    expect(durabilitySeal(offline.state)).toBe("attention");
+    expect(durabilityStatusMark(offline.state)).toBe("attention");
 
     const connected = describeSessionDurability({
       localDeviceRuntimeAdopted: false,
@@ -75,40 +75,23 @@ describe("session durability derivation", () => {
   });
 });
 
-describe("offline vault trust axis contract", () => {
+describe("offline vault durability contract", () => {
   const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 
-  it("folds connectivity into the vault axis and the durability seal", () => {
-    // An adopted Drive vault used to report "Cloud Vault active · verified"
-    // and "Encrypted state synced" with the browser offline. Offline vault
-    // reachability was the one runtime claim these two surfaces did not read.
-    expect(app).toContain('"Vault adopted · currently unreachable"');
-    expect(app).toContain('googleDriveVaultAdopted && !online ? "attention" : "verified"');
-    // The session bar reads the seal from the durability vocabulary itself, so
-    // the axis and the chip cannot disagree about an unreachable vault, and the
-    // fourth hand-written copy of the ternary is gone.
-    expect(app).toContain("const sessionDurabilitySeal: SealState = durabilitySeal(sessionDurability.state);");
+  it("derives one standing durability fact from the active storage authority", () => {
+    expect(app).toContain("const sessionDurability = describeSessionDurability({");
+    expect(app).toContain("googleDriveVault: googleDriveVaultAdopted,");
+    expect(app).toContain("online,");
+    expect(app).toContain("const sessionDurabilityStatusMark: StatusMarkState = durabilityStatusMark(sessionDurability.state);");
+    expect(app).toContain("detail: sessionDurability.detail,");
     expect(app).not.toContain('sessionDurability.state === "syncing"');
   });
 
-  it("keeps the standing durability state out of the transient status line", () => {
-    /*
-     * `runtimeStatus` is the one mixed-purpose line the shell overwrites with
-     * the next thing that happens anywhere. It used to carry "Local Device
-     * Vault needs a saved recovery key before first use", and the Atlas
-     * measured the whole category error: inert text with no action (J002),
-     * 0×0px on a phone (J003), evicted 0.6s into the first turn by "Persisting
-     * turn intent" and replaced by "Local kernel ready" for the next three
-     * hours (J114), and on its way past it overwrote the completion signal for
-     * a profile switch (J020). The claim belongs to the vault trust axis, which
-     * is derived from state and cannot be overwritten.
-     */
+  it("keeps standing durability in the session fact and its Vault action", () => {
     expect(app).not.toContain("Local Device Vault needs a saved recovery key");
-    expect(app).toContain('"Not saved · Vault not set up"');
-    // And the axis is alarming rather than neutral while a durable destination
-    // is selected and nothing has been adopted — `none` is the rung that let
-    // the whole state be carried by a status string in the first place.
-    expect(app).toContain(': preferences.vaultBackend === "ephemeral" ? "none" : "attention"');
+    expect(app).toContain('id: "durability" as const,');
+    expect(app).toContain('action: Object.freeze({ label: "Vault", onSelect: () => navigate("vault") })');
+    expect(app).toContain("durability={sessionDurability}");
   });
 
   it("states a failed resume in one line and leaves the forensics where they render", () => {

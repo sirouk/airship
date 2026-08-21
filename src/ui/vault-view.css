@@ -31,7 +31,7 @@
  * The route's live state, rendered by the one status family.
  *
  * This was a bespoke pill with its own four-colour ramp keyed off the raw
- * snapshot phase. The mark, the colour and the word now all come from <Seal>,
+ * snapshot phase. The mark, the colour and the word now all come from <StatusMark>,
  * fed by the same `vaultState()` the band below it reads, so the two cannot
  * disagree about whether the Vault is adopted.
  */
@@ -211,7 +211,7 @@
 .vault-view__state[data-state="blocked"] { border-left-color: var(--v-failed); }
 .vault-view__state[data-state="probing"] { border-left-color: var(--v-info); }
 
-.vault-view__state > .seal { align-self: start; }
+.vault-view__state > .status-mark { align-self: start; }
 .vault-view__state-copy { display: grid; gap: var(--sp-1); min-width: 0; }
 .vault-view__state strong { font-size: var(--fs-lead); }
 .vault-view__state p { margin: 0; color: var(--ink-muted); line-height: 1.5; }

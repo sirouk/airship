@@ -1,3 +1,4 @@
+import { isRecord } from "../../core/records";
 import { randomUuid } from "../../core/id";
 
 export const COMPANION_PROTOCOL_VERSION = 1;
@@ -308,6 +309,3 @@ function isCompanionCapabilities(value: unknown): value is CompanionCapabilities
     && Array.isArray(value.compute.operations);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}

@@ -54,7 +54,7 @@ describe("the rail's single tab stop", () => {
   const open = railTraversal({ workspace: true });
   const everyView: readonly NavigationView[] = [
     "chat", "sessions", "workspace", "editor", "terminal", "memory", "context",
-    "profiles", "capabilities", "skills", "vault", "billing", "proof", "access",
+    "profiles", "capabilities", "skills", "vault", "access",
   ];
 
   it("resolves to a row the rail actually renders, for every view", () => {
@@ -104,7 +104,7 @@ describe("the rail's single tab stop", () => {
 describe("the rail's you-are-here state", () => {
   const everyView: readonly NavigationView[] = [
     "chat", "sessions", "workspace", "editor", "terminal", "memory", "context",
-    "profiles", "capabilities", "skills", "vault", "billing", "proof", "access",
+    "profiles", "capabilities", "skills", "vault", "access",
   ];
   const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
   const railKeys = new Set<string>([...railTraversal({ workspace: true }), "profiles"]);
@@ -118,10 +118,9 @@ describe("the rail's you-are-here state", () => {
   it("keeps a nested row marking its parent, and never re-parents a row of its own", () => {
     expect(railStandInFor("editor")).toBe("workspace");
     expect(railStandInFor("terminal")).toBe("workspace");
-    // Account is a rail row in its own right, not a sub-page of a connection
-    // method. Standing on it must not light Connection up.
-    expect(railStandInFor("billing")).toBe("billing");
+    // Providers is a rail row in its own right, not a sub-page of Vault.
     expect(railStandInFor("access")).toBe("access");
+    expect(railStandInFor("vault")).toBe("vault");
   });
 
   it("stands Memory in for its index and Profiles in for its two subroutes", () => {
@@ -136,7 +135,7 @@ describe("the rail's you-are-here state", () => {
     for (const view of ["skills", "capabilities", "sessions"] as const) {
       expect(railCurrentHint(view), view).toBe(destinationLabel(view));
     }
-    for (const view of ["chat", "workspace", "profiles", "billing"] as const) {
+    for (const view of ["chat", "workspace", "profiles", "access"] as const) {
       expect(railCurrentHint(view), view).toBeUndefined();
     }
   });
@@ -223,7 +222,7 @@ describe("the rail's recents disclosure", () => {
  * One rail, one left-edge language.
  *
  * The owner's reading of this rail found three at once. The destination rows —
- * Chat, Workspace, Memory, Proof, Vault, Connection, Account — carry the inset
+ * Chat, Workspace, Memory, Profiles, Vault, and Providers — carry the inset
  * tab mark `.nav-item[data-scope]::after` draws, and he named those as the
  * reference. `Skills` and `Capabilities` carried a full-height hairline
  * instead, because `.nav-item--nested` draws one and neither row had a

@@ -23,6 +23,7 @@ describe("approval policy scope is stated where it is changed", () => {
     expect(general?.approvalMode).toBe("ask-first");
     const revised = await createProfileRevision({
       ...general!,
+      version: 3,
       parentRevision: general!.revision,
       approvalMode: "full-access",
       createdAt: "2026-07-28T00:00:00.000Z",

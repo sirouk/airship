@@ -11,7 +11,7 @@ import { BrowserTerminalManager } from "./manager";
 import type { FileSystemTree, WebContainer } from "@webcontainer/api";
 
 /*
- * TRM-06 / PRF-07: shell work in the journal Proof actually audits.
+ * TRM-06: shell work belongs in the session journal’s bounded local record.
  *
  * `BrowserTerminalManager` kept a complete, bounded lineage of every command,
  * process epoch and reconciliation — inside a 64-record ring buffer, read by
@@ -110,7 +110,7 @@ describe("terminal lineage in the session journal", () => {
       expect(report.findings.filter((finding) => finding.severity !== "info")).toEqual([]);
       expect(report.status).toBe("verified");
       expect(report.counts.unknownEvents).toBe(0);
-      // Counted under its own name so Proof can state it. Folding shell work
+      // Counted under its own name so Sessions can state it. Folding shell work
       // into `events` would have left a reader unable to tell a session where
       // no shell ran from one whose shell work was never recorded.
       expect(report.counts.shellRecords).toBe(5);
@@ -137,7 +137,7 @@ describe("terminal lineage in the session journal", () => {
 
       // Subscribed, but the terminal names no thread. Borrowing the reader's
       // current conversation would put one terminal's commands in another
-      // conversation's proof, which is worse than the gap it would close.
+      // conversation's local record, which is worse than the gap it would close.
       const unsubscribe = installSink(journal);
       try {
         await manager.write(orphan.id, "whoami\r");
@@ -206,13 +206,8 @@ describe("terminal lineage in the session journal", () => {
     expect(app).toContain("const threadId = terminalSession.threadId;");
     expect(app).toContain("if (!threadId || !active) return;");
     expect(app).toContain("terminalAuditTail.current = terminalAuditTail.current");
-    // And the count reaches the one surface that claims to audit this journal.
-    // It moved out of the collapsed journal disclosure and into the recorded-
-    // work ledger beside the verdict, where the other three kinds of recorded
-    // work now stand with it — the row and its zero-is-a-fact rule are intact,
-    // one level further forward.
-    const proof = await readFile(new URL("../ui/proof-view.tsx", import.meta.url), "utf8");
-    expect(proof).toContain('{ label: "Shell records", value: `${counts.shellRecords}` },');
+    expect(app).toContain("const draft = terminalActivityEvent(record, terminalSession);");
+    expect(app).toContain("active.journal.append(threadId, [{ type: draft.type, payload: draft.payload }])");
   });
 });
 

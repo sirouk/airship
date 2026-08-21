@@ -8,60 +8,37 @@ import type { EventJournal } from "../core/journal";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { ToolRegistry } from "./registry";
 
-export const MEMORY_PATH = "/workspace/.airship/memory.json";
-const MAX_MEMORIES = 512;
-
-export type MemoryScope = "session" | "profile" | "workspace";
-
-/**
- * The pinned silo boundary, resolved for pins that predate it. A v1 pin never
- * carried a scope, so it reads as the profile-wide default it was written under
- * — narrowing it retroactively would hide records the session already used.
+/*
+ * The document schema lives in `memory-document.ts` and is re-exported here so
+ * every existing importer keeps working. The split is not cosmetic: reading or
+ * writing memory.json used to require the whole tool surface, and a surface
+ * that only merges records was paying 35 KiB of chunk for a parser worth two.
  */
-export function effectiveMemoryScope(profile: SessionProfileBinding): MemoryScope {
-  return profile.version === 2 ? profile.memoryScope : "profile";
-}
+import {
+  LEGACY_MEMORY_SCOPE,
+  MAX_MEMORIES,
+  MEMORY_PATH,
+  effectiveMemoryScope,
+  emptyMemoryDocument,
+  parseMemoryDocument,
+  scopedMemories,
+  serializeMemoryDocument,
+  strictMemoryString,
+  type MemoryRecord,
+} from "./memory-document";
 
-/**
- * The single gate every read of memory.json passes through. Scope is a
- * boundary, not a presentation preference, so the turn seam, `recall_memory`
- * and `search_memory` must all narrow identically or the silo leaks through
- * whichever reader was forgotten.
- */
-export function scopedMemories(
-  records: readonly MemoryRecord[],
-  binding: Readonly<{ profileId: string; memoryScope: MemoryScope; sessionId: string }>,
-): MemoryRecord[] {
-  return records.filter((item) =>
-    item.scope.kind === "profile" &&
-    item.scope.profileId === binding.profileId &&
-    (binding.memoryScope !== "session" || item.scope.createdInSessionId === binding.sessionId),
-  );
-}
-
-type ProfileMemoryScope = Readonly<{
-  kind: "profile";
-  profileId: string;
-  profileRevision: string;
-  createdInSessionId: string;
-}>;
-
-type LegacyMemoryScope = Readonly<{ kind: "legacy-unscoped" }>;
-
-export type MemoryRecord = Readonly<{
-  id: string;
-  content: string;
-  source: string;
-  createdAt: string;
-  scope: ProfileMemoryScope | LegacyMemoryScope;
-}>;
-
-type MemoryDocument = Readonly<{
-  records: readonly MemoryRecord[];
-  sourceVersion: 1 | 2;
-  legacyCount: number;
-}>;
-
+export {
+  MAX_MEMORIES,
+  MEMORY_PATH,
+  effectiveMemoryScope,
+  emptyMemoryDocument,
+  parseMemoryDocument,
+  scopedMemories,
+  serializeMemoryDocument,
+  type MemoryDocument,
+  type MemoryRecord,
+  type MemoryScope,
+} from "./memory-document";
 
 type DuplicateSummary = { id: string; excerpt: string; similarity: number; exact: boolean };
 
@@ -110,7 +87,7 @@ export function registerMemoryTools(
       const query = typeof args.query === "string" ? args.query.trim() : "";
       const limit = typeof args.limit === "number" ? args.limit : 12;
       const file = await workspace.read(MEMORY_PATH);
-      const document = file ? parseMemoryDocument(file.content) : emptyDocument();
+      const document = file ? parseMemoryDocument(file.content) : emptyMemoryDocument();
       const memoryScope = effectiveMemoryScope(profile);
       const records = scopedMemories(document.records, {
         profileId: profile.profileId,
@@ -127,7 +104,7 @@ export function registerMemoryTools(
           records,
           (memory) => memory.content,
           {
-            scopeKey: (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+            scopeKey: (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : LEGACY_MEMORY_SCOPE,
             createdAt: (memory) => memory.createdAt,
           },
         );
@@ -210,7 +187,7 @@ export function registerMemoryTools(
       const args = objectArguments(argumentsValue);
       const action = requiredString(args.action, "action");
       const current = await workspace.read(MEMORY_PATH);
-      const document = current ? parseMemoryDocument(current.content) : emptyDocument();
+      const document = current ? parseMemoryDocument(current.content) : emptyMemoryDocument();
       const binding = {
         profileId: profile.profileId,
         memoryScope: effectiveMemoryScope(profile),
@@ -233,7 +210,7 @@ export function registerMemoryTools(
           content,
           scoped,
           (memory) => memory.content,
-          (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : "legacy-unscoped",
+          (memory) => memory.scope.kind === "profile" ? memory.scope.profileId : LEGACY_MEMORY_SCOPE,
           profile.profileId,
         );
         const exact = duplicates.find((candidate) => candidate.exact);
@@ -276,9 +253,9 @@ export function registerMemoryTools(
         const id = requiredString(args.id, "id");
         // Forget is authorised from the same visible set as recall: a silo the
         // session cannot read must not be one it can destroy by guessing an ID.
-        const owned = scopedMemories(document.records, binding).some((record) => record.id === id);
+        const owned = scopedMemories(document.records, binding).some((entry) => entry.id === id);
         if (!owned) throw new Error(`Memory not found in pinned profile ${profile.profileId}: ${id}.`);
-        next = document.records.filter((record) => record.id !== id);
+        next = document.records.filter((entry) => entry.id !== id);
         message = `Forgot memory ${id} from pinned profile ${profile.profileId}.`;
       } else {
         throw new Error(`Unsupported memory action: ${action}.`);
@@ -291,7 +268,7 @@ export function registerMemoryTools(
         scope: binding.memoryScope,
         profileId: profile.profileId,
         profileRevision: profile.profileRevision,
-        legacyQuarantined: next.filter((record) => record.scope.kind === "legacy-unscoped").length,
+        legacyQuarantined: next.filter((record) => record.scope.kind === LEGACY_MEMORY_SCOPE).length,
         schemaVersion: 2,
         revision: written.revision,
         path: written.path,
@@ -310,80 +287,13 @@ export function registerMemoryTools(
   registry.register(update);
 }
 
-export function parseMemoryDocument(content: string): MemoryDocument {
-  let value: unknown;
-  try { value = JSON.parse(content); } catch { throw new Error(`${MEMORY_PATH} is not valid JSON.`); }
-  if (!record(value) || (value.version !== 1 && value.version !== 2) || !Array.isArray(value.records) || value.records.length > MAX_MEMORIES) {
-    throw new Error(`${MEMORY_PATH} is malformed.`);
-  }
-  const sourceVersion = value.version;
-  const records = value.records.map((item): MemoryRecord => parseRecord(item, sourceVersion));
-  const ids = new Set(records.map((item) => item.id));
-  if (ids.size !== records.length) throw new Error(`${MEMORY_PATH} contains duplicate memory IDs.`);
-  return Object.freeze({
-    records: Object.freeze(records),
-    sourceVersion,
-    legacyCount: records.filter((item) => item.scope.kind === "legacy-unscoped").length,
-  });
-}
-
-function parseRecord(value: unknown, version: 1 | 2): MemoryRecord {
-  if (!record(value)) throw new Error(`${MEMORY_PATH} contains an invalid record.`);
-  const base = {
-    id: strictString(value.id, "memory id", 128),
-    content: stringUnknown(value.content, "memory content", 8_192),
-    source: stringUnknown(value.source, "memory source", 2_048),
-    createdAt: timestamp(value.createdAt),
-  };
-  if (version === 1) return Object.freeze({ ...base, scope: Object.freeze({ kind: "legacy-unscoped" }) });
-  if (!record(value.scope) || (value.scope.kind !== "profile" && value.scope.kind !== "legacy-unscoped")) {
-    throw new Error(`${MEMORY_PATH} contains an invalid memory scope.`);
-  }
-  const scope: ProfileMemoryScope | LegacyMemoryScope = value.scope.kind === "legacy-unscoped"
-    ? Object.freeze({ kind: "legacy-unscoped" })
-    : Object.freeze({
-        kind: "profile",
-        profileId: strictString(value.scope.profileId, "memory profile ID", 256),
-        profileRevision: strictString(value.scope.profileRevision, "memory profile revision", 256),
-        createdInSessionId: strictString(value.scope.createdInSessionId, "memory creation session", 512),
-      });
-  return Object.freeze({ ...base, scope });
-}
-
-function serializeMemoryDocument(records: readonly MemoryRecord[]): string {
-  return `${JSON.stringify({ version: 2, records }, null, 2)}\n`;
-}
-
 async function pinnedProfile(journal: EventJournal, context: ToolContext): Promise<SessionProfileBinding> {
   const session = await journal.getSession(context.sessionId, context.signal);
   if (!session) throw new Error(`Memory authority session was not found: ${context.sessionId}.`);
   if (!session.manifest.profile) throw new Error("Explicit memory requires an accountable session with a pinned profile.");
-  strictString(session.manifest.profile.profileId, "pinned memory profile ID", 256);
-  strictString(session.manifest.profile.profileRevision, "pinned memory profile revision", 256);
+  strictMemoryString(session.manifest.profile.profileId, "pinned memory profile ID", 256);
+  strictMemoryString(session.manifest.profile.profileRevision, "pinned memory profile revision", 256);
   return session.manifest.profile;
-}
-
-function emptyDocument(): MemoryDocument {
-  return Object.freeze({ records: Object.freeze([]), sourceVersion: 2, legacyCount: 0 });
-}
-
-function stringUnknown(value: unknown, name: string, maximum: number): string {
-  if (typeof value !== "string" || !value.trim() || value.length > maximum || value.includes("\u0000")) {
-    throw new Error(`${name} is invalid.`);
-  }
-  return value.trim();
-}
-
-function strictString(value: unknown, name: string, maximum: number): string {
-  const text = stringUnknown(value, name, maximum);
-  if (/[\u0000-\u001f\u007f]/u.test(text)) throw new Error(`${name} is invalid.`);
-  return text;
-}
-
-function timestamp(value: unknown): string {
-  const text = stringUnknown(value, "memory timestamp", 128);
-  if (!Number.isFinite(Date.parse(text)) || new Date(text).toISOString() !== text) throw new Error("memory timestamp is invalid.");
-  return text;
 }
 
 function record(value: unknown): value is Record<string, unknown> {

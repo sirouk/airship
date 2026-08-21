@@ -1,5 +1,5 @@
-import type { ConversationReceipt } from "../receipts/types";
-import { createLocalReceipt, finalizeProviderReceipt } from "../receipts/types";
+import type { ConversationReceipt } from "../core/conversation-receipt";
+import { createLocalReceipt, finalizeProviderReceipt } from "../core/conversation-receipt";
 import type { ToolRegistry } from "../tools/registry";
 import type { WorkspacePort } from "../workspace/contracts";
 import type {
@@ -7,6 +7,7 @@ import type {
   CanonicalMessage,
   InferenceTransport,
   JsonValue,
+  SessionInferenceBinding,
   SessionManifest,
   TaskPlanEntry,
   ToolCall,
@@ -15,9 +16,9 @@ import type {
 import { sha256, stableStringify, toolArgumentsDigest } from "./hash";
 import { randomUuid } from "./id";
 import type { DurableEvent, EventDraft } from "./journal";
-import { effectiveSessionContextPolicy, effectiveSessionModel, EventJournal } from "./journal";
+import { effectiveSessionContextPolicy, effectiveSessionModel, EventJournal, JournalConflictError } from "./journal";
 import { approvalProvenance } from "../approvals/modes";
-import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
+import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
   canonicalContextSelection,
   canonicalTurnContextQuery,
@@ -44,6 +45,11 @@ import {
 } from "./fork-context";
 import { withInferenceRetry, type InferenceRetryPolicy } from "./inference-retry";
 import {
+  assertPinnedInferenceTransport,
+  assertValidSessionInferenceBinding,
+  canonicalSessionInferenceProviderId,
+} from "./inference-binding";
+import {
   calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
   createInferenceTransportContextSummarizer,
@@ -69,6 +75,8 @@ export type RunTurnOptions = {
   /** Inline, bounded images prepared with prepareCanonicalImageInputs(). */
   images?: CanonicalMessage["images"];
   transport: InferenceTransport;
+  /** Exact live route authority. Required to upgrade a historical v1 binding. */
+  activeInferenceBinding?: SessionInferenceBinding;
   tools: ToolRegistry;
   journal: EventJournal;
   approvalPolicy: ApprovalPolicy;
@@ -146,6 +154,8 @@ const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/gu;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
+const PRIME_RUNTIME_MISMATCH = "runtime selection mismatch: this session is prime-pinned by journal records; fork the session to use the airship-core runtime.";
+const TERMINAL_RECONCILIATION_FAILED = "The turn failed and its durable terminal state could not be reconciled.";
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
@@ -159,14 +169,17 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const session = await options.journal.getSession(options.sessionId, options.signal);
   if (!session) throw new Error(`Unknown session: ${options.sessionId}`);
   assertSupportedTurnManifest(session.manifest);
+  assertValidSessionInferenceBinding(session.manifest);
+  const canonicalProviderId = canonicalSessionInferenceProviderId(session.manifest);
   if (session.manifest.protocolVersion === 1) {
     throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
   }
-  if (session.manifest.providerId !== transport.id) {
-    throw new Error(
-      `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${transport.id}.`,
-    );
-  }
+  assertPinnedInferenceTransport(
+    session.manifest,
+    transport.id,
+    options.activeInferenceBinding,
+    effectiveSessionModel(session),
+  );
   const currentToolDigest = await sha256(
     stableStringify(options.tools.definitions() as unknown as JsonValue),
   );
@@ -174,6 +187,13 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     throw new Error("The tool manifest changed. Fork the session before using a different tool set.");
   }
   const existingEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
+  // Core's turn.requested is its engine claim. Refuse a Prime marker already
+  // present in the exact history this admission is about; the appendAtHead
+  // conflict path below covers the complementary ordering where Prime lands
+  // after this read but before Core's compare-and-set.
+  if (existingEvents.some((event) => event.type.startsWith("prime."))) {
+    throw new Error(PRIME_RUNTIME_MISMATCH);
+  }
   const unfinishedTurn = findUnfinishedProviderTurn(existingEvents);
   if (unfinishedTurn) {
     throw new Error(`Turn ${unfinishedTurn} has no durable terminal event; recover or fork the session before continuing.`);
@@ -192,6 +212,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const liveEnvironment = await prepareLiveEnvironment({
     sessionId: options.sessionId,
     manifest: session.manifest,
+    model: effectiveSessionModel(session),
     tools: options.tools,
     transportPosture: transport.posture,
     signal: options.signal,
@@ -229,17 +250,46 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     return true;
   };
 
-  await append([
-    {
-      type: "turn.requested",
-      turnId,
-      payload: {
-        content: options.content,
-        ...(images.length ? { images: images as unknown as JsonValue } : {}),
-        ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
+  /*
+   * This is the turn's durable admission boundary. Preflight above may await
+   * browser or storage work, so a model/policy change can legitimately win in
+   * the meantime. Never rebase the request over that change: the caller must
+   * retry against the newly projected session instead of starting with stale
+   * route authority. Once admitted, the audit snapshots this turn's model and
+   * context policy at this exact event, so a later in-place switch belongs to
+   * the next turn while this one finishes under its admitted identity.
+   */
+  let admission;
+  try {
+    admission = await options.journal.appendAtHead(
+      options.sessionId,
+      {
+        sequence: session.headSequence,
+        digest: session.headDigest,
+        ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
       },
-    },
-  ]);
+      [{
+        type: "turn.requested",
+        turnId,
+        payload: {
+          content: options.content,
+          ...(images.length ? { images: images as unknown as JsonValue } : {}),
+          ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
+        },
+      }],
+      options.signal,
+    );
+  } catch (error) {
+    if (error instanceof JournalConflictError) {
+      const currentEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
+      if (currentEvents.some((event) => event.type.startsWith("prime."))) {
+        throw new Error(PRIME_RUNTIME_MISMATCH);
+      }
+    }
+    throw error;
+  }
+  emitted.push(...admission.events);
+  notifySignal(options.onSignal, { type: "durable", events: admission.events });
 
   try {
     const contextSelection = await prepareTurnContext({
@@ -311,6 +361,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         ...(effectiveContextPolicy?.compression.summarizer.mode === "inference-transport" ? {
           summarizer: createInferenceTransportContextSummarizer({
             transport,
+            providerId: canonicalProviderId,
             model: effectiveSessionModel(session),
             sessionId: session.id,
           }),
@@ -437,7 +488,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           operationId: requestId,
           payload: {
             step,
-            providerId: transport.id,
+            providerId: canonicalProviderId,
             model: effectiveSessionModel(session),
             posture: transport.posture,
             requestDigest,
@@ -724,11 +775,18 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       }
       const responseDigest = await sha256(content);
       const receipt = completed.receipt
-        ? finalizeProviderReceipt(completed.receipt, transport.id, requestDigest, responseDigest)
+        ? finalizeProviderReceipt(completed.receipt, {
+            sessionId: options.sessionId,
+            turnId,
+            provider: canonicalProviderId,
+            model: effectiveSessionModel(session),
+            requestDigest,
+            responseDigest,
+          })
         : createLocalReceipt({
             sessionId: options.sessionId,
             turnId,
-            provider: transport.id,
+            provider: canonicalProviderId,
             model: effectiveSessionModel(session),
             requestDigest,
             responseDigest,
@@ -764,7 +822,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       } catch (reconciliationError) {
         throw new AggregateError(
           [error, reconciliationError],
-          "The turn failed and its durable terminal state could not be reconciled.",
+          TERMINAL_RECONCILIATION_FAILED,
         );
       }
     }
@@ -786,7 +844,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         } catch (reconciliationError) {
           throw new AggregateError(
             [error, terminalError, reconciliationError],
-            "The turn failed and its durable terminal state could not be reconciled.",
+            TERMINAL_RECONCILIATION_FAILED,
           );
         }
         if (terminalRecovered) throw error;
@@ -808,10 +866,9 @@ async function prepareTurnContext(args: Readonly<{
   signal: AbortSignal;
 }>): Promise<CanonicalContextSelection | undefined> {
   const provider = args.tools.getTurnContextProvider();
-  // Historical protocol-v1 manifests omitted the pin. Preserve their exact
-  // provider-if-present behavior; createSessionManifest now always pins new
-  // sessions so current turns are never governed by this compatibility path.
-  const mode = args.manifest.turnContext ?? (provider ? "required" : "disabled");
+  // Protocol-v1 sessions are refused before this helper; every admitted turn
+  // therefore uses the exact policy pinned in its protocol-v2 manifest.
+  const mode = args.manifest.turnContext;
   if (mode === "disabled") return undefined;
   if (!provider) throw new Error("This session requires turn-context retrieval, but no provider is attached.");
   const query = canonicalTurnContextQuery(args.content);
@@ -837,6 +894,7 @@ async function prepareTurnContext(args: Readonly<{
 async function prepareLiveEnvironment(args: Readonly<{
   sessionId: string;
   manifest: SessionManifest;
+  model: string;
   tools: ToolRegistry;
   transportPosture: InferenceTransport["posture"];
   signal: AbortSignal;
@@ -849,6 +907,7 @@ async function prepareLiveEnvironment(args: Readonly<{
   const snapshot = await sealLiveEnvironmentSnapshot({
     sessionId: args.sessionId,
     manifest: args.manifest,
+    model: args.model,
     toolDefinitions: args.tools.definitions(),
     transportPosture: args.transportPosture,
     observation,
@@ -856,7 +915,7 @@ async function prepareLiveEnvironment(args: Readonly<{
   if (!await verifyLiveEnvironmentSnapshot(snapshot)) {
     throw new Error("The sealed live-environment snapshot did not verify.");
   }
-  if (!liveEnvironmentScopeMatches(snapshot, args.sessionId, args.manifest)) {
+  if (!liveEnvironmentScopeMatches(snapshot, args.sessionId, args.manifest, args.model)) {
     throw new Error("The live-environment snapshot is outside this session's pinned scope.");
   }
   return snapshot;

@@ -4,15 +4,16 @@ import { waitForShellSettled } from "./support/settled";
 
 const routes = [
   ["chat", /.+/], ["sessions", /^All conversations$/i], ["workspace", /^Workspace$/i],
-  ["editor", /^Editor$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i], ["context", /^Memory$/i],
-  ["profiles", /^Profiles$/i], ["capabilities", /^Capabilities$/i], ["skills", /^Skills$/i],
-  ["proof", /^Proof$/i], ["vault", /^Vault$/i],
-  // The two headings that used to rename their destination on arrival.
-  ["connection", /^Connection$/iu], ["account", /^Account$/iu],
+  ["editor", /^Editor$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i],
+  ["context", /^Memory$/i], ["profiles", /^Profiles$/i],
+  ["capabilities", /^Capabilities$/i], ["skills", /^Skills$/i], ["vault", /^Vault$/i],
+  // Providers currently begins with the provider-fabric section heading.
+  ["connection", /^Cloud and local models$/iu],
 ] as const;
 
 const widths = [768, 820, 1024] as const;
 const densities = ["comfortable", "compact"] as const;
+const RAIL_DESTINATIONS = ["Chat", "Workspace", "Memory", "Vault", "Providers"] as const;
 
 test("a cold conversation-history URL remains authoritative while its deferred view loads", async ({ page }) => {
   await page.goto("/#sessions");
@@ -247,8 +248,12 @@ test("the left rail advertises its own overflow only while content is hidden", a
     expect(state.hidden, `${height}px rail hides no destination`).toEqual([]);
   }
 
-  // The "end" case, re-asserted at a height the rail genuinely cannot fit.
+  // The "end" case uses the current Workspace children to make the short rail
+  // genuinely overflow, rather than depending on routes the product removed.
   await page.setViewportSize({ width: 1_440, height: 480 });
+  const expandWorkspace = page.getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Expand Workspace" });
+  if (await expandWorkspace.count()) await expandWorkspace.click();
   await expect
     .poll(async () => rail.evaluate((element) => element.dataset.scrollEdges), {
       message: "rail advertises hidden content at 480px",
@@ -270,7 +275,7 @@ test("the left rail advertises its own overflow only while content is hidden", a
   await page.screenshot({ path: testInfo.outputPath("rail-scroll-affordance.png"), animations: "disabled" });
 });
 
-test("the rail keeps three states, remembers the one it is put in, and reaches every destination by keyboard", async ({ page }, testInfo) => {
+test("the rail keeps three states, remembers its width, and reaches every filed destination by keyboard", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop rail state contract");
   await page.setViewportSize({ width: 1_440, height: 900 });
   await page.goto("/#chat");
@@ -309,7 +314,7 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
   // Collapsed does not mean anonymous: every destination keeps its accessible
   // name, so an icon rail never ships a column of unlabelled glyphs.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  for (const label of ["Chat", "Workspace", "Memory", "Proof", "Vault", "Connection", "Account"] as const) {
+  for (const label of RAIL_DESTINATIONS) {
     await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
 
@@ -378,9 +383,9 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
    * Walks until the rail stops moving rather than a fixed eight presses. The
    * row count is not a constant: the recents list opens itself where there is
    * room, and each conversation in it is a row the arrows must pass through.
-   * Eight presses reached Account when the list was closed and stopped short of
-   * it when the list was open — which is the traversal working and the counting
-   * failing.
+   * A fixed number of presses reached Providers when the list was closed and
+   * stopped short when recents were open — the traversal was working and the
+   * counting was failing.
    */
   const walk: (string | null)[] = [];
   let previous: string | null = null;
@@ -391,7 +396,7 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
     previous = here;
     await page.keyboard.press("ArrowDown");
   }
-  expect(walk, `arrow traversal reached: ${walk.join(" → ")}`).toContain("Account");
+  expect(walk, `arrow traversal reached: ${walk.join(" → ")}`).toContain("Providers");
   expect(walk).toContain("Vault");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
@@ -515,8 +520,30 @@ test("mobile workspace and terminal controls preserve their content lanes", asyn
   // measures the thing that band was costing: the share of a phone viewport
   // spent before the first file row, plus the promise that the route's own
   // sentence is still reachable rather than deleted.
-  const workbenchTop = await page.locator(".workbench-shell").evaluate((shell) => shell.getBoundingClientRect().top);
-  expect(workbenchTop).toBeLessThanOrEqual(844 * .34);
+  //
+  // AMENDED AGAIN, and the number is the honest part of it. The 34% ceiling
+  // left this route 4px of slack, and the folder tier spent those 4px by being
+  // a `<details>` that is closed on load and that nothing ever opened — its
+  // rendered text was 46 characters while its `textContent` was 1,041, and four
+  // e2e assertions about approvals and the Terminal were passing on the
+  // difference. The tier states its own state in rendered text now: "No folder
+  // is open. Nothing on this device is readable by Airship until you open one."
+  // Measured at 390×844, that sentence is 82px and the first file row moves
+  // from 283px to 365px.
+  //
+  // So the ceiling moves and the floor arrives, because "how much chrome" was
+  // only ever a proxy for "how much workbench". A budget with 4px of slack is
+  // what pushed a promise into a fold; a workbench floor is what the budget was
+  // protecting, and it is now asserted directly.
+  const workbench = await page.locator(".workbench-shell").evaluate((shell) => {
+    const box = shell.getBoundingClientRect();
+    return { top: box.top, height: box.height };
+  });
+  expect(workbench.top).toBeLessThanOrEqual(844 * .44);
+  // Measured 374px on this build with no folder open; 360 is that reading with
+  // the slack a font metric can move it by, and nothing like the 82px a
+  // sentence costs.
+  expect(workbench.height).toBeGreaterThanOrEqual(360);
   await expect(page.getByRole("button", { name: /About Workspace/u })).toBeVisible();
   await expect(page.locator(".route-header__status")).toContainText("Ephemeral");
 
@@ -603,12 +630,12 @@ for (const density of densities) {
          */
         await page.waitForFunction(() => {
           const routed = document.querySelector("main.main");
-          return Boolean(routed && routed.querySelector("h1, .session-bar h1") && document.querySelector(".topbar"));
+          return Boolean(routed && routed.querySelector("h1, .session-bar h1, .provider-fabric__heading h2") && document.querySelector(".topbar"));
         }, undefined, { timeout: 15_000 });
 
         const geometry = await page.evaluate((routeHash) => {
           const main = document.querySelector<HTMLElement>("main.main");
-          const heading = main?.querySelector<HTMLElement>("h1, .session-bar h1");
+          const heading = main?.querySelector<HTMLElement>("h1, .session-bar h1, .provider-fabric__heading h2");
           // FIXED: this queried a guessed class that no element carries — the
           // nav renders as `.mobile-nav` — so the lookup always missed and the
           // `mobileTop !== undefined` guard below silently absorbed its own
@@ -663,7 +690,7 @@ for (const density of densities) {
           // clickable rather than hidden.
           expect(railWidth).toBeGreaterThanOrEqual(60);
           const navigation = rail.getByRole("navigation", { name: "Primary" });
-          for (const label of ["Chat", "Workspace", "Memory", "Proof", "Vault", "Connection", "Account"] as const) {
+          for (const label of RAIL_DESTINATIONS) {
             await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
           }
           // The profile switcher survives this breakpoint now; it used to be
@@ -685,12 +712,12 @@ for (const density of densities) {
             .not.toHaveAttribute("data-scroll-edges", /start|end/u);
         }
 
-        if (["proof", "vault", "connection", "account"].includes(hash)) {
-          await expect(main.locator(".trust-hub-tabs")).toHaveCount(0);
+        if (["vault", "connection"].includes(hash)) {
+          await expect(main.getByRole("navigation")).toHaveCount(0);
         }
       }
 
-      for (const hash of ["chat", "workspace", "editor", "profiles", "proof?section=attestations", "connection"] as const) {
+      for (const hash of ["chat", "workspace", "editor", "memory", "sessions", "connection"] as const) {
         await page.goto(`/#${hash}`);
         await page.screenshot({ path: testInfo.outputPath(`${density}-${width}-${hash}.png`), animations: "disabled" });
       }
@@ -803,8 +830,8 @@ for (const density of densities) {
     const pinned = await profile.boundingBox();
     expect(pinned!.y).toBeCloseTo(initial[2]!.y, 0);
 
-    await navigation.getByRole("button", { name: "Account", exact: true }).click();
-    await expect(page).toHaveURL(/#account$/);
+    await navigation.getByRole("button", { name: "Providers", exact: true }).click();
+    await expect(page).toHaveURL(/#connection$/);
     await expect(profile).toBeVisible();
     const after = await profile.boundingBox();
     expect(after).not.toBeNull();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DURABILITY_STATES, durabilityLabel, durabilitySeal, durabilityShort } from "./durability-indicator";
+import { DURABILITY_STATES, durabilityLabel, durabilityStatusMark, durabilityShort } from "./durability-indicator";
 
 describe("DurabilityIndicator", () => {
   it("states page-only durability without implying sync", () => {
@@ -27,10 +27,10 @@ describe("DurabilityIndicator", () => {
     }
     expect(durabilityLabel("sync-paused")).toBe("Encrypted · sync paused offline");
     // The seal is the same claim in glyph form and must not out-rank the words.
-    expect(durabilitySeal("sync-paused")).toBe("attention");
-    expect(durabilitySeal("syncing")).toBe("checking");
-    expect(durabilitySeal("synced")).toBe("verified");
-    expect(durabilitySeal("local")).toBe("verified");
+    expect(durabilityStatusMark("sync-paused")).toBe("attention");
+    expect(durabilityStatusMark("syncing")).toBe("checking");
+    expect(durabilityStatusMark("synced")).toBe("verified");
+    expect(durabilityStatusMark("local")).toBe("verified");
   });
 
   it("ranks page memory as a state the reader has to act on", () => {
@@ -43,11 +43,11 @@ describe("DurabilityIndicator", () => {
      * one function, so the rung is the product's single answer to "does closing
      * this tab cost anything".
      */
-    expect(durabilitySeal("ephemeral")).toBe("attention");
+    expect(durabilityStatusMark("ephemeral")).toBe("attention");
     // The two claims that mean "your work is written down" must not be dragged
     // up with it; only the states with a consequence are alarming.
-    expect(durabilitySeal("local")).toBe("verified");
-    expect(durabilitySeal("synced")).toBe("verified");
+    expect(durabilityStatusMark("local")).toBe("verified");
+    expect(durabilityStatusMark("synced")).toBe("verified");
   });
 
   it("abbreviates to the consequence, not to the jargon", () => {

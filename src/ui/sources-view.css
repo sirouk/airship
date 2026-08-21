@@ -127,14 +127,14 @@
  * grid left ~500px of void beside the one card that had a paragraph. The
  * summary names every fact, so nothing is buried by the collapse.
  */
-.git-sources-trust-disclosure {
+.git-sources-facts-disclosure {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   background: var(--surface-soft);
 }
 
-.git-sources-trust-disclosure > summary {
+.git-sources-facts-disclosure > summary {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 10px;
@@ -145,22 +145,22 @@
   list-style: none;
 }
 
-.git-sources-trust-disclosure > summary::-webkit-details-marker { display: none; }
-.git-sources-trust-disclosure > summary::after { margin-left: auto; color: var(--ink-faint); content: "⌄"; }
-.git-sources-trust-disclosure[open] > summary::after { content: "⌃"; }
-.git-sources-trust-disclosure > summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
-.git-sources-trust-disclosure > summary > small { color: var(--ink-faint); font-size: var(--fs-caption); }
+.git-sources-facts-disclosure > summary::-webkit-details-marker { display: none; }
+.git-sources-facts-disclosure > summary::after { margin-left: auto; color: var(--ink-faint); content: "⌄"; }
+.git-sources-facts-disclosure[open] > summary::after { content: "⌃"; }
+.git-sources-facts-disclosure > summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
+.git-sources-facts-disclosure > summary > small { color: var(--ink-faint); font-size: var(--fs-caption); }
 
-.git-posture-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.git-source-fact-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 
-.git-sources-trust {
+.git-sources-facts {
   display: grid;
   gap: 1px;
   border-top: 1px solid var(--line);
   background: var(--line);
 }
 
-.git-sources-trust > div {
+.git-sources-facts > div {
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -168,7 +168,7 @@
   background: var(--surface-soft);
 }
 
-.git-sources-trust small { color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.5; }
+.git-sources-facts small { color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.5; }
 
 .git-sources-alert {
   display: flex;
@@ -519,13 +519,13 @@
 
 @media (max-width: 760px) {
   .git-sources input, .git-sources select, .git-sources textarea { font-size: var(--fs-field); }
-  .git-sources-trust-disclosure > summary > small { width: 100%; }
+  .git-sources-facts-disclosure > summary > small { width: 100%; }
   /* Four wrapped chips cost 167px of a 632px phone. One scrolling row costs
      34px and drops no label: every chip is a swipe away and the row still
      counts what the disclosure holds. */
-  .git-posture-chips { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
-  .git-posture-chips::-webkit-scrollbar { display: none; }
-  .git-posture-chips > * { flex: 0 0 auto; scroll-snap-align: start; }
+  .git-source-fact-chips { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; }
+  .git-source-fact-chips::-webkit-scrollbar { display: none; }
+  .git-source-fact-chips > * { flex: 0 0 auto; scroll-snap-align: start; }
 
   /*
    * …and the swipe says so. The row above hides its scrollbar, which is right
@@ -537,9 +537,9 @@
    * hiding a chip and never on a row that fits. It costs no layout: a mask
    * paints inside the row's own box, so no chip and no neighbour loses a pixel.
    */
-  .git-posture-chips[data-scroll-edges="start"] { mask-image: linear-gradient(to right, transparent 0, #000 24px); }
-  .git-posture-chips[data-scroll-edges="end"] { mask-image: linear-gradient(to left, transparent 0, #000 24px); }
-  .git-posture-chips[data-scroll-edges="both"] { mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%); }
+  .git-source-fact-chips[data-scroll-edges="start"] { mask-image: linear-gradient(to right, transparent 0, #000 24px); }
+  .git-source-fact-chips[data-scroll-edges="end"] { mask-image: linear-gradient(to left, transparent 0, #000 24px); }
+  .git-source-fact-chips[data-scroll-edges="both"] { mask-image: linear-gradient(to right, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%); }
   .git-import-form { grid-template-columns: 1fr; }
   .git-import-receipt dl { grid-template-columns: 1fr 1fr; }
   .git-import-receipt dl > div:nth-child(3n) { border-right: 1px solid var(--line); }
@@ -586,11 +586,11 @@
   .git-sources input,
   .git-sources textarea,
   .git-sources-layout,
-  .git-sources-trust-disclosure { border-color: CanvasText; }
+  .git-sources-facts-disclosure { border-color: CanvasText; }
   /* A fade is a colour effect, and forced colours replace the palette it fades
      into: the chip at the edge would be dissolved into the system canvas rather
      than softened. `.tabs__strip` retracts its mask here for the same reason. */
-  .git-posture-chips { mask-image: none; }
+  .git-source-fact-chips { mask-image: none; }
   .git-sources button:focus-visible,
   .git-sources input:focus-visible,
   .git-sources select:focus-visible,

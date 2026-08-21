@@ -10,10 +10,9 @@ Answer, with numbers.
 
 ## 1. What airship Python execution can actually host (verified against code)
 
-Every figure here is from `src/tools/execution-tools.ts` /
-`src/execution/*-contract.ts` (cross-checked table in
-`/root/pa-audit/airship-exec-budgets.md`; no contradiction found between
-docs and code):
+Every figure here is from `src/tools/execution-tools.ts` and
+`src/execution/*-contract.ts`, which are in this repository and are where to
+check them:
 
 - Pyodide pack: 64 KiB source per job, `timeoutMs ≤ 10_000` per job (after a
   separately-bounded 30 s boot), fresh interpreter per job, ambient
@@ -21,9 +20,10 @@ docs and code):
   never called, 256 KiB per stream cap, workspace mounts bounded 256 files /
   512 KiB / 4 MiB with `.airship/.git/node_modules` exclusion on both
   ingress and egress.
-- These are honest caps for *disposable executors* — not for an agent loop.
-  An agent turn needs minutes of model round-trips, a persistent interpreter
-  across steps, and tools that reach the network.
+- These are honest caps for the old disposable executor, not for an agent
+  loop. An agent turn needs minutes of model round-trips and reviewed tools.
+  Stock JavaScript is now deliberately job-scoped; only optional Pyodide keeps
+  an interpreter namespace across jobs.
 
 **Measured on this machine (Pyodide 314.0.2, node executor, warm-asset
 loadPyodide calls; `scripts/bench/pyodide-boot.mjs`):**
@@ -34,22 +34,15 @@ persistent job roundtrips (×10): 2.9, 1.0, 0.7, 0.8, 0.8, 1.8, 1.1, 0.8, 0.6, 0
 disposable-per-job at 10 jobs: 20.7 s | persistent: 2.6 s + 11 ms   (~8×)
 ```
 
-One fresh-boot-per-task agent (prime-agent's IPython cadence, 10 kernel jobs
-across one turn) would spend ≈ 21 s of a turn merely re-booting CPython in
-this tier, before any model call, and the tier's 30 s boot budget sits inside
-its 10 s/default job boundary with a whole-network preamble removed. A
-persistent kernel kills 95 % of that fixed cost.
+The measurement records the performance motive for dormant persistent-Pyodide research; it does not authorize activation. A persistent kernel would avoid roughly 21 seconds of fresh CPython boots across ten model calls. It does not describe the stock JavaScript engine, whose lightweight
+worker is intentionally recreated for every job as a hard completion boundary.
 
-**Stream/parse throughput of the ported parsers** (`scripts/bench/parse-throughput.test.ts`,
-200k SSE events streamed through the ported parser + 100k partial-JSON parses):
-
-```
-run isolated (node):  SSE 131.1 MB/s · 1,640,431 events/s → covers 100k-events/step broker budgets ~120×
-                      stream-json partial parse: 30,227 ops/s at ~4 KiB args
-run under vitest full-suite parallelism (same machine, contention):
-                      SSE 58.9 MB/s  · 736,931 events/s
-                      stream-json:   11,728 ops/s
-```
+**Stream/parse throughput of the ported parsers.** This section recorded 131.1
+MB/s of SSE and 30,227 partial-JSON parses per second, measured by a bench that
+ran the SSE and partial-JSON parsers under `src/prime/ai/`. Both parsers, the
+bench, and the provider stack that was their only caller have been deleted, so
+the figures are history and cannot be re-taken from this repository. Airship's
+own streaming lives in `src/inference/openai-wire/`.
 
 Provider-realistic load (~2–10k SSE events per agent turn with ~400B
 events) is two orders of magnitude below the contended floor, so parsing
@@ -70,22 +63,19 @@ Reasons, in order of weight:
    tunneling through `execute_workspace_program`'s ≤16 predeclared exact
    calls, which is a hard ceiling on prime-agent's RLM shape.
 2. **Feature completeness.** Prime-agent is ≈ 6–7k lines of semantic core
-   (streaming + loop + harness + subagents + session machines) per
-   `/root/pa-audit/prime-agent-port-manifest.md`. A faithful port needs those
+   (streaming + loop + harness + subagents + session machines); the port of
+   it is `src/prime/`, which is where that count can be re-taken. A faithful port needs those
    exact voucher semantics on live journals — Python-in-Pyodide replicas
    would require a TypeScript "assistant governor" anyway.
-3. **Performance.** Persistent kernel vs fresh-boot-per-job: measured ≈ 8×
-   on warm assets, worse with network-fetched assets; streaming provider
-   calls are fetch+SSE, native to TypeScript; Python fetches would round-trip
-   through JS bridges or ambient net removal games.
-4. **The agent keeps its REPL.** The walls that matter are removed honestly:
-   the prime kernel is a persistent worker with per-job budgets (host policy;
-   default 5 min wall clock — named in results, not implied), bridge calls
+3. **Performance.** Dormant persistent-Pyodide research measured ≈ 8× versus fresh CPython per job on warm assets. It remains quarantined because cross-cell task provenance is unprovable. Stock JavaScript instead pays a small fresh-worker cost to enforce its hard
+   post-result boundary; provider streaming stays native TypeScript fetch+SSE.
+4. **The agent keeps a kernel call surface.** The walls are stated honestly:
+   stock JavaScript is job-scoped with host-policy budgets (default 5 min wall
+   clock, named in results); bridge calls
    from code are arbitrary in number (bounded by per-job call budget) and
    each is approval-bound + journaled with its own operation identity
    (`prime-kernel:<jobId>:<seq>`), the harness/persistence runs on IndexedDB,
-   and engine=pyodide (true persistent CPython namespace) sits behind an
-   install+probe gate on the same kernel host.
+   while the persistent `engine=pyodide` implementation is quarantined and unavailable from the production engine factory.
 
 ## 3. What ships (feature accounting vs upstream)
 
@@ -115,8 +105,8 @@ Deferred honestly (documented gates, named-not-dropped):
   like any other pack.
 - Compute: kernel job defaults maxJobWallMs = 300 s (named in results);
   bridges bounded per call (args ≤ 1 MiB), per-job calls ≤ 1000, capture
-  per stream ≤ 1 Mi in page memory; kernel namespace persistent per kernel
-  instance (reset named on restart; semantics documented).
+  per stream ≤ 1 Mi in page memory. JavaScript namespace is job-scoped;
+  optional Pyodide is kernel-instance-scoped and names every reset.
 - All agent-turn guardrails carry airship's exact numbers (tool-call/step
   64, assistant text 4 MiB, step events 100k, reserved response tokens 1024,
   repeated-identical-failure warn@2/stop@5).

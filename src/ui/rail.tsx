@@ -24,8 +24,8 @@ import type { SessionActivityReport } from "../capabilities/runtime-load";
  * What it was: 232px carrying eleven destinations, a 250px scrolling
  * conversation list, a 310px scrolling profile list and a 120px profile card —
  * 785 to 943px of content inside a 501 to 701px box. It scrolled at every
- * laptop height, which meant Proof, Vault, Connection and Account were below
- * the fold on the default viewport, and it cost 20 tab stops (29 with eight
+ * laptop height, which meant Vault and provider setup were below the fold on
+ * the default viewport, and it cost 20 tab stops (29 with eight
  * conversations) to cross on the way to the composer.
  *
  * What it is: a profile-first cockpit. The active profile is the first control,
@@ -44,6 +44,16 @@ export type RailConversation = Readonly<{
   preview: string;
   updatedAt: string;
   favorite: boolean;
+  /**
+   * A turn is in flight in this conversation.
+   *
+   * Turns run per conversation, so "is anything working" was never a property of
+   * the page. Without this the rail could show four threads of which two were
+   * answering and print exactly the same row for all four — and the one thing a
+   * person needs from a list of parallel conversations is which of them are
+   * still going.
+   */
+  running?: boolean;
   /**
    * Branches of this row's lineage the shortcut collapsed behind it. Stated on
    * the row rather than merely acted on: a hidden conversation that is not
@@ -70,12 +80,9 @@ export type RailProps = Readonly<{
   state: RailState;
   navRef: Ref<HTMLElement>;
   inert: boolean;
-  busy: boolean;
   /** Aggregated model-turn activity for every conversation this page owns. */
   activity?: SessionActivityReport;
   unreadTurnCount: number;
-  /** A receipt exists for the active session, so Proof has something to show. */
-  hasReceipt: boolean;
   conversations: readonly RailConversation[];
   activeConversationId: string;
   /**
@@ -278,10 +285,8 @@ export function Rail({
   state,
   navRef,
   inert,
-  busy,
   activity,
   unreadTurnCount,
-  hasReceipt,
   conversations,
   activeConversationId,
   unresumableConversationId,
@@ -676,7 +681,6 @@ export function Rail({
           {row.id === "chat" && unreadTurnCount > 0
             ? <span class="nav-turn-badge" role="img" aria-label={`${String(unreadTurnCount)} completed turn${unreadTurnCount === 1 ? "" : "s"}`}>{unreadTurnCount}</span>
             : null}
-          {row.id === "proof" && hasReceipt ? <span class="nav-proof-dot" /> : null}
         </button>
         {row.nested.length > 0 ? (
           <button
@@ -838,6 +842,10 @@ export function Rail({
             {session.id === unresumableConversationId ? (
               <small class="recent-conversation__blocked">Needs review · could not be reopened</small>
             ) : null}
+            {/* Words, not a colour or a spinner: this line is part of the row's
+                accessible name, so "which of these is still going" has the same
+                answer for a reader and for a listener. */}
+            {session.running ? <small class="recent-conversation__running">Working…</small> : null}
             {session.hiddenBranchCount ? <small class="recent-conversation__branches">
               {session.hiddenBranchCount} more branch{session.hiddenBranchCount === 1 ? "" : "es"} in All conversations
             </small> : null}
@@ -922,7 +930,6 @@ export function Rail({
                 type="button"
                 aria-label="New conversation"
                 title="New conversation"
-                disabled={busy}
                 // The list stays up where it is part of the rail: you have just
                 // made a conversation and its row is about to appear in it, and
                 // closing here also latched the disclosure shut for the rest of
@@ -991,7 +998,6 @@ export function Rail({
           className="profile-menu"
           ariaLabel="Agent profile"
           value={profileId}
-          disabled={busy}
           placement="down"
           options={profiles.map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
           leading={(option) => <span class="profile-monogram" style={profileBadgeStyle?.(option.value)} aria-hidden="true">{monogram(option.label)}</span>}

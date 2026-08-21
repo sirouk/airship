@@ -122,7 +122,7 @@
  * top of the panel — in flow, where it cannot paint over the thing it is about.
  *
  * It used to be `position: sticky; top: 45px; z-index: 7`, and the 45px was
- * clearance for a trust-hub tab strip that this sheet's own comment cited at
+ * clearance for a retired status tab strip that this sheet's own comment cited at
  * `platform-shell.css:20,148`. That strip is gone: the only `position: sticky`
  * left in `platform-shell.css` is the Preferences dialog header, and nothing on
  * `#vault` pins to the top of `.main` at all. So the offset cleared nothing,

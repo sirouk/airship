@@ -550,7 +550,7 @@ export function settledWorkbenchNotice(current: WorkbenchNotice | undefined): Wo
 export const WORKBENCH_DONE_NOTICE_MS = 6_000;
 
 /**
- * The seal state a notice tone maps to, in the one status vocabulary.
+ * The status mark state a notice tone maps to, in the one status vocabulary.
  *
  * Errors never auto-dismiss and never render as a toast, so this is only ever
  * asked about a notice that is currently on screen.
@@ -560,7 +560,7 @@ export function workbenchNoticeState(kind: WorkbenchNoticeKind): "checking" | "v
 }
 
 export type WorkbenchBufferState = Readonly<{
-  /** The word the file strip shows, and the seal's accessible name. */
+  /** The word the file strip shows, and the status mark's accessible name. */
   word: string;
   /** The sentence behind that word. Rendered as visible text, never `title`-only. */
   detail: string;
@@ -585,7 +585,7 @@ export function workbenchBufferState(input: Readonly<{
 }>): WorkbenchBufferState {
   if (input.binary) {
     return Object.freeze({
-      word: "Protected bytes",
+      word: "Binary file",
       detail: "Binary · read-only",
       state: "none",
     });

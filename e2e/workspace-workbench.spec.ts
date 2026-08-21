@@ -49,8 +49,8 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await expect(page.locator(".editor-strip")).toContainText("Saved");
   await expect(page.locator(".editor-strip")).toBeInViewport();
   // AMENDED: the dirty marker moved from a bespoke `<b>` onto the shared
-  // <Tabs> state seal. Asserting the accessible name is stronger than counting
-  // an element: it proves a screen reader is told the buffer is clean, which
+  // <Tabs> state indicator. Asserting the accessible name is stronger than counting
+  // an element: it validates that a screen reader is told the buffer is clean, which
   // the CSS-structural count never did.
   await expect(page.getByRole("tab", { name: /architecture\.md/ })).not.toHaveAccessibleName(/Unsaved/u);
 

@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 /**
  * The `g`-prefix navigation chords registered by `useGlobalNavigationJumps`
  * are a window-level keydown listener. With a modal platform overlay open
- * (command palette, preferences, trust sheet, mobile "more" sheet, approval
- * prompt, profile transition), the routed surface is inert — but inert only
+ * (command palette, preferences, mobile "more" sheet, approval prompt,
+ * profile transition), the routed surface is inert — but inert only
  * suppresses pointer and focus interaction, not window key handling — so a
  * chord fired `navigatePrimary` underneath the dialog, swapping the route and
  * pushing history invisibly where the route-focus effect then no-ops on an
@@ -38,7 +38,7 @@ describe("navigation-jump overlay gate", () => {
     // Every surface that takes the keyboard has to be in the gate. Adding an
     // overlay without adding it here is exactly the regression this catches.
     for (const overlay of [
-      "mobileMoreOpen", "paletteOpen", "preferencesOpen", "trustSheetOpen",
+      "mobileMoreOpen", "paletteOpen", "preferencesOpen",
       "approvalPending", "profileCockpitTransition", "shortcutsOpen",
     ]) {
       expect(declaration, `${overlay} does not gate the navigation chords`).toContain(overlay);
@@ -47,11 +47,10 @@ describe("navigation-jump overlay gate", () => {
     expect(appSource).toMatch(/useGlobalNavigationJumps\(\s*navigatePrimary,\s*\(\)\s*=>\s*!platformOverlayOpenRef\.current/u);
   });
 
-  it("rail and overlay-owned navigation stay ungated on navigatePrimary itself", () => {
-    // The gate must NOT be baked into navigatePrimary: rail buttons and
-    // overlay-owned navigation (palette entries, trust-sheet rows) call it
-    // directly and must keep working while an overlay is open.
-    expect(appSource).toContain('function navigatePrimary(next: View) {\n    if (next === "proof") {');
+  it("rail and overlay-owned navigation delegate through navigatePrimary", () => {
+    // The overlay gate belongs to the global shortcut listener. Rail buttons
+    // and overlay-owned navigation call this direct route delegate.
+    expect(appSource).toContain('function navigatePrimary(next: View) {\n    navigate(next);\n  }');
     expect(appSource).toContain("onNavigate={navigatePrimary}");
     expect(appSource).toContain("navigate: navigatePrimary");
   });

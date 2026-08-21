@@ -89,7 +89,7 @@ describe("focus rings survive every outline suppression", () => {
   it("reads the whole route stylesheet set, so a new sheet cannot opt itself out", () => {
     expect(stylesheets).toContain("sessions-view.css");
     expect(stylesheets).toContain("platform-shell.css");
-    expect(stylesheets).toContain("model-picker.css");
+    expect(stylesheets).toContain("provider-connections-view.css");
     expect(stylesheets.length).toBeGreaterThan(25);
   });
 

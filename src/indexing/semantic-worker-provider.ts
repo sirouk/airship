@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from "./contracts";
 
+const EMBEDDING_CANCELLED = "Embedding cancelled.";
 export const AIRSHIP_SEMANTIC_MODEL = Object.freeze({
   transformersVersion: "4.0.0",
   modelId: "mixedbread-ai/mxbai-embed-xsmall-v1",
@@ -150,7 +151,7 @@ export class LazySemanticWorkerEmbeddingProvider implements EmbeddingProvider {
       const abort = () => {
         this.worker?.postMessage({ type: "cancel", requestId });
         this.pending.delete(requestId);
-        reject(signal?.reason ?? new DOMException("Embedding cancelled.", "AbortError"));
+        reject(signal?.reason ?? new DOMException(EMBEDDING_CANCELLED, "AbortError"));
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.pending.set(requestId, {
@@ -318,7 +319,7 @@ export function createSemanticWorkerHandler(
       return;
     }
     if (message.type === "cancel") {
-      operations.get(message.requestId)?.abort(new DOMException("Embedding cancelled.", "AbortError"));
+      operations.get(message.requestId)?.abort(new DOMException(EMBEDDING_CANCELLED, "AbortError"));
       return;
     }
     if (message.type === "dispose") {
@@ -382,14 +383,14 @@ function boundedThreads(value: number): number {
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Embedding cancelled.", "AbortError");
+  if (signal?.aborted) throw signal.reason ?? new DOMException(EMBEDDING_CANCELLED, "AbortError");
 }
 
 function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return promise;
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason ?? new DOMException("Embedding cancelled.", "AbortError"));
+    const abort = () => reject(signal.reason ?? new DOMException(EMBEDDING_CANCELLED, "AbortError"));
     signal.addEventListener("abort", abort, { once: true });
     promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });

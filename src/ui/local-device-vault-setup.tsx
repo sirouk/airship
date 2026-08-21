@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
@@ -15,7 +16,7 @@ import {
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { importWorkspaceRecoveryKey } from "../vault/recovery";
 import { downloadBytes } from "./file-download";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import "./local-device-vault-setup.css";
 
 export const LOCAL_DEVICE_BACKUP_MAX_FILE_BYTES = 256 * 1024 * 1024;
@@ -38,23 +39,23 @@ export type RecoveryCustody = "none" | "copied" | "downloaded" | "transcribed";
  * above the one control on this route that destroys a value permanently, which
  * made the quietest thing on screen the most consequential. `attention` is the
  * honest state for a one-time secret that has not left the page yet, and the
- * seal puts a mark and a colour behind the words rather than replacing them.
+ * status mark puts a mark and a colour behind the words rather than replacing them.
  */
-export function recoveryCustodyStatus(custody: RecoveryCustody): Readonly<{ state: SealState; label: string }> {
-  if (custody === "copied") return Object.freeze({ state: "verified" as SealState, label: "Copied to your clipboard." });
-  if (custody === "downloaded") return Object.freeze({ state: "verified" as SealState, label: "Download requested." });
-  if (custody === "transcribed") return Object.freeze({ state: "asserted" as SealState, label: "You said you wrote it down. Airship did not observe that." });
-  return Object.freeze({ state: "attention" as SealState, label: "Not copied or downloaded yet." });
+export function recoveryCustodyStatus(custody: RecoveryCustody): Readonly<{ state: StatusMarkState; label: string }> {
+  if (custody === "copied") return Object.freeze({ state: "verified" as StatusMarkState, label: "Copied to your clipboard." });
+  if (custody === "downloaded") return Object.freeze({ state: "verified" as StatusMarkState, label: "Download requested." });
+  if (custody === "transcribed") return Object.freeze({ state: "asserted" as StatusMarkState, label: "You said you wrote it down. Airship did not observe that." });
+  return Object.freeze({ state: "attention" as StatusMarkState, label: "Not copied or downloaded yet." });
 }
 
 /**
  * Whether the ceremony may let the one-time key be blanked.
  *
- * Measured (J058): with the Seal reading verbatim "Not copied or downloaded
+ * Measured (J058): with the StatusMark reading verbatim "Not copied or downloaded
  * yet.", the acknowledgement checkbox was `disabled: false`, one click advanced
  * the ceremony to `acknowledged`, and "The recovery value is no longer
  * rendered." A screen that knows the fact which makes the next click dangerous
- * and permits it anyway is warning nobody. The seal already computes that fact;
+ * and permits it anyway is warning nobody. The status mark already computes that fact;
  * this reads it rather than restating the rule.
  */
 export function recoveryAcknowledgementAllowed(custody: RecoveryCustody): boolean {
@@ -190,7 +191,7 @@ export function LocalDeviceVaultSetup({
    * Whether the second half of the recovery kit has been taken in this visit.
    *
    * A page cannot confirm that a download landed, so this is the same class of
-   * claim as the ceremony's custody seal: it records that Airship handed the
+   * claim as the ceremony's custody status mark: it records that Airship handed the
    * bytes over, and the copy says exactly that rather than "backed up".
    */
   const [backupExported, setBackupExported] = useState(false);
@@ -670,7 +671,7 @@ export function LocalDeviceVaultSetup({
       if (mounted.current) {
         setNotice({
           kind: "success",
-          message: `Atomic restore verified ${result.restored.toLocaleString()} encrypted object${result.restored === 1 ? "" : "s"}.`,
+          message: `Atomic restore checked ${result.restored.toLocaleString()} encrypted object${result.restored === 1 ? "" : "s"}.`,
         });
       }
     } catch (error) {
@@ -793,10 +794,10 @@ export function LocalDeviceVaultSetup({
                     </button>
                   </div>
                   <p class="local-device-vault__custody" data-custody={custody}>
-                    <Seal {...recoveryCustodyStatus(custody)} density="chip" />
+                    <StatusMark {...recoveryCustodyStatus(custody)} density="chip" />
                   </p>
                   {/*
-                    * The seal is load-bearing now.
+                    * The status mark is load-bearing now.
                     *
                     * While it reads "Not copied or downloaded yet." the
                     * acknowledgement is refused and the escape is an explicit
@@ -1001,7 +1002,7 @@ export function LocalDeviceVaultSetup({
           <summary>Restore encrypted backup</summary>
           <div>
             <div class="local-device-vault__restore-intro">
-              <strong>Verified atomic replacement</strong>
+              <strong>Atomic replacement checked</strong>
               <p>The complete file and recovery key must authenticate before the selected Vault can be replaced.</p>
             </div>
             <label>
@@ -1178,18 +1179,7 @@ export async function readBoundedLocalDeviceBackup(
   }
 }
 
-export function formatLocalDeviceBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "Unknown";
-  if (value < 1024) return `${Math.floor(value)} B`;
-  const units = ["KiB", "MiB", "GiB"] as const;
-  let amount = value / 1024;
-  let unit: (typeof units)[number] = units[0];
-  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
-    amount /= 1024;
-    unit = units[index]!;
-  }
-  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
-}
+export const formatLocalDeviceBytes = formatBytes;
 
 function persistenceCopy(result: "granted" | "not-granted" | "unsupported"): string {
   switch (result) {

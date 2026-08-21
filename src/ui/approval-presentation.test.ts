@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { remainingApprovalTime, writeApprovalFacts } from "./approval-presentation";
 import { BrowserGitClient } from "../git";
-import { MemoryGitAdapter } from "../git/memory-adapter";
+import { MemoryGitAdapter } from "../git/memory-adapter.test-support";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { MemoryWorkspace } from "../workspace/memory";

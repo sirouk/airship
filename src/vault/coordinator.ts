@@ -9,6 +9,7 @@ import type { CiphertextCacheCapability } from "../storage/client-ciphertext-cac
 import type { EncryptedProfileCatalogStore } from "../profiles/persistence";
 import type { VaultContextFabricPort } from "./context-fabric-port";
 import type { GoogleDriveWorkspace } from "../storage/google-drive-workspace";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import type { S3CredentialProvider, S3ObjectStore } from "../storage/s3-object-store";
 import {
   validateVaultS3Configuration,
@@ -108,7 +109,7 @@ export type VaultSnapshot =
       phase: "ready";
       revision: number;
       evidence: VaultProbeEvidence;
-      message: "Vault contract verified for this browser origin; synchronization has not been evaluated.";
+      message: "Storage checks passed in this browser; synchronization was not tested.";
     }>)
     | (ConfiguredFields & Readonly<{
       phase: "degraded";
@@ -192,7 +193,12 @@ export type ProbeVaultRequest = {
 type Listener = (snapshot: VaultSnapshot) => void;
 type WithoutRevision<T> = T extends unknown ? Omit<T, "revision"> : never;
 type VaultRuntimeModules = Readonly<{
-  S3ObjectStore: typeof import("../storage/s3-object-store").S3ObjectStore;
+  /**
+   * Present only in a lab build. The S3 object store is reachable through one
+   * destination — the host-composed loopback lab — so a stock build fetches
+   * neither this module nor the AWS request signing inside it.
+   */
+  S3ObjectStore?: typeof import("../storage/s3-object-store").S3ObjectStore;
   runObjectStoreConformance: typeof import("../storage/conformance").runObjectStoreConformance;
   EncryptedObjectJournalBackend: typeof import("../storage/encrypted-object-journal").EncryptedObjectJournalBackend;
   EncryptedProfileCatalogStore: typeof import("../profiles/persistence").EncryptedProfileCatalogStore;
@@ -239,7 +245,7 @@ export class VaultCoordinator {
    * Sizes are the provider's object sizes — ciphertext for every encrypted
    * write, which is everything the Vault claims to hold — summed from one
    * prefix listing under the configuration's namespace. Reading this is a
-   * read-only list call against the already-verified store: it cannot mutate
+   * read-only list call against the store that completed the storage checks: it cannot mutate
    * anything, and a refusal returns `undefined` rather than a guessed number.
    *
    * The prefix is empty because the store is *already* confined to the
@@ -315,7 +321,7 @@ export class VaultCoordinator {
     const runtime = this.runtime;
     const queue = this.reclamationQueue;
     if (this.current.phase !== "ready" || !runtime || !queue) {
-      throw new Error("Vault reclamation requires a verified Vault runtime; connect the Vault and complete its probe first.");
+      throw new Error("Vault reclamation requires a ready Vault runtime; connect the Vault and complete its storage checks first.");
     }
     // Sweep code rides the same deferred pack as the rest of the Vault
     // runtime; a ready phase has it cached already.
@@ -345,6 +351,14 @@ export class VaultCoordinator {
   }
 
   configure(request: ConfigureVaultRequest): VaultSnapshot {
+    /*
+     * The S3 configuration path exists for one destination — the host-composed
+     * loopback lab — so a stock build refuses it here rather than carrying the
+     * S3 configuration grammar, its validator and its provider-requirement
+     * table. Nothing in a stock build calls this: the selector never offers the
+     * destination and `loadPreferenceOverrides` never restores it.
+     */
+    if (!LOCAL_LAB_BUILD) throw new Error("This build has no S3-compatible vault destination to configure.");
     const config = validateVaultS3Configuration(request.configuration);
     this.invalidateProbe("Vault configuration was replaced.");
     this.resetProvider();
@@ -459,7 +473,7 @@ export class VaultCoordinator {
 
   /**
    * Renew a Google Drive grant from a click/tap without replacing the store,
-   * workspace key, or verified runtime. No refresh token is retained.
+   * workspace key, or ready runtime. No refresh token is retained.
    */
   async reauthorizeGoogleDrive(): Promise<void> {
     if (!this.config || !isGoogleDriveConfiguration(this.config) || !this.directStore) {
@@ -472,7 +486,7 @@ export class VaultCoordinator {
 
   readyRuntime(): ReadyVaultRuntime {
     if (this.current.phase !== "ready" || !this.runtime) {
-      throw new Error("Vault runtime is unavailable until the live probe verifies the configured provider and encryption path.");
+      throw new Error("Vault runtime is unavailable until the configured provider and encryption-path checks pass.");
     }
     return this.runtime;
   }
@@ -526,7 +540,8 @@ export class VaultCoordinator {
     try {
       const modules = await loadVaultRuntimeModules();
       if (generation !== this.generation || controller.signal.aborted) throw abortReason(controller.signal);
-      const store = this.directStore ?? this.store ?? (!isGoogleDriveConfiguration(config) && provider
+      const store = this.directStore ?? this.store ?? (LOCAL_LAB_BUILD && modules.S3ObjectStore
+        && !isGoogleDriveConfiguration(config) && provider
         ? new modules.S3ObjectStore({
             endpoint: config.endpoint,
             region: config.region,
@@ -562,7 +577,7 @@ export class VaultCoordinator {
         ...conformance.createdKeys,
         ...composition.createdKeys,
       ])].sort());
-      // Probe litter is provably unreachable — nothing but this run ever
+      // Probe litter is unreachable within this coordinator run — nothing else
       // references those keys — so it is the one safe reclamation candidate that
       // needs no safety age. Anything unconfirmed keeps the original warning.
       const cleanup = await this.reclaimProbeObjects(store, allCreatedKeys, controller.signal);
@@ -630,7 +645,7 @@ export class VaultCoordinator {
         phase: "ready",
         ...this.configuredFields(),
         evidence,
-        message: "Vault contract verified for this browser origin; synchronization has not been evaluated.",
+        message: "Storage checks passed in this browser; synchronization was not tested.",
       });
     } catch (error) {
       if (generation !== this.generation) throw abortReason(controller.signal);
@@ -742,8 +757,8 @@ export class VaultCoordinator {
      * Having the verb is not the same as being allowed to use it.
      *
      * This reported `true` for any store carrying a `trash` method, which is a
-     * claim about the adapter rather than about the deployment. Measured
-     * against the local MinIO lab, whose credential policy grants Get/Put/List
+     * claim about the adapter rather than about the deployment. In the local
+     * MinIO lab, the credential policy grants Get/Put/List
      * and not Delete: every key came back refused with a 403 and the runtime
      * still declared deletion available. A sweep that reclaimed nothing is the
      * answer to "can this runtime delete", so it is reported as the answer.
@@ -905,7 +920,7 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: O
       persistence: "memory-only" as const,
       resetEvents: Object.freeze(["logout", "account-switch", "vault-disconnect"] as const),
     }),
-    cspConnectSrc: Object.freeze([...config.credentialSource.authorityOrigins]),
+    networkOrigins: Object.freeze([...config.credentialSource.authorityOrigins]),
     cors: Object.freeze({
       allowedMethods: Object.freeze(["GET", "POST", "PATCH"]),
       allowedRequestHeaders: Object.freeze(["Authorization", "Content-Type", "If-Match", "Range"]),
@@ -932,10 +947,13 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: O
 let runtimeModulesPromise: Promise<VaultRuntimeModules> | undefined;
 
 function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
-  runtimeModulesPromise ??= import("../load-deferred-capabilities")
-    .then(({ loadDeferredCapabilities }) => loadDeferredCapabilities())
-    .then((capabilities) => Object.freeze({
-    S3ObjectStore: capabilities.S3ObjectStore,
+  runtimeModulesPromise ??= Promise.all([
+    import("../load-deferred-capabilities").then(({ loadDeferredCapabilities }) => loadDeferredCapabilities()),
+    // Folded away in a stock build, which takes the dynamic import with it.
+    LOCAL_LAB_BUILD ? import("../storage/s3-object-store") : undefined,
+  ])
+    .then(([capabilities, s3]) => Object.freeze({
+    S3ObjectStore: s3?.S3ObjectStore,
     runObjectStoreConformance: capabilities.runObjectStoreConformance,
     EncryptedObjectJournalBackend: capabilities.EncryptedObjectJournalBackend,
     EncryptedProfileCatalogStore: capabilities.EncryptedProfileCatalogStore,
@@ -1049,7 +1067,7 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
       code: "credential-denied",
       severity: "error",
       operation: "credentials",
-      publicMessage: "Google Drive authorization expired or was cleared. Reconnect Google from an explicit click, then verify the vault again.",
+      publicMessage: "Google Drive authorization expired or was cleared. Reconnect Google from an explicit click, then run the storage checks again.",
       retryable: true,
       commitState: "not-applicable",
       recordedAt,
@@ -1073,7 +1091,7 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
       recordedAt,
     });
   }
-  if (isCognitoIdentityError(error)) {
+  if (LOCAL_LAB_BUILD && isCognitoIdentityError(error)) {
     const throttled = error.code === "TooManyRequestsException" || error.code === "InternalErrorException";
     return Object.freeze({
       code: throttled ? "credential-throttled" : "credential-denied",
@@ -1142,11 +1160,17 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
   });
 }
 
+/**
+ * A temporary-credential authority is an S3 concept, and S3 is reachable only
+ * from the host-composed loopback lab. A stock build folds this predicate and
+ * the diagnostic above it away rather than shipping a branch nothing can enter.
+ */
 function isCognitoIdentityError(error: unknown): error is Error & {
   code: string;
   retryable: boolean;
   requestId?: string;
 } {
+  if (!LOCAL_LAB_BUILD) return false;
   if (!(error instanceof Error) || error.name !== "CognitoIdentityError") return false;
   const value = error as Error & { code?: unknown; retryable?: unknown; requestId?: unknown };
   return typeof value.code === "string" &&

@@ -9,8 +9,8 @@ Use:
 - warm ivory or near-black work surfaces;
 - ink, blued steel, oxidized brass, and restrained copper accents;
 - fine engraved rules, deliberate borders, shallow material layers, and occasional knurled-control cues;
-- a high-contrast editorial serif only for brief display moments, paired with a humanist system sans and a compact mono for evidence/data;
-- small line icons and receipt seals whose shape communicates proof state without color;
+- a high-contrast editorial serif only for brief display moments, paired with a humanist system sans and a compact mono for run data;
+- small line icons whose shape communicates operational state without relying on color;
 - generous breathing room around dense, operational information.
 
 Avoid:
@@ -20,7 +20,7 @@ Avoid:
 - decorative motion, heavy shadows, ornate chrome, or bitmap texture downloads;
 - copying the supplied mockup theme or layout verbatim.
 
-The name Airship can remain a memorable product mark. Product copy stays direct: Session, Workspace, Sources, Worktree, Proof, Funding, Device—not Bridge, Engine Room, Captain, or other role-play vocabulary.
+The name Airship can remain a memorable product mark. Product copy stays direct: Session, Workspace, Sources, Worktree, Providers, Vault, Device—not Bridge, Engine Room, Captain, or other role-play vocabulary.
 
 ## Performance is visual quality
 
@@ -33,20 +33,19 @@ The name Airship can remain a memorable product mark. Product copy stays direct:
 
 ## Responsive parity
 
-Desktop exposes three resizable regions: navigation/source tree, active work surface, and contextual inspector. Mobile presents the same information as top-level Chat, Workspace, Sources, and Proof views with bottom navigation and drill-in sheets. Nothing essential is desktop-only: staging, diffs, approvals, receipts, profile switching, source filters, session recovery, and funding all remain available.
+Desktop exposes three resizable regions: navigation/source tree, active work surface, and contextual inspector. Mobile presents the same information as top-level Chat, Workspace, Sources, and Setup views with bottom navigation and drill-in sheets. Nothing essential is desktop-only: staging, diffs, approvals, profile switching, source filters, Run details, and session recovery all remain available.
 
-## Proof icon grammar
+## Operational status grammar
 
-Proof icons are compact seals, not status decoration:
+Status marks report product state. They do not certify a provider, model, or remote runtime:
 
-- outlined circle: not checked;
-- interrupted circle: checking or stale;
-- solid check seal: cryptographically verified claim;
-- half seal: transport/service evidence only;
-- warning diamond: policy mismatch, expiry, or incomplete receipt;
-- crossed seal: verification failed.
+- neutral outline: no active result;
+- interrupted circle: work in progress or stale local state;
+- check: the named local operation completed;
+- warning diamond: action needed or incomplete local state;
+- crossed mark: the named operation failed.
 
-Color reinforces but never carries meaning. Selecting a seal opens the claim stack with issuer, subject, scope, age, expiry, evidence digest, verifier policy, and export action.
+Color reinforces but never carries meaning. Run details expose bounded local and provider-origin metadata as trace data, with `attestation: "none"`; the interface does not turn that metadata into proof.
 
 ## Initial tokens
 
@@ -62,9 +61,9 @@ set, the mode and profile overrides, and the reasoning for each value.
   --ink: #ece8de;             /* body text; --ink-muted / --ink-faint below it */
   --accent: #c19a58;          /* brass: the product's own material */
   --accent-bright: #dfba72;   /* the pressable brass, and --focus */
-  --copper: #be805f;          /* asserted, not verified */
-  --verdigris: var(--v-verified);
-  --signal-red: var(--v-failed);
+  --copper: #be805f;          /* a restrained material accent */
+  --signal: var(--v-verified); /* successful operational state */
+  --danger: var(--v-failed);  /* failed operational state */
   --line: color-mix(in srgb, currentColor 18%, transparent);
   --radius-control: 6px;
   --radius-panel: 10px;

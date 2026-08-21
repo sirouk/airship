@@ -1,4 +1,5 @@
-import { ownedArrayBuffer } from "../core/bytes";
+import { isRecord } from "../core/records";
+import { ownedArrayBuffer, sha256Hex } from "../core/bytes";
 
 const DEFAULT_MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_EPOCHS = 53;
@@ -272,19 +273,12 @@ function parseContentRange(value: string | null): { start: number; endExclusive:
   return { start, endExclusive: endInclusive + 1, totalSize };
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", ownedArrayBuffer(bytes)));
-  return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
 
 async function responseError(operation: string, response: Response): Promise<Error> {
   const detail = (await response.text().catch(() => "")).slice(0, 500);
   return new Error(`${operation} failed (${response.status})${detail ? `: ${detail}` : ""}`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

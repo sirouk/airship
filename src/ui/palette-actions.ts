@@ -27,9 +27,16 @@ export type PaletteAction = Readonly<{
 }>;
 
 export type ConversationVerbs = Readonly<{
-  /** A sentence, or nothing when the verb can run. */
-  newConversationBlocked?: string;
-  renameBlocked?: string;
+  /*
+   * A sentence, or nothing when the verb can run.
+   *
+   * New conversation and Rename have no entry here, and that is the shape of
+   * the fix rather than an omission: the only reason either was ever withheld
+   * was the page-wide “Stop the active turn first.”, and a turn belongs to one
+   * conversation. Minting a second thread and renaming a journal record are
+   * never in a running turn's way. A field nothing can set is a refusal nobody
+   * can state, so it is gone rather than left as a hook.
+   */
   retryBlocked?: string;
   editBranchBlocked?: string;
   forkBlocked?: string;
@@ -43,9 +50,9 @@ export type ConversationVerbs = Readonly<{
 export function conversationPaletteActions(verbs: ConversationVerbs): readonly PaletteAction[] {
   return Object.freeze([
     action("new-conversation", "New conversation", "Start a fresh conversation in this profile",
-      ["new", "conversation", "thread", "chat", "start"], verbs.newConversationBlocked, verbs.onNewConversation),
+      ["new", "conversation", "thread", "chat", "start"], undefined, verbs.onNewConversation),
     action("rename-conversation", "Rename conversation", "Rename the conversation you are in",
-      ["rename", "title", "name", "conversation"], verbs.renameBlocked, verbs.onRename),
+      ["rename", "title", "name", "conversation"], undefined, verbs.onRename),
     action("retry-turn", "Retry", "Branch before the last answer and ask it again",
       ["retry", "again", "regenerate", "answer"], verbs.retryBlocked, verbs.onRetry),
     action("edit-branch", "Edit & branch", "Reopen the last prompt on a new branch",

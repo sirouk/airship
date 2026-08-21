@@ -215,6 +215,11 @@ export class InferenceConnectionRegistry {
     this.#revision += 1;
   }
 
+  nextGeneration(connectionId: string): number {
+    const id = identifier(connectionId, "Connection ID");
+    return (this.#generations.get(id) ?? 0) + 1;
+  }
+
   get(connectionId: string): InferenceConnectionMetadata | undefined {
     const record = this.#records.get(connectionId);
     return record ? this.#liveMetadata(record.metadata) : undefined;

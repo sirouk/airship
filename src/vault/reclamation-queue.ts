@@ -1,3 +1,5 @@
+import { requiredVaultString } from "./field";
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -242,9 +244,9 @@ function parseQueueDocument(bytes: Uint8Array): ReclamationQueueDocument {
 function parseQueueEntry(value: unknown): ReclamationQueueEntry {
   if (!isRecord(value)) throw new Error("Vault reclamation queue entry is invalid.");
   return Object.freeze({
-    kind: validatedKind(requiredString(value.kind, "reclamation candidate kind", 64)),
-    cloudKey: validatedCloudKey(requiredString(value.cloudKey, "reclamation cloud key", 4_096)),
-    supersededAt: validTimestamp(requiredString(value.supersededAt, "reclamation supersession time", 128), "reclamation supersession time"),
+    kind: validatedKind(requiredVaultString(value.kind, "reclamation candidate kind", 64)),
+    cloudKey: validatedCloudKey(requiredVaultString(value.cloudKey, "reclamation cloud key", 4_096)),
+    supersededAt: validTimestamp(requiredVaultString(value.supersededAt, "reclamation supersession time", 128), "reclamation supersession time"),
   });
 }
 
@@ -265,14 +267,6 @@ function compareCanonical(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function requiredString(value: unknown, label: string, maxBytes: number): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    encoder.encode(value).byteLength > maxBytes
-  ) throw new Error(`${label} is invalid.`);
-  return value;
-}
 
 function validTimestamp(value: string, label: string): string {
   const timestamp = Date.parse(value);
@@ -280,6 +274,3 @@ function validTimestamp(value: string, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

@@ -2,18 +2,31 @@
 # the image; sending them from the host wastes time and can leak local state.
 node_modules
 dist
+extension/build
+public/extension/releases
 .git
 
-# Research, native build trees, and local visual-capture artifacts are not part
-# of the static application artifact.
+# Research, native build trees, tests, and local visual-capture artifacts are
+# not part of the static application artifact.
 references
 crates
+coverage
+test-results
 .aesthetic
 .ui-capture
 .playwright-mcp
 playwright-report
 .wrangler
 
-# Local session scratch files.
+# Local credentials, lab state, agent state, and session scratch files never
+# enter a local or remote Docker builder.
+.env*
+.airship-lab
+outputs
+work
+.kilo
+graphify-out
+docs/_work
+shots
 .sweep-tmp*.mjs
 *-this-session-is-being-continued-from-a-previous-c.txt

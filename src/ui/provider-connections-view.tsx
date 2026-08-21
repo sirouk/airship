@@ -1,11 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import type { SessionManifest } from "../core/contracts";
-import {
-  browserInferenceFabric,
-  type ActivatedInferenceRoute,
-  type BrowserCloudProviderId,
-  type BrowserInferenceConnection,
-} from "../inference/fabric";
+import { browserInferenceFabric, type ActivatedInferenceRoute, type BrowserInferenceConnection } from "../inference/fabric";
 import {
   DEFAULT_LOCAL_MODEL_ORIGINS,
   LM_STUDIO_DEFAULT_ENDPOINT,
@@ -16,13 +11,12 @@ import type {
   InferenceModelDescriptor,
   InferenceProviderDescriptor,
   ModelCapability,
+  OpenAiCompatibleProviderInput,
 } from "../inference/providers";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import {
-  accessLaneForProvider,
   reconnectRouteDisposition,
   type AccessReconnectIntent,
-  type ConnectLaneId,
   type ReconnectRouteDisposition,
 } from "./access-intent";
 import { BrandLogo, type BrandLogoName } from "./brand-icons";
@@ -44,30 +38,39 @@ export type ProviderConnectionsViewProps = Readonly<{
   onDisconnect(connectionId: string): Promise<void>;
 }>;
 
+export type CustomProviderFormField =
+  | "providerName"
+  | "baseUrl"
+  | "modelsUrl"
+  | "apiKeyHeader"
+  | "apiKeyScheme"
+  | "apiKey";
+
+export type CustomProviderErrorRoute = Readonly<{
+  field?: CustomProviderFormField;
+  /** Network and unmatched refusals need an alert in addition to field focus. */
+  alertSummary: boolean;
+}>;
+
 type ProviderOperationError = Readonly<{
   connectionId: string;
   message: string;
   placement: "connection" | "setup" | "surface";
+  customProviderRoute?: CustomProviderErrorRoute;
 }>;
 
 const CLOUD_PROVIDER_IDS = Object.freeze([
   "openai",
   "anthropic",
   "xai",
-] as const satisfies readonly BrowserCloudProviderId[]);
+  "chutes",
+] as const);
 
-const PROVIDER_FABRIC_RECONNECT_LANES: ReadonlySet<ConnectLaneId> = new Set([
-  "codex",
-  "claude",
-  "grok",
-  "local",
-]);
-
-/** Leaves Chutes and companion returns to the surfaces that own those lanes. */
+/** Every exact provider ID, including custom and dynamic-local IDs, belongs to this fabric. */
 export function providerFabricReconnectIntent(
   intent?: AccessReconnectIntent,
 ): AccessReconnectIntent | undefined {
-  return intent && PROVIDER_FABRIC_RECONNECT_LANES.has(intent.lane) ? intent : undefined;
+  return intent;
 }
 
 /**
@@ -87,7 +90,7 @@ const LOCAL_PROVIDERS: readonly Readonly<{
   Object.freeze({ kind: "lm-studio" as const, label: "LM Studio", defaultEndpoint: LM_STUDIO_DEFAULT_ENDPOINT }),
 ]);
 
-const LOCAL_PROVIDER_DETAIL = "Reads the service's live model catalog and only displays capabilities supported by returned evidence.";
+const LOCAL_PROVIDER_DETAIL = "Reads the service's live model catalog and only displays capabilities reported by that catalog.";
 
 /* Cloud setup cards carry the vendor's own mark, the same one the connect
    lanes and the Account tab show, so a person meets one picture per company. */
@@ -95,6 +98,7 @@ const CLOUD_PROVIDER_BRANDS: Readonly<Record<(typeof CLOUD_PROVIDER_IDS)[number]
   openai: "openai",
   anthropic: "anthropic",
   xai: "xai",
+  chutes: "chutes",
 });
 
 const MODEL_CAPABILITY_LABELS: Readonly<Record<ModelCapability, string>> = Object.freeze({
@@ -140,6 +144,10 @@ export function ProviderConnectionsView({
   const exactReconnectHeld = reconnectDispositions
     ? [...reconnectDispositions.values()].some((disposition) => disposition === "exact")
     : false;
+  const customProviderError = error?.placement === "setup"
+    && error.connectionId === "openai-compatible-custom"
+    ? error
+    : undefined;
 
   useEffect(() => browserInferenceFabric.subscribe(() => setRevision((value) => value + 1)), []);
   useEffect(() => () => abort.current?.abort(new DOMException("Connection view closed.", "AbortError")), []);
@@ -155,9 +163,10 @@ export function ProviderConnectionsView({
     work: (signal: AbortSignal) => Promise<void>,
     requiresInternet = true,
     errorPlacement: ProviderOperationError["placement"] = "surface",
+    routeCustomProviderError?: (error: unknown) => CustomProviderErrorRoute,
   ): Promise<boolean> {
     /*
-     * Route activation crosses the provider probe and the App's immutable
+     * Route activation crosses local model selection and the App's immutable
      * session commit. It is not safe to supersede that transaction merely by
      * aborting its discovery signal: the session commit may already be in
      * progress. Use a synchronous admission fence in addition to rendered
@@ -174,11 +183,18 @@ export function ProviderConnectionsView({
       return true;
     } catch (caught) {
       if (!controller.signal.aborted) {
+        let customProviderRoute: CustomProviderErrorRoute | undefined;
+        try {
+          customProviderRoute = routeCustomProviderError?.(caught);
+        } catch {
+          // An error router is diagnostic only. It must never hide the refusal.
+        }
         setNotice(undefined);
         setError({
           connectionId: id,
           message: safeProviderErrorMessage(caught, requiresInternet ? online : true),
           placement: errorPlacement,
+          ...(customProviderRoute ? { customProviderRoute } : {}),
         });
       }
       return false;
@@ -196,6 +212,23 @@ export function ProviderConnectionsView({
       aria-labelledby="provider-fabric-title"
       aria-busy={Boolean(busyConnection)}
     >
+      {/*
+        * The route's own name, clipped to the accessible tree.
+        *
+        * Providers was the one settled route in the product with no `<h1>` at
+        * all: its heading tree started at the `<h2>` below, so a reader who
+        * navigates by heading level landed nowhere on the route the shell sends
+        * them to when nothing is connected. `route-header.tsx` already carries
+        * this recipe — "`title` is always a real `<h1>`; `titleVisible={false}`
+        * clips it to the accessible tree" — and this is the same thing without
+        * importing the primitive, which the entry budget will not pay for.
+        *
+        * The word is the one `document.title` and the rail already use, so the
+        * three names for this route agree. The visible `<h2>` keeps its sentence
+        * and becomes a correct child of the page's heading, which is also what
+        * stops `e2e/touch-target-floor.spec.ts` measuring the boot splash here.
+        */}
+      <h1 class="sr-only">Providers</h1>
       <header class="provider-fabric__heading">
         <div>
           <span>Provider fabric</span>
@@ -229,7 +262,7 @@ export function ProviderConnectionsView({
               ? fabricReconnectIntent
               : undefined;
             const targetAvailable = fabricReconnectIntent
-              && accessLaneForProvider(entry.provider.id) === fabricReconnectIntent.lane
+              && entry.provider.id === fabricReconnectIntent.providerId
               && entry.models.some((model) => model.id === fabricReconnectIntent.model);
             return (
               <ConnectedProvider
@@ -247,7 +280,7 @@ export function ProviderConnectionsView({
                 busy={busyConnection === entry.connection.id}
                 disabled={Boolean(busyConnection)}
                 onActivate={(modelId) => run(entry.connection.id, async (signal) => {
-                  setNotice(`Checking ${entry.provider.label}/${modelId} through this exact connection…`);
+                  setNotice(`Selecting ${entry.provider.label}/${modelId} on this exact connection…`);
                   const route = await browserInferenceFabric.activate(entry.connection.id, modelId, signal);
                   await onActivate(route, signal);
                   signal.throwIfAborted();
@@ -268,7 +301,7 @@ export function ProviderConnectionsView({
           })}
         </div>
       ) : (
-        <p class="provider-fabric__empty">No additional provider is connected. Chutes connection controls remain available above.</p>
+        <p class="provider-fabric__empty">No provider is connected. Add any cloud or local provider below.</p>
       )}
 
       <div class="provider-fabric__setup">
@@ -280,9 +313,27 @@ export function ProviderConnectionsView({
           <details class="provider-fabric__cloud-disclosure" open>
             <summary>
               <span>Configure cloud API keys</span>
-              <small>{cloudProviders.length} provider adapters · credentials stay in page memory</small>
+              <small>{cloudProviders.length} quick presets + any OpenAI-compatible endpoint · credentials stay in page memory</small>
             </summary>
             <div class="provider-fabric__cloud-grid">
+              <OpenAiCompatibleProviderCard
+                online={online}
+                busy={busyConnection === "openai-compatible-custom"}
+                disabled={Boolean(busyConnection)}
+                connectionError={customProviderError?.message}
+                connectionErrorField={customProviderError?.customProviderRoute?.field}
+                connectionErrorAlert={customProviderError?.customProviderRoute?.alertSummary ?? true}
+                onConnect={(provider, apiKey) => run("openai-compatible-custom", async (signal) => {
+                  setNotice(`Reading the model catalog from ${provider.baseUrl}…`);
+                  const connected = await browserInferenceFabric.connectOpenAiCompatible({
+                    provider,
+                    apiKey,
+                    acknowledgeDirectBrowserCredentialRisk: true,
+                    signal,
+                  });
+                  setNotice(`${connected.provider.label} is connected in page memory with ${connected.models.length} reported model${connected.models.length === 1 ? "" : "s"}. Select one to create a pinned conversation; access is checked on the first turn.`);
+                }, true, "setup", (caught) => customProviderErrorRoute(caught, provider))}
+              />
               {cloudProviders.map((provider) => {
                 const connected = connections.some((entry) => entry.provider.id === provider.id);
                 return (
@@ -300,12 +351,12 @@ export function ProviderConnectionsView({
                     onConnect={(apiKey) => run(provider.id, async (signal) => {
                       setNotice(`Reading the live ${provider.label} model catalog…`);
                       await browserInferenceFabric.connectCloud({
-                        providerId: provider.id as BrowserCloudProviderId,
+                        providerId: provider.id,
                         apiKey,
                         acknowledgeDirectBrowserCredentialRisk: true,
                         signal,
                       });
-                      setNotice(`${provider.label} is connected in page memory. Select a model to check invocation and create a pinned conversation.`);
+                      setNotice(`${provider.label} is connected in page memory. Select a model to create a pinned conversation; access is checked on the first turn.`);
                     }, true, "setup")}
                   />
                 );
@@ -331,9 +382,9 @@ export function ProviderConnectionsView({
                 busy={busyConnection === provider.kind}
                 disabled={Boolean(busyConnection)}
                 onConnect={(endpoint) => run(provider.kind, async (signal) => {
-                  setNotice(`Checking ${provider.label} at ${endpoint} and reading its installed-model evidence…`);
+                  setNotice(`Checking ${provider.label} at ${endpoint} and reading its installed model catalog…`);
                   const connected = await browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal });
-                  setNotice(`${provider.label} is connected at ${endpoint} with ${connected.models.length} advertised models. Choose a text model in Chat or below to verify and start a conversation.`);
+                  setNotice(`${provider.label} is connected at ${endpoint} with ${connected.models.length} advertised models. Choose a text model in Chat or below to start a conversation; the first turn checks access.`);
                 }, false)}
               />
             ))}
@@ -450,10 +501,10 @@ function ConnectedProvider({
           setModelId(nextModel);
         }}
       />
-      <div class="provider-capabilities" role="group" aria-label="Capabilities supported by source evidence for the selected model">
+      <div class="provider-capabilities" role="group" aria-label="Capabilities reported for the selected model">
         {supported.length
           ? supported.slice(0, 6).map((capability) => <span key={capability}>{capability}</span>)
-          : <span>No capabilities confirmed by source evidence</span>}
+          : <span>{capabilityStripPlaceholder(entry.models.length, selected !== undefined)}</span>}
         {supported.length > 6 ? <span>+{supported.length - 6} more</span> : null}
       </div>
       {protectsReturn ? (
@@ -474,7 +525,7 @@ function ConnectedProvider({
           onClick={() => void onActivate(modelId)}
         >
           {busy
-            ? "Checking invocation…"
+            ? "Selecting…"
             : reconnectDisposition === "replacement"
               ? "Exact connection no longer held"
               : reconnectDisposition === "unrelated"
@@ -516,7 +567,7 @@ export function providerReconnectDisposition(
 ): ReconnectRouteDisposition {
   const targetAvailable = entry.models.some((model) => model.id === intent.model);
   return reconnectRouteDisposition(intent, {
-    lane: accessLaneForProvider(entry.provider.id),
+    providerId: entry.provider.id,
     method: entry.connection.authKind === "oauth-public-pkce"
       ? "oauth-pkce"
       : entry.connection.authKind,
@@ -524,6 +575,234 @@ export function providerReconnectDisposition(
     connectionId: entry.connection.id,
     connectionGeneration: entry.connection.generation,
   });
+}
+
+function OpenAiCompatibleProviderCard({
+  online,
+  busy,
+  disabled,
+  connectionError,
+  connectionErrorField,
+  connectionErrorAlert,
+  onConnect,
+}: Readonly<{
+  online: boolean;
+  busy: boolean;
+  disabled: boolean;
+  connectionError?: string;
+  connectionErrorField?: CustomProviderFormField;
+  connectionErrorAlert: boolean;
+  onConnect(provider: OpenAiCompatibleProviderInput, apiKey: string): Promise<boolean>;
+}>) {
+  const titleId = useId();
+  const nameId = useId();
+  const baseUrlId = useId();
+  const modelsUrlId = useId();
+  const headerId = useId();
+  const schemeId = useId();
+  const keyId = useId();
+  const riskId = useId();
+  const errorId = useId();
+  const nameInput = useRef<HTMLInputElement>(null);
+  const baseUrlInput = useRef<HTMLInputElement>(null);
+  const modelsUrlInput = useRef<HTMLInputElement>(null);
+  const headerInput = useRef<HTMLInputElement>(null);
+  const schemeInput = useRef<HTMLInputElement>(null);
+  const keyInput = useRef<HTMLInputElement>(null);
+  const advancedSettings = useRef<HTMLDetailsElement>(null);
+  const [label, setLabel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [modelsUrl, setModelsUrl] = useState("");
+  const [apiKeyHeader, setApiKeyHeader] = useState("Authorization");
+  const [rawKey, setRawKey] = useState(false);
+  const [hasKey, setHasKey] = useState(false);
+  const [accepted, setAccepted] = useState(false);
+  const ready = Boolean(label.trim() && baseUrl.trim() && apiKeyHeader.trim() && hasKey && accepted);
+
+  useEffect(() => {
+    if (!connectionError || !connectionErrorField || disabled) return;
+    if (
+      connectionErrorField === "modelsUrl"
+      || connectionErrorField === "apiKeyHeader"
+      || connectionErrorField === "apiKeyScheme"
+    ) {
+      if (advancedSettings.current) advancedSettings.current.open = true;
+    }
+    let target: HTMLInputElement | null = null;
+    switch (connectionErrorField) {
+      case "providerName": target = nameInput.current; break;
+      case "baseUrl": target = baseUrlInput.current; break;
+      case "modelsUrl": target = modelsUrlInput.current; break;
+      case "apiKeyHeader": target = headerInput.current; break;
+      case "apiKeyScheme": target = schemeInput.current; break;
+      case "apiKey": target = keyInput.current; break;
+    }
+    const frame = requestAnimationFrame(() => target?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [connectionError, connectionErrorField, disabled]);
+
+  return (
+    <form
+      class="provider-setup-card provider-setup-card--custom"
+      aria-labelledby={titleId}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const apiKey = keyInput.current?.value ?? "";
+        const provider: OpenAiCompatibleProviderInput = {
+          label: label.trim(),
+          baseUrl: baseUrl.trim(),
+          ...(modelsUrl.trim() ? { modelsUrl: modelsUrl.trim() } : {}),
+          apiKeyHeader: apiKeyHeader.trim(),
+          apiKeyScheme: rawKey ? "raw" : "bearer",
+        };
+        void onConnect(provider, apiKey).then((succeeded) => {
+          if (!succeeded) return;
+          if (keyInput.current) keyInput.current.value = "";
+          setHasKey(false);
+          setAccepted(false);
+        });
+      }}
+    >
+      <header><Icon name="model" size={18} /><div><h4 id={titleId}>OpenAI-compatible endpoint</h4><span>Custom HTTPS provider · page memory</span></div></header>
+      <p>Connect any browser-reachable OpenAI-compatible chat-completions API. The endpoint must expose a model catalog and allow this Airship origin through CORS.</p>
+      <p class="provider-custom-lifetime">Endpoint settings and credentials last for this page only. Saved conversations retain the provider ID, model, and old connection generation, but never the URL or key. Re-enter the same settings after a reload to create a new connection.</p>
+      <div class="provider-custom-fields">
+        <label class="provider-key-field" for={nameId}>
+          <span>Provider name</span>
+          <input
+            ref={nameInput}
+            id={nameId}
+            value={label}
+            required
+            disabled={disabled}
+            autoComplete="off"
+            maxLength={128}
+            placeholder="My inference provider"
+            aria-invalid={connectionErrorField === "providerName" ? "true" : undefined}
+            aria-describedby={connectionErrorField === "providerName" ? errorId : undefined}
+            onInput={(event) => setLabel(event.currentTarget.value)}
+          />
+        </label>
+        <label class="provider-key-field" for={baseUrlId}>
+          <span>API base URL · HTTPS</span>
+          <input
+            ref={baseUrlInput}
+            id={baseUrlId}
+            type="url"
+            inputMode="url"
+            value={baseUrl}
+            required
+            disabled={disabled}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellcheck={false}
+            placeholder="https://provider.example/v1/"
+            aria-invalid={connectionErrorField === "baseUrl" ? "true" : undefined}
+            aria-describedby={connectionErrorField === "baseUrl" ? errorId : undefined}
+            onInput={(event) => setBaseUrl(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <details ref={advancedSettings} class="provider-auth-contract">
+        <summary>Advanced catalog and API-key settings</summary>
+        <div class="provider-custom-fields provider-custom-fields--advanced">
+          <label class="provider-key-field" for={modelsUrlId}>
+            <span>Model catalog URL · optional</span>
+            <input
+              ref={modelsUrlInput}
+              id={modelsUrlId}
+              type="url"
+              inputMode="url"
+              value={modelsUrl}
+              disabled={disabled}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellcheck={false}
+              placeholder="Defaults to &lt;base URL&gt;/models"
+              aria-invalid={connectionErrorField === "modelsUrl" ? "true" : undefined}
+              aria-describedby={connectionErrorField === "modelsUrl" ? errorId : undefined}
+              onInput={(event) => setModelsUrl(event.currentTarget.value)}
+            />
+          </label>
+          <label class="provider-key-field" for={headerId}>
+            <span>API-key header</span>
+            <input
+              ref={headerInput}
+              id={headerId}
+              value={apiKeyHeader}
+              required
+              disabled={disabled}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellcheck={false}
+              placeholder="Authorization"
+              aria-invalid={connectionErrorField === "apiKeyHeader" ? "true" : undefined}
+              aria-describedby={connectionErrorField === "apiKeyHeader" ? errorId : undefined}
+              onInput={(event) => setApiKeyHeader(event.currentTarget.value)}
+            />
+          </label>
+        </div>
+        <label class="provider-risk-check" for={schemeId}>
+          <input
+            ref={schemeInput}
+            id={schemeId}
+            type="checkbox"
+            checked={rawKey}
+            disabled={disabled}
+            aria-invalid={connectionErrorField === "apiKeyScheme" ? "true" : undefined}
+            aria-describedby={connectionErrorField === "apiKeyScheme" ? errorId : undefined}
+            onChange={(event) => setRawKey(event.currentTarget.checked)}
+          />
+          <span>Send the key as the raw header value instead of prefixing it with <code>Bearer </code>.</span>
+        </label>
+      </details>
+      <label class="provider-key-field" for={keyId}>
+        <span>API key · page memory only</span>
+        <input
+          ref={keyInput}
+          id={keyId}
+          type="password"
+          required
+          autoComplete="off"
+          autoCapitalize="none"
+          inputMode="text"
+          spellcheck={false}
+          aria-invalid={connectionErrorField === "apiKey" ? "true" : undefined}
+          aria-describedby={connectionErrorField === "apiKey" ? `${riskId} ${errorId}` : riskId}
+          disabled={disabled}
+          placeholder="Paste credential"
+          onInput={(event) => setHasKey(Boolean(event.currentTarget.value.trim()))}
+        />
+      </label>
+      <label class="provider-risk-check" id={riskId}>
+        <input
+          type="checkbox"
+          checked={accepted}
+          required
+          disabled={disabled}
+          onChange={(event) => setAccepted(event.currentTarget.checked)}
+        />
+        <span>I understand this tab sends the key directly to the configured API and catalog URLs. Airship does not persist it.</span>
+      </label>
+      <button
+        type="submit"
+        disabled={!online || disabled || !ready}
+        aria-describedby={connectionError && !connectionErrorField ? errorId : undefined}
+      >{busy ? "Connecting…" : "Connect custom endpoint"}</button>
+      {connectionError ? (
+        <p
+          id={errorId}
+          class="provider-fabric__error provider-setup-card__error"
+          role={connectionErrorAlert ? "alert" : undefined}
+        >
+          <Icon name="warning" size={16} />
+          <span>{connectionError} {connectionErrorField
+            ? "Correct the marked field, then try again. The other endpoint settings and credential were kept."
+            : "The endpoint settings and credential were kept so you can correct them."}</span>
+        </p>
+      ) : null}
+    </form>
+  );
 }
 
 function CloudProviderCard({
@@ -563,22 +842,9 @@ function CloudProviderCard({
           : <Icon name="model" size={18} />}
         <div><h4>{provider.label}</h4><span>API key · page memory</span></div>
       </header>
-      {/* The measured sentence answers "is OAuth possible here", and for OpenAI
-          it answers yes — a reviewed public-PKCE client whose token endpoint
-          returns `access-control-allow-origin: *`, so the exchange completes in
-          the page. It does not answer "is it wired into this build", and nothing
-          calls `connectOAuth`: the fabric exposes `connectCloud` and
-          `connectLocal` only. So an operator read a paragraph explaining that
-          sign-in works, found no control for it on the card, and the Connect
-          route two clicks away said the opposite in plain words. The descriptor
-          stays the single source of the first fact; the second is the card's own
-          to state, in the codex lane's wording. */}
       <details class="provider-auth-contract">
-        <summary>Why API key instead of OAuth?</summary>
-        <p>{provider.oauth.detail}</p>
-        {provider.oauth.state === "configured-public-pkce"
-          ? <p>This route connects API keys only — no account sign-in is wired into this build for {provider.label}.</p>
-          : null}
+        <summary>Why a page-memory API key?</summary>
+        <p>No account sign-in flow is wired into this build for {provider.label}. This card accepts an API key, keeps it only in this page, and sends it directly to the provider when needed.</p>
       </details>
       <label class="provider-key-field" for={inputId}>
         <span>{apiKeyMethod.label} · page memory only</span>
@@ -713,6 +979,28 @@ export function providerConnectionCountLabel(count: number): string {
   return `${count} connection${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * What the capability strip says when it has nothing to list.
+ *
+ * One sentence used to answer three different states, and it was wrong in two
+ * of them. A card opens with no model selected, so "The model catalog did not
+ * report capabilities" was the first thing a person read after connecting —
+ * and choosing a model in the picker directly above it, with no reload, then
+ * printed Text input, Text output, Tools and Reasoning from the same catalog
+ * the sentence had just blamed. The screen contradicted itself in one gesture.
+ *
+ * So the strip says which of the three it is: nothing to choose from, nothing
+ * chosen yet, or a chosen model whose catalog entry really did report no
+ * capabilities. The third keeps its original wording, because that state is
+ * the one it was always true of.
+ */
+export function capabilityStripPlaceholder(catalogSize: number, modelChosen: boolean): string {
+  if (catalogSize === 0) return "This connection reported no models";
+  return modelChosen
+    ? "The model catalog did not report capabilities"
+    : "Choose a model to see its reported capabilities";
+}
+
 export function supportedModelCapabilityLabels(
   model: Pick<InferenceModelDescriptor, "capabilities">,
 ): readonly string[] {
@@ -726,15 +1014,85 @@ export function modelOptionDescription(
   model: Pick<InferenceModelDescriptor, "capabilities" | "availability" | "source">,
 ): string {
   const capabilities = supportedModelCapabilityLabels(model);
-  const evidence = modelSourceLabel(model.source.kind);
+  const source = modelSourceLabel(model.source.kind);
   const availability = model.availability.state === "available"
     ? "available"
     : model.availability.state === "unavailable"
       ? "unavailable"
       : "availability unknown";
   return capabilities.length
-    ? `${evidence} · ${availability} · ${capabilities.join(" · ")}`
-    : `${evidence} · ${availability} · no capabilities confirmed by source evidence`;
+    ? `${source} · ${availability} · ${capabilities.join(" · ")}`
+    : `${source} · ${availability} · capabilities not reported`;
+}
+
+/**
+ * Assign a refused custom-provider connection to the control that can correct
+ * it. Local validation has one exact owner. Catalog/network failures keep an
+ * alert summary and only focus a URL when the failed request identifies that
+ * authority. Unknown failures deliberately have no field target, so they can
+ * never fall through to the credential input.
+ */
+export function customProviderErrorRoute(
+  error: unknown,
+  provider: Pick<OpenAiCompatibleProviderInput, "modelsUrl"> = {},
+): CustomProviderErrorRoute {
+  let message = "";
+  let code: unknown;
+  let status: unknown;
+  try {
+    if (error && typeof error === "object") {
+      const candidateMessage = Reflect.get(error, "message");
+      if (typeof candidateMessage === "string") message = candidateMessage.toLowerCase();
+      code = Reflect.get(error, "code");
+      status = Reflect.get(error, "status");
+    }
+  } catch {
+    return Object.freeze({ alertSummary: true });
+  }
+
+  if (/\bprovider name\b/u.test(message)) {
+    return Object.freeze({ field: "providerName", alertSummary: false });
+  }
+  if (/\bprovider models url\b/u.test(message)) {
+    return Object.freeze({ field: "modelsUrl", alertSummary: false });
+  }
+  if (/\bprovider base url\b/u.test(message)) {
+    return Object.freeze({ field: "baseUrl", alertSummary: false });
+  }
+  if (/\bapi-key header(?: name)?\b/u.test(message)) {
+    return Object.freeze({ field: "apiKeyHeader", alertSummary: false });
+  }
+  if (/\bapi-key format\b/u.test(message)) {
+    return Object.freeze({ field: "apiKeyScheme", alertSummary: false });
+  }
+  if (/\binference api key\b/u.test(message)) {
+    return Object.freeze({ field: "apiKey", alertSummary: false });
+  }
+
+  const catalogField: CustomProviderFormField = provider.modelsUrl?.trim()
+    ? "modelsUrl"
+    : "baseUrl";
+  const httpStatus = typeof status === "number"
+    ? status
+    : /\bhttp (\d{3})\b/u.exec(message)?.[1];
+  const parsedStatus = typeof httpStatus === "string" ? Number(httpStatus) : httpStatus;
+  if (parsedStatus === 401 || parsedStatus === 403) {
+    return Object.freeze({ field: "apiKey", alertSummary: true });
+  }
+  if (parsedStatus === 404 || parsedStatus === 405 || parsedStatus === 410) {
+    return Object.freeze({ field: catalogField, alertSummary: true });
+  }
+  if (
+    code === "network-or-cors"
+    || code === "timeout"
+    || code === "invalid-content-type"
+    || code === "invalid-response"
+    || code === "response-too-large"
+    || /could not be reached|catalog response|returned invalid json|model catalog|returned no models|timed out/u.test(message)
+  ) {
+    return Object.freeze({ field: catalogField, alertSummary: true });
+  }
+  return Object.freeze({ alertSummary: true });
 }
 
 export function safeProviderErrorMessage(error: unknown, online: boolean): string {
@@ -773,7 +1131,7 @@ function connectionHealthLabel(
 
 function modelSourceLabel(source: InferenceModelDescriptor["source"]["kind"]): string {
   switch (source) {
-    case "provider-directory": return "Provider directory";
+    case "provider-directory": return "Provider catalog";
     case "local-discovery": return "Local discovery";
     case "live-probe": return "Live probe";
     case "manual": return "Manual metadata";

@@ -4,10 +4,12 @@ import { extname, resolve, sep } from "node:path";
 
 const root = resolve(process.argv[2] ?? "dist");
 const port = boundedPort(process.argv[3] ?? "4193");
+const corsPort = boundedPort(String(port + 1));
 const installDelayMs = boundedDelay(process.argv[4] ?? "0");
 const publicBasePath = normalizedBasePath(process.argv[5] ?? "/");
 const host = "127.0.0.1";
 let workerVersion = 0;
+let workerRedirectMode = "none";
 
 const contentTypes = Object.freeze({
   ".css": "text/css; charset=utf-8",
@@ -33,9 +35,51 @@ const server = createServer(async (request, response) => {
       response.writeHead(204, { "Cache-Control": "no-store" }).end();
       return;
     }
+    if (url.pathname === `${publicBasePath}__airship_test__/worker-redirect`) {
+      const mode = url.searchParams.get("mode") ?? "none";
+      if (!new Set(["none", "same-origin", "cross-origin-cors"]).has(mode)) {
+        response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Invalid worker redirect mode.");
+        return;
+      }
+      workerRedirectMode = mode;
+      response.writeHead(204, { "Cache-Control": "no-store" }).end();
+      return;
+    }
+    if (url.pathname === `${publicBasePath}__airship_test__/redirected-worker.js`) {
+      const payload = Buffer.from("self.__redirectDerivedPrimeKernelWorker = true;\n");
+      response.writeHead(200, {
+        "Cache-Control": "no-store",
+        "Content-Length": payload.byteLength,
+        "Content-Type": "text/javascript; charset=utf-8",
+      });
+      response.end(request.method === "HEAD" ? undefined : payload);
+      return;
+    }
+    if (url.pathname === `${publicBasePath}__airship_test__/cors-worker.js`) {
+      const payload = Buffer.from("self.__crossOriginCorsPrimeKernelWorker = true;\n");
+      response.writeHead(200, {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store",
+        "Content-Length": payload.byteLength,
+        "Content-Type": "text/javascript; charset=utf-8",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+      });
+      response.end(request.method === "HEAD" ? undefined : payload);
+      return;
+    }
     const relativePath = stripPublicBasePath(url.pathname);
     if (relativePath === undefined) {
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found.");
+      return;
+    }
+    if (/^\/assets\/[A-Za-z0-9_-]+\.prime-kernel-worker\.js$/u.test(relativePath) && workerRedirectMode !== "none") {
+      const location = workerRedirectMode === "same-origin"
+        ? `${publicBasePath}__airship_test__/redirected-worker.js`
+        : `http://${host}:${corsPort}${publicBasePath}__airship_test__/cors-worker.js`;
+      response.writeHead(302, {
+        "Cache-Control": "no-store",
+        Location: location,
+      }).end();
       return;
     }
     const requested = resolveRequest(relativePath);
@@ -71,12 +115,36 @@ const server = createServer(async (request, response) => {
   }
 });
 
+const corsServer = createServer((request, response) => {
+  const url = new URL(request.url ?? "/", `http://${host}:${corsPort}`);
+  if (
+    (request.method === "GET" || request.method === "HEAD")
+    && url.pathname === `${publicBasePath}__airship_test__/cors-worker.js`
+  ) {
+    const payload = Buffer.from("self.__crossOriginCorsPrimeKernelWorker = true;\n");
+    response.writeHead(200, {
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+      "Content-Length": payload.byteLength,
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+    });
+    response.end(request.method === "HEAD" ? undefined : payload);
+    return;
+  }
+  response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found.");
+});
+
+corsServer.listen(corsPort, host);
 server.listen(port, host, () => {
   process.stdout.write(`Airship headerless static fixture listening at http://${host}:${port}${publicBasePath}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, () => {
+    corsServer.close();
+    server.close(() => process.exit(0));
+  });
 }
 
 function resolveRequest(pathname) {

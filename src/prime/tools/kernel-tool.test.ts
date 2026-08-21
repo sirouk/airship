@@ -13,7 +13,7 @@ import type { KernelJobResult } from "../kernel/kernel-contract";
 import type { KernelWorkerLike } from "../kernel/kernel-host";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { createPrimeExecuteCodeTool } from "./kernel-tool";
-import { makeToolContext } from "./test-utils";
+import { makeToolContext } from "./test-utils.test-support";
 
 type ScriptedWorker = KernelWorkerLike & {
   emit(message: unknown): void;

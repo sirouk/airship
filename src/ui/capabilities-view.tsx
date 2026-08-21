@@ -14,7 +14,7 @@ import {
 } from "../execution/runtime-registry";
 import { Icon } from "./icons";
 import { RouteHeader } from "./route-header";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import "./capabilities-view.css";
 
 export type CapabilitiesViewProps = Readonly<{
@@ -36,14 +36,14 @@ export type CapabilitiesViewProps = Readonly<{
 }>;
 
 /**
- * Lives here rather than in `seal.tsx` because this surface is its only
- * consumer and `seal.tsx` is reachable from the entry chunk: a mapping only the
+ * Lives here rather than in `status-mark.tsx` because this surface is its only
+ * consumer and `status-mark.tsx` is reachable from the entry chunk: a mapping only the
  * Capabilities route reads should not be paid for at first paint.
  */
-export function sealStateForCapabilitySummary(
+export function statusStateForCapabilitySummary(
   runtimes: readonly Readonly<{ state: string }>[],
   failed = false,
-): SealState {
+): StatusMarkState {
   if (failed) return "failed";
   if (!runtimes.length) return "checking";
   const ready = runtimes.filter(({ state }) => state === "ready").length;
@@ -112,7 +112,7 @@ export function CapabilitiesView({ inspect, inspectBrowser, inspectExtension, su
       />
 
       <div class="capability-summary" role="status">
-        <Seal state={sealStateForCapabilitySummary(runtimes, Boolean(error))} acting={!error && !runtimes.length} label={browser && !error ? `${status} · observed ${formatObservedAt(browser.observedAt)}` : status} detail="Live in-page runtime state." />
+        <StatusMark state={statusStateForCapabilitySummary(runtimes, Boolean(error))} acting={!error && !runtimes.length} label={browser && !error ? `${status} · observed ${formatObservedAt(browser.observedAt)}` : status} detail="Live in-page runtime state." />
         <span>Every effect still follows the active approval policy.</span>
       </div>
       {error ? <div class="capability-error" role="alert"><Icon name="warning" />{error}</div> : null}
@@ -136,7 +136,7 @@ export function CapabilitiesView({ inspect, inspectBrowser, inspectExtension, su
             <div><dt>Provider relay</dt><dd>{extension.providers.length ? extension.providers.join(", ") : "No provider routes"}</dd></div>
             <div><dt>Ciphertext cache</dt><dd>{extension.companion?.storage.state === "available" ? extension.companion.storage.enabled ? "Enabled" : "Available" : "Unavailable"}</dd></div>
             <div><dt>Background compute</dt><dd>{extension.companion?.compute.state === "available" ? extension.companion.compute.operations.join(", ") : "Unavailable"}</dd></div>
-          </dl> : <p>Open Connection to install, enable, or reconnect the Airship Companion, then refresh this probe.</p>}
+          </dl> : <p>Install or enable the Airship Companion from <code>{`${import.meta.env.BASE_URL}extension/`}</code>, then refresh this probe.</p>}
         </DeviceCard>
       </section> : null}
 
@@ -189,7 +189,7 @@ function BrowserCapabilityPanel({ report, onReprobe }: Readonly<{ report: Browse
   return <section class="capability-device" aria-labelledby="device-capability-title">
     <header>
       <div><span class="eyebrow">Live page-memory probe</span><h2 id="device-capability-title">Device acceleration</h2><p>Probes select preferences; each workload reports its active backend.</p></div>
-      <Seal state="asserted" label={`${humanize(report.scheduling.class)} schedule`} detail={report.scheduling.reasons.join(" · ")} compact />
+      <StatusMark state="asserted" label={`${humanize(report.scheduling.class)} schedule`} detail={report.scheduling.reasons.join(" · ")} compact />
     </header>
 
     <dl class="capability-signal-strip" aria-label="Adaptive scheduling signals">
@@ -268,7 +268,7 @@ function DeviceCard({ title, observation, detail, onReprobe, children }: Readonl
   const [state, label] = probePresentation(observation);
   const action = onReprobe ? probeAction(observation, onReprobe) : undefined;
   return <article class={`capability-device-card ${observation.state}`}>
-    <header><div><h3>{title}</h3>{detail ? <small>{detail}</small> : null}</div><Seal state={state} label={label} detail={observation.detail} compact /></header>
+    <header><div><h3>{title}</h3>{detail ? <small>{detail}</small> : null}</div><StatusMark state={state} label={label} detail={observation.detail} compact /></header>
     {children}
     <p>{observation.detail}</p>
     {action ? <button class="capability-probe-action" type="button" onClick={action.onSelect}>{action.label}</button> : null}
@@ -276,10 +276,9 @@ function DeviceCard({ title, observation, detail, onReprobe, children }: Readonl
 }
 
 /**
- * When the rendered report was observed. Local to this pack for the same reason
- * billing-view keeps its own: importing a formatter across a route boundary
- * merges the two chunks the release gate keeps apart. The word and the shape
- * match billing-view's "observed" reading so one vocabulary describes both.
+ * When the rendered report was observed. Kept local so importing a formatter
+ * across a route boundary does not merge chunks that the release gate keeps
+ * separate.
  */
 export function formatObservedAt(value: string): string {
   const parsed = Date.parse(value);
@@ -310,7 +309,7 @@ function connectionLabel(report: BrowserRuntimeCapabilityReport): string {
  * evidences are therefore checked first: both arrive carrying a `failed` or
  * `unavailable` state that would otherwise swallow them.
  */
-export function probePresentation(observation: BrowserCapabilityObservation): readonly [SealState, string] {
+export function probePresentation(observation: BrowserCapabilityObservation): readonly [StatusMarkState, string] {
   if (observation.evidence === "permission-needed") return ["attention", "Permission needed"];
   if (observation.evidence === "disabled") return ["attention", "Switched off here"];
   if (observation.state === "failed") return ["failed", "Probe failed"];
@@ -359,7 +358,7 @@ function RuntimeCard({ runtime, onCommand }: Readonly<{ runtime: ExecutionCapabi
   const boundary = action ? undefined : runtimeBoundary(runtime);
   const [state, label] = runtimePresentation(runtime.state);
   return <article class={`capability-runtime ${runtime.state}`}>
-    <header><span class="capability-runtime__icon"><Icon name={runtimeGlyph(runtime)} /></span><div><h2>{runtime.label}</h2><small>{runtime.languages.join(" · ")}</small></div><Seal state={state} label={label} detail={runtime.detail} size={15} compact /></header>
+    <header><span class="capability-runtime__icon"><Icon name={runtimeGlyph(runtime)} /></span><div><h2>{runtime.label}</h2><small>{runtime.languages.join(" · ")}</small></div><StatusMark state={state} label={label} detail={runtime.detail} size={15} compact /></header>
     {action
       ? <button class="primary" type="button" onClick={() => onCommand(action.command)}>{action.label}<span aria-hidden="true">→</span></button>
       : <p class="capability-runtime__boundary">{boundary!.condition}{boundary!.remedy ? <span>{boundary!.remedy}</span> : null}</p>}
@@ -415,7 +414,7 @@ export function runtimeAction(runtime: ExecutionCapability): Readonly<{ label: s
  * "No action available" is not one fact, and three different worlds used to
  * share one sentence. `activating` has no action precisely because the
  * activation is already running — telling that reader the release advertises no
- * path contradicts the "Activating" seal beside it. A host blocker states a
+ * path contradicts the "Activating" status mark beside it. A host blocker states a
  * condition the reader can usually clear, and carries its own remedy. Only a
  * runtime this release genuinely never shipped earns the release-level
  * sentence, which is the one claim none of the other two may make.
@@ -433,7 +432,7 @@ export function runtimeBoundary(
   return Object.freeze({ condition: "No activation path is advertised by this release." });
 }
 
-function runtimePresentation(state: ExecutionCapability["state"]): readonly [SealState, string] {
+function runtimePresentation(state: ExecutionCapability["state"]): readonly [StatusMarkState, string] {
   if (state === "ready") return ["verified", "Ready"];
   if (state === "installable") return ["asserted", "Available"];
   if (state === "activating") return ["checking", "Activating"];

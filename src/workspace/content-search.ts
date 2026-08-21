@@ -139,7 +139,7 @@ export async function searchWorkspaceContent(
    * on the alphabetically first 512 paths — so `src/**` in a workspace whose
    * assets sort ahead of `src/` selects nothing while reporting a bounded scan.
    * Both backends list with `localeCompare` (src/workspace/memory.ts:34,
-   * src/workspace/indexeddb.ts:60), so the cursor compares the same way the
+   * every production workspace port), so the cursor compares the same way the
    * inventory is ordered rather than with `<`, which disagrees on case.
    */
   const afterCursor = options.cursor

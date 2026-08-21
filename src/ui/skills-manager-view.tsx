@@ -35,8 +35,6 @@ export type SkillsManagerViewProps = Readonly<{
   onApply: (profileId: string) => Promise<ProfileSwitchFailure>;
   /** Opens a conversation pinned to the skill set currently resolved here. */
   onStartConversation: () => Promise<string | undefined>;
-  /** Exact reason the initiating control cannot start a conversation now. */
-  startConversationDisabledReason?: string;
   scope: string;
 }>;
 
@@ -238,7 +236,6 @@ export function SkillsManagerView({
   onDeleteSkill,
   onApply,
   onStartConversation,
-  startConversationDisabledReason,
   scope,
 }: SkillsManagerViewProps) {
   const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId);
@@ -394,8 +391,14 @@ export function SkillsManagerView({
     }
   }
 
-  const conversationStartStatus = startConversationDisabledReason ?? conversationStartFailure;
-
+  /*
+   * Only a failure can put a sentence here now.
+   *
+   * The shell's other producer was “Stop the active turn before starting a new
+   * conversation.”, and turns run per conversation: a new conversation has no
+   * turn of its own to collide with. With nothing left to pre-empt the control,
+   * this surface reports what the attempt actually returned.
+   */
   return (
     <section class="work-view">
       <RouteHeader
@@ -413,17 +416,16 @@ export function SkillsManagerView({
               class="small-button"
               type="button"
               title={`Pins the ${resolvedCount} resolved skills into a new conversation's prompt.`}
-              aria-describedby={conversationStartStatus ? "skill-conversation-start-status" : undefined}
-              disabled={Boolean(startConversationDisabledReason)}
+              aria-describedby={conversationStartFailure ? "skill-conversation-start-status" : undefined}
               onClick={() => void startConversation()}
             >New conversation with this set</button>
           : <button class="small-button" type="button" aria-describedby={profileSwitchFailure ? "skill-profile-switch-failure" : undefined} onClick={() => void applyProfile()}>Switch to {profile.name}</button>}
         <button class="small-button" type="button" onClick={() => setEditorTarget({ mode: "new" })}>New skill</button>
-        {conversationStartStatus ? <p
+        {conversationStartFailure ? <p
           id="skill-conversation-start-status"
-          class={`skills-toolbar-status${conversationStartFailure && !startConversationDisabledReason ? " failure" : ""}`}
-          role={conversationStartFailure && !startConversationDisabledReason ? "alert" : "status"}
-        >{conversationStartStatus}</p> : null}
+          class="skills-toolbar-status failure"
+          role="alert"
+        >{conversationStartFailure}</p> : null}
         {profileSwitchFailure ? <p id="skill-profile-switch-failure" class="profile-switch-failure" role="alert">{profileSwitchFailure}</p> : null}
       </div>
       {/* The wrapper exists only so the effect above has something to align to:

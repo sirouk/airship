@@ -1,7 +1,7 @@
 import type { WebContainer, WebContainerProcess } from "@webcontainer/api";
 import type { NodeWebContainerLifecycleEvent } from "../execution/node-webcontainer-pack";
 import { randomUuid } from "../core/id";
-import { normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
+import { isLocalFolderMountPath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import {
   TERMINAL_METADATA_PATH,
   TERMINAL_WORKSPACE_MOUNT,
@@ -15,6 +15,7 @@ import {
 } from "./contracts";
 import { publishTerminalAuditRecord } from "./audit-sink";
 import {
+  ATTACHED_FOLDER_REFUSAL,
   mountTerminalWorkspace,
   reconcileTerminalWorkspace,
   syncTerminalWorkspace,
@@ -260,7 +261,7 @@ export class BrowserTerminalManager {
       .map(snapshot));
   }
 
-  /** Closed tabs stay available to audit/proof integration until bounded pruning. */
+  /** Closed tabs stay available to local history inspection until bounded pruning. */
   archived(profileId?: string): readonly TerminalSessionSnapshot[] {
     return Object.freeze([...this.sessions.values()]
       .filter((session) => Boolean(session.closedAt) && session.profileId === profileId)
@@ -300,13 +301,17 @@ export class BrowserTerminalManager {
     if (this.sessions.size >= MAX_STORED_SESSIONS) throw new Error(`Terminal metadata supports at most ${MAX_STORED_SESSIONS} retained sessions across profiles. Export or clear older terminal lineage before creating another tab.`);
     const now = new Date().toISOString();
     const id = randomUuid();
+    const cwd = normalizeWorkspacePath(args.cwd ?? "/workspace");
+    // The attached folder is never in the mount, so a tab opened inside it
+    // would start in a directory the shell cannot enter. Say so instead.
+    if (isLocalFolderMountPath(cwd)) throw new Error(`${ATTACHED_FOLDER_REFUSAL} Refused: ${cwd}`);
     const session: MutableSession = {
       id,
       name: boundedName(args.name ?? `Terminal ${scoped.length + 1}`),
       ...(profileId ? { profileId } : {}),
       ...(args.threadId ? { threadId: boundedThread(args.threadId) } : {}),
       origin: boundedOrigin(args.origin ?? { kind: args.threadId ? "conversation" : "terminal-route" }),
-      cwd: normalizeWorkspacePath(args.cwd ?? "/workspace"),
+      cwd,
       status: "idle",
       createdAt: now,
       updatedAt: now,
@@ -746,7 +751,7 @@ export class BrowserTerminalManager {
     const available = this.canReconcile();
     if (available === this.reconcileAvailable) return;
     this.reconcileAvailable = available;
-    for (const listener of this.reconcileListeners) listener(available);
+    for (const listener of this.reconcileListeners) notifyTerminalObserver(listener, available);
   }
 
   /**
@@ -970,7 +975,7 @@ export class BrowserTerminalManager {
   private emitWorkspaceChanges(changed: readonly string[]): void {
     if (!changed.length) return;
     const stable = Object.freeze([...changed]);
-    for (const listener of this.workspaceListeners) listener(stable);
+    for (const listener of this.workspaceListeners) notifyTerminalObserver(listener, stable);
   }
 
   private async pumpOutput(session: MutableSession, process: WebContainerProcess, generation: number): Promise<void> {
@@ -1454,11 +1459,26 @@ export class BrowserTerminalManager {
 
   private emitSession(session: MutableSession): void {
     const value = snapshot(session);
-    for (const listener of this.sessionListeners.get(session.id) ?? []) listener(value);
+    for (const listener of this.sessionListeners.get(session.id) ?? []) notifyTerminalObserver(listener, value);
   }
 
   private emitList(): void {
-    for (const subscription of this.listListeners) subscription.listener(this.list(subscription.profileId));
+    for (const subscription of this.listListeners) {
+      notifyTerminalObserver(subscription.listener, this.list(subscription.profileId));
+    }
+  }
+}
+
+/**
+ * A view that throws while reading terminal state cannot be allowed to stop the
+ * terminal from reaching the rest of its subscribers, or to abort the session
+ * transition that is publishing this snapshot.
+ */
+function notifyTerminalObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control terminal lifecycle.
   }
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonValue, ToolContext, ToolDefinition } from "../core/contracts";
 import { ApprovalBroker } from "./broker";
-import { approvalProvenance, createApprovalModePolicy, type SafetyReviewResult } from "./modes";
+import { approvalProvenance, createApprovalModePolicy } from "./modes";
 
 const writeTool: ToolDefinition = {
   name: "write_file",
@@ -71,49 +71,34 @@ describe("approval modes", () => {
     expect(write).toContain("path confinement");
   });
 
-  it("Auto Approve allows only a structured safe verdict and denies an unsafe verdict", async () => {
+  it("Auto Approve deterministically permits registered write effects without inference", async () => {
     const broker = new ApprovalBroker();
-    const safetyReview = vi.fn(async (_tool: ToolDefinition, _args: JsonValue): Promise<SafetyReviewResult> => ({
-      verdict: "safe" as const,
-      reason: "The write stays inside the revision-bound workspace.",
-      requestId: "review-safe",
-      model: "review-model",
-    }));
-    const policy = createApprovalModePolicy({ mode: "auto-approve", broker, safetyReview });
-    const safeContext = context("safe");
-    await expect(policy.review(writeTool, { path: "notes/a.md" }, safeContext)).resolves.toBe("allow");
-    expect(approvalProvenance(policy, safeContext)).toEqual({
-      mode: "auto-approve",
-      source: "model-review",
-      reason: "The write stays inside the revision-bound workspace.",
-      reviewRequestId: "review-safe",
-      reviewModel: "review-model",
-    });
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const writeContext = context("auto-write");
 
-    safetyReview.mockResolvedValueOnce({ verdict: "unsafe", reason: "Unexpected destructive scope" });
-    const unsafeContext = context("unsafe");
-    await expect(policy.review(writeTool, {}, unsafeContext)).resolves.toBe("deny");
+    await expect(policy.review(writeTool, { path: "notes/a.md" }, writeContext)).resolves.toBe("allow");
+    expect(approvalProvenance(policy, writeContext)).toMatchObject({
+      mode: "auto-approve",
+      source: "bounded-browser-sandbox",
+    });
+    expect(approvalProvenance(policy, writeContext)).toBeUndefined();
     expect(broker.snapshot().pending).toHaveLength(0);
-    expect(approvalProvenance(policy, unsafeContext)).toMatchObject({ source: "model-review" });
   });
 
-  it("Auto Approve fails closed to a human prompt when review is unavailable or malformed", async () => {
+  it("Auto Approve asks a person for execute, network, and identity effects", async () => {
     const broker = new ApprovalBroker();
-    const policy = createApprovalModePolicy({
-      mode: "auto-approve",
-      broker,
-      safetyReview: async () => ({ verdict: "indeterminate", reason: "Malformed structured output." }),
-    });
-    const toolContext = context();
-    const decision = policy.review(writeTool, {}, toolContext);
-    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
-    broker.decide(broker.snapshot().pending[0]!.id, "deny");
-    await expect(decision).resolves.toBe("deny");
-    expect(approvalProvenance(policy, toolContext)).toMatchObject({
-      mode: "auto-approve",
-      source: "human-fallback",
-    });
-    expect(approvalProvenance(policy, toolContext)).toBeUndefined();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    for (const effect of ["execute", "network", "identity"] as const) {
+      const toolContext = context(`auto-${effect}`);
+      const decision = policy.review({ ...writeTool, effect }, {}, toolContext);
+      await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+      broker.decide(broker.snapshot().pending[0]!.id, "deny");
+      await expect(decision).resolves.toBe("deny");
+      expect(approvalProvenance(policy, toolContext)).toMatchObject({
+        mode: "auto-approve",
+        source: "human-fallback",
+      });
+    }
   });
 
   /*
@@ -134,11 +119,144 @@ describe("approval modes", () => {
       await vi.advanceTimersByTimeAsync(11);
       // The gate still fails closed; only the record tells the two apart.
       await expect(decision).resolves.toBe("deny");
-      const reason = approvalProvenance(policy, writeContext)?.reason ?? "";
+      const provenance = approvalProvenance(policy, writeContext);
+      const reason = provenance?.reason ?? "";
       expect(reason).not.toMatch(/denied/iu);
       expect(reason).toMatch(/expired/iu);
+      // The structured field has to agree with the sentence beside it. It said
+      // `human` while the reason said no decision was recorded, and `source` is
+      // what `session-audit.ts` reads and what the transcript labels from.
+      expect(provenance?.source).toBe("unattended");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /*
+   * F3. Auto Approve and Full Access answer for the browser workspace. Neither
+   * of them was ever shown a path that is a real directory on a real disk: the
+   * mount is composed under `WorkspacePort`, and no tool in `src/tools`
+   * distinguishes the two, so a `write_file` to `/workspace/local/…` ran
+   * unprompted, in place, with no undo, and was journaled as being "inside its
+   * declared browser tool boundary".
+   */
+  it("reviews a write to an attached folder in every automatic mode, and says why", async () => {
+    for (const mode of ["auto-approve", "full-access"] as const) {
+      const broker = new ApprovalBroker();
+      const policy = createApprovalModePolicy({ mode, broker });
+      const toolContext = context(`folder-${mode}`);
+      const decision = policy.review(writeTool, { path: "/workspace/local/airship/src/main.ts", content: "x" }, toolContext);
+      await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+      broker.decide(broker.snapshot().pending[0]!.id, "deny");
+      await expect(decision).resolves.toBe("deny");
+      const provenance = approvalProvenance(policy, toolContext);
+      expect(provenance).toMatchObject({ mode, source: "human-fallback" });
+      expect(provenance?.reason).toContain("folder on your own device");
+      expect(provenance?.reason).toContain("nothing here can undo it");
+      expect(provenance?.reason).toContain("every approval mode reviews it");
+      expect(provenance?.reason).not.toContain("browser tool boundary");
+    }
+  });
+
+  it("finds the folder path wherever the tool spells it, and leaves workspace paths alone", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const asked = async (argumentsValue: JsonValue, operationId: string): Promise<boolean> => {
+      const toolContext = context(operationId);
+      const decision = policy.review(writeTool, argumentsValue, toolContext);
+      // `review` reaches the broker synchronously up to its first await, so one
+      // settled microtask is enough to see whether a request was filed at all.
+      await Promise.resolve();
+      const pending = broker.snapshot().pending;
+      if (pending.length > 0) broker.decide(pending[0]!.id, "allow");
+      await expect(decision).resolves.toBe("allow");
+      return pending.length > 0;
+    };
+
+    // Relative, and normalised: `local/x` is the same directory as the absolute form.
+    expect(await asked({ path: "local/notes.md", content: "x" }, "relative")).toBe(true);
+    // A doubled separator normalises into the mount too, and must not slip past.
+    expect(await asked({ path: "/workspace//local/notes.md", content: "x" }, "doubled")).toBe(true);
+    expect(await asked({ sourcePath: "/workspace/a.md", destinationPath: "/workspace/local/a.md" }, "move")).toBe(true);
+    expect(await asked({ edits: [{ path: "/workspace/local/a.md", newText: "x" }] }, "batch")).toBe(true);
+    expect(await asked({ path: "/workspace/notes.md", content: "x" }, "ordinary")).toBe(false);
+  });
+
+  it("still reads an attached folder without asking, because reading it changes nothing", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "auto-approve", broker });
+    const toolContext = context("folder-read");
+    await expect(policy.review({ ...writeTool, effect: "read" }, { path: "/workspace/local/a.md" }, toolContext))
+      .resolves.toBe("allow");
+    expect(broker.snapshot().pending).toHaveLength(0);
+    expect(approvalProvenance(policy, toolContext)).toMatchObject({ source: "automatic-read" });
+  });
+
+  /*
+   * The same defect one step earlier than the expiry above. Three page events
+   * take a live request off the table with nobody asked anything: the approval
+   * dialog's chunk fails to load, the shell unmounts, and a conversation's
+   * approval mode changes under an outstanding prompt. All three reached the
+   * broker's page-wide settle helper — the same one the person's own "Deny
+   * pending request" button reaches — and filed `deny`, so the journal read
+   * `source: "human"` and "Denied without approval" for a question that was
+   * never answered and, for the failed chunk, never shown.
+   */
+  it("records a request the page withdrew as a withdrawal, not as a refusal", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const withdrawnContext = context("withdrawn");
+    const decision = policy.review(writeTool, { path: "a.md" }, withdrawnContext);
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    broker.settleAll("page");
+    // The gate is exactly as closed as it was; only the record changed.
+    await expect(decision).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, withdrawnContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "unattended" });
+    expect(provenance?.reason).toBe("No decision was recorded; the page withdrew this request before anyone answered it.");
+    expect(provenance?.reason).not.toContain("Denied without approval");
+  });
+
+  /*
+   * And the one caller that really is a person keeps saying so. "Deny pending
+   * request" is a refusal on the record, and nothing here may quietly turn it
+   * into "nobody answered" — that would be the same lie pointed the other way.
+   */
+  it("still records the person's own Deny control as a decision they made", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const deniedContext = context("denied");
+    const decision = policy.review(writeTool, { path: "a.md" }, deniedContext);
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    broker.settleAll("human");
+    await expect(decision).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, deniedContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "human" });
+    expect(provenance?.reason).toBe("Denied without approval; the effect did not run.");
+  });
+
+  /*
+   * A page-wide cap that background conversations can fill without the person
+   * seeing anything was journaled as a refusal the person made.
+   */
+  it("never records a queue-full refusal as a decision a person made", async () => {
+    const broker = new ApprovalBroker({ maxPending: 1 });
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const first = policy.review(writeTool, { path: "a.md" }, context("first"));
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    const blockedContext = context("second");
+    await expect(policy.review(writeTool, { path: "b.md" }, blockedContext)).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, blockedContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "unattended" });
+    expect(provenance?.reason).toContain("Nobody was asked");
+    expect(provenance?.reason).toContain("most approval requests it allows at once");
+    expect(provenance?.reason).toContain("Answer the requests that are waiting");
+    expect(provenance?.reason).not.toContain("Denied without approval");
+
+    broker.decide(broker.snapshot().pending[0]!.id, "deny");
+    await first;
   });
 });

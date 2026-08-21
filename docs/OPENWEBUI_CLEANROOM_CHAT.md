@@ -36,7 +36,7 @@ Airship maps those behaviors onto different invariants:
 | Server draft | Session-scoped `sessionStorage` draft; no credential or attachment bytes persist |
 | Message queue | Page-memory, per-conversation queue; attachments remain `File` handles in the tab |
 | Regenerate/edit | Retry in place or create an immutable conversation branch before resubmission |
-| Tool/reasoning rendering | Durable `MessagePart` projections with proof-bearing source facts |
+| Tool/reasoning rendering | Durable `MessagePart` projections with source-backed facts |
 | Backend persistence | Local Device, Google Drive, or S3 Vault adapters behind the shared encrypted interfaces |
 
 ## Clean-room constraints

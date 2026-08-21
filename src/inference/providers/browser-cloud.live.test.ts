@@ -12,12 +12,12 @@
  * Each vendor is skipped unless its key is supplied through the environment;
  * the credential is never written to a file, fixture, or assertion message.
  */
+import { ANTHROPIC_PROVIDER, OPENAI_PROVIDER, XAI_PROVIDER } from "./official-providers";
 import { describe, expect, it } from "vitest";
 import type { InferenceEvent, InferenceRequest, ToolDefinition } from "../../core/contracts";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
-  XaiBrowserTransport,
+  ResponsesBrowserTransport,
 } from "./browser-cloud";
 
 const OPENAI_KEY = process.env.AIRSHIP_OPENAI_API_KEY?.trim();
@@ -41,7 +41,7 @@ describeOpenAi("live OpenAI Responses wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.openai.com/v1/models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload", async () => {
+  it("completes the toolless toolless request payload", async () => {
     expect(await finishReasonOf(openAi(), probeRequest(OPENAI_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -57,7 +57,7 @@ describeAnthropic("live Anthropic Messages wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.anthropic.com/v1/models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload", async () => {
+  it("completes the toolless toolless request payload", async () => {
     expect(await finishReasonOf(anthropic(), probeRequest(ANTHROPIC_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -84,7 +84,7 @@ describeXai("live xAI wire contract", () => {
     expect(models[0]?.source.sourceUrl).toBe("https://api.x.ai/v1/language-models");
   }, TIMEOUT_MS);
 
-  it("completes the toolless activation probe payload against /v1/responses", async () => {
+  it("completes the toolless toolless request payload against /v1/responses", async () => {
     expect(await finishReasonOf(xai(), probeRequest(XAI_MODEL))).toBeDefined();
   }, TIMEOUT_MS);
 
@@ -93,8 +93,8 @@ describeXai("live xAI wire contract", () => {
   }, TIMEOUT_MS);
 });
 
-function openAi(): OpenAiBrowserTransport {
-  return new OpenAiBrowserTransport({
+function openAi(): ResponsesBrowserTransport {
+  return new ResponsesBrowserTransport(OPENAI_PROVIDER, {
     connectionId: "openai-live-gate",
     connectionGeneration: 1,
     getApiKey: () => OPENAI_KEY!,
@@ -102,15 +102,15 @@ function openAi(): OpenAiBrowserTransport {
 }
 
 function anthropic(): AnthropicBrowserTransport {
-  return new AnthropicBrowserTransport({
+  return new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
     connectionId: "anthropic-live-gate",
     connectionGeneration: 1,
     getApiKey: () => ANTHROPIC_KEY!,
   });
 }
 
-function xai(): XaiBrowserTransport {
-  return new XaiBrowserTransport({
+function xai(): ResponsesBrowserTransport {
+  return new ResponsesBrowserTransport(XAI_PROVIDER, {
     connectionId: "xai-live-gate",
     connectionGeneration: 1,
     getApiKey: () => XAI_KEY!,
@@ -128,7 +128,7 @@ const REPORT_STATUS: ToolDefinition = {
   effect: "read",
 };
 
-/** Byte-for-byte the shape fabric.ts verifyInvocation sends: no tools at all. */
+/** Byte-for-byte the shape the provider transport contract sends: no tools at all. */
 function probeRequest(model: string): InferenceRequest {
   const requestId = crypto.randomUUID();
   return {

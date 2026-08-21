@@ -1,6 +1,5 @@
-import type { SealState } from "./seal";
+import type { StatusMarkState } from "./status-mark";
 import {
-  accessLaneForProvider,
   accessReconnectHash,
   type AccessReconnectMethod,
 } from "./access-intent";
@@ -76,7 +75,7 @@ export function sessionEventCount(headSequence: number): string {
 }
 
 /** Ranked worst-first, so a row of pills can be reduced to one verdict. */
-const INTEGRITY_SEVERITY: Readonly<Record<SealState, number>> = Object.freeze({
+const INTEGRITY_SEVERITY: Readonly<Record<StatusMarkState, number>> = Object.freeze({
   failed: 5,
   attention: 4,
   stale: 3,
@@ -88,7 +87,7 @@ const INTEGRITY_SEVERITY: Readonly<Record<SealState, number>> = Object.freeze({
 
 export type SessionIntegrityPill = Readonly<{
   key: "structure" | "resume" | "receipts";
-  state: SealState;
+  state: StatusMarkState;
   /** The visible word. Never a raw enum. */
   label: string;
   /** The sentence the pill carries into the expansion, verbatim from source. */
@@ -98,7 +97,7 @@ export type SessionIntegrityPill = Readonly<{
 export type SessionIntegrityRow = Readonly<{
   pills: readonly SessionIntegrityPill[];
   /** Worst of the two verdict pills; the receipt count is a figure, not a verdict. */
-  state: SealState;
+  state: StatusMarkState;
   /**
    * Fail open. A row that is not entirely green opens itself, so a problem is
    * never one click away — collapse is only ever allowed to hide agreement.
@@ -108,6 +107,24 @@ export type SessionIntegrityRow = Readonly<{
   label: string;
 }>;
 
+export type SessionReceiptAssessment = Readonly<{
+  scope: string;
+  digestRecomputed: boolean;
+  authenticity: string;
+}>;
+
+export function sessionReceiptAssessmentDetail(
+  assessment: SessionReceiptAssessment,
+): string {
+  const scope = assessment.scope === "structural-linkage-only"
+    ? "Structural linkage only"
+    : assessment.scope.replaceAll("-", " ");
+  const authenticity = assessment.authenticity === "not-proven"
+    ? "not proven"
+    : assessment.authenticity.replaceAll("-", " ");
+  return `${scope} · digests ${assessment.digestRecomputed ? "recomputed" : "not recomputed"} · authenticity ${authenticity}`;
+}
+
 export type SessionIntegrityInput = Readonly<{
   history: Readonly<{
     status: "consistent" | "incomplete" | "suspect" | string;
@@ -116,6 +133,7 @@ export type SessionIntegrityInput = Readonly<{
     totalEvents: number;
     turnCount: number;
   }>;
+  verification: SessionReceiptAssessment;
   receiptCount: number;
   lifecycle: Readonly<{ state: string; label: string }>;
   compatibility?: Readonly<{ action: string; label: string }>;
@@ -155,7 +173,7 @@ export type SessionIntegrityInput = Readonly<{
 export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegrityRow {
   // Nothing was said here, so nothing about it was proved. See `messageCount`.
   const unused = input.messageCount === 0 && input.history.turnCount === 0;
-  const structureState: SealState = unused
+  const structureState: StatusMarkState = unused
     ? "none"
     : input.history.status === "consistent"
       ? "verified"
@@ -169,7 +187,7 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
     detail: `${input.history.checkedEvents} of ${input.history.totalEvents} events inspected · ${input.history.turnCount} turn${input.history.turnCount === 1 ? "" : "s"}`,
   });
 
-  const resumeState: SealState = input.transcriptReplayFailed
+  const resumeState: StatusMarkState = input.transcriptReplayFailed
     ? "attention"
     : unused
       // Openable, but there is nothing in it to bring back, and a green
@@ -194,7 +212,7 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
         ? "Empty conversation"
         : input.compatibility?.label ?? "No active runtime",
     detail: input.transcriptReplayFailed
-      ? `History verified · ${input.lifecycle.label}`
+      ? `History check passed · ${input.lifecycle.label}`
       : input.lifecycle.label,
   });
 
@@ -204,7 +222,7 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
     key: "receipts",
     state: "none",
     label: `${input.receiptCount} receipt${input.receiptCount === 1 ? "" : "s"}`,
-    detail: "Structural linkage only · digests not recomputed · authenticity not proven",
+    detail: sessionReceiptAssessmentDetail(input.verification),
   });
 
   const state = INTEGRITY_SEVERITY[structureState] >= INTEGRITY_SEVERITY[resumeState] ? structureState : resumeState;
@@ -234,7 +252,7 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
       || input.history.checkedEvents < input.history.totalEvents
       || (input.compatibility !== undefined && input.compatibility.action !== "resume")
     ),
-    label: `Session integrity. ${structure.label}. ${resume.label}. ${receipts.label}. Opens the inspected event counts, the runtime decision and its reasons, and the proof scope.`,
+    label: `Session integrity. ${structure.label}. ${resume.label}. ${receipts.label}. Opens the local inspection details: inspected event counts, the runtime decision and its reasons, and receipt details. Receipt assessment: ${receipts.detail}.`,
   });
 }
 
@@ -526,9 +544,9 @@ type ReconnectRuntime = Readonly<{
 /**
  * The model as a person says it.
  *
- * `zai-org/GLM-5.2-TEE` is one model with an org prefix, and the button that
- * names it is competing for a 44px row on a 390px phone. The full id is not
- * lost — the pinned/active table below prints it unabbreviated, which is where
+ * `provider/model-name` is one model with a prefix, and the button that names
+ * it is competing for a 44px row on a 390px phone. The full id is not lost —
+ * the pinned/active table below prints it unabbreviated, which is where
  * comparing two ids is the point.
  */
 function shortModelName(model: string): string {
@@ -536,7 +554,7 @@ function shortModelName(model: string): string {
   return tail || model;
 }
 
-/** `Chutes · GLM-5.2-TEE` — the label the lane and the model make together. */
+/** `Provider · model-name` — the label the route and the model make together. */
 function routeLabel(providerLabel: string, model: string): string {
   return `${providerLabel} · ${shortModelName(model)}`;
 }
@@ -609,10 +627,8 @@ export function sessionReconnectPlan(input: Readonly<{
 
   const connectionOnly = codes.every((code) => RECONNECTABLE_CODES.has(code));
   const nouns = codes.map(reasonNoun);
-  const lane = accessLaneForProvider(pins.inferenceBinding.providerId);
-  if (!lane) return undefined;
   const href = accessReconnectHash({
-    lane,
+    providerId: pins.inferenceBinding.providerId,
     method: pins.inferenceBinding.authMethod,
     model: pins.inferenceBinding.modelId,
     connectionId: pins.inferenceBinding.connectionId,

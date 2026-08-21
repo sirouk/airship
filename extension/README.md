@@ -11,8 +11,9 @@ Airship is a static page. Two providers cannot be reached from a page at all:
 
 This extension is the smallest transport that can reach both while keeping every
 secret on the device. It relays five fixed URL prefixes for one Airship origin.
-It does **not** create a provider OAuth grant: provider account controls remain
-unavailable until an Airship-usable registration and controller are reviewed.
+It does **not** create a provider OAuth grant or expose provider account
+controls. The stock product uses browser-direct API keys. This relay can carry
+only authority that a configured integration already obtained.
 
 The same companion also offers an opt-in, ciphertext-only IndexedDB acceleration
 cache and bounded background hashing/vector ranking. Those services use a
@@ -244,10 +245,11 @@ containing-app project, so there is no second copy of the boundary to drift.
 declarativeNetRequest header rewriting nor blocking `webRequest`. `User-Agent`
 therefore cannot be rewritten, so:
 
-- **xAI transport is available.** It needs no override, but Airship still needs
-  a reviewed provider grant/controller before account authorization is offered.
-- **Anthropic reports unavailable**, with the reason, and Airship must not
-  offer it. Anthropic **API keys** are unaffected — they never use the bridge.
+- **xAI grant transport is reachable.** It needs no override, but the stock
+  setup does not invoke it. A configured integration may supply authority it
+  already obtained.
+- **Anthropic grant transport reports unavailable**, with the reason. Anthropic
+  **API keys** are unaffected — they never use the bridge.
 
 That report comes from what the worker observed at runtime, not from the
 browser's name. The Safari manifest withholds the permission (there is none to

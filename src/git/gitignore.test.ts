@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryWorkspace } from "../workspace/memory";
 import { BrowserGitClient } from "./client";
-import { MemoryGitAdapter } from "./memory-adapter";
+import { MemoryGitAdapter } from "./memory-adapter.test-support";
 import { WorkspaceGitAdapter } from "./workspace-adapter";
 
 const signal = new AbortController().signal;

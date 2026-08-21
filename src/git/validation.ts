@@ -31,21 +31,17 @@ export const GIT_LIMITS = Object.freeze({
 });
 
 /**
- * Exact origins this build's shipped Content-Security-Policy `connect-src`
- * permits for Git Smart HTTP, beyond `'self'`. index.html and public/_headers
- * name `api.github.com` and `raw.githubusercontent.com` — both REST/CDN hosts
- * used by the snapshot importer, neither of which serves `/info/refs` — so no
- * cross-origin Git host is reachable from the page at all. The list stays empty
- * until a Git host is added to the policy; src/git/validation.test.ts pins it
- * against the two shipped policy documents so the two cannot drift apart.
+ * Exact origins this build's Git subsystem permits for direct Smart HTTP,
+ * beyond the page's own origin. Provider egress is intentionally dynamic, but
+ * Git stays on a separate fail-closed allowlist because repository requests
+ * and credential prompts are a different authority boundary.
  */
 export const GIT_REMOTE_CONNECT_ORIGINS: readonly string[] = Object.freeze([]);
 
 /**
- * The page's own origin is reachable through `connect-src 'self'`, so a Git
- * remote served beside Airship is genuinely usable. A host without a document
- * origin (Node, a test runner) cannot prove any origin is permitted, so it
- * contributes nothing and every cross-origin remote fails closed.
+ * A Git remote served beside Airship is usable without cross-origin authority.
+ * A host without a document origin contributes nothing and every remote fails
+ * closed unless it appears in the explicit Git allowlist.
  */
 export function gitRemoteConnectOrigins(): readonly string[] {
   const page = pageOrigin();
@@ -57,20 +53,15 @@ export function pageOrigin(): string | undefined {
   return typeof candidate === "string" && candidate && candidate !== "null" ? candidate : undefined;
 }
 
-/**
- * Fail before the request leaves the adapter. A CSP block and a remote CORS
- * refusal both surface as an opaque `TypeError: Failed to fetch`, so without
- * this gate Airship would blame the remote for a decision its own page policy
- * made.
- */
+/** Fail before a remote outside the explicit Git egress policy is contacted. */
 export function assertRemoteOriginPermitted(url: string, operation: "clone" | "fetch" | "push"): string {
   const origin = new URL(validateRemoteUrl(url)).origin;
   const permitted = gitRemoteConnectOrigins();
   if (permitted.includes(origin)) return origin;
   throw new GitDomainError(
     "remote-origin-not-permitted",
-    `Airship's own Content-Security-Policy blocks a direct Git ${operation} to ${origin}; the request was never sent. `
-    + `This build permits Git Smart HTTP only to ${permitted.length ? permitted.join(", ") : "no origin at all — not even its own, because this host has no document origin"}. `
+    `Airship's Git remote policy blocks a direct Git ${operation} to ${origin}; the request was never sent. `
+    + `This build permits Git Smart HTTP only to ${permitted.length ? permitted.join(", ") : "no origin at all — this host has no document origin and its Git allowlist is empty"}. `
     + "github.com and gitlab.com are not permitted and grant no CORS on their Git endpoints regardless. "
     + "Use the GitHub snapshot importer, which reads api.github.com and raw.githubusercontent.com.",
   );

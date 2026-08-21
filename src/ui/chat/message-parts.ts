@@ -1,6 +1,6 @@
 import type { ApprovalProvenance, JsonValue, SessionManifest } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
-import { canonicalImageInputs } from "../../core/multimodal";
+import { canonicalImageInputs } from "../../core/multimodal-contract";
 import { parseCapabilityTier } from "./capability-tier";
 
 export const MESSAGE_PART_KINDS = [
@@ -118,6 +118,7 @@ export const TOOL_AUTHORITY_LABELS: Readonly<Record<ApprovalProvenance["source"]
   "model-review": "Model review",
   "bounded-browser-sandbox": "Full Access",
   "automatic-read": "Read-only, automatic",
+  unattended: "Refused, nobody asked",
 });
 
 const TOOL_AUTHORITY_MODES: ReadonlySet<string> = new Set<ApprovalProvenance["mode"]>([

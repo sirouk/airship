@@ -28,8 +28,6 @@ const allViews: readonly NavigationView[] = [
   "capabilities",
   "skills",
   "vault",
-  "billing",
-  "proof",
   "access",
 ];
 
@@ -40,16 +38,15 @@ describe("canonical navigation model", () => {
       "workspace",
       "memory",
       "profiles",
-      "proof",
       "vault",
       "access",
     ]);
-    expect(CANONICAL_DESTINATIONS).toHaveLength(7);
+    expect(CANONICAL_DESTINATIONS).toHaveLength(6);
 
     const chat = CANONICAL_DESTINATIONS.find((entry) => entry.id === "chat");
     const workspace = CANONICAL_DESTINATIONS.find((entry) => entry.id === "workspace");
     const profiles = CANONICAL_DESTINATIONS.find((entry) => entry.id === "profiles");
-    const connection = CANONICAL_DESTINATIONS.find((entry) => entry.id === "access");
+    const providers = CANONICAL_DESTINATIONS.find((entry) => entry.id === "access");
     expect(chat?.nested).toEqual([
       // `global` here was the parent-agnostic default, and the palette prints
       // the tag verbatim: the route enforces profile scope, so the tag has to.
@@ -66,12 +63,12 @@ describe("canonical navigation model", () => {
       expect.objectContaining({ id: "skills", label: "Skills", hash: "#skills" }),
       expect.objectContaining({ id: "capabilities", label: "Capabilities", hash: "#capabilities" }),
     ]);
-    expect(connection?.nested).toEqual([
-      expect.objectContaining({ id: "billing", label: "Account", hash: "#account" }),
-    ]);
+    // The provider surface is one destination with nothing filed under it:
+    // the retired Account route folded into it rather than nesting below it.
+    expect(providers?.nested).toEqual([]);
     expect(canonicalParentForView("skills")).toBe("profiles");
     expect(canonicalParentForView("capabilities")).toBe("profiles");
-    expect(canonicalParentForView("billing")).toBe("access");
+    expect(canonicalParentForView("access")).toBe("access");
     expect(canonicalParentForView("sessions")).toBe("chat");
     expect(canonicalParentForView("editor")).toBe("workspace");
     expect(canonicalParentForView("terminal")).toBe("workspace");
@@ -80,32 +77,30 @@ describe("canonical navigation model", () => {
 
   it("emits label-aligned hashes and preserves legacy route aliases", () => {
     for (const view of allViews) {
-      const expectedHash = view === "access" ? "#connection" : view === "billing" ? "#account" : `#${view}`;
+      const expectedHash = view === "access" ? "#connection" : `#${view}`;
       expect(navigationHashForView(view)).toBe(expectedHash);
       expect(navigationViewFromHash(expectedHash)).toBe(view);
       expect(navigationViewFromHash(`${expectedHash}?selection=current`)).toBe(view);
     }
     expect(navigationViewFromHash("#access")).toBe("access");
-    expect(navigationViewFromHash("#billing")).toBe("billing");
     expect(navigationViewFromHash("#sources")).toBe("editor");
-    expect(navigationViewFromHash("#attestations")).toBe("proof");
     expect(navigationViewFromHash("#chat/018f40e0-7c62-7c70-9db7-6d5de37ae52c")).toBe("chat");
     expect(navigationViewFromHash("#unknown")).toBe("chat");
   });
 
   it("defines five fixed mobile controls with conversations available through More", () => {
-    // Memory before Trust, and in the band rather than behind the overflow
+    // Memory before Providers, and in the band rather than behind the overflow
     // glyph. The slot it takes was the live-load reading's, which counted
     // execution-pack runs and therefore read `0 · Idle` on a phone forever.
     expect(MOBILE_PRIMARY_CONTROLS).toEqual([
       { id: "chat", label: "Chat", kind: "route", view: "chat" },
       { id: "workspace", label: "Workspace", kind: "route", view: "workspace" },
       { id: "memory", label: "Memory", kind: "route", view: "memory" },
-      { id: "trust", label: "Trust", kind: "route", view: "proof" },
+      { id: "providers", label: "Providers", kind: "route", view: "access" },
       { id: "more", label: "More", kind: "overlay", overlay: "more" },
     ]);
     expect(MOBILE_PRIMARY_CONTROLS).toHaveLength(5);
-    expect(mobilePrimaryControlForView("proof")).toBe("trust");
+    expect(mobilePrimaryControlForView("access")).toBe("providers");
     expect(mobilePrimaryControlForView("memory")).toBe("memory");
   });
 
@@ -122,13 +117,9 @@ describe("canonical navigation model", () => {
       profiles: "more",
       capabilities: "more",
       skills: "more",
-      // Trust is #proof and nothing else. These three are More's rows, and a
-      // phone on #account used to light Trust — a section that neither holds
-      // the route nor leads back to it — while More read inactive.
+      // Vault stays behind More; the provider surface owns the band's own track.
       vault: "more",
-      billing: "more",
-      access: "more",
-      proof: "trust",
+      access: "providers",
     });
   });
 
@@ -145,7 +136,6 @@ describe("canonical navigation model", () => {
       "capabilities",
       "vault",
       "access",
-      "billing",
       "settings",
     ]);
     expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "skills")).toEqual(
@@ -154,8 +144,8 @@ describe("canonical navigation model", () => {
     expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "capabilities")).toEqual(
       expect.objectContaining({ parent: "profiles", label: "Capabilities", hash: "#capabilities", description: "Detected device and runtime support" }),
     );
-    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "billing")).toEqual(
-      expect.objectContaining({ parent: "access", label: "Account", hash: "#account" }),
+    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "access")).toEqual(
+      expect.objectContaining({ label: "Providers", hash: "#connection" }),
     );
     expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "sessions")).toEqual(
       expect.objectContaining({ parent: "chat", label: "All conversations", hash: "#sessions", description: "Search and resume past chats" }),
@@ -261,19 +251,14 @@ describe("a destination is called one thing, on the way in and after arrival", (
   it("finds the route headings it is meant to police", () => {
     // Without this the assertion below passes on an empty scan, which is how a
     // naming contract quietly stops being one.
-    expect(headings.length).toBeGreaterThanOrEqual(10);
-    expect(headings.map((heading) => heading.view)).toContain("access");
-    expect(headings.map((heading) => heading.view)).toContain("billing");
+    expect(headings.length).toBeGreaterThanOrEqual(8);
+    expect(headings.map((heading) => heading.view)).toContain("profiles");
   });
 
   it("titles every route with its canonical destination label", () => {
     /*
-     * The two that renamed themselves on arrival: the rail row, the command
-     * palette, the Trust hub tab and the More sheet all read "Connection" and
-     * "Account" from `CANONICAL_DESTINATIONS`, and the pages under them read
-     * "Connect models" and "Account standing". A person taps a word and has to
-     * land on a screen that contains it. Both extra phrases survive — in the
-     * eyebrow, which is the rung that exists for a route's second line.
+     * Every surface reads destination names from `CANONICAL_DESTINATIONS`.
+     * A person taps a word and has to land on a screen that contains it.
      */
     const disagreements = headings
       .filter((heading) => heading.title !== destinationLabel(heading.view))
@@ -291,10 +276,10 @@ describe("a destination is called one thing, on the way in and after arrival", (
   it("leaves only the views that draw no route heading at all uncovered", () => {
     const covered = new Set<NavigationView>([...headings.map((heading) => heading.view), "workspace", "editor"]);
     const uncovered = allViews.filter((view) => !covered.has(view));
-    // Chat is the conversation itself and carries no route heading; Vault still
-    // hand-rolls its `<h1>`. A bound rather than a list: the next route to
-    // adopt the shared header must not turn this test red.
-    expect(uncovered.length, `uncovered: ${uncovered.join(", ")}`).toBeLessThanOrEqual(2);
+    // Chat is the conversation itself and carries no route heading; Vault and
+    // Providers still hand-roll their `<h1>`. A bound rather than a list: the
+    // next route to adopt the shared header must not turn this test red.
+    expect(uncovered.length, `uncovered: ${uncovered.join(", ")}`).toBeLessThanOrEqual(3);
   });
 });
 
@@ -307,14 +292,13 @@ describe("the rail's filing", () => {
     // had nothing above it to be distinguished from, "Agent" was a group of
     // one, and this product shows receipts rather than asking for trust.
     expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Work");
-    expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Trust");
-    expect(RAIL_SECTIONS[0]?.rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory", "proof"]);
-    expect(RAIL_SECTIONS[1]?.rows.map((row) => row.id)).toEqual(["vault", "access", "billing"]);
+    expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Setup");
+    expect(RAIL_SECTIONS[0]?.rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory"]);
+    expect(RAIL_SECTIONS[1]?.rows.map((row) => row.id)).toEqual(["vault", "access"]);
   });
 
-  it("un-nests Account and keeps Workspace as the one correct nesting", () => {
-    expect(rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory", "proof", "vault", "access", "billing"]);
-    expect(rows.find((row) => row.id === "billing")?.hash).toBe("#account");
+  it("keeps Workspace as the one correct nesting", () => {
+    expect(rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory", "vault", "access"]);
     expect(rows.flatMap((row) => row.nested.map((nested) => nested.id))).toEqual(["editor", "terminal"]);
   });
 
@@ -335,9 +319,9 @@ describe("the rail's filing", () => {
   });
 
   it("walks the visual order, folding nested rows in only while their parent is open", () => {
-    expect(railTraversal({})).toEqual(["chat", "workspace", "memory", "proof", "vault", "access", "billing"]);
+    expect(railTraversal({})).toEqual(["chat", "workspace", "memory", "vault", "access"]);
     expect(railTraversal({ workspace: true })).toEqual([
-      "chat", "workspace", "editor", "terminal", "memory", "proof", "vault", "access", "billing",
+      "chat", "workspace", "editor", "terminal", "memory", "vault", "access",
     ]);
     // A collapsed parent must not leave its children in the arrow-key order:
     // focus would move to a row nobody can see.

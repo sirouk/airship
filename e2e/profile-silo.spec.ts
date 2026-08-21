@@ -43,15 +43,11 @@ test("Profile is the primary A → B → A cockpit silo while global services st
         if (!shell || document.querySelector(".profile-cockpit-transition")) return;
         const profile = shell.dataset.activeProfile;
         const sessionProfile = shell.dataset.sessionProfile;
+        // A route may hold an unresolved conversation address as intent, but
+        // the mounted cockpit may never combine one Profile with another
+        // Profile's active conversation.
         if (profile && sessionProfile && profile !== sessionProfile) {
           (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`${profile}:${sessionProfile}`);
-        }
-        const proofSession = shell.dataset.proofSession;
-        const mappedProofProfile = proofSession
-          ? (window as typeof window & { __airshipSessionProfiles?: Record<string, string> }).__airshipSessionProfiles?.[proofSession]
-          : undefined;
-        if (location.hash.startsWith("#proof") && profile && mappedProofProfile && mappedProofProfile !== profile) {
-          (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`proof:${profile}:${mappedProofProfile}`);
         }
       }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
     };
@@ -65,12 +61,6 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
   const alphaUrl = page.url();
   const alphaSessionId = alphaUrl.split("#chat/")[1]!;
-  await page.evaluate((sessionId) => {
-    (window as typeof window & { __airshipSessionProfiles?: Record<string, string> }).__airshipSessionProfiles = {
-      [sessionId]: "general",
-    };
-  }, alphaSessionId);
-
   await renameConversation(page, ALPHA_TITLE);
   await createScrollableTranscript(page);
   const transcript = page.locator(".transcript");
@@ -106,13 +96,15 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await openMemoryIndex(page);
   await expect.poll(() => alphaIndex.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
 
-  await openPrimary(page, "Proof");
-  await expectProofSession(page, alphaSessionId);
+  // The retired standalone audit route is not a second session authority. The
+  // Profile-scoped Sessions library carries this conversation's bounded
+  // transcript and local trace count without widening the cockpit.
+  await expectSessionDetails(page, alphaSessionId);
 
   // These services are deliberately outside the Profile silo. Their rail rows
   // retain the global scope and their page authority is not duplicated under A.
   const primary = page.getByRole("navigation", { name: "Primary" });
-  for (const globalDestination of ["Vault", "Connection", "Account"] as const) {
+  for (const globalDestination of ["Vault", "Providers"] as const) {
     await expect(primary.getByRole("button", { name: globalDestination, exact: true })).toHaveAttribute("data-scope", "global");
   }
 
@@ -121,10 +113,6 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
   const betaUrl = page.url();
   const betaSessionId = betaUrl.split("#chat/")[1]!;
-  await page.evaluate((sessionId) => {
-    const scope = window as typeof window & { __airshipSessionProfiles?: Record<string, string> };
-    scope.__airshipSessionProfiles = { ...scope.__airshipSessionProfiles, [sessionId]: "research" };
-  }, betaSessionId);
   expect(betaUrl).not.toBe(alphaUrl);
   await expect(composer).toHaveValue("");
 
@@ -193,28 +181,39 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect.poll(() => page.locator("#memory-index").evaluate((element: HTMLDetailsElement) => element.open)).toBe(false);
   await betaQuery.fill(BETA_MEMORY_QUERY);
 
-  await openPrimary(page, "Proof");
-  await expectProofSession(page, betaSessionId);
-  await expect(page.getByText(alphaSessionId, { exact: true })).toHaveCount(0);
+  await expectSessionDetails(page, betaSessionId);
+  await expect(page.locator(`.session-library-row[data-session-id="${alphaSessionId}"]`)).toHaveCount(0);
 
-  // A copied Proof UUID is likewise only an address, not authorization. Until
-  // ownership is verified the route renders B's safe fallback; a General ID
-  // is then canonicalized away without exposing its audit/session metadata.
+  // A copied conversation UUID is an address, not authorization. The current
+  // Chat route keeps an unresolved durable address as intent, but it must not
+  // materialize General's transcript under Research's cockpit authority.
   await page.evaluate((sessionId) => {
-    window.location.hash = `proof?session=${encodeURIComponent(sessionId)}`;
+    window.location.hash = `chat/${encodeURIComponent(sessionId)}`;
   }, alphaSessionId);
-  await expect(page).toHaveURL(new RegExp(`#proof\\?session=${betaSessionId}$`, "u"));
-  await expectProofSession(page, betaSessionId);
-  await expect(page.getByText(alphaSessionId, { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`#chat/${alphaSessionId}$`, "u"));
+  await expect(shell).toHaveAttribute("data-active-profile", "research");
+  await expect(shell).toHaveAttribute("data-session-profile", "research");
+  // The silo answers by name now: an address from another cockpit says which
+  // cockpit owns it and what the two ways forward are, rather than reporting a
+  // generic unavailable link.
+  await expect(page.locator(".composer-notice"))
+    .toContainText(/belongs to the General profile|conversation link is not available|Fork required/u);
+  await expect(page.locator(".transcript")).not.toContainText("Profile silo transcript turn 1");
+  await expect(page.getByText(ALPHA_TITLE, { exact: true })).toHaveCount(0);
+
+  // Return to Research's own address before checking the global surfaces.
+  await page.evaluate((sessionId) => {
+    window.location.hash = `chat/${encodeURIComponent(sessionId)}`;
+  }, betaSessionId);
+  await expect(page).toHaveURL(betaUrl);
+  await expect(composer).toHaveValue(BETA_DRAFT);
 
   // The same global service pages remain mounted from one global authority;
   // changing Profile never creates a profile-local copy or alters their scope.
   await openPrimary(page, "Vault");
   await expect(page.getByRole("heading", { name: "Vault", level: 1 })).toBeVisible();
-  await openPrimary(page, "Connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
-  await openPrimary(page, "Account");
-  await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
+  await openPrimary(page, "Providers");
+  await expect(page.getByRole("region", { name: "Cloud and local models" })).toBeVisible();
 
   stage = "switch to general";
   await selectProfile(page, "General", "general");
@@ -248,9 +247,8 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(page.getByRole("searchbox", { name: "Search every memory surface" })).toHaveValue(ALPHA_MEMORY_QUERY);
   await expect.poll(() => page.locator("#memory-index").evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
 
-  await openPrimary(page, "Proof");
-  await expectProofSession(page, alphaSessionId);
-  await expect(page.getByText(betaSessionId, { exact: true })).toHaveCount(0);
+  await expectSessionDetails(page, alphaSessionId);
+  await expect(page.locator(`.session-library-row[data-session-id="${betaSessionId}"]`)).toHaveCount(0);
   expect(await page.evaluate(() => (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks ?? []))
     .toEqual([]);
   const crossViewportValues = await page.evaluate((keys) => keys.map((key) => sessionStorage.getItem(key)), [
@@ -403,15 +401,17 @@ async function renameTerminal(page: Page, current: string, next: string): Promis
   await expect(tabs.getByRole("tab", { name: new RegExp(next, "u") })).toBeVisible();
 }
 
-async function expectProofSession(page: Page, sessionId: string): Promise<void> {
-  await expect(page.getByRole("heading", { name: "Proof", level: 1 })).toBeVisible();
-  const journal = page.locator("details.proof-journal");
-  const summary = journal.locator(":scope > summary");
-  await expect(summary).toContainText(/structure passed|invalid/u);
-  if (!(await journal.evaluate((element: HTMLDetailsElement) => element.open))) {
-    await summary.click();
-  }
-  const commitment = page.locator(".audit-commitment");
-  await expect(commitment).toContainText(sessionId);
-  await expect(commitment.getByText(sessionId, { exact: true })).toBeVisible();
+async function expectSessionDetails(page: Page, sessionId: string): Promise<void> {
+  await page.evaluate(() => { window.location.hash = "sessions"; });
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
+  const row = page.locator(`.session-library-row[data-session-id="${sessionId}"]`);
+  await expect(row).toBeVisible();
+  await row.locator(".session-library-card").click();
+
+  const inspector = page.locator(".session-library-inspector");
+  await expect(inspector.locator(".session-library-eyebrow")).toContainText("Conversation");
+  await expect(inspector.getByRole("button", { name: /^Session integrity\./u }))
+    .toHaveAccessibleName(/\d+ receipts?.*local inspection details/u);
+  await expect(inspector.locator("details.session-library-technical > summary"))
+    .toContainText(/Manifest pins and transcript · \d+ messages?/u);
 }

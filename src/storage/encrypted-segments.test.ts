@@ -7,7 +7,7 @@ import {
   readEncryptedSegment,
   sealSegmentedObject,
 } from "./encrypted-segments";
-import { MemoryObjectStore } from "./memory-object-store";
+import { MemoryObjectStore } from "./memory-object-store.test-support";
 
 const encoder = new TextEncoder();
 

@@ -1,6 +1,9 @@
-import type { ApprovalPolicy } from "../../core/contracts";
+import type {
+  ApprovalPolicy,
+  InferenceTransport,
+  SessionInferenceBindingV2,
+} from "../../core/contracts";
 import type { EventJournal } from "../../core/journal";
-import type { InferenceTransport } from "../../core/contracts";
 import type { WorkspacePort } from "../../workspace/contracts";
 import type { Agent } from "../agent";
 import type { KernelJobResult, KernelJobSpec } from "../kernel/kernel-contract";
@@ -12,8 +15,9 @@ import type {
   PrimeAgentRuntimeFactory,
   PrimeSubagentSpawnInput,
 } from "../subagents/types";
-import { PrimeAgentSession } from "./session";
+import { PrimeAgentSession, assertPrimeSessionInferenceWiring } from "./session";
 import { createSessionManifest } from "../../core/session-manifest";
+import { assertPinnedInferenceTransport } from "../../core/inference-binding";
 import { createPrimeToolSurface, attachPrimeKernelTool } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
 import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt";
@@ -23,7 +27,7 @@ import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt
  * child sessions instead of a named absence.
  *
  * Until now the only implementation of this interface was the test double in
- * `subagents/test-utils.ts`, which is why `createPrimeToolRegistry` omitted
+ * `subagents/test-utils.test-support.ts`, which is why `createPrimeToolRegistry` omitted
  * the whole RLM family with "no agent registry is attached to this session".
  *
  * The contract this has to honour, and the one that is easy to get wrong: a
@@ -49,6 +53,7 @@ export type PrimeAgentFactoryDeps = Readonly<{
   airshipTools: Parameters<typeof createPrimeToolSurface>[0]["airship"];
   transport: InferenceTransport;
   providerId: string;
+  inferenceBinding?: SessionInferenceBindingV2;
   workspaceId: string;
   /** Bounds a child turn exactly as the parent turn is bounded. */
   maxSteps?: number;
@@ -135,12 +140,23 @@ export function createPrimeAgentRuntimeFactory(deps: PrimeAgentFactoryDeps): Pri
       });
       const systemPrompt = composed.prompt;
 
+      const inferenceBinding = deps.inferenceBinding
+        ? Object.freeze({ ...deps.inferenceBinding, modelId: input.model.id })
+        : undefined;
       const manifest = await createSessionManifest({
         systemPrompt,
         providerId: deps.providerId,
         model: input.model.id,
+        ...(inferenceBinding ? { inferenceBinding } : {}),
         tools: surface.registry.definitions(),
         workspaceId: deps.workspaceId,
+      });
+      assertPinnedInferenceTransport(manifest, deps.transport.id, inferenceBinding);
+      assertPrimeSessionInferenceWiring({
+        manifest,
+        model: input.model,
+        transport: deps.transport,
+        ...(inferenceBinding ? { activeInferenceBinding: inferenceBinding } : {}),
       });
       const record = await deps.journal.createSession(`${input.name} · child of ${input.fromName}`, manifest);
 
@@ -152,6 +168,7 @@ export function createPrimeAgentRuntimeFactory(deps: PrimeAgentFactoryDeps): Pri
         approvalPolicy: deps.approvalPolicy,
         model: input.model,
         transport: deps.transport,
+        ...(inferenceBinding ? { activeInferenceBinding: inferenceBinding } : {}),
         ...(deps.maxSteps !== undefined ? { maxSteps: deps.maxSteps } : {}),
         ...(deps.signal ? { signal: deps.signal } : {}),
       });

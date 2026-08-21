@@ -1,79 +1,43 @@
 /**
- * The worker runtime for the prime kernel's `pyodide` engine: a persistent
- * CPython interpreter re-hosting prime-agent's IPython cell semantics
- * (port-manifest §3.1) inside one dedicated module worker. Returned as
- * source text, so every value it needs (budgets, asset base) is serialized
- * into the template by the engine at construction time, exactly like
- * kernel-worker-source.ts and airship's pyodideWorkerSource
- * (src/tools/execution-tools.ts).
+ * Generated runtime for the persistent Prime Pyodide kernel.
  *
- * Semantics and their provenance:
- *   - boot: loadPyodide from the same-origin pinned pack at
- *     /execution-packs/pyodide/; ready is posted the moment CPython
- *     has initialized, the ambient removals are applied, and the Python
- *     namespace bootstrap ran — mirroring airship's "ready the moment
- *     CPython has initialized" probe, extended with the namespace setup
- *     (the model never sees this machinery);
- *   - removals: exactly airship's nine-name list, applied ONCE after boot
- *     and before the first job. Pyodide's own loader needs fetch while
- *     booting; after boot it never does again because
- *     loadPackagesFromImports is NEVER called (pure pinned stdlib only);
- *   - persistence: one globals dict (created via pyodide.toPy({})) is
- *     reused as `globals` for every job, which gives each job's top-level
- *     assignments module-level cell semantics — the split is
- *     { globals: __globals } with `locals` defaulting to the same dict,
- *     so `x = 1` in one job is visible as `x` in the next, IPython-style.
- *     Namespace lifetime is kernel-instance-scoped: it lives and dies
- *     with this worker, and crashing it is always reported, never hidden;
- *   - streams: pyodide's batched stdout/stderr lines feed one bounded
- *     per-job capture (maxStreamChars) whose accepted delta is also
- *     live-posted in chunks of at most STREAM_CHUNK_CHARS;
- *   - values: the last-expression completion value is toJs()-converted
- *     and JSON-serialized under maxValueBytes, with the same
- *     { primeValue: "truncated", limitBytes } marker the javascript
- *     engine uses; unconvertible values fall back to String();
- *   - errors: pyodide's PythonError carries `type` (the Python exception
- *     name) and a message that *is* the formatted traceback; the worker
- *     shapes (ename, evalue, traceback) into one canonical text that
- *     always ends in the jupyter-style "<Ename>: <evalue>" tail line;
- *   - cancellation: CPython cannot be interrupted mid-statement without
- *     SharedArrayBuffer plumbing this pack does not use. Cancelling a job
- *     is therefore a cooperative flag the worker consults at every
- *     Python/JS round-trip boundary — pat.sleep polls between sleeps and
- *     pat.call refuses/resolves early — and once more when the job's
- *     runPythonAsync settles. A cancellation that lands this way is named
- *     "cancelled-with-boundary", and the hard boundary remains host-side
- *     worker termination (pyodide-engine.ts PYODIDE_TERMINATE_GRACE_MS).
- *   - one in-flight job: the host serializes the job queue (invariant 24);
- *     the worker refuses a concurrent exec closed rather than corrupting
- *     the single interpreter.
+ * The Pyodide loader needs the worker's normal browser surface while the
+ * pinned pack boots. Immediately after loadPyodide resolves, this runtime
+ * applies the canonical disposable-worker scrub to the global and every
+ * recoverable WorkerGlobalScope prototype owner. The controller listener,
+ * sender, protocol capability, and native collection helpers stay lexical.
+ * Python receives only the frozen `pat` bridge module.
+ *
+ * Ambient/controller isolation does not solve cross-cell asyncio provenance:
+ * an old task can call the shared module while a later cell is active. The
+ * factory therefore quarantines this persistent research runtime even though
+ * its direct tests continue to lock namespace and isolation behavior.
  */
 
+import { disposableWorkerIsolationPreludeSource } from "../../execution/disposable-worker-isolation-source";
 import type { KernelBudgets } from "./kernel-contract";
+import {
+  KERNEL_PROTOCOL_TOKEN_BYTES,
+  KERNEL_STREAM_FRAME_OVERHEAD_CHARS,
+  MAX_KERNEL_JOB_ID_CHARS,
+  MAX_KERNEL_LABEL_CHARS,
+  MAX_KERNEL_STREAM_FRAMES,
+  MAX_KERNEL_TOOL_NAME_CHARS,
+} from "./kernel-contract";
 
-/** Live stream frames carry at most this many characters; mirrors airship's per-frame slice rule. */
+/** Live stream frames carry at most this many characters. */
 export const PYODIDE_STREAM_CHUNK_CHARS = 4_096;
-/**
- * pat.sleep consults the cooperative cancel flag between polls of this
- * length. Short enough that a cancelled sleep dies promptly at a boundary,
- * long enough that the poll loop is not the hot path of the interpreter.
- */
+/** Cooperative sleep polling cadence. */
 export const PYODIDE_SLEEP_POLL_MS = 25;
-/** Names token prefixing the error text of a job whose cancellation landed at a statement boundary. */
+/** Named cancellation result when CPython reaches a JS boundary. */
 export const PYODIDE_CANCELLED_AT_BOUNDARY = "cancelled-with-boundary";
-/** The preloaded Python marker naming the pat surface revision, exposed as `_pat_version`. */
+/** Preloaded Python marker for the pat surface. */
 export const PAT_KERNEL_VERSION = "pyodide-kernel-v1";
-/** Filename shown in Python tracebacks for kernel cells (upstream shows <ipython-input-…>). */
+/** Filename shown in Python tracebacks. */
 export const PYODIDE_JOB_FILENAME = "<prime-kernel>";
+/** Exact wire revision. A fresh capability additionally binds every worker generation. */
+export const PYODIDE_KERNEL_PROTOCOL_VERSION = "prime-pyodide-worker-v2";
 
-/**
- * Python run once at boot inside the persistent globals dict — the minimal
- * analog of prime-agent's rlm bootstrap. Deliberately tiny and documented:
- * `pat` (the registered JS module with call/progress/sleep), `_pat_version`
- * (surface marker), and `__name__ = "__main__"` because a bare globals dict
- * otherwise resolves `__name__` to the builtins module name, while IPython
- * always runs cells as __main__.
- */
 const PYTHON_NAMESPACE_BOOTSTRAP = [
   "import pat",
   `_pat_version = ${JSON.stringify(PAT_KERNEL_VERSION)}`,
@@ -82,64 +46,230 @@ const PYTHON_NAMESPACE_BOOTSTRAP = [
 
 export function pyodideKernelWorkerSource(budgets: KernelBudgets, assetBase: string): string {
   return `"use strict";
-const __post = globalThis.postMessage.bind(globalThis);
+(() => {
+"use strict";
+${disposableWorkerIsolationPreludeSource()}
+const __String = String;
+const __Number = Number;
+const __Error = Error;
+const __TypeError = TypeError;
+const __Promise = Promise;
+const __Map = Map;
+const __ObjectPrototype = Object.prototype;
+const __objectCreate = Object.create.bind(Object);
+const __objectFreeze = Object.freeze.bind(Object);
+const __getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors.bind(Object);
+const __reflectOwnKeys = Reflect.ownKeys.bind(Reflect);
+const __arrayIsArray = Array.isArray.bind(Array);
+const __arrayIncludes = Function.call.bind(Array.prototype.includes);
+const __arrayPush = Function.call.bind(Array.prototype.push);
+const __arrayJoin = Function.call.bind(Array.prototype.join);
+const __mapGet = Function.call.bind(Map.prototype.get);
+const __mapSet = Function.call.bind(Map.prototype.set);
+const __mapDelete = Function.call.bind(Map.prototype.delete);
+const __mapValues = Function.call.bind(Map.prototype.values);
+const __mapClear = Function.call.bind(Map.prototype.clear);
+const __mapIteratorNext = Function.call.bind(
+  __getPrototypeOf(__mapValues(new __Map())).next
+);
+const __stringSlice = Function.call.bind(String.prototype.slice);
+const __stringSplit = Function.call.bind(String.prototype.split);
+const __stringTrim = Function.call.bind(String.prototype.trim);
+const __stringTrimEnd = Function.call.bind(String.prototype.trimEnd);
+const __stringEndsWith = Function.call.bind(String.prototype.endsWith);
+const __stringIndexOf = Function.call.bind(String.prototype.indexOf);
+const __regexpExec = Function.call.bind(RegExp.prototype.exec);
+const __regexpTest = Function.call.bind(RegExp.prototype.test);
+const __jsonParse = JSON.parse.bind(JSON);
+const __jsonStringify = JSON.stringify.bind(JSON);
 const __encoder = new TextEncoder();
-const __budgets = ${JSON.stringify(budgets)};
-const PYODIDE_MODULE = ${JSON.stringify(assetBase + "pyodide.mjs")};
-const PYODIDE_BASE = ${JSON.stringify(assetBase)};
-const PAT_KERNEL_VERSION = ${JSON.stringify(PAT_KERNEL_VERSION)};
-const JOB_FILENAME = ${JSON.stringify(PYODIDE_JOB_FILENAME)};
-const STREAM_CHUNK_CHARS = ${String(PYODIDE_STREAM_CHUNK_CHARS)};
-const SLEEP_POLL_MS = ${String(PYODIDE_SLEEP_POLL_MS)};
-const BOUNDARY = ${JSON.stringify(PYODIDE_CANCELLED_AT_BOUNDARY)};
+const __encode = Function.call.bind(TextEncoder.prototype.encode);
+const __now = Date.now.bind(Date);
+const __setTimeout = globalThis.setTimeout.bind(globalThis);
+const __max = Math.max.bind(Math);
+const __min = Math.min.bind(Math);
+const __isFinite = Number.isFinite.bind(Number);
+const __isSafeInteger = Number.isSafeInteger.bind(Number);
 
-let __py = undefined;
-// The one persistent namespace. Created once at boot; every job receives it
-// as globals (and, by default, locals), which is what makes cell state
-// survive across jobs inside this worker generation.
-let __globals = undefined;
-// One job at a time: { jobId, seq, cancelled, cancelReason, stdout, stderr, pending: Map }.
-let __active = undefined;
+const __budgets = ${JSON.stringify(budgets)};
+const __pyodideModule = ${JSON.stringify(assetBase + "pyodide.mjs")};
+const __pyodideBase = ${JSON.stringify(assetBase)};
+const __patKernelVersion = ${JSON.stringify(PAT_KERNEL_VERSION)};
+const __jobFilename = ${JSON.stringify(PYODIDE_JOB_FILENAME)};
+const __streamChunkChars = ${String(PYODIDE_STREAM_CHUNK_CHARS)};
+const __sleepPollMs = ${String(PYODIDE_SLEEP_POLL_MS)};
+const __boundary = ${JSON.stringify(PYODIDE_CANCELLED_AT_BOUNDARY)};
+const __protocolVersion = ${JSON.stringify(PYODIDE_KERNEL_PROTOCOL_VERSION)};
+const __protocolTokenPattern = new RegExp(${JSON.stringify(`^[0-9a-f]{${KERNEL_PROTOCOL_TOKEN_BYTES * 2}}$`)});
+const __maxJobIdChars = ${String(MAX_KERNEL_JOB_ID_CHARS)};
+const __maxLabelChars = ${String(MAX_KERNEL_LABEL_CHARS)};
+const __maxToolNameChars = ${String(MAX_KERNEL_TOOL_NAME_CHARS)};
+const __maxStreamFrames = ${String(MAX_KERNEL_STREAM_FRAMES)};
+const __streamFrameOverheadChars = ${String(KERNEL_STREAM_FRAME_OVERHEAD_CHARS)};
+
+let __protocolToken;
+let __protocolGeneration;
+let __resolveProtocol;
+const __protocolReady = new __Promise((resolve) => { __resolveProtocol = resolve; });
+let __py;
+let __runPythonAsync;
+let __globals;
+let __active;
+
+const __dataRecord = () => __objectCreate(null);
+const __setData = (target, name, value, writable = false) => {
+  __defineProperty(target, name, {
+    value, enumerable: true, configurable: false, writable
+  });
+};
+
+const __readRecord = (value, name, required, optional = []) => {
+  if (typeof value !== "object" || value === null || __arrayIsArray(value)) {
+    throw new __TypeError(name + " must be a plain record.");
+  }
+  let prototype;
+  let descriptors;
+  let keys;
+  try {
+    prototype = __getPrototypeOf(value);
+    descriptors = __getOwnPropertyDescriptors(value);
+    keys = __reflectOwnKeys(value);
+  } catch {
+    throw new __TypeError(name + " could not be inspected.");
+  }
+  if (prototype !== __ObjectPrototype && prototype !== null) {
+    throw new __TypeError(name + " must have a plain-object prototype.");
+  }
+  const result = __dataRecord();
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (typeof key !== "string" || (!__arrayIncludes(required, key) && !__arrayIncludes(optional, key))) {
+      throw new __TypeError(name + " contains an unknown field.");
+    }
+    const descriptor = descriptors[key];
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new __TypeError(name + "." + key + " must be an enumerable data property.");
+    }
+    __setData(result, key, descriptor.value);
+  }
+  for (let index = 0; index < required.length; index += 1) {
+    const key = required[index];
+    if (!__hasOwn(result, key)) throw new __TypeError(name + "." + key + " is required.");
+  }
+  return result;
+};
+
+const __requiredString = (value, name, maximum, allowEmpty = false) => {
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.length > maximum) {
+    throw new __TypeError(name + " must be a bounded string.");
+  }
+  return value;
+};
+
+const __requiredSafeInteger = (value, name) => {
+  if (typeof value !== "number" || !__isSafeInteger(value) || value < 0) {
+    throw new __TypeError(name + " must be a non-negative safe integer.");
+  }
+  return value;
+};
+
+const __validateEnvelope = (record, name) => {
+  if (record.protocol !== __protocolVersion
+      || record.protocolToken !== __protocolToken
+      || record.generation !== __protocolGeneration) {
+    throw new __Error(name + " has an invalid generation capability.");
+  }
+};
+
+const __postFrame = (frame) => {
+  if (typeof __protocolToken !== "string" || !__isSafeInteger(__protocolGeneration)) {
+    throw new __Error("The Pyodide worker protocol is not initialized.");
+  }
+  // Spread uses CreateDataProperty, so poisoned Object.prototype setters
+  // cannot observe or replace the lexical capability.
+  __post({
+    ...frame,
+    protocol: __protocolVersion,
+    protocolToken: __protocolToken,
+    generation: __protocolGeneration
+  });
+};
+
+const __boundedError = (value) =>
+  __stringSlice(__String(value), 0, __max(1, __budgets.maxStreamChars));
+
+const __forEachMapValue = (map, visit) => {
+  const iterator = __mapValues(map);
+  for (;;) {
+    const step = __mapIteratorNext(iterator);
+    if (step.done) return;
+    visit(step.value);
+  }
+};
+
+const __protocolFault = (detail) => {
+  const error = new __Error("Pyodide worker protocol violation: " + detail);
+  // Throwing out of the trusted controller listener produces a Worker error;
+  // the host terminates the generation. Never continue after a malformed
+  // authority frame.
+  throw error;
+};
 
 const __cancelError = (reason) => {
-  const error = new Error(reason || "Prime kernel job cancelled.");
-  error.name = "PrimeKernelJobCancelled";
+  const error = new __Error(reason || "Prime kernel job cancelled.");
+  __defineProperty(error, "name", {
+    value: "PrimeKernelJobCancelled", enumerable: false,
+    configurable: true, writable: true
+  });
   return error;
 };
 
 const __cancelText = (job) =>
-  BOUNDARY + ": " + (job.cancelReason || "kernel job cancelled") +
-  ". CPython cannot interrupt a statement in flight, so the cancellation landed at a Python/JS boundary (await or statement end); the hard boundary remains host-side worker termination.";
+  __boundary + ": " + (job.cancelReason || "kernel job cancelled")
+  + ". CPython cannot interrupt a statement in flight, so the cancellation landed at a Python/JS boundary (await or statement end); the hard boundary remains host-side worker termination.";
 
-const __streamRecord = (kind, text) => {
+const __streamRecord = (kind, value) => {
   const job = __active;
-  if (!job) return;
-  // Batched pyodide lines arrive without their newline. Live frames carry
-  // every line in chunks of at most STREAM_CHUNK_CHARS; the stream budget
-  // binds only the durable capture (the same split the javascript engine
-  // uses: page-memory presentation is never the durable authority).
-  const line = String(text) + "\\n";
-  for (let offset = 0; offset < line.length; offset += STREAM_CHUNK_CHARS) {
-    __post({ type: kind, jobId: job.jobId, text: line.slice(offset, offset + STREAM_CHUNK_CHARS) });
+  if (!job || (kind !== "stdout" && kind !== "stderr")) return;
+  const line = __String(value) + "\\n";
+  for (let offset = 0; offset < line.length && job.streamFrames < __maxStreamFrames; offset += __streamChunkChars) {
+    const chunk = __stringSlice(line, offset, offset + __streamChunkChars);
+    const chargeName = kind === "stderr" ? "stderrCharge" : "stdoutCharge";
+    const currentCharge = job[chargeName];
+    const remaining = __budgets.maxStreamChars - currentCharge;
+    if (remaining < __streamFrameOverheadChars) return;
+    const accepted = __stringSlice(chunk, 0, __max(0, remaining - __streamFrameOverheadChars));
+    if (accepted.length === 0 && chunk.length !== 0) return;
+    job[chargeName] = currentCharge + accepted.length + __streamFrameOverheadChars;
+    job.streamFrames += 1;
+    if (kind === "stderr") job.stderr += accepted;
+    else job.stdout += accepted;
+    __postFrame({ type: kind, jobId: job.jobId, text: accepted });
   }
-  if (kind === "stderr") job.stderr = (job.stderr + line).slice(0, __budgets.maxStreamChars);
-  else job.stdout = (job.stdout + line).slice(0, __budgets.maxStreamChars);
 };
 
-// Value channel: identical budget rule as the javascript engine and
-// airship's jsonValue — JSON text under maxValueBytes or the named
-// truncation marker; anything unserializable degrades to String().
-const __returnMarker = () => JSON.stringify({ primeValue: "truncated", limitBytes: __budgets.maxValueBytes });
+const __truncationMarker = (() => {
+  const marker = __dataRecord();
+  __setData(marker, "primeValue", "truncated");
+  __setData(marker, "limitBytes", __budgets.maxValueBytes);
+  return __jsonStringify(marker);
+})();
+const __returnMarker = () => __truncationMarker;
+
 const __serializeValueBounded = (value) => {
   let converted = value;
   try {
     if (converted && typeof converted.toJs === "function") converted = converted.toJs();
-    let encoded = JSON.stringify(converted === undefined ? null : converted);
+    let encoded = __jsonStringify(converted === undefined ? null : converted);
     if (encoded === undefined) encoded = "null";
-    if (__encoder.encode(encoded).byteLength <= __budgets.maxValueBytes) return encoded;
+    if (__encode(__encoder, encoded).byteLength <= __budgets.maxValueBytes) return encoded;
     return __returnMarker();
   } catch {
-    try { return JSON.stringify(String(converted)); } catch { return "\\"null\\""; }
+    try {
+      const fallback = __jsonStringify(__String(converted));
+      if (__encode(__encoder, fallback).byteLength <= __budgets.maxValueBytes) return fallback;
+      return __returnMarker();
+    } catch { return "\\\"null\\\""; }
   } finally {
     try {
       if (value && typeof value.destroy === "function" && !value.destroyed) value.destroy();
@@ -147,92 +277,96 @@ const __serializeValueBounded = (value) => {
   }
 };
 
-// Shape pyodide's PythonError into (ename, evalue, traceback) concatenated
-// the jupyter way: the traceback body first, and a canonical
-// "<Ename>: <evalue>" tail line whenever the body does not already end in
-// one that names the exception.
 const __pythonErrorText = (caught) => {
   let ename = "PythonError";
   if (caught && typeof caught.type === "string" && caught.type) ename = caught.type;
   else if (caught && typeof caught.name === "string" && caught.name) ename = caught.name;
-  const message = String(caught && caught.message || caught || "Prime kernel job failed.");
-  const body = message.replace(/[ \\t\\r\\n]+$/, "");
-  const lines = body.split("\\n");
+  const message = __String(caught && caught.message || caught || "Prime kernel job failed.");
+  const body = __stringTrimEnd(message);
+  const lines = __stringSplit(body, "\\n");
   let last = ename;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].trim()) { last = lines[i].trim(); break; }
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const trimmed = __stringTrim(lines[index]);
+    if (trimmed) { last = trimmed; break; }
   }
   let evalue = last;
-  const parsed = last.match(/^[A-Za-z_][A-Za-z0-9_.]*(?::|[ ]*$)[ ]?(.*)$/);
-  if (parsed && parsed[1] !== undefined) evalue = parsed[1].trim();
-  if (!evalue) evalue = String(caught && caught.message || caught);
-  if (body.indexOf(ename) >= 0 && body.endsWith(last)) return body;
-  return body + "\\n" + ename + ": " + evalue;
+  const parsed = __regexpExec(/^[A-Za-z_][A-Za-z0-9_.]*(?::|[ ]*$)[ ]?(.*)$/, last);
+  if (parsed && parsed[1] !== undefined) evalue = __stringTrim(parsed[1]);
+  if (!evalue) evalue = __String(caught && caught.message || caught);
+  if (__stringIndexOf(body, ename) >= 0 && __stringEndsWith(body, last)) return __boundedError(body);
+  return __boundedError(body + "\\n" + ename + ": " + evalue);
 };
 
-// The pat module: the sanctioned egress mirroring prime-agent's typed
-// host_request comm bridge. call(tool, argsJson) carries JSON text both
-// ways through the host's bridge frames; progress is presentation-only
-// stdout; sleep is the one cooperative cancellation point pure Python code
-// can checkpoint at.
-const __buildPatModule = () => ({
-  call: (tool, argsJson) => new Promise((resolve, reject) => {
+const __buildPatModule = () => {
+  const module = __dataRecord();
+  __setData(module, "call", (toolValue, argsJson) => new __Promise((resolve, reject) => {
     const job = __active;
-    if (!job) { reject(new Error("pat.call requires an active prime kernel job.")); return; }
+    if (!job) { reject(new __Error("pat.call requires an active prime kernel job.")); return; }
     if (job.cancelled) { reject(__cancelError(job.cancelReason)); return; }
-    const seq = job.seq++;
-    if (job.seq > __budgets.maxBridgeCallsPerJob) {
-      reject(new Error("Kernel bridge call limit exceeded (" + __budgets.maxBridgeCallsPerJob + " calls per job)."));
+    const tool = __String(toolValue);
+    if (tool.length === 0 || tool.length > __maxToolNameChars) {
+      reject(new __TypeError("Tool names must contain 1-" + __maxToolNameChars + " characters."));
+      return;
+    }
+    if (job.seq >= __budgets.maxBridgeCallsPerJob) {
+      reject(new __Error("Kernel bridge call limit exceeded (" + __budgets.maxBridgeCallsPerJob + " calls per job)."));
       return;
     }
     let args;
-    try { args = argsJson === undefined || argsJson === null ? {} : JSON.parse(String(argsJson)); }
-    catch { reject(new TypeError("pat.call arguments must be JSON text, e.g. pat.call(tool, json.dumps(obj)).")); return; }
-    if (args === undefined) args = {};
-    if (__encoder.encode(JSON.stringify(args)).byteLength > __budgets.maxBridgePayloadBytes) {
-      reject(new Error("pat.call arguments exceed the kernel bridge payload budget (" + __budgets.maxBridgePayloadBytes + " bytes)."));
+    try { args = argsJson === undefined || argsJson === null ? {} : __jsonParse(__String(argsJson)); }
+    catch {
+      reject(new __TypeError("pat.call arguments must be JSON text, e.g. pat.call(tool, json.dumps(obj))."));
       return;
     }
-    job.pending.set(seq, { resolve, reject });
-    __post({ type: "bridge-request", jobId: job.jobId, call: { jobId: job.jobId, seq, tool: String(tool), arguments: args } });
-  }),
-  progress: (text) => __streamRecord("stdout", ":: progress: " + String(text)),
-  sleep: (ms) => new Promise((resolve, reject) => {
-    const total = Math.max(0, Number(ms) || 0);
-    const startedAt = Date.now();
+    if (args === undefined) args = {};
+    let encoded;
+    try { encoded = __jsonStringify(args); }
+    catch { reject(new __TypeError("pat.call arguments must be JSON data.")); return; }
+    if (encoded === undefined || __encode(__encoder, encoded).byteLength > __budgets.maxBridgePayloadBytes) {
+      reject(new __Error("pat.call arguments exceed the kernel bridge payload budget (" + __budgets.maxBridgePayloadBytes + " bytes)."));
+      return;
+    }
+    const seq = job.seq;
+    job.seq += 1;
+    __mapSet(job.pending, seq, __objectFreeze({ resolve, reject }));
+    __postFrame({
+      type: "bridge-request",
+      jobId: job.jobId,
+      call: { jobId: job.jobId, seq, tool, arguments: args }
+    });
+  }));
+  __setData(module, "progress", (text) => __streamRecord("stdout", ":: progress: " + __String(text)));
+  __setData(module, "sleep", (milliseconds) => new __Promise((resolve, reject) => {
+    const total = __max(0, __Number(milliseconds) || 0);
+    const startedAt = __now();
     const tick = () => {
       const job = __active;
-      if (!job) { reject(new Error("Kernel job ended while pat.sleep was pending.")); return; }
+      if (!job) { reject(new __Error("Kernel job ended while pat.sleep was pending.")); return; }
       if (job.cancelled) { reject(__cancelError(job.cancelReason)); return; }
-      const elapsed = Date.now() - startedAt;
+      const elapsed = __now() - startedAt;
       if (elapsed >= total) { resolve(0); return; }
-      setTimeout(tick, Math.min(SLEEP_POLL_MS, Math.max(1, total - elapsed)));
+      __setTimeout(tick, __min(__sleepPollMs, __max(1, total - elapsed)));
     };
-    setTimeout(tick, Math.min(SLEEP_POLL_MS, total));
-  }),
-});
+    __setTimeout(tick, __min(__sleepPollMs, total));
+  }));
+  return __objectFreeze(module);
+};
 
-// CPython cannot be interrupted mid-statement; this is the entire policy,
-// honestly named in the result error text when it lands.
 const __requestCancel = (jobId, reason) => {
   const job = __active;
-  if (!job || job.jobId !== jobId) return;
-  if (job.cancelled) return;
+  if (!job || job.jobId !== jobId || job.cancelled) return;
   job.cancelled = true;
   job.cancelReason = reason;
-  // Outstanding bridge awaits are Python/JS boundaries: resolve them now as
-  // cancellations so the pending Python await raises promptly instead of
-  // waiting on a host tool round-trip the job no longer wants.
-  for (const pending of job.pending.values()) pending.reject(__cancelError(reason));
+  __forEachMapValue(job.pending, (pending) => pending.reject(__cancelError(reason)));
 };
 
 const __finishJob = (job, outcome, valueJson, error, startedAt) => {
-  for (const pending of job.pending.values()) {
-    pending.reject(new Error("Kernel job ended while a bridge call was unresolved."));
-  }
-  job.pending.clear();
+  __forEachMapValue(job.pending, (pending) => {
+    pending.reject(new __Error("Kernel job ended while a bridge call was unresolved."));
+  });
+  __mapClear(job.pending);
   __active = undefined;
-  __post({
+  __postFrame({
     type: "finished",
     jobId: job.jobId,
     result: {
@@ -244,39 +378,31 @@ const __finishJob = (job, outcome, valueJson, error, startedAt) => {
       stdout: job.stdout,
       stderr: job.stderr,
       bridgeCalls: job.seq,
-      wallMs: Date.now() - startedAt
+      wallMs: __max(0, __now() - startedAt)
     }
   });
 };
 
 async function __runJob(spec) {
-  if (__active) {
-    __post({
-      type: "finished",
-      jobId: spec.jobId,
-      result: {
-        jobId: spec.jobId,
-        engine: "pyodide",
-        outcome: "failed",
-        error: "Pyodide kernel refused a concurrent job: one in-flight cell per kernel (job " + __active.jobId + " is running).",
-        stdout: "", stderr: "", bridgeCalls: 0, wallMs: 0
-      }
-    });
-    return;
-  }
-  const job = {
-    jobId: spec.jobId,
-    seq: 0,
-    cancelled: false,
-    cancelReason: undefined,
-    stdout: "",
-    stderr: "",
-    pending: new Map()
-  };
+  if (__active) return __protocolFault("the host sent concurrent exec frames");
+  const job = __dataRecord();
+  __setData(job, "jobId", spec.jobId);
+  __setData(job, "seq", 0, true);
+  __setData(job, "cancelled", false, true);
+  __setData(job, "cancelReason", undefined, true);
+  __setData(job, "stdout", "", true);
+  __setData(job, "stderr", "", true);
+  __setData(job, "stdoutCharge", 0, true);
+  __setData(job, "stderrCharge", 0, true);
+  __setData(job, "streamFrames", 0, true);
+  __setData(job, "pending", new __Map());
   __active = job;
-  const startedAt = Date.now();
+  const startedAt = __now();
   try {
-    const value = await __py.runPythonAsync(String(spec.code), { globals: __globals, filename: JOB_FILENAME });
+    const value = await __runPythonAsync(__String(spec.code), {
+      globals: __globals,
+      filename: __jobFilename
+    });
     if (job.cancelled) __finishJob(job, "cancelled", undefined, __cancelText(job), startedAt);
     else __finishJob(job, "completed", __serializeValueBounded(value), undefined, startedAt);
   } catch (caught) {
@@ -285,60 +411,137 @@ async function __runJob(spec) {
   }
 }
 
-globalThis.onmessage = (event) => {
-  const message = event.data;
-  if (!message || typeof message.type !== "string") return;
-  if (message.type === "exec") { void __runJob(message.job); return; }
-  if (message.type === "cancel") { __requestCancel(message.jobId, message.reason); return; }
-  if (message.type === "bridge-response") {
-    const job = __active;
-    const call = message.call;
-    if (!job || message.jobId !== job.jobId || !call || typeof call.seq !== "number") return;
-    const pending = job.pending.get(call.seq);
-    if (!pending) return;
-    job.pending.delete(call.seq);
-    if (call.ok) pending.resolve(call.content);
-    else pending.reject(new Error(call.error || "The tool call failed."));
-    return;
-  }
-  // The terminate frame is advisory: the host forces worker.terminate()
-  // immediately after posting it, and no graceful path can outrun a
-  // statement in flight anyway.
+const __readAuthenticatedMessage = (value) => {
+  const head = __readRecord(
+    value,
+    "controller frame",
+    ["type", "protocol", "protocolToken", "generation"],
+    ["job", "jobId", "reason", "call"]
+  );
+  __validateEnvelope(head, "controller frame");
+  return head;
 };
 
+const __onControllerMessage = (event) => {
+  // Only browser-delivered Worker messages are authority. Model code can
+  // construct MessageEvent objects, but those always carry isTrusted=false.
+  if (!event || event.isTrusted !== true) return;
+  try {
+    if (__protocolToken === undefined) {
+      const init = __readRecord(
+        event.data,
+        "init frame",
+        ["type", "protocol", "protocolToken", "generation"]
+      );
+      if (init.type !== "init" || init.protocol !== __protocolVersion
+          || typeof init.protocolToken !== "string"
+          || !__regexpTest(__protocolTokenPattern, init.protocolToken)
+          || !__isSafeInteger(init.generation) || init.generation < 0) {
+        return __protocolFault("the initialization frame is invalid");
+      }
+      __protocolToken = init.protocolToken;
+      __protocolGeneration = init.generation;
+      const resolve = __resolveProtocol;
+      __resolveProtocol = undefined;
+      resolve();
+      return;
+    }
+
+    const message = __readAuthenticatedMessage(event.data);
+    if (message.type === "exec") {
+      const spec = __readRecord(message.job, "exec frame.job", ["jobId", "code"], ["label"]);
+      __requiredString(spec.jobId, "exec frame.job.jobId", __maxJobIdChars);
+      __requiredString(spec.code, "exec frame.job.code", __budgets.maxSourceChars, true);
+      if (spec.label !== undefined) __requiredString(spec.label, "exec frame.job.label", __maxLabelChars, true);
+      void __runJob(spec);
+      return;
+    }
+    if (message.type === "cancel") {
+      const jobId = __requiredString(message.jobId, "cancel frame.jobId", __maxJobIdChars);
+      if (message.reason !== undefined) __requiredString(message.reason, "cancel frame.reason", __budgets.maxStreamChars, true);
+      __requestCancel(jobId, message.reason);
+      return;
+    }
+    if (message.type === "bridge-response") {
+      const jobId = __requiredString(message.jobId, "bridge-response frame.jobId", __maxJobIdChars);
+      const call = __readRecord(message.call, "bridge-response frame.call", ["seq", "ok"], ["content", "error", "metadata"]);
+      const seq = __requiredSafeInteger(call.seq, "bridge-response frame.call.seq");
+      if (call.ok !== true && call.ok !== false) return __protocolFault("bridge-response ok is not boolean");
+      const job = __active;
+      if (!job || jobId !== job.jobId) return;
+      const pending = __mapGet(job.pending, seq);
+      if (!pending) return;
+      __mapDelete(job.pending, seq);
+      if (call.ok === true) {
+        const content = __requiredString(call.content, "bridge-response frame.call.content", __budgets.maxBridgePayloadBytes, true);
+        pending.resolve(content);
+      } else {
+        const error = __requiredString(call.error, "bridge-response frame.call.error", __budgets.maxBridgePayloadBytes);
+        pending.reject(new __Error(error));
+      }
+      return;
+    }
+    if (message.type === "terminate") return;
+    return __protocolFault("the host sent an unknown frame type");
+  } catch (caught) {
+    return __protocolFault(__boundedError(caught && caught.message || caught));
+  }
+};
+
+// Install the only controller listener while the native EventTarget method is
+// still available. It remains reachable only from this closure after scrub.
+__listen("message", __onControllerMessage);
+
 void (async () => {
-  const bootStarted = Date.now();
+  await __protocolReady;
+  const bootStarted = __now();
   try {
-    const module = await import(PYODIDE_MODULE);
-    __py = await module.loadPyodide({ indexURL: PYODIDE_BASE, fullStdLib: false });
-  } catch (error) {
-    __post({ type: "boot-failed", engine: "pyodide", error: "Pyodide kernel boot failed: " + String(error && error.message || error) });
+    const module = await import(__pyodideModule);
+    __py = await module.loadPyodide({ indexURL: __pyodideBase, fullStdLib: false });
+
+    // This must be the first action after the pinned loader resolves. Pyodide
+    // needed fetch/XHR to boot; namespace setup and every model cell run only
+    // after the canonical ambient + controller prototype scrub succeeds.
+    __scrubAmbient();
+    __scrubController();
+  } catch (caught) {
+    __postFrame({
+      type: "boot-failed",
+      engine: "pyodide",
+      error: "Pyodide kernel boot/isolation failed: " + __boundedError(caught && caught.message || caught)
+    });
     return;
   }
-  __py.setStdout({ batched: (line) => __streamRecord("stdout", line) });
-  __py.setStderr({ batched: (line) => __streamRecord("stderr", line) });
-  try { __py.setStdin({ stdin: () => null }); } catch {}
-  __globals = __py.toPy({});
-  // Ambient removals AFTER bootstrap, exactly airship's nine-name list,
-  // applied once. Pyodide needed fetch only while booting; after this it
-  // has no ambient network/storage/DOM/nested-worker egress left.
-  const REMOVALS = ["fetch","XMLHttpRequest","WebSocket","EventSource","indexedDB","caches","importScripts","Worker","SharedWorker"];
-  for (const name of REMOVALS) {
-    try { Object.defineProperty(globalThis, name, { value: undefined, configurable: false, writable: false }); } catch {}}
-  __py.registerJsModule("pat", __buildPatModule());
+
   try {
-    await __py.runPythonAsync(${JSON.stringify(PYTHON_NAMESPACE_BOOTSTRAP)}, { globals: __globals, filename: "<prime-kernel-init>" });
-  } catch (error) {
-    __post({ type: "boot-failed", engine: "pyodide", error: "Pyodide kernel namespace bootstrap failed: " + String(error && error.message || error) });
+    __py.setStdout({ batched: (line) => __streamRecord("stdout", line) });
+    __py.setStderr({ batched: (line) => __streamRecord("stderr", line) });
+    try { __py.setStdin({ stdin: () => null }); } catch {}
+    __globals = __py.toPy({});
+    __py.registerJsModule("pat", __buildPatModule());
+    // Bind the later-used entry point before Python can import pyodide_js and
+    // replace properties on the shared public API object.
+    __runPythonAsync = __py.runPythonAsync.bind(__py);
+    await __runPythonAsync(${JSON.stringify(PYTHON_NAMESPACE_BOOTSTRAP)}, {
+      globals: __globals,
+      filename: "<prime-kernel-init>"
+    });
+  } catch (caught) {
+    __postFrame({
+      type: "boot-failed",
+      engine: "pyodide",
+      error: "Pyodide kernel namespace bootstrap failed: " + __boundedError(caught && caught.message || caught)
+    });
     return;
   }
-  // Ready the moment CPython + namespace exist; the host now owns the clock.
-  __post({
+
+  __postFrame({
     type: "ready",
     engine: "pyodide",
-    bootMs: Date.now() - bootStarted,
+    bootMs: __max(0, __now() - bootStarted),
     version: typeof __py.version === "string" ? __py.version : "unknown"
   });
+})();
 })();
 `;
 }

@@ -15,7 +15,7 @@ import type { ProfileRevision } from "../profiles/domain";
 import type { ClientEncryptedWorkspacePort, WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import type { FederatedMemoryResult, FederatedMemorySearchState } from "../tools/federated-memory";
 import { ContextView } from "./context-route";
-import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilityStatusMark, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { MemoryKindLegend } from "./memory-controls";
 import { densityAllows, usePresentationDensity } from "./density";
@@ -23,7 +23,7 @@ import { groupMemoryRelationships } from "./memory-relationships";
 import { messagePlainText, type MessagePart } from "./chat/message-parts";
 import { useShellIsPhone } from "./phone-viewport";
 import { RouteHeader } from "./route-header";
-import { Seal } from "./seal";
+import { StatusMark } from "./status-mark";
 import {
   ProvenanceChip,
   provenanceDigest,
@@ -237,7 +237,7 @@ export const RETRIEVAL_FLOOR_HEADING = "Closest, below the confidence floor";
  * Twin of `inferredTerminalDurability` in `terminal-view.tsx`, deliberately not
  * imported from it: Terminal is its own lazily loaded route chunk, and a
  * runtime import would merge it into Memory's. The shared vocabulary — the
- * state names, `durabilityLabel`, `durabilitySeal` — does come from the one
+ * state names, `durabilityLabel`, `durabilityStatusMark` — does come from the one
  * owner, so only this four-line inference is stated twice.
  */
 export function inferredMemoryDurability(workspace?: WorkspacePort): MemoryDurability {
@@ -251,7 +251,7 @@ export function inferredMemoryDurability(workspace?: WorkspacePort): MemoryDurab
     return Object.freeze({
       state: "local" as const,
       label: "Client-encrypted · tier unknown",
-      detail: `The active workspace proves Airship's client-encryption boundary, so ${PROFILE_MEMORY_PATH} is written through it. Its backing tier was not supplied to Memory, so this route claims neither device nor cloud synchronization.`,
+      detail: `The active workspace uses Airship's client-encryption boundary, so ${PROFILE_MEMORY_PATH} is written through it. Its backing tier was not supplied to Memory, so this route claims neither device nor cloud synchronization.`,
     });
   }
   return Object.freeze({
@@ -976,14 +976,14 @@ export function MemoryView({
           {densityAllows("telemetry", density) ? (
           <div>
             <dt>Recall runs</dt>
-            <dd><Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." /></dd>
+            <dd><StatusMark state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." /></dd>
           </div>
           ) : null}
           {(densityAllows("telemetry", density) || (recallDurability.state !== "synced" && recallDurability.state !== "local")) ? (
           <div>
             <dt>Records live</dt>
-            <dd><Seal
-              state={durabilitySeal(recallDurability.state)}
+            <dd><StatusMark
+              state={durabilityStatusMark(recallDurability.state)}
               density="chip"
               label={recallDurability.label ?? durabilityLabel(recallDurability.state)}
               detail={recallDurability.detail}
@@ -1041,13 +1041,9 @@ export function MemoryView({
             * produced cannot recur, and each caption is the cell's own
             * provenance, verbatim.
             *
-            * These are the shipped `.metric` cells rather than <MetricStrip>:
-            * `metric-strip.tsx` is imported by `billing-view`, which lives in
-            * the deferred-capabilities chunk, so importing it here too would
-            * merge `memory-graph/kind-visual` into a shared chunk and the
-            * release gate requires that chunk by name. Same three slots, same
-            * strings; the swap is the primitive owner's to make once the
-            * chunk map allows it.
+            * These remain local `.metric` cells so
+            * `memory-graph/kind-visual` stays in its named deferred chunk. The
+            * release gate checks that chunk boundary.
             */}
           <div class="memory-metrics" role="group" aria-label="Relationship graph statistics">
             <div class="metric"><span>Nodes</span><strong>{graph.stats.nodeCount}</strong><small>real page inputs + derived terms</small></div>

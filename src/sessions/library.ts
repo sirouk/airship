@@ -1,6 +1,6 @@
 import { deepFreeze } from "../core/freeze";
 import type { SessionManifest } from "../core/contracts";
-import { JournalConflictError, SESSION_BOOKKEEPING_EVENT_TYPES, type EventJournal, type SessionRecord } from "../core/journal";
+import { JournalConflictError, SESSION_BOOKKEEPING_EVENT_TYPES, type EventJournal, type JournalHead, type SessionRecord } from "../core/journal";
 import {
   decideSessionResume,
   extractSessionPins,
@@ -43,7 +43,7 @@ export type SessionLibraryDetail = Readonly<{
 export type ForkSessionRequest = Readonly<{
   title?: string;
   manifest?: SessionManifest;
-  expectedSourceHead?: Readonly<{ sequence: number; digest: string }>;
+  expectedSourceHead?: JournalHead;
   /** Audited quiescent boundary: a terminal turn or a between-turn session-scoped record. */
   sourcePoint?: Readonly<{ sequence: number; digest: string }>;
   signal?: AbortSignal;
@@ -222,7 +222,7 @@ export class SessionLibrary {
   async delete(
     sessionId: string,
     options: Readonly<{
-      expectedHead?: Readonly<{ sequence: number; digest: string }>;
+      expectedHead?: JournalHead;
       signal?: AbortSignal;
     }> = {},
   ): Promise<void> {
@@ -231,7 +231,11 @@ export class SessionLibrary {
     const expectedHead = options.expectedHead ?? await (async () => {
       const session = await this.journal.getSession(sessionId, options.signal);
       if (!session) throw new UnknownSessionError(sessionId);
-      return { sequence: session.headSequence, digest: session.headDigest };
+      return {
+        sequence: session.headSequence,
+        digest: session.headDigest,
+        ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
+      };
     })();
     await this.journal.deleteSession(sessionId, expectedHead, options.signal);
   }
@@ -353,7 +357,9 @@ export class SessionLibrary {
 }
 
 function sameHead(left: SessionRecord, right: SessionRecord): boolean {
-  return left.headSequence === right.headSequence && left.headDigest === right.headDigest;
+  return left.headSequence === right.headSequence
+    && left.headDigest === right.headDigest
+    && left.headIncarnation === right.headIncarnation;
 }
 
 function assertSessionId(value: string): void {

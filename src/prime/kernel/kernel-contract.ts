@@ -1,6 +1,6 @@
 /**
  * The prime kernel contract: protocol, budgets, and capability metadata
- * for the persistent RLM execution kernel.
+ * for the RLM execution kernels.
  *
  * Why this exists: prime-agent's RLM runs model-written code in a
  * persistent interpreter (IPython) with a namespace that survives across
@@ -10,8 +10,8 @@
  * disposable worker starts. This kernel is the same idea with the walls
  * down, and the honesty rules preserved:
  *
- *   - one persistent worker per kernel instance: a session REPL, not a
- *     disposable executor;
+ *   - the JavaScript engine uses one worker per job as its browser-enforced
+ *     post-completion boundary; Pyodide remains a persistent session REPL;
  *   - code runs with NO ambient network/storage/DOM (the same removal
  *     list the disposable executors use) — every effect crosses the tool
  *     bridge, where every call is individually reviewed, journaled, and
@@ -21,9 +21,9 @@
  *   - cancellation is cooperative first (job-scope AbortSignal inside the
  *     worker) and terminate-worker as the hard boundary, reported
  *     honestly in the capability record;
- *   - namespace persistence is kernel-instance-scoped: state survives
- *     jobs and turns, and is RESET on kernel restart. Crash resets are
- *     reported, never hidden.
+ *   - namespace lifetime is reported per engine. JavaScript is job-scoped
+ *     because its worker is terminated after every result; Pyodide remains
+ *     kernel-instance-scoped. Crash and reset boundaries are never hidden.
  */
 
 import type { JsonValue } from "../../core/contracts";
@@ -112,10 +112,27 @@ export const DEFAULT_KERNEL_BUDGETS: KernelBudgets = Object.freeze({
   maxQueuedJobs: 64,
 });
 
+/** Fixed wire bounds that are not policy knobs. */
+export const KERNEL_PROTOCOL_TOKEN_BYTES = 32;
+export const MAX_KERNEL_JOB_ID_CHARS = 256;
+export const MAX_KERNEL_LABEL_CHARS = 1_024;
+export const MAX_KERNEL_TOOL_NAME_CHARS = 256;
+export const MAX_KERNEL_JSON_DEPTH = 64;
+export const MAX_KERNEL_JSON_NODES = 100_000;
+/** Empty writes still consume a frame; this caps message/event amplification independently of captured text. */
+export const MAX_KERNEL_STREAM_FRAMES = 4_096;
+/** Each stream frame is charged for its separator/wire boundary, including an empty first frame. */
+export const KERNEL_STREAM_FRAME_OVERHEAD_CHARS = 1;
 
+/**
+ * JavaScript worker frames carry this unguessable, generation-local envelope.
+ * It is held only by the controller closure and the host. Pyodide still uses
+ * the base union below until its separate worker protocol is migrated.
+ */
+export type KernelWorkerProtocolEnvelope = Readonly<{ protocolToken: string }>;
 
 export type KernelHostToWorkerMessage =
-  | Readonly<{ type: "init"; budgets: KernelBudgets }>
+  | Readonly<{ type: "init"; budgets: KernelBudgets; protocolToken: string }>
   | Readonly<{ type: "exec"; job: { jobId: string; code: string; label?: string } }>
   | Readonly<{ type: "cancel"; jobId: string; reason?: string }>
   | Readonly<{ type: "bridge-response"; jobId: string; call: KernelBridgeCallResult }>
@@ -144,6 +161,9 @@ export type KernelJobEventMessage =
   | Readonly<{ type: "bridge-result"; jobId: string; seq: number; ok: boolean }>
   | Readonly<{ type: "finished"; jobId: string; result: KernelJobResult }>;
 
+/** Authenticated wire shape used by the JavaScript worker generation. */
+export type JavascriptKernelWorkerToHostMessage = KernelWorkerToHostMessage & KernelWorkerProtocolEnvelope;
+
 /**
  * Honest capability metadata one engine instance reports about itself, in
  * the same vocabulary airship's execution runtime registry uses
@@ -171,14 +191,12 @@ export type KernelEngineDescription = Readonly<{
    */
   workspaceAccess: "none" | "bridge-documented";
   /**
-   * Namespace lifetime. Both engines are "kernel-instance": top-level
-   * assignments survive across jobs inside one worker generation and are
-   * destroyed — and reported as destroyed — by restart, crash, or
-   * terminate. Cross-restart snapshots (prime-agent's dill state-snapshot)
-   * are explicitly NOT claimed here; see pyodide PORT.md for the deferred
-   * restore seam.
+   * Namespace lifetime. JavaScript is "job": the host terminates its worker
+   * after every finished frame so post-return microtasks cannot escape the
+   * watchdog. Pyodide is "kernel-instance" and survives until restart, crash,
+   * or terminate. Cross-restart snapshots are explicitly not claimed.
    */
-  persistence: "kernel-instance";
+  persistence: "job" | "kernel-instance";
   /**
    * Cancellation truth per engine: javascript aborts its job-scope
    * AbortSignal first; pyodide flips a cooperative flag CPython consults
@@ -192,3 +210,19 @@ export type KernelEngineDescription = Readonly<{
    */
   network: "absent-ambient; tool bridge only";
 }>;
+
+/**
+ * Is this a bounded protocol string?
+ *
+ * The predicate, without the refusal. Both kernel engines — the JavaScript
+ * host in `kernel-host.ts` and the Pyodide engine in `pyodide-engine.ts` —
+ * carried a byte-identical `requiredString`, and each threw its own protocol
+ * error class. The question they were asking was one question; only the
+ * identity of the complaint differed, and callers do branch on that identity.
+ * So the test lives here once and each engine keeps a one-line wrapper that
+ * raises its own error.
+ */
+export function boundedProtocolString(value: unknown, maxChars: number, allowEmpty: boolean): string | undefined {
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.length > maxChars) return undefined;
+  return value;
+}

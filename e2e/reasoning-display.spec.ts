@@ -22,15 +22,15 @@ test("provider reasoning lands as its own collapsible part, summary first, full 
   await page.getByRole("button", { name: "Send message" }).click();
 
   // Collapsed by default: the headline is visible, the body is not yet.
-  const part = page.locator(".message-part.reasoning-summary.reasoning-full").first();
+  const part = page.locator("details.reasoning-aside").first();
   await expect(part).toBeVisible({ timeout: 20_000 });
   await expect(part.locator("summary")).toContainText("Reasoning");
-  await expect(part.locator("summary small")).toContainText("provider exposed it");
-  await expect(part.locator("pre.reasoning-summary__text")).not.toBeVisible();
+  await expect(part.locator(".reasoning-aside__meta")).toContainText("characters");
+  await expect(part.locator(".reasoning-aside__body")).not.toBeVisible();
 
   // One deliberate action reveals exactly what the provider streamed.
   await part.locator("summary").click();
-  const body = part.locator("pre.reasoning-summary__text");
+  const body = part.locator(".reasoning-aside__body");
   await expect(body).toBeVisible();
   await expect(body).toContainText('First I decide what "whether to ship on Friday" asks for.');
   await expect(body).toContainText("in the voice the profile set.");
@@ -55,7 +55,7 @@ test("the Profile display preference opens reasoning by default without touching
   await composer.click();
   await composer.fill("/reason the default expansion");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator(".message-part.reasoning-summary.reasoning-full summary").first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator("details.reasoning-aside summary").first()).toBeVisible({ timeout: 20_000 });
 
   // The Profile preference lives with the profile's other boundaries, in the
   // editor the Profiles route opens on the selected profile.
@@ -69,7 +69,7 @@ test("the Profile display preference opens reasoning by default without touching
 
   // Same thread, next render: the reasoning starts open — display only changed.
   await page.goto("/#chat", { waitUntil: "domcontentloaded" });
-  const openBody = page.locator("article.message-part.reasoning-summary.reasoning-full pre.reasoning-summary__text").first();
+  const openBody = page.locator("details.reasoning-aside .reasoning-aside__body").first();
   await expect(openBody).toBeVisible({ timeout: 20_000 });
   await expect(openBody).toContainText('First I decide what "the default expansion" asks for.');
 });

@@ -7,8 +7,11 @@ import { MemoryJournalBackend } from "../core/memory-journal";
 import { auditSessionHistory } from "../core/session-audit";
 import {
   PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
+  forkActivationManifestMatches,
+  inferenceBindingsMatch,
   ProfileActiveConversationConflictError,
   profileManifestResumeMismatches,
+  profileManifestResumeRefusal,
   profileOwnedSessions,
   requireProfileOwnedSession,
   resolveProfileActiveConversation,
@@ -41,7 +44,6 @@ async function manifest(systemPrompt: string, overrides: Partial<SessionManifest
       workspaceBinding: { kind: "active-workspace" },
       memoryScope: "profile",
       approvalMode: "ask-first",
-      minimumPosture: "local",
     },
   });
   return { ...base, ...overrides } as SessionManifest;
@@ -69,6 +71,132 @@ describe("profile cockpit resume matching", () => {
     expect(actual.systemPromptDigest).not.toBe(expected.systemPromptDigest);
     expect(actual.profile?.resolutionDigest).not.toBe(expected.profile?.resolutionDigest);
     expect(resumableProfileManifestMatches(actual, expected)).toBe(true);
+  });
+
+  it("requires exact protocol and transport identity for v2 inference bindings", () => {
+    const base = {
+      connectionId: "connection-1",
+      connectionGeneration: 1,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-1",
+      boundAt: "2026-01-01T00:00:00.000Z",
+    };
+    const actual = {
+      ...base,
+      version: 2 as const,
+      transportId: "chutes-openai-compatible-v1",
+      protocol: "openai-compatible" as const,
+    };
+    expect(inferenceBindingsMatch(actual, { ...actual })).toBe(true);
+    expect(inferenceBindingsMatch(actual, { ...actual, transportId: "other-transport" })).toBe(false);
+    expect(inferenceBindingsMatch(actual, { ...actual, protocol: "openai-responses" })).toBe(false);
+    // A v2 durable pin cannot be satisfied by a downgraded live binding.
+    expect(inferenceBindingsMatch(actual, { ...base, version: 1 })).toBe(false);
+    // Historical v1 pins may resume on the same upgraded v2 live authority.
+    expect(inferenceBindingsMatch({ ...base, version: 1 }, actual)).toBe(true);
+  });
+
+  it("admits fork-boundary model/context projection but no route-authority drift", async () => {
+    const binding = {
+      version: 2 as const,
+      connectionId: "chutes-main",
+      connectionGeneration: 2,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      transportId: "chutes-openai-compatible-v1",
+      protocol: "openai-compatible" as const,
+      modelId: "model-a",
+      boundAt: "2026-01-01T00:00:00.000Z",
+    };
+    const authority = await manifest("Pinned prompt", {
+      providerId: binding.providerId,
+      model: binding.modelId,
+      inferenceBinding: binding,
+    });
+    const beforeChange = { ...authority };
+    const afterChange = {
+      ...authority,
+      model: "model-b",
+      inferenceBinding: { ...binding, modelId: "model-b" },
+      contextPolicy: undefined,
+    } as SessionManifest;
+
+    expect(forkActivationManifestMatches(beforeChange, authority)).toBe(true);
+    expect(forkActivationManifestMatches(afterChange, authority)).toBe(true);
+    expect(forkActivationManifestMatches({
+      ...afterChange,
+      inferenceBinding: { ...binding, modelId: "model-b", transportId: "other-transport" },
+    }, authority)).toBe(false);
+    expect(forkActivationManifestMatches({ ...afterChange, providerId: "other-provider" }, authority)).toBe(false);
+    expect(forkActivationManifestMatches({ ...afterChange, toolManifestDigest: "sha256:drift" }, authority)).toBe(false);
+
+    const legacyAuthority = {
+      ...authority,
+      providerId: binding.transportId,
+      inferenceBinding: {
+        connectionId: binding.connectionId,
+        connectionGeneration: binding.connectionGeneration,
+        providerId: binding.providerId,
+        providerLabel: binding.providerLabel,
+        providerRevision: binding.providerRevision,
+        authMethod: binding.authMethod,
+        transportBoundary: binding.transportBoundary,
+        modelId: "model-a",
+        boundAt: binding.boundAt,
+        version: 1 as const,
+      },
+    } as SessionManifest;
+    expect(forkActivationManifestMatches({
+      ...legacyAuthority,
+      model: "model-b",
+      inferenceBinding: { ...legacyAuthority.inferenceBinding!, modelId: "model-b" },
+    }, legacyAuthority)).toBe(true);
+  });
+
+  it("resumes a realistic legacy provider-as-transport pin only through its exact v2 wire", async () => {
+    const base = {
+      connectionId: "chutes-main",
+      connectionGeneration: 2,
+      providerId: "chutes",
+      providerLabel: "Chutes",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-1",
+      boundAt: "2026-08-20T00:00:00.000Z",
+    };
+    const actual = await manifest("Pinned prompt", {
+      providerId: "chutes-openai-compatible-v1",
+      model: base.modelId,
+      inferenceBinding: { ...base, version: 1 },
+    });
+    const expected = await manifest("Pinned prompt", {
+      providerId: base.providerId,
+      model: base.modelId,
+      inferenceBinding: {
+        ...base,
+        version: 2,
+        transportId: "chutes-openai-compatible-v1",
+        protocol: "openai-compatible",
+      },
+    });
+
+    expect(profileManifestResumeMismatches(actual, expected)).toEqual([]);
+    expect(profileManifestResumeMismatches(actual, {
+      ...expected,
+      inferenceBinding: { ...expected.inferenceBinding!, protocol: "openai-chat-completions" },
+    } as SessionManifest)).toContain("inference-binding");
+    expect(profileManifestResumeMismatches(actual, {
+      ...expected,
+      inferenceBinding: { ...expected.inferenceBinding!, transportId: "other-openai-compatible-v1" },
+    } as SessionManifest)).toContain("inference-binding");
   });
 
   it("rejects changes to stable profile, tool, and runtime pins", async () => {
@@ -234,6 +362,60 @@ describe("durable profile active-conversation pointer", () => {
     // The single-answer form is this list's head and nothing else, so the two
     // can never disagree about which conversation comes back.
     expect((await resolveResumableProfileConversation(journal, "research", pinned))?.id).toBe(candidates[0]?.id);
+  });
+
+  /*
+   * The substitution this function used to perform.
+   *
+   * `preferredSessionId` is the conversation a caller was asked for by name —
+   * a deep link, or the conversation a profile was last in. It was consulted
+   * only after every candidate had already been filtered by manifest
+   * compatibility, so an asked-for conversation whose pins no longer resolve
+   * was dropped silently and a different one was returned in its place. The
+   * caller then opened that other conversation under the requested
+   * conversation's own address.
+   */
+  it("never answers a named request with a different conversation", async () => {
+    let tick = 0;
+    const journal = new EventJournal(
+      new MemoryJournalBackend(),
+      () => new Date(Date.UTC(2026, 6, 28, 0, 0, tick++)).toISOString(),
+    );
+    const pinned = await manifest("Named request");
+    const asked = await journal.createSession("Asked for", await manifest("Named request", {
+      providerId: "custom-endpoint",
+    }));
+    const other = await journal.createSession("Somebody else", pinned);
+    await selectProfileActiveConversation(journal, "research", other.id);
+
+    // Without a name, the resumable shelf is unchanged.
+    expect((await resumableProfileConversationCandidates(journal, "research", pinned))
+      .map((session) => session.id)).toEqual([other.id]);
+    // Asked for by name, the answer is that conversation or nothing at all.
+    expect((await resolveResumableProfileConversation(journal, "research", pinned, asked.id))?.id)
+      .toBe(asked.id);
+    expect((await resolveResumableProfileConversation(journal, "research", pinned, "not-in-this-journal"))?.id)
+      .toBe(other.id);
+  });
+
+  /*
+   * The answer is synchronous, so it can be given in the frame the route
+   * resolves rather than after a deferred describer chunk arrives.
+   */
+  it("states why a saved conversation cannot continue, naming the pins that moved", async () => {
+    const expected = await manifest("Refusal wording");
+    const pinnedElsewhere = await manifest("Refusal wording", {
+      providerId: "custom-endpoint",
+      model: "custom/opus",
+    });
+
+    const refusal = profileManifestResumeRefusal(pinnedElsewhere, expected);
+    expect(refusal).toContain("reading a saved conversation");
+    expect(refusal).toContain("What no longer matches: provider, model.");
+    expect(refusal).toContain("Fork it to continue.");
+    // A conversation with nothing to name still gets one honest sentence.
+    expect(profileManifestResumeRefusal(expected, expected))
+      .toBe("You are reading a saved conversation. It cannot continue on this route. Fork it to continue.");
   });
 
   it("prefers the explicit selection over a more recently edited compatible conversation", async () => {

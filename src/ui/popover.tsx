@@ -27,7 +27,7 @@ export const POPOVER_SHEET_MAX_WIDTH = 640;
  * phone held sideways is no: 932×430 is wider than any threshold a phone
  * breakpoint would set and shorter than every one of them. An anchored panel
  * needs *vertical* room, so a viewport that is wide and short is precisely the
- * shape the width test gets wrong — and it got it wrong on the Proof route's
+ * shape the width test gets wrong — and it once got it wrong on a document route's
  * claim stack, which is that route's primary evidence surface. Measured on the
  * shipped build at 932×430: the trigger's bottom edge sits ~305px down a
  * `.main` pane that ends at 385px above the navigation band, so `popoverRoom`
@@ -288,7 +288,7 @@ export type PopoverProps = Readonly<{
   label: string;
   /** Sticky panel heading, and the bottom sheet's header title. */
   heading: string;
-  /** Resting content of the trigger — normally a `<Seal density="chip">`. */
+  /** Resting content of the trigger — normally a `<StatusMark density="chip">`. */
   trigger: ComponentChildren;
   children: ComponentChildren;
   triggerClass?: string;
@@ -668,7 +668,17 @@ export function Popover({
             Done
           </button>
         </div>
-        <div class="popover__body">{children}</div>
+        {/*
+          * A scroll container that is not a tab stop is content a keyboard
+          * cannot reach: `.popover__body` is `overflow-y: auto`, and on the Run
+          * details receipt it holds 572px of panel in a 235px box, so Request
+          * digest, Response digest and Receipt format existed only for a mouse
+          * wheel. The focus trap parked Tab on Done forever, and ArrowDown,
+          * PageDown and End all left scrollTop at 0. `tabIndex={0}` makes the
+          * region focusable, which is what gives those keys a scroller to act
+          * on; `FOCUSABLE_SELECTOR` then includes it in the trap.
+          */}
+        <div class="popover__body" tabIndex={0}>{children}</div>
       </div>
     </div>
   );

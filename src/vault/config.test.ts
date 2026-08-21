@@ -7,7 +7,7 @@ import {
 } from "./config";
 
 describe("vault S3 configuration", () => {
-  it("canonicalizes no values and exposes exact CSP, CORS, IAM, and lifecycle requirements", () => {
+  it("canonicalizes no values and exposes exact network, CORS, IAM, and lifecycle requirements", () => {
     const config = validateVaultS3Configuration(productionConfig());
     const requirements = vaultProviderRequirements(config);
 
@@ -19,7 +19,7 @@ describe("vault S3 configuration", () => {
       probePrefix: ".airship-probes/v1",
       forcePathStyle: false,
     });
-    expect(requirements.cspConnectSrc).toEqual([
+    expect(requirements.networkOrigins).toEqual([
       "https://airship-private.s3.us-east-1.amazonaws.com",
       "https://cognito-identity.us-east-1.amazonaws.com",
       "https://issuer.example",

@@ -1,21 +1,21 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { Popover } from "./popover";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import { SCROLL_EDGE_EPSILON, scrollEdges, type ScrollEdges } from "./scroll-affordance";
 
 /**
  * USAGE — the one tab strip. Two variants, one "you are here" encoding.
  *
- * Region switching (Proof, Workspace, Connect methods, the profile hub):
+ * Region switching (Workspace, Terminal sessions, the profile hub):
  *
  *   <Tabs
- *     label="Proof views"
- *     items={[{ id: "summary", label: "Receipt & journal" },
- *             { id: "attestations", label: "Attestation evidence" }]}
+ *     label="Workspace views"
+ *     items={[{ id: "files", label: "Files" },
+ *             { id: "source", label: "Source control" }]}
  *     activeId={section}
  *     onSelect={onSectionChange}
- *     panelId={(id) => `proof-panel-${id}`}
+ *     panelId={(id) => `workspace-panel-${id}`}
  *   />
  *
  * Closable document tabs (Editor files, Terminal sessions):
@@ -41,7 +41,7 @@ import { SCROLL_EDGE_EPSILON, scrollEdges, type ScrollEdges } from "./scroll-aff
  * - roving tabindex with ←/→/Home/End, per the tablist pattern.
  *
  * Counts ride with the label as plain text (`Source Control 3`), never as a
- * filled badge. A live state is a `dot` Seal whose word is in the accessible
+ * filled badge. A live state is a `dot` StatusMark whose word is in the accessible
  * name — never a second line of text.
  */
 
@@ -62,7 +62,7 @@ export type TabItem = Readonly<{
   /** What the count counts, for the accessible name: "3 changes". */
   countLabel?: string;
   /** A live state — Terminal's "Running", an unsaved buffer. */
-  state?: SealState;
+  state?: StatusMarkState;
   /** The word for that state. Required reading: it is the accessible carrier. */
   stateLabel?: string;
   /** A replaceable document preview. Its visible label is italicized. */
@@ -196,8 +196,8 @@ export function tabOverflowLabel(input: Readonly<{ hidden: number; total: number
 /**
  * A tab's accessible name: label, disambiguator, count and live-state word.
  *
- * The state word is concatenated rather than left to the seal alone so the
- * name is complete even where the seal is decorative, and `detail` leads when
+ * The state word is concatenated rather than left to the status mark alone so the
+ * name is complete even where the status mark is decorative, and `detail` leads when
  * the visible label has been truncated — the accessible tree gets the whole
  * identity even when 15ch of strip does not.
  */
@@ -373,7 +373,7 @@ export function Tabs({
             >
               {item.leading ? <span class="tabs__leading" aria-hidden="true">{item.leading}</span> : null}
               {item.state ? (
-                <Seal state={item.state} label={item.stateLabel} density="dot" size={16} class="tabs__state" />
+                <StatusMark state={item.state} label={item.stateLabel} density="dot" size={16} class="tabs__state" />
               ) : null}
               <span class="tabs__label">{item.label}</span>
               {item.hint ? <small class="tabs__hint">{item.hint}</small> : null}
@@ -417,7 +417,7 @@ export function Tabs({
               >
                 {item.leading ? <span class="tabs__leading" aria-hidden="true">{item.leading}</span> : null}
                 {item.state ? (
-                  <Seal state={item.state} label={item.stateLabel} density="dot" size={16} />
+                  <StatusMark state={item.state} label={item.stateLabel} density="dot" size={16} />
                 ) : null}
                 <span class="tabs__overflow-label">{item.detail ?? item.label}</span>
                 {item.count !== undefined ? <small>{item.countLabel ?? item.count}</small> : null}

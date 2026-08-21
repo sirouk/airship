@@ -170,7 +170,7 @@ describe("terminal Git command bridge", () => {
     expect((await workspace.read("/workspace/feature.txt"))?.content).toBe("feature\n");
 
     const added = await run("git remote add origin https://git.example.test/repository.git");
-    expect(added.output).toContain("Content-Security-Policy cannot reach that origin");
+    expect(added.output).toContain("Git remote policy does not permit that origin");
     expect((await run("git remote -v")).output).toContain("https://git.example.test/repository.git (fetch)");
     await run("git remote remove origin");
     expect((await run("git remote")).output).toBe("No remotes configured.\n");
@@ -315,13 +315,13 @@ describe("terminal Git command bridge", () => {
       cwd: "/workspace",
       client,
       review: async () => { reviewCalls += 1; return "allow"; },
-    })).rejects.toThrow(/Content-Security-Policy blocks a direct Git clone/u);
+    })).rejects.toThrow(/Git remote policy blocks a direct Git clone/u);
     expect(reviewCalls).toBe(0);
   });
 
   it("routes push through the identity approval and the same direct Smart HTTP adapter", async () => {
     const workspace = new MemoryWorkspace();
-    // The shipped connect-src reaches Git Smart HTTP only through 'self', so a
+    // The stock Git policy permits Smart HTTP only through the page origin, so a
     // pushable remote is one served beside Airship.
     vi.stubGlobal("location", { origin: "https://git.example.test" });
     const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{

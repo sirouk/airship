@@ -40,6 +40,7 @@ function withProfileSkillMode(
   else skillModes[skillId] = mode;
   return createProfileRevision({
     ...profile,
+    version: 3,
     parentRevision: profile.revision,
     skillModes,
     createdAt: new Date().toISOString(),
@@ -155,6 +156,7 @@ describe("removing an authored skill", () => {
       profiles: Object.freeze([
         await createProfileRevision({
           ...general,
+          version: 3,
           parentRevision: general.revision,
           skillModes: { ...general.skillModes, "custom.house-style": "inherit" },
           createdAt: new Date().toISOString(),

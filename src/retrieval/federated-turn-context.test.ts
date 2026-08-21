@@ -30,7 +30,6 @@ describe("FederatedTurnContextProvider", () => {
         workspaceBinding: { kind: "active-workspace" },
         memoryScope: "profile",
         approvalMode: "ask-first",
-        minimumPosture: "local",
       },
     });
     const session = await journal.createSession("Builder", manifest);
@@ -96,7 +95,6 @@ describe("FederatedTurnContextProvider", () => {
       workspaceBinding: { kind: "active-workspace" as const },
       memoryScope: "session" as const,
       approvalMode: "ask-first" as const,
-      minimumPosture: "local" as const,
     };
     const manifest = await createSessionManifest({
       systemPrompt: "Research.", providerId: "test", model: "test", tools: [],

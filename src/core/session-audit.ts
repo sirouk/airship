@@ -9,8 +9,13 @@ import type {
   ToolDefinition,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
+import {
+  assertValidSessionInferenceBinding,
+  sessionInferenceProviderIdMatches,
+} from "./inference-binding";
+import { lastRecencyAdvancingEvent } from "./journal";
 import type { DurableEvent, SessionRecord } from "./journal";
-import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
+import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
 import {
   canonicalContextSelection,
   contextSelectionScopeMatches,
@@ -108,30 +113,27 @@ export const KNOWN_EVENT_TYPES = new Set([
   /*
    * One thing a shell session did. Terminal lineage used to live only in the
    * manager's 64-record ring buffer, so a command that rewrote the workspace
-   * was absent from the artifact Proof audits — and an event type this set does
+   * was absent from the local history being checked — and an event type this set does
    * not name raises EVENT_TYPE_UNKNOWN, which would have made recording shell
    * work *degrade* the completeness of the journal it was recorded in.
    */
   TERMINAL_ACTIVITY_EVENT_TYPE,
   /*
-   * The prime engine's own evidence vocabulary, and the reason it has to be
-   * named here is written three comments above: an event type this set does
-   * not name raises EVENT_TYPE_UNKNOWN, which is a `completeness` finding,
-   * which makes the report `incomplete`. Prime became the default engine while
-   * this set still listed only the airship turn protocol, so *every* new
-   * conversation journaled a `prime.session.runtime.seal` the audit could not
-   * read and was quarantined from resume by its own first turn — the exact
-   * degrade-by-recording trap the terminal comment above was written to avoid.
+   * The Prime engine's own record vocabulary. An event type this set does not
+   * name raises EVENT_TYPE_UNKNOWN, which makes the report `incomplete`.
+   * Prime became the default engine while this set still listed only the
+   * Airship turn protocol, so the first runtime-selection marker made each new
+   * conversation unopenable after its first turn.
    *
    * Listed literally rather than imported: `src/prime` imports core, and core
-   * importing prime back would close a cycle. `session-audit-prime-vocabulary.test.ts`
-   * holds the two in agreement, so a new prime record cannot be added without
-   * this set learning it.
+   * importing Prime back would close a cycle. The direct vocabulary test holds
+   * the two lists in agreement.
    *
-   * Named, not interpreted. These sit beside the canonical transcript and
-   * carry no turn-protocol obligations, so the audit reads them as records it
-   * knows exist rather than records it verifies the shape of.
+   * Named, not interpreted. These records sit beside the canonical transcript
+   * and carry no turn-protocol obligations. The former runtime marker remains
+   * here only for historical journal reads; current writes use the new marker.
    */
+  "prime.session.runtime.selected",
   "prime.session.runtime.seal",
   "prime.harness.refined",
   "prime.kernel.job.started",
@@ -158,10 +160,12 @@ const TERMINAL_MAX_COMMAND_CHARS = 1_024;
 const TERMINAL_MAX_SUMMARY_CHARS = 512;
 const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const EFFECTS = new Set(["read", "write", "network", "execute", "identity"]);
-const POSTURES = new Set(["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"]);
-const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-confidential"]);
+const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-heavy"]);
+const POSTURES = new Set(["local", "plaintext-remote"]);
 /** The closed authority vocabulary of `ApprovalProvenance`; see approvalProvenanceIssue. */
-const APPROVAL_SOURCES = new Set(["automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox"]);
+const APPROVAL_SOURCES = new Set([
+  "automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox", "unattended",
+]);
 const APPROVAL_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
 const FINISH_REASONS = new Set(["stop", "tool-calls", "length"]);
 const encoder = new TextEncoder();
@@ -172,7 +176,7 @@ export type SessionAuditCategory =
   | "chain"
   | "manifest"
   | "protocol"
-  | "receipt"
+  | "trace"
   | "completeness"
   | "anchor";
 
@@ -190,7 +194,7 @@ export type SessionAuditFinding = Readonly<{
 export type TrustedJournalHead = Readonly<{
   sequence: number;
   digest: string;
-  /** Human-readable origin such as an enclave receipt, transparency log, or signed export. */
+  /** Human-readable origin such as a signed export or external checkpoint. */
   source: string;
 }>;
 
@@ -224,7 +228,7 @@ export type SessionAuditReport = Readonly<{
     chain: boolean;
     manifest: boolean;
     protocol: boolean;
-    receiptBindings: boolean;
+    traceBindings: boolean;
     complete: boolean;
   }>;
   counts: Readonly<{
@@ -272,6 +276,27 @@ export type SessionAuditOptions = Readonly<{
   limits?: Partial<SessionAuditLimits>;
 }>;
 
+/** Keep issue metadata positional so the emitted object keys exist once, not once per audit rule. */
+type FindingContext = Omit<SessionAuditFinding, "code" | "severity" | "category" | "message">;
+type AddFinding = (
+  code: string,
+  category: SessionAuditCategory,
+  message: string,
+  context?: FindingContext,
+  severity?: SessionAuditSeverity,
+) => void;
+
+function addEventFinding(
+  add: AddFinding,
+  event: DurableEvent,
+  code: string,
+  message: string,
+  category: SessionAuditCategory = "protocol",
+  severity?: SessionAuditSeverity,
+): void {
+  add(code, category, message, eventLocation(event), severity);
+}
+
 const DEFAULT_LIMITS: SessionAuditLimits = Object.freeze({
   maxEvents: 100_000,
   maxEventBytes: 2 * 1024 * 1024,
@@ -289,6 +314,9 @@ type ToolState = {
 
 type TurnState = {
   id: string;
+  /** Route policy admitted when turn.requested joined the durable chain. */
+  model: string;
+  contextPolicy: SessionManifest["contextPolicy"];
   step: number;
   request?: {
     content: string;
@@ -326,15 +354,38 @@ type LastContextMessage = Readonly<{ index: number; content: string }>;
  * backend. The report deliberately distinguishes local consistency from
  * authenticity; only a separately trusted head can anchor the chain.
  */
-export async function auditSessionHistory(
+export function auditSessionHistory(
   input: SessionAuditInput,
   options: SessionAuditOptions = {},
 ): Promise<SessionAuditReport> {
+  /*
+   * One synchronous ownership boundary for the whole audit call.
+   *
+   * The chain walk yields for every SHA-256 operation. Retaining even one
+   * caller-owned event, manifest field, or trusted-head option across that
+   * yield lets the digest preimage and the later protocol/report reads observe
+   * different values. Snapshot the complete graph in one traversal before the
+   * async implementation starts, preserving aliases while refusing accessors
+   * without executing them.
+   */
+  let snapshot: Readonly<{ input: SessionAuditInput; options: SessionAuditOptions }>;
+  try {
+    snapshot = descriptorSafeDeepSnapshot({ input, options });
+  } catch {
+    return Promise.resolve(invalidAuditSnapshotReport());
+  }
+  return auditSessionHistorySnapshot(snapshot.input, snapshot.options);
+}
+
+async function auditSessionHistorySnapshot(
+  input: SessionAuditInput,
+  options: SessionAuditOptions,
+): Promise<SessionAuditReport> {
+  if (!asPlainRecord(options)) return invalidAuditSnapshotReport();
   const limits = resolveLimits(options.limits);
   const findings: SessionAuditFinding[] = [];
-  const add = (
-    finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity },
-  ) => findings.push(Object.freeze({ severity: "error", ...finding }));
+  const add: AddFinding = (code, category, message, context, severity = "error") =>
+    findings.push(Object.freeze({ severity, ...context, code, category, message }));
 
   const rawInput = asPlainRecord(input);
   const rawSession = asPlainRecord(rawInput?.session);
@@ -342,11 +393,7 @@ export async function auditSessionHistory(
   const sessionId = boundedString(rawSession?.id, 512) ?? "unknown";
 
   if (!rawInput || !rawSession || !rawEvents) {
-    add({
-      code: "INPUT_INVALID",
-      category: "schema",
-      message: "Audit input must contain a plain session record and an event array.",
-    });
+    add("INPUT_INVALID", "schema", "Audit input must contain a plain session record and an event array.");
     return finishReport({
       checkedAt: options.checkedAt,
       sessionId,
@@ -359,11 +406,7 @@ export async function auditSessionHistory(
   }
 
   if (rawEvents.length > limits.maxEvents) {
-    add({
-      code: "EVENT_LIMIT_EXCEEDED",
-      category: "schema",
-      message: `Journal contains ${rawEvents.length} events; the audit limit is ${limits.maxEvents}.`,
-    });
+    add("EVENT_LIMIT_EXCEEDED", "schema", `Journal contains ${rawEvents.length} events; the audit limit is ${limits.maxEvents}.`);
   }
 
   const session = validateSessionRecord(rawSession, add);
@@ -377,36 +420,21 @@ export async function auditSessionHistory(
   for (const rawEvent of rawEvents.slice(0, limits.maxEvents)) {
     const eventRecord = asPlainRecord(rawEvent);
     if (!eventRecord) {
-      add({ code: "EVENT_INVALID", category: "schema", message: "Journal event must be a plain object." });
+      add("EVENT_INVALID", "schema", "Journal event must be a plain object.");
       continue;
     }
     const location = eventLocation(eventRecord);
     const unknownFields = Object.keys(eventRecord).filter((field) => !EVENT_FIELDS.has(field));
     if (unknownFields.length > 0) {
-      add({
-        ...location,
-        code: "EVENT_UNKNOWN_FIELDS",
-        category: "schema",
-        message: `Event contains fields outside protocol v1: ${unknownFields.sort().join(", ")}.`,
-      });
+      add("EVENT_UNKNOWN_FIELDS", "schema", `Event contains fields outside protocol v1: ${unknownFields.sort().join(", ")}.`, location);
     }
     if (!isDurableEventShape(eventRecord)) {
-      add({
-        ...location,
-        code: "EVENT_SHAPE_INVALID",
-        category: "schema",
-        message: "Event is missing a required protocol-v1 field or contains an invalid field type.",
-      });
+      add("EVENT_SHAPE_INVALID", "schema", "Event is missing a required protocol-v1 field or contains an invalid field type.", location);
       continue;
     }
     const jsonInspection = inspectJson(eventRecord.payload, limits);
     if (!jsonInspection.valid) {
-      add({
-        ...location,
-        code: "EVENT_PAYLOAD_INVALID",
-        category: "schema",
-        message: jsonInspection.message,
-      });
+      add("EVENT_PAYLOAD_INVALID", "schema", jsonInspection.message, location);
       continue;
     }
 
@@ -427,57 +455,37 @@ export async function auditSessionHistory(
     const eventBytes = encoder.encode(canonical).byteLength;
     totalBytes += eventBytes;
     if (eventBytes > limits.maxEventBytes) {
-      add({
-        ...eventLocation(event),
-        code: "EVENT_SIZE_EXCEEDED",
-        category: "schema",
-        message: `Canonical event size ${eventBytes} exceeds the ${limits.maxEventBytes}-byte audit limit.`,
-      });
+      addEventFinding(add, event, "EVENT_SIZE_EXCEEDED", `Canonical event size ${eventBytes} exceeds the ${limits.maxEventBytes}-byte audit limit.`, "schema");
     }
     if (totalBytes > limits.maxTotalBytes) {
-      add({
-        ...eventLocation(event),
-        code: "JOURNAL_SIZE_EXCEEDED",
-        category: "schema",
-        message: `Canonical journal size exceeds the ${limits.maxTotalBytes}-byte audit limit.`,
-      });
+      addEventFinding(add, event, "JOURNAL_SIZE_EXCEEDED", `Canonical journal size exceeds the ${limits.maxTotalBytes}-byte audit limit.`, "schema");
       break;
     }
 
     if (event.version !== 1) {
-      add({ ...eventLocation(event), code: "EVENT_VERSION_INVALID", category: "schema", message: "Event version must be 1." });
+      addEventFinding(add, event, "EVENT_VERSION_INVALID", "Event version must be 1.", "schema");
     }
     if (event.sessionId !== sessionId) {
-      add({ ...eventLocation(event), code: "CROSS_SESSION_EVENT", category: "chain", message: "Event belongs to a different session." });
+      addEventFinding(add, event, "CROSS_SESSION_EVENT", "Event belongs to a different session.", "chain");
     }
     if (event.sequence !== expectedSequence) {
-      add({
-        ...eventLocation(event),
-        code: "SEQUENCE_GAP",
-        category: "chain",
-        message: `Expected sequence ${expectedSequence}; found ${event.sequence}.`,
-      });
+      addEventFinding(add, event, "SEQUENCE_GAP", `Expected sequence ${expectedSequence}; found ${event.sequence}.`, "chain");
     }
     if (event.previousDigest !== expectedPreviousDigest) {
-      add({
-        ...eventLocation(event),
-        code: "PREVIOUS_DIGEST_MISMATCH",
-        category: "chain",
-        message: "Event does not extend the preceding digest.",
-      });
+      addEventFinding(add, event, "PREVIOUS_DIGEST_MISMATCH", "Event does not extend the preceding digest.", "chain");
     }
     if (!DIGEST_PATTERN.test(event.digest) || (await sha256(canonical)) !== event.digest) {
-      add({ ...eventLocation(event), code: "EVENT_DIGEST_MISMATCH", category: "chain", message: "Event digest is invalid." });
+      addEventFinding(add, event, "EVENT_DIGEST_MISMATCH", "Event digest is invalid.", "chain");
     }
     if (eventIds.has(event.eventId)) {
-      add({ ...eventLocation(event), code: "EVENT_ID_REUSED", category: "chain", message: "Event ID is reused in this session." });
+      addEventFinding(add, event, "EVENT_ID_REUSED", "Event ID is reused in this session.", "chain");
     }
     eventIds.add(event.eventId);
     const recordedTime = Date.parse(event.recordedAt);
     if (!Number.isFinite(recordedTime)) {
-      add({ ...eventLocation(event), code: "EVENT_TIME_INVALID", category: "schema", message: "Event timestamp is not a valid ISO timestamp." });
+      addEventFinding(add, event, "EVENT_TIME_INVALID", "Event timestamp is not a valid ISO timestamp.", "schema");
     } else if (recordedTime < previousTime) {
-      add({ ...eventLocation(event), code: "EVENT_TIME_REVERSED", category: "chain", message: "Event timestamp precedes the prior event." });
+      addEventFinding(add, event, "EVENT_TIME_REVERSED", "Event timestamp precedes the prior event.", "chain");
     }
     previousTime = recordedTime;
     expectedSequence = event.sequence + 1;
@@ -504,6 +512,101 @@ export async function auditSessionHistory(
   });
 }
 
+/** Fail closed without consulting any part of a graph that could not be owned safely. */
+function invalidAuditSnapshotReport(): SessionAuditReport {
+  return finishReport({
+    sessionId: "unknown",
+    session: undefined,
+    events: [],
+    findings: [Object.freeze({
+      code: "INPUT_INVALID",
+      severity: "error",
+      category: "schema",
+      message: "Audit input must contain a plain session record and an event array.",
+    })],
+    counts: emptyCounts(),
+  });
+}
+
+const INVALID_AUDIT_SNAPSHOT_PROTOTYPE = Object.freeze(Object.create(null) as object);
+
+/**
+ * Clone one caller-owned graph through own property descriptors only.
+ *
+ * `structuredClone` executes getters. That is acceptable for several trusted
+ * construction APIs, but not for this verifier: exported journal data is
+ * untrusted and the audit's existing plain-record contract explicitly rejects
+ * accessors. This iterative clone never reads a property through `[[Get]]`.
+ * It preserves data descriptors, aliases, cycles, sparse arrays, and null
+ * prototypes. Exotic prototypes are replaced by one internal prototype so the
+ * existing plain-record checks still reject them without retaining a caller
+ * object through the clone's prototype chain.
+ */
+function descriptorSafeDeepSnapshot<T>(value: T): T {
+  type PendingClone = Readonly<{ source: object; target: object; array: boolean }>;
+  const clones = new WeakMap<object, object>();
+  const pending: PendingClone[] = [];
+
+  const allocate = (candidate: unknown): unknown => {
+    if (typeof candidate === "function") {
+      throw new TypeError("Audit snapshots cannot contain functions.");
+    }
+    if (candidate === null || typeof candidate !== "object") return candidate;
+    const existing = clones.get(candidate);
+    if (existing) return existing;
+
+    let array: boolean;
+    let prototype: object | null;
+    try {
+      array = Array.isArray(candidate);
+      prototype = Object.getPrototypeOf(candidate);
+    } catch {
+      throw new TypeError("Audit input could not be inspected safely.");
+    }
+    const target = array
+      ? []
+      : prototype === Object.prototype
+        ? {}
+        : prototype === null
+          ? Object.create(null) as object
+          : Object.create(INVALID_AUDIT_SNAPSHOT_PROTOTYPE) as object;
+    clones.set(candidate, target);
+    pending.push({ source: candidate, target, array });
+    return target;
+  };
+
+  const snapshot = allocate(value);
+  while (pending.length > 0) {
+    const { source, target, array } = pending.pop()!;
+    let descriptors: PropertyDescriptorMap;
+    try {
+      descriptors = Object.getOwnPropertyDescriptors(source);
+    } catch {
+      throw new TypeError("Audit input could not be inspected safely.");
+    }
+    const descriptorRecord = descriptors as unknown as Record<PropertyKey, PropertyDescriptor>;
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (array && key === "length") continue;
+      const descriptor = descriptorRecord[key];
+      if (!descriptor || !("value" in descriptor)) {
+        throw new TypeError("Audit snapshots require accessor-free own data properties.");
+      }
+      Object.defineProperty(target, key, {
+        ...descriptor,
+        value: allocate(descriptor.value),
+      });
+    }
+    if (array) {
+      const lengthDescriptor = descriptorRecord.length;
+      if (!lengthDescriptor || !("value" in lengthDescriptor)) {
+        throw new TypeError("Audit arrays require a data length property.");
+      }
+      Object.defineProperty(target, "length", lengthDescriptor);
+    }
+  }
+  return snapshot as T;
+}
+
 function resolveLimits(overrides: Partial<SessionAuditLimits> | undefined): SessionAuditLimits {
   const resolved = { ...DEFAULT_LIMITS, ...overrides };
   for (const [name, value] of Object.entries(resolved)) {
@@ -514,103 +617,119 @@ function resolveLimits(overrides: Partial<SessionAuditLimits> | undefined): Sess
 
 function validateSessionRecord(
   raw: Record<string, unknown>,
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
 ): SessionRecord | undefined {
   const requiredStrings = ["id", "title", "createdAt", "updatedAt", "headDigest"] as const;
-  if (requiredStrings.some((field) => boundedString(raw[field], field === "title" ? 4_096 : 512) === undefined)) {
-    add({ code: "SESSION_SHAPE_INVALID", category: "schema", message: "Session record has an invalid required string field." });
+  if (requiredStrings.some((field) => !boundedString(raw[field], field === "title" ? 4_096 : 512))) {
+    add("SESSION_SHAPE_INVALID", "schema", "Session record has an invalid required string field.");
     return undefined;
   }
   if (!Number.isSafeInteger(raw.headSequence) || (raw.headSequence as number) < 0 || !asPlainRecord(raw.manifest)) {
-    add({ code: "SESSION_SHAPE_INVALID", category: "schema", message: "Session head or manifest has an invalid shape." });
+    add("SESSION_SHAPE_INVALID", "schema", "Session head or manifest has an invalid shape.");
     return undefined;
   }
   if (!Number.isFinite(Date.parse(raw.createdAt as string)) || !Number.isFinite(Date.parse(raw.updatedAt as string))) {
-    add({ code: "SESSION_TIME_INVALID", category: "schema", message: "Session timestamps are invalid." });
+    add("SESSION_TIME_INVALID", "schema", "Session timestamps are invalid.");
   }
   if (raw.headSequence === 0 ? raw.headDigest !== "genesis" : !DIGEST_PATTERN.test(raw.headDigest as string)) {
-    add({ code: "SESSION_HEAD_INVALID", category: "chain", message: "Session head digest is invalid for its sequence." });
+    add("SESSION_HEAD_INVALID", "chain", "Session head digest is invalid for its sequence.");
   }
   return raw as unknown as SessionRecord;
 }
 
 async function validateManifest(
   manifest: SessionManifest,
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
 ): Promise<void> {
   const raw = asPlainRecord(manifest);
   const manifestInspection = inspectJson(manifest, DEFAULT_LIMITS);
   if (!manifestInspection.valid) {
-    add({ code: "MANIFEST_DATA_INVALID", category: "manifest", message: manifestInspection.message });
+    add("MANIFEST_DATA_INVALID", "manifest", manifestInspection.message);
     return;
   }
   if (
     !raw ||
     (raw.protocolVersion !== 1 && raw.protocolVersion !== 2) ||
-    boundedString(raw.systemPrompt, 512 * 1024) === undefined ||
-    boundedString(raw.systemPromptDigest, 128) === undefined ||
-    boundedString(raw.providerId, 256) === undefined ||
-    boundedString(raw.model, 512) === undefined ||
-    boundedString(raw.toolManifestDigest, 128) === undefined ||
-    boundedString(raw.workspaceId, 2_048) === undefined ||
-    boundedString(raw.createdAt, 128) === undefined ||
+    !boundedString(raw.systemPrompt, 512 * 1024) ||
+    !boundedString(raw.systemPromptDigest, 128) ||
+    !boundedString(raw.providerId, 256) ||
+    !boundedString(raw.model, 512) ||
+    !boundedString(raw.toolManifestDigest, 128) ||
+    !boundedString(raw.workspaceId, 2_048) ||
+    !boundedString(raw.createdAt, 128) ||
     !Array.isArray(raw.tools)
   ) {
-    add({ code: "MANIFEST_SHAPE_INVALID", category: "manifest", message: "Session manifest does not satisfy a supported protocol shape." });
+    add("MANIFEST_SHAPE_INVALID", "manifest", "Session manifest does not satisfy a supported protocol shape.");
     return;
   }
   if ((await sha256(raw.systemPrompt as string)) !== raw.systemPromptDigest) {
-    add({ code: "SYSTEM_PROMPT_DIGEST_MISMATCH", category: "manifest", message: "System prompt does not match its pinned digest." });
+    add("SYSTEM_PROMPT_DIGEST_MISMATCH", "manifest", "System prompt does not match its pinned digest.");
   }
   if (!CAPABILITY_TIERS.has(String(raw.capabilityTier))) {
-    add({ code: "CAPABILITY_TIER_INVALID", category: "manifest", message: "Manifest capability tier is invalid." });
+    add("CAPABILITY_TIER_INVALID", "manifest", "Manifest capability tier is invalid.");
   }
   if (raw.securityPosture !== undefined && !POSTURES.has(String(raw.securityPosture))) {
-    add({ code: "SECURITY_POSTURE_PIN_INVALID", category: "manifest", message: "Manifest security posture pin is invalid." });
+    add("SECURITY_POSTURE_PIN_INVALID", "manifest", "Manifest inference-path pin is invalid.");
   }
   const inferenceBinding = asPlainRecord(raw.inferenceBinding);
+  let inferenceBindingShapeValid = true;
+  try {
+    assertValidSessionInferenceBinding(raw as unknown as Pick<SessionManifest, "providerId" | "model" | "inferenceBinding">);
+  } catch {
+    inferenceBindingShapeValid = false;
+  }
   if (raw.inferenceBinding !== undefined && (
+    !inferenceBindingShapeValid ||
     !inferenceBinding ||
-    inferenceBinding.version !== 1 ||
-    boundedString(inferenceBinding.connectionId, 256) === undefined ||
+    (inferenceBinding.version !== 1 && inferenceBinding.version !== 2) ||
+    Object.keys(inferenceBinding).length !== (inferenceBinding.version === 2 ? 12 : 10) ||
+    (inferenceBinding.version === 2 && (
+      !boundedString(inferenceBinding.transportId, 256) ||
+      !["openai-responses", "openai-chat-completions", "anthropic-messages", "openai-compatible"].includes(String(inferenceBinding.protocol))
+    )) ||
+    !boundedString(inferenceBinding.connectionId, 256) ||
     !Number.isSafeInteger(inferenceBinding.connectionGeneration) ||
     (inferenceBinding.connectionGeneration as number) <= 0 ||
-    boundedString(inferenceBinding.providerId, 256) === undefined ||
-    boundedString(inferenceBinding.providerLabel, 256) === undefined ||
+    !boundedString(inferenceBinding.providerId, 256) ||
+    (inferenceBinding.version === 2 && inferenceBinding.providerId !== raw.providerId) ||
+    !boundedString(inferenceBinding.providerLabel, 256) ||
     !Number.isSafeInteger(inferenceBinding.providerRevision) ||
     (inferenceBinding.providerRevision as number) <= 0 ||
     !["oauth-pkce", "api-key", "local-none"].includes(String(inferenceBinding.authMethod)) ||
-    !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(inferenceBinding.transportBoundary)) ||
-    boundedString(inferenceBinding.modelId, 512) === undefined ||
+    !(inferenceBinding.version === 1
+      ? ["e2ee-attestable", "provider-tls", "loopback-local"]
+      : ["provider-tls", "loopback-local"]
+    ).includes(String(inferenceBinding.transportBoundary)) ||
+    !boundedString(inferenceBinding.modelId, 512) ||
     inferenceBinding.modelId !== raw.model ||
-    boundedString(inferenceBinding.boundAt, 128) === undefined ||
+    !boundedString(inferenceBinding.boundAt, 128) ||
     !Number.isFinite(Date.parse(String(inferenceBinding.boundAt)))
   )) {
-    add({ code: "INFERENCE_BINDING_INVALID", category: "manifest", message: "Manifest inference connection binding is malformed or does not match its model pin." });
+    add("INFERENCE_BINDING_INVALID", "manifest", "Manifest inference connection binding is malformed or does not match its model pin.");
   }
   if (raw.contextPolicy !== undefined && !canonicalSessionContextPolicy(raw.contextPolicy)) {
-    add({ code: "CONTEXT_POLICY_INVALID", category: "manifest", message: "Manifest context-window and compression semantics are invalid." });
+    add("CONTEXT_POLICY_INVALID", "manifest", "Manifest context-window and compression semantics are invalid.");
   }
   if (
     (raw.protocolVersion === 1 && raw.turnContext !== undefined) ||
     (raw.protocolVersion === 2 && raw.turnContext !== "required" && raw.turnContext !== "disabled")
   ) {
-    add({ code: "TURN_CONTEXT_POLICY_INVALID", category: "manifest", message: "Manifest turn-context retrieval policy is invalid." });
+    add("TURN_CONTEXT_POLICY_INVALID", "manifest", "Manifest turn-context retrieval policy is invalid.");
   }
   const lineage = asPlainRecord(raw.lineage);
   if (raw.lineage !== undefined && (
     !lineage ||
     lineage.version !== 1 ||
     lineage.kind !== "fork" ||
-    boundedString(lineage.sourceSessionId, 512) === undefined ||
+    !boundedString(lineage.sourceSessionId, 512) ||
     !Number.isSafeInteger(lineage.sourceHeadSequence) ||
     (lineage.sourceHeadSequence as number) <= 0 ||
     !DIGEST_PATTERN.test(String(lineage.sourceHeadDigest)) ||
-    boundedString(lineage.forkedAt, 128) === undefined ||
+    !boundedString(lineage.forkedAt, 128) ||
     !Number.isFinite(Date.parse(String(lineage.forkedAt))) ||
     lineage.forkedAt !== raw.createdAt
   )) {
-    add({ code: "FORK_LINEAGE_INVALID", category: "manifest", message: "Manifest fork lineage is malformed or does not match manifest creation time." });
+    add("FORK_LINEAGE_INVALID", "manifest", "Manifest fork lineage is malformed or does not match manifest creation time.");
   }
   const tools = raw.tools;
   const toolNames = new Set<string>();
@@ -619,8 +738,8 @@ async function validateManifest(
     const tool = asPlainRecord(candidate);
     if (
       !tool ||
-      boundedString(tool.name, 256) === undefined ||
-      boundedString(tool.description, 32_768) === undefined ||
+      !boundedString(tool.name, 256) ||
+      !boundedString(tool.description, 32_768) ||
       !EFFECTS.has(String(tool.effect)) ||
       !inspectJson(tool.inputSchema, DEFAULT_LIMITS).valid
     ) {
@@ -631,9 +750,9 @@ async function validateManifest(
     toolNames.add(tool.name as string);
   }
   if (!toolsValid) {
-    add({ code: "TOOL_MANIFEST_INVALID", category: "manifest", message: "Tool manifest contains an invalid or duplicate definition." });
+    add("TOOL_MANIFEST_INVALID", "manifest", "Tool manifest contains an invalid or duplicate definition.");
   } else if ((await sha256(stableStringify(tools as JsonValue))) !== raw.toolManifestDigest) {
-    add({ code: "TOOL_MANIFEST_DIGEST_MISMATCH", category: "manifest", message: "Tool definitions do not match their pinned digest." });
+    add("TOOL_MANIFEST_DIGEST_MISMATCH", "manifest", "Tool definitions do not match their pinned digest.");
   }
   const profile = asPlainRecord(raw.profile);
   if (profile) {
@@ -643,7 +762,7 @@ async function validateManifest(
       const skill = asPlainRecord(candidate);
       if (
         !skill ||
-        boundedString(skill.skillId, 256) === undefined ||
+        !boundedString(skill.skillId, 256) ||
         !DIGEST_PATTERN.test(String(skill.digest)) ||
         !Number.isSafeInteger(skill.promptOrder) ||
         (skill.promptOrder as number) < -10_000 ||
@@ -665,29 +784,28 @@ async function validateManifest(
       !skills ||
       !skillsValid ||
       (profile.version !== 1 && profile.version !== 2) ||
-      boundedString(profile.profileId, 256) === undefined ||
+      !boundedString(profile.profileId, 256) ||
       !DIGEST_PATTERN.test(String(profile.profileRevision)) ||
-      boundedString(profile.themeId, 256) === undefined ||
+      !boundedString(profile.themeId, 256) ||
       !DIGEST_PATTERN.test(String(profile.themeDigest)) ||
       !DIGEST_PATTERN.test(String(profile.skillSetDigest)) ||
       !DIGEST_PATTERN.test(String(profile.resolutionDigest))
     ) {
-      add({ code: "PROFILE_BINDING_INVALID", category: "manifest", message: "Session profile binding is invalid." });
+      add("PROFILE_BINDING_INVALID", "manifest", "Session profile binding is invalid.");
     } else if ((await sha256(stableStringify(skills as JsonValue))) !== profile.skillSetDigest) {
-      add({ code: "SKILL_SET_DIGEST_MISMATCH", category: "manifest", message: "Resolved skills do not match their pinned digest." });
+      add("SKILL_SET_DIGEST_MISMATCH", "manifest", "Resolved skills do not match their pinned digest.");
     }
     const workspaceBinding = asPlainRecord(profile.workspaceBinding);
-    const hasSiloFields = profile.workspaceBinding !== undefined || profile.memoryScope !== undefined || profile.approvalMode !== undefined || profile.minimumPosture !== undefined;
+    const hasSiloFields = profile.workspaceBinding !== undefined || profile.memoryScope !== undefined || profile.approvalMode !== undefined;
     const validWorkspaceBinding = workspaceBinding !== undefined && (
       (workspaceBinding.kind === "active-workspace" && Object.keys(workspaceBinding).length === 1) ||
-      (workspaceBinding.kind === "workspace-id" && boundedString(workspaceBinding.workspaceId, 512) !== undefined)
+      (workspaceBinding.kind === "workspace-id" && !!boundedString(workspaceBinding.workspaceId, 512))
     );
     const validSilo = validWorkspaceBinding
       && ["session", "profile", "workspace"].includes(String(profile.memoryScope))
-      && ["ask-first", "auto-approve", "full-access"].includes(String(profile.approvalMode))
-      && POSTURES.has(String(profile.minimumPosture) as SecurityPosture);
+      && ["ask-first", "auto-approve", "full-access"].includes(String(profile.approvalMode));
     if ((profile.version === 2 && !validSilo) || (profile.version === 1 && hasSiloFields)) {
-      add({ code: "PROFILE_SILO_INVALID", category: "manifest", message: "Session profile workspace, memory, approval, or proof boundary is invalid." });
+      add("PROFILE_SILO_INVALID", "manifest", "Session profile workspace, memory, or approval boundary is invalid.");
     }
   }
 }
@@ -695,23 +813,44 @@ async function validateManifest(
 function validateHead(
   session: SessionRecord,
   events: readonly DurableEvent[],
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
 ): void {
   const last = events.at(-1);
   const sequence = last?.sequence ?? 0;
   const digest = last?.digest ?? "genesis";
   if (session.headSequence !== sequence || session.headDigest !== digest) {
-    add({ code: "SESSION_HEAD_MISMATCH", category: "chain", message: "Session head does not match the final audited event." });
+    add("SESSION_HEAD_MISMATCH", "chain", "Session head does not match the final audited event.");
   }
-  if (last && session.updatedAt !== last.recordedAt) {
-    add({ code: "SESSION_UPDATED_AT_MISMATCH", category: "chain", message: "Session update timestamp does not match the final event.", severity: "warning" });
+  /*
+   * `updatedAt` is not a copy of the last event's clock, and comparing it to
+   * one accused every fresh conversation of drift.
+   *
+   * The journals set it from `lastRecencyAdvancingEvent`: selecting a
+   * conversation, reordering a favorite and starring one are journaled but do
+   * not float a thread in "recently active", because reading a thread is not
+   * working in it. The Profile cockpit writes exactly such a record —
+   * `profile.active-conversation.selected` — at startup, so a conversation
+   * nobody has spoken in ends with a bookkeeping event and `updatedAt` stays on
+   * `session.created`. Measured on the built tree: a brand-new empty
+   * conversation reported "1 structural observation · SESSION UPDATED AT
+   * MISMATCH · Session update timestamp does not match the final event." beside
+   * "Nothing recorded yet" and "0 receipts", on a first run, with nothing to
+   * have drifted.
+   *
+   * Comparing against the record that actually sets the field is stricter, not
+   * weaker: a journal whose last event is bookkeeping was previously unable to
+   * pass this check at all, so the finding carried no information there.
+   */
+  const recency = lastRecencyAdvancingEvent(events);
+  if (recency && session.updatedAt !== recency.recordedAt) {
+    add("SESSION_UPDATED_AT_MISMATCH", "chain", "Session update timestamp does not match the final event.", undefined, "warning");
   }
 }
 
 async function validateProtocol(
   session: SessionRecord,
   events: readonly DurableEvent[],
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
 ): Promise<SessionAuditReport["counts"]> {
   const counts = emptyCounts();
   counts.events = events.length;
@@ -762,12 +901,7 @@ async function validateProtocol(
 
   const requireActive = (event: DurableEvent): TurnState | undefined => {
     if (!active || !event.turnId || event.turnId !== active.id || active.terminal) {
-      add({
-        ...eventLocation(event),
-        code: "EVENT_OUTSIDE_ACTIVE_TURN",
-        category: "protocol",
-        message: `${event.type} does not belong to the active turn.`,
-      });
+      addEventFinding(add, event, "EVENT_OUTSIDE_ACTIVE_TURN", `${event.type} does not belong to the active turn.`);
       return undefined;
     }
     return active;
@@ -779,23 +913,17 @@ async function validateProtocol(
       event.turnId !== activeLocal.turnId ||
       event.operationId !== activeLocal.operationId
     ) {
-      add({
-        ...eventLocation(event),
-        code: "LOCAL_COMMAND_EVENT_ORPHANED",
-        category: "protocol",
-        message: `${event.type} does not match the active client-only local command.`,
-      });
+      addEventFinding(add, event, "LOCAL_COMMAND_EVENT_ORPHANED", `${event.type} does not match the active client-only local command.`);
       return undefined;
     }
     return activeLocal;
   };
 
   /*
-   * The model the thread names at this point in the walk. The session's
-   * pinned manifest is the model the thread was created under; a
-   * `session.model-changed` event supersedes it for everything after — which
-   * is the only way digests minted after an in-flight switch can still be
-   * the canonical transcript the audit replays.
+   * The model the thread offers to the next durable turn at this point in the
+   * walk. turn.requested snapshots it into TurnState. A later model change is
+   * therefore effective for the next turn without rewriting the identity of a
+   * turn that is already admitted and may still be streaming.
    */
   // The walk begins at history's first event, before any change could have
   // happened: the model that binds receipts minted from a manifest-stamped
@@ -827,55 +955,45 @@ async function validateProtocol(
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!;
+    const { type, turnId: eventTurnId, operationId: eventOperationId } = event;
     const payload = asPlainRecord(event.payload);
-    if (!KNOWN_EVENT_TYPES.has(event.type)) {
+    if (!KNOWN_EVENT_TYPES.has(type)) {
       counts.unknownEvents += 1;
-      add({
-        ...eventLocation(event),
-        code: "EVENT_TYPE_UNKNOWN",
-        category: "completeness",
-        severity: "warning",
-        message: `Event type ${event.type} is not interpreted by protocol-v1 audit rules.`,
-      });
+      addEventFinding(add, event, "EVENT_TYPE_UNKNOWN", `Event type ${type} is not interpreted by protocol-v1 audit rules.`, "completeness", "warning");
       continue;
     }
 
-    if (event.type === "session.created") {
-      if (index !== 0 || sawCreation || event.turnId || event.operationId || !payload) {
-        add({ ...eventLocation(event), code: "SESSION_CREATION_INVALID", category: "protocol", message: "session.created must be the first event and have no turn or operation ID." });
+    if (type === "session.created") {
+      if (index !== 0 || sawCreation || eventTurnId || eventOperationId || !payload) {
+        addEventFinding(add, event, "SESSION_CREATION_INVALID", "session.created must be the first event and have no turn or operation ID.");
       } else {
         sawCreation = true;
         const eventManifest = asPlainRecord(payload.manifest);
         if (!eventManifest || stableStringify(eventManifest as JsonValue) !== stableStringify(session.manifest as unknown as JsonValue)) {
-          add({ ...eventLocation(event), code: "SESSION_MANIFEST_SNAPSHOT_MISMATCH", category: "manifest", message: "Creation event manifest differs from the session record." });
+          addEventFinding(add, event, "SESSION_MANIFEST_SNAPSHOT_MISMATCH", "Creation event manifest differs from the session record.", "manifest");
         }
         if (typeof payload.title === "string") projectedTitle = payload.title;
       }
       continue;
     }
-    if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+    if (type === FORK_CONTEXT_EVENT_TYPE) {
       const seed = canonicalForkContextSeed(event.payload);
       const verified = seed ? await verifyForkContextSeed(seed) : false;
       const scope = { sessionId: session.id, lineage: session.manifest.lineage };
       if (
         index !== 1 ||
         sawForkContext ||
-        event.turnId ||
-        event.operationId ||
+        eventTurnId ||
+        eventOperationId ||
         !seed ||
         !verified ||
         !forkContextSeedMatchesScope(seed, scope)
       ) {
-        add({
-          ...eventLocation(event),
-          code: !seed || !verified
+        addEventFinding(add, event, !seed || !verified
             ? "FORK_CONTEXT_SEED_INVALID"
             : !forkContextSeedMatchesScope(seed, scope)
               ? "FORK_CONTEXT_SEED_SCOPE_MISMATCH"
-              : "FORK_CONTEXT_SEED_LIFECYCLE_INVALID",
-          category: "protocol",
-          message: "Fork context must be one verified, lineage-bound event immediately after session creation.",
-        });
+              : "FORK_CONTEXT_SEED_LIFECYCLE_INVALID", "Fork context must be one verified, lineage-bound event immediately after session creation.");
       } else {
         sawForkContext = true;
         verifiedForkContextDigest = seed.contextDigest;
@@ -883,21 +1001,21 @@ async function validateProtocol(
       }
       continue;
     }
-    if (event.type === "session.renamed") {
-      if (event.turnId || event.operationId || !payload || typeof payload.title !== "string" || !payload.title.trim() || payload.title.length > 240) {
-        add({ severity: "error", category: "protocol", code: "SESSION_RENAME_MALFORMED", sequence: event.sequence, message: "A session rename must carry one bounded title outside any turn." });
+    if (type === "session.renamed") {
+      if (eventTurnId || eventOperationId || !payload || typeof payload.title !== "string" || !payload.title.trim() || payload.title.length > 240) {
+        add("SESSION_RENAME_MALFORMED", "protocol", "A session rename must carry one bounded title outside any turn.", { sequence: event.sequence });
       } else projectedTitle = payload.title;
       continue;
     }
-    if (event.type === "session.favorite.changed") {
-      if (event.turnId || event.operationId || !payload || typeof payload.favorite !== "boolean") {
-        add({ severity: "error", category: "protocol", code: "SESSION_FAVORITE_MALFORMED", sequence: event.sequence, message: "A session favorite change must carry one boolean outside any turn." });
+    if (type === "session.favorite.changed") {
+      if (eventTurnId || eventOperationId || !payload || typeof payload.favorite !== "boolean") {
+        add("SESSION_FAVORITE_MALFORMED", "protocol", "A session favorite change must carry one boolean outside any turn.", { sequence: event.sequence });
       }
       continue;
     }
-    if (event.type === "session.approval-policy-changed") {
-      if (event.turnId || event.operationId || !payload || !["ask-first", "auto-approve", "full-access"].includes(String(payload.approvalMode))) {
-        add({ severity: "error", category: "protocol", code: "SESSION_APPROVAL_POLICY_MALFORMED", sequence: event.sequence, message: "A session approval-policy change must carry one named mode outside any turn." });
+    if (type === "session.approval-policy-changed") {
+      if (eventTurnId || eventOperationId || !payload || !["ask-first", "auto-approve", "full-access"].includes(String(payload.approvalMode))) {
+        add("SESSION_APPROVAL_POLICY_MALFORMED", "protocol", "A session approval-policy change must carry one named mode outside any turn.", { sequence: event.sequence });
       } else {
         // Well formed — the branch above proved the string is one of the three
         // named modes — so it is what governs from here down the chain.
@@ -905,15 +1023,15 @@ async function validateProtocol(
       }
       continue;
     }
-    if (event.type === "session.model-changed") {
+    if (type === "session.model-changed") {
       const policyValue = payload && !Array.isArray(payload) && typeof payload === "object"
         ? payload.contextPolicy
         : undefined;
       const modelValue = payload && !Array.isArray(payload) && typeof payload === "object" ? payload.model : undefined;
       const malformedModel = typeof modelValue !== "string" || !modelValue.trim() || modelValue.length > 256 || /[\u0000-\u001F\u007F]/u.test(modelValue);
       const malformedPolicy = policyValue !== undefined && policyValue !== null && !canonicalSessionContextPolicy(policyValue);
-      if (event.turnId || event.operationId || malformedModel || malformedPolicy) {
-        add({ severity: "error", category: "protocol", code: "SESSION_MODEL_CHANGE_MALFORMED", sequence: event.sequence, message: "A session model change must carry one printable model id, and any embedded context policy, outside any turn." });
+      if (eventTurnId || eventOperationId || malformedModel || malformedPolicy) {
+        add("SESSION_MODEL_CHANGE_MALFORMED", "protocol", "A session model change must carry one printable model id, and any embedded context policy, outside any turn.", { sequence: event.sequence });
       } else {
         effectiveModel = modelValue as string;
         if (policyValue !== undefined) {
@@ -924,12 +1042,12 @@ async function validateProtocol(
       }
       continue;
     }
-    if (event.type === "profile.favorite-order.moved") {
+    if (type === "profile.favorite-order.moved") {
       const hasBeforeSession = payload?.beforeSessionId !== undefined;
       const hasBeforeFavorite = payload?.beforeFavoriteEventId !== undefined;
       if (
-        event.turnId
-        || event.operationId
+        eventTurnId
+        || eventOperationId
         || !payload
         || payload.version !== 1
         || !boundedString(payload.profileId, 512)
@@ -945,20 +1063,14 @@ async function validateProtocol(
         || payload.sessionId !== session.id
         || payload.beforeSessionId === session.id
       ) {
-        add({
-          severity: "error",
-          category: "protocol",
-          code: "PROFILE_FAVORITE_ORDER_MALFORMED",
-          sequence: event.sequence,
-          message: "A favorite-order move must be profile-bound, membership-bound, bounded, and recorded outside any turn.",
-        });
+        add("PROFILE_FAVORITE_ORDER_MALFORMED", "protocol", "A favorite-order move must be profile-bound, membership-bound, bounded, and recorded outside any turn.", { sequence: event.sequence });
       }
       continue;
     }
-    if (event.type === "profile.active-conversation.selected") {
+    if (type === "profile.active-conversation.selected") {
       if (
-        event.turnId
-        || event.operationId
+        eventTurnId
+        || eventOperationId
         || active
         || !payload
         || payload.version !== 1
@@ -969,18 +1081,12 @@ async function validateProtocol(
         || (payload.previousEventId !== undefined && !boundedString(payload.previousEventId, 512))
         || payload.profileId !== session.manifest.profile?.profileId
       ) {
-        add({
-          severity: "error",
-          category: "protocol",
-          code: "PROFILE_ACTIVE_CONVERSATION_MALFORMED",
-          sequence: event.sequence,
-          message: "A profile active-conversation selection must be profile-bound, bounded, and recorded between turns.",
-        });
+        add("PROFILE_ACTIVE_CONVERSATION_MALFORMED", "protocol", "A profile active-conversation selection must be profile-bound, bounded, and recorded between turns.", { sequence: event.sequence });
       }
       continue;
     }
 
-    if (event.type === "context.summary.updated") {
+    if (type === "context.summary.updated") {
       const summary = canonicalContextSummary(event.payload);
       const valid = summary
         ? await verifyContextSummary(summary, events.slice(0, index + 1))
@@ -988,25 +1094,26 @@ async function validateProtocol(
       const turnBoundPreprocessing = Boolean(
         active &&
         session.manifest.protocolVersion === 2 &&
-        event.turnId === active.id &&
-        !event.operationId &&
+        eventTurnId === active.id &&
+        !eventOperationId &&
         active.step === -1 &&
         !active.inference &&
         !active.finalAssistant &&
         active.tools.length === 0,
       );
-      const outsideTurn = !active && !event.turnId && !event.operationId;
+      const outsideTurn = !active && !eventTurnId && !eventOperationId;
       if (
         activeLocal || (!outsideTurn && !turnBoundPreprocessing) || !summary || !valid ||
         summary.sourceEndSequence >= event.sequence ||
-        !summaryMatchesContextPolicy(summary, session.manifest, events.slice(0, index), effectiveModel, effectiveContextPolicy)
+        !summaryMatchesContextPolicy(
+          summary,
+          session.manifest,
+          events.slice(0, index),
+          turnBoundPreprocessing && active ? active.model : effectiveModel,
+          turnBoundPreprocessing && active ? active.contextPolicy : effectiveContextPolicy,
+        )
       ) {
-        add({
-          ...eventLocation(event),
-          code: "CONTEXT_SUMMARY_INVALID",
-          category: "protocol",
-          message: "A context summary must be a verified, digest-linked transcript-prefix delta outside an active turn.",
-        });
+        addEventFinding(add, event, "CONTEXT_SUMMARY_INVALID", "A context summary must be a verified, digest-linked transcript-prefix delta outside an active turn.");
       } else {
         reprojectMessagesThrough(index, turnBoundPreprocessing);
         if (active && turnBoundPreprocessing) active.compacted = true;
@@ -1022,18 +1129,13 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "local.command.requested") {
+    if (type === "local.command.requested") {
       if (active || activeLocal) {
-        add({
-          ...eventLocation(event),
-          code: "LOCAL_COMMAND_OVERLAP",
-          category: "protocol",
-          message: "A client-only local command started while another turn or local command was active.",
-        });
+        addEventFinding(add, event, "LOCAL_COMMAND_OVERLAP", "A client-only local command started while another turn or local command was active.");
         continue;
       }
-      const turnId = boundedString(event.turnId, 512);
-      const operationId = boundedString(event.operationId, 512);
+      const turnId = boundedString(eventTurnId, 512);
+      const operationId = boundedString(eventOperationId, 512);
       const toolName = boundedString(payload?.toolName, 256);
       const hasArguments = Boolean(payload && Object.prototype.hasOwnProperty.call(payload, "arguments"));
       if (
@@ -1046,12 +1148,7 @@ async function validateProtocol(
         seenTurns.has(turnId) ||
         seenOperations.has(operationId)
       ) {
-        add({
-          ...eventLocation(event),
-          code: "LOCAL_COMMAND_REQUEST_INVALID",
-          category: "protocol",
-          message: "A local command request must have new turn/operation IDs, a bounded tool name, text, and arguments.",
-        });
+        addEventFinding(add, event, "LOCAL_COMMAND_REQUEST_INVALID", "A local command request must have new turn/operation IDs, a bounded tool name, text, and arguments.");
         continue;
       }
       seenTurns.add(turnId);
@@ -1062,34 +1159,24 @@ async function validateProtocol(
     }
 
     if (
-      event.type === "local.command.approved" ||
-      event.type === "local.command.completed" ||
-      event.type === "local.command.denied" ||
-      event.type === "local.command.failed"
+      type === "local.command.approved" ||
+      type === "local.command.completed" ||
+      type === "local.command.denied" ||
+      type === "local.command.failed"
     ) {
       const command = requireActiveLocal(event);
       if (!command || !payload) continue;
       if (payload.toolName !== command.toolName) {
-        add({
-          ...eventLocation(event),
-          code: "LOCAL_COMMAND_IDENTITY_MISMATCH",
-          category: "protocol",
-          message: "A local-command event changed its pinned tool identity.",
-        });
+        addEventFinding(add, event, "LOCAL_COMMAND_IDENTITY_MISMATCH", "A local-command event changed its pinned tool identity.");
         continue;
       }
-      if (event.type === "local.command.approved") {
+      if (type === "local.command.approved") {
         if (command.approved) {
-          add({
-            ...eventLocation(event),
-            code: "LOCAL_COMMAND_APPROVAL_INVALID",
-            category: "protocol",
-            message: "A local command approval is duplicated.",
-          });
+          addEventFinding(add, event, "LOCAL_COMMAND_APPROVAL_INVALID", "A local command approval is duplicated.");
         } else {
           command.approved = true;
           const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
-          if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
+          if (issue) addEventFinding(add, event, "TOOL_APPROVAL_PROVENANCE_INVALID", issue);
         }
         continue;
       }
@@ -1097,26 +1184,21 @@ async function validateProtocol(
       let terminalValid = true;
       if (typeof payload.content !== "string") terminalValid = false;
       if (
-        event.type === "local.command.completed" &&
+        type === "local.command.completed" &&
         (!command.approved || typeof payload.isError !== "boolean")
       ) {
         terminalValid = false;
       }
-      if (event.type === "local.command.denied" && command.approved) terminalValid = false;
+      if (type === "local.command.denied" && command.approved) terminalValid = false;
       if (
-        event.type === "local.command.failed" &&
+        type === "local.command.failed" &&
         payload.cancelled !== undefined &&
         typeof payload.cancelled !== "boolean"
       ) {
         terminalValid = false;
       }
       if (!terminalValid) {
-        add({
-          ...eventLocation(event),
-          code: "LOCAL_COMMAND_TERMINAL_INVALID",
-          category: "protocol",
-          message: "A local command terminal is out of order or has malformed client-only result metadata.",
-        });
+        addEventFinding(add, event, "LOCAL_COMMAND_TERMINAL_INVALID", "A local command terminal is out of order or has malformed client-only result metadata.");
       } else {
         counts.terminalLocalCommands += 1;
       }
@@ -1124,7 +1206,7 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === CONVERSATION_NAMED_EVENT_TYPE) {
+    if (type === CONVERSATION_NAMED_EVENT_TYPE) {
       /*
        * The naming inference runs beside a turn rather than inside one, so it
        * gets its own identity and touches no turn state. What it must carry is
@@ -1139,15 +1221,15 @@ async function validateProtocol(
        *
        * The title is the *outcome*, not the evidence, so it may be absent: a
        * request that came back with a refusal or an essay was still billed and
-       * still attested, and requiring a title here would have meant the only
+       * still recorded, and requiring a title here would have meant the only
        * way to stay audit-clean was to journal nothing — which is precisely the
        * unaudited paid request this record exists to end. A titleless record
        * must therefore carry the verbatim answer instead, so it still states
        * what was paid for and still lets the receipt's response digest be
        * recomputed. Neither field absent is an empty claim, and stays refused.
        */
-      const turnId = boundedString(event.turnId, 512);
-      const operationId = boundedString(event.operationId, 512);
+      const turnId = boundedString(eventTurnId, 512);
+      const operationId = boundedString(eventOperationId, 512);
       const title = boundedString(payload?.title, 240);
       const answer = typeof payload?.answer === "string" && payload.answer.length <= 4_096;
       // Absent is allowed; malformed never is. A 4 KiB "title" must still be
@@ -1160,16 +1242,11 @@ async function validateProtocol(
         !titleAcceptable ||
         seenTurns.has(turnId) ||
         seenOperations.has(operationId) ||
-        boundedString(payload.model, 256) === undefined ||
+        !boundedString(payload.model, 256) ||
         (payload.answer !== undefined && (typeof payload.answer !== "string" || payload.answer.length > 4_096)) ||
         (payload.receipt !== undefined && !receiptIdentityMatches(asPlainRecord(payload.receipt), session, turnId, effectiveModel))
       ) {
-        add({
-          ...eventLocation(event),
-          code: "CONVERSATION_NAMING_INVALID",
-          category: "protocol",
-          message: "A conversation naming record must have new turn/operation IDs, a bounded model, either a bounded title or the verbatim answer it was rejected from, and any receipt must name this session and operation.",
-        });
+        addEventFinding(add, event, "CONVERSATION_NAMING_INVALID", "A conversation naming record must have new turn/operation IDs, a bounded model, either a bounded title or the verbatim answer it was rejected from, and any trace receipt must name this session and operation.");
         continue;
       }
       seenTurns.add(turnId);
@@ -1178,7 +1255,7 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === HUMAN_INTENT_EVENT_TYPE) {
+    if (type === HUMAN_INTENT_EVENT_TYPE) {
       /*
        * A human-initiated decision is deliberately outside the turn protocol:
        * the person can stage a commit or probe a vault while a turn is running,
@@ -1188,8 +1265,8 @@ async function validateProtocol(
        * naming the authority that allowed it. Anything less is the decoration
        * the tool-approval path was already found to be.
        */
-      const turnId = boundedString(event.turnId, 512);
-      const operationId = boundedString(event.operationId, 512);
+      const turnId = boundedString(eventTurnId, 512);
+      const operationId = boundedString(eventOperationId, 512);
       const name = boundedString(payload?.toolName, 256);
       const decision = payload?.decision;
       if (
@@ -1202,12 +1279,7 @@ async function validateProtocol(
         (decision !== "allow" && decision !== "deny") ||
         !EFFECTS.has(String(payload.effect))
       ) {
-        add({
-          ...eventLocation(event),
-          code: "HUMAN_INTENT_INVALID",
-          category: "protocol",
-          message: "A human-initiated approval must carry new turn/operation IDs, a bounded tool name, a known effect, and an allow/deny decision.",
-        });
+        addEventFinding(add, event, "HUMAN_INTENT_INVALID", "A human-initiated approval must carry new turn/operation IDs, a bounded tool name, a known effect, and an allow/deny decision.");
         continue;
       }
       seenTurns.add(turnId);
@@ -1220,12 +1292,12 @@ async function validateProtocol(
       if (decision === "allow") counts.humanIntentAllowed += 1;
       const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
       if (issue) {
-        add({ ...eventLocation(event), code: "HUMAN_INTENT_PROVENANCE_INVALID", category: "protocol", message: issue });
+        addEventFinding(add, event, "HUMAN_INTENT_PROVENANCE_INVALID", issue);
       }
       continue;
     }
 
-    if (event.type === TERMINAL_ACTIVITY_EVENT_TYPE) {
+    if (type === TERMINAL_ACTIVITY_EVENT_TYPE) {
       /*
        * A shell action, validated entirely on its own terms.
        *
@@ -1250,8 +1322,8 @@ async function validateProtocol(
       const sourceRecordId = payload?.sourceRecordId === undefined ? undefined : boundedString(payload.sourceRecordId, 512);
       if (
         !payload ||
-        event.turnId ||
-        event.operationId ||
+        eventTurnId ||
+        eventOperationId ||
         payload.version !== 1 ||
         payload.outputTail !== undefined ||
         !terminalSessionId ||
@@ -1278,22 +1350,12 @@ async function validateProtocol(
           changedPaths.length > TERMINAL_MAX_CHANGED_PATHS ||
           changedPaths.some((path) => !boundedString(path, 4_096))))
       ) {
-        add({
-          ...eventLocation(event),
-          code: "TERMINAL_RECORD_INVALID",
-          category: "protocol",
-          message: "A terminal record must sit outside any turn and carry a bounded terminal id, record id, positive sequence, process epoch, known kind/outcome/origin, cwd, summary and timestamp — and no retained process output.",
-        });
+        addEventFinding(add, event, "TERMINAL_RECORD_INVALID", "A terminal record must sit outside any turn and carry a bounded terminal id, record id, positive sequence, process epoch, known kind/outcome/origin, cwd, summary and timestamp — and no retained process output.");
         continue;
       }
       const identity = `${terminalSessionId}:${writerId ?? ""}:${String(sequence)}`;
       if (seenTerminalRecords.has(identity)) {
-        add({
-          ...eventLocation(event),
-          code: "TERMINAL_RECORD_DUPLICATE",
-          category: "protocol",
-          message: "The same terminal record sequence was appended twice for this terminal and writer.",
-        });
+        addEventFinding(add, event, "TERMINAL_RECORD_DUPLICATE", "The same terminal record sequence was appended twice for this terminal and writer.");
         continue;
       }
       seenTerminalRecords.add(identity);
@@ -1301,21 +1363,16 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "turn.requested") {
+    if (type === "turn.requested") {
       if (activeLocal) {
-        add({
-          ...eventLocation(event),
-          code: "TURN_OVERLAP",
-          category: "protocol",
-          message: "A provider turn started before the active client-only local command terminated.",
-        });
+        addEventFinding(add, event, "TURN_OVERLAP", "A provider turn started before the active client-only local command terminated.");
         continue;
       }
       if (active && !active.terminal) {
-        add({ ...eventLocation(event), code: "TURN_OVERLAP", category: "protocol", message: "A turn started before the preceding turn reached a terminal event." });
+        addEventFinding(add, event, "TURN_OVERLAP", "A turn started before the preceding turn reached a terminal event.");
       }
-      if (!event.turnId || event.operationId || seenTurns.has(event.turnId)) {
-        add({ ...eventLocation(event), code: "TURN_REQUEST_INVALID", category: "protocol", message: "Turn request must have a new turn ID and no operation ID." });
+      if (!eventTurnId || eventOperationId || seenTurns.has(eventTurnId)) {
+        addEventFinding(add, event, "TURN_REQUEST_INVALID", "Turn request must have a new turn ID and no operation ID.");
         active = undefined;
         continue;
       }
@@ -1327,7 +1384,7 @@ async function validateProtocol(
         ? await verifyLiveEnvironmentSnapshot(liveEnvironment)
         : false;
       const liveEnvironmentScopeVerified = liveEnvironment
-        ? liveEnvironmentScopeMatches(liveEnvironment, session.id, session.manifest)
+        ? liveEnvironmentScopeMatches(liveEnvironment, session.id, session.manifest, effectiveModel)
         : false;
       const contextSelection = payload?.contextSelection === undefined
         ? undefined
@@ -1341,38 +1398,39 @@ async function validateProtocol(
         : false;
       const embeddedContextAllowed = session.manifest.turnContext === undefined;
       if (!payload || typeof payload.content !== "string") {
-        add({ ...eventLocation(event), code: "TURN_CONTENT_INVALID", category: "protocol", message: "Turn request payload must contain string content." });
+        addEventFinding(add, event, "TURN_CONTENT_INVALID", "Turn request payload must contain string content.");
       }
       if (!images) {
-        add({ ...eventLocation(event), code: "TURN_IMAGES_INVALID", category: "protocol", message: "Turn request images violate the bounded inline-image contract." });
+        addEventFinding(add, event, "TURN_IMAGES_INVALID", "Turn request images violate the bounded inline-image contract.");
       }
       if (payload?.liveEnvironment !== undefined && !liveEnvironment) {
-        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_INVALID", category: "protocol", message: "Turn live-environment data violates the bounded canonical snapshot contract." });
+        addEventFinding(add, event, "TURN_LIVE_ENVIRONMENT_INVALID", "Turn live-environment data violates the bounded canonical snapshot contract.");
       } else if (liveEnvironment && !liveEnvironmentVerified) {
-        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_DIGEST_MISMATCH", category: "protocol", message: "Turn live-environment snapshot digest does not verify." });
+        addEventFinding(add, event, "TURN_LIVE_ENVIRONMENT_DIGEST_MISMATCH", "Turn live-environment snapshot digest does not verify.");
       } else if (liveEnvironment && !liveEnvironmentScopeVerified) {
-        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_SCOPE_MISMATCH", category: "protocol", message: "Turn live-environment snapshot is outside the session's pinned scope." });
+        addEventFinding(add, event, "TURN_LIVE_ENVIRONMENT_SCOPE_MISMATCH", "Turn live-environment snapshot is outside the session's pinned scope.");
       }
       if (payload?.contextSelection !== undefined && !contextSelection) {
-        add({ ...eventLocation(event), code: "TURN_CONTEXT_INVALID", category: "protocol", message: "Turn context selection violates the bounded provenance contract." });
+        addEventFinding(add, event, "TURN_CONTEXT_INVALID", "Turn context selection violates the bounded provenance contract.");
       } else if (contextSelection && !contextVerified) {
-        add({ ...eventLocation(event), code: "TURN_CONTEXT_DIGEST_MISMATCH", category: "protocol", message: "Turn context selection digest or selected text digest does not verify." });
+        addEventFinding(add, event, "TURN_CONTEXT_DIGEST_MISMATCH", "Turn context selection digest or selected text digest does not verify.");
       } else if (contextSelection && !contextQueryVerified) {
-        add({ ...eventLocation(event), code: "TURN_CONTEXT_QUERY_MISMATCH", category: "protocol", message: "Turn context selection is committed to a different canonical query." });
+        addEventFinding(add, event, "TURN_CONTEXT_QUERY_MISMATCH", "Turn context selection is committed to a different canonical query.");
       } else if (contextSelection && !contextScopeVerified) {
-        add({ ...eventLocation(event), code: "TURN_CONTEXT_SCOPE_MISMATCH", category: "protocol", message: "Turn context selection lineage is outside the session's pinned scope." });
+        addEventFinding(add, event, "TURN_CONTEXT_SCOPE_MISMATCH", "Turn context selection lineage is outside the session's pinned scope.");
       }
       if (payload?.contextSelection !== undefined && !embeddedContextAllowed) {
-        add({
-          ...eventLocation(event),
-          code: "TURN_CONTEXT_LEGACY_EMBED_INVALID",
-          category: "protocol",
-          message: "Only historical manifests without an explicit turn-context policy may embed selection data in turn.requested.",
-        });
+        addEventFinding(add, event, "TURN_CONTEXT_LEGACY_EMBED_INVALID", "Only historical manifests without an explicit turn-context policy may embed selection data in turn.requested.");
       }
-      seenTurns.add(event.turnId);
+      seenTurns.add(eventTurnId);
       counts.turns += 1;
-      active = { id: event.turnId, step: -1, tools: [] };
+      active = {
+        id: eventTurnId,
+        model: effectiveModel,
+        contextPolicy: effectiveContextPolicy,
+        step: -1,
+        tools: [],
+      };
       if (lastContextMessage) {
         const prior = messages[lastContextMessage.index];
         if (prior?.role === "user") messages[lastContextMessage.index] = { ...prior, content: lastContextMessage.content };
@@ -1386,9 +1444,22 @@ async function validateProtocol(
             embeddedContextAllowed && contextSelection && contextVerified && contextQueryVerified && contextScopeVerified
           ))) {
         const index = messages.length;
+        /*
+         * The exemption the agent applies when it builds the request it sends
+         * (see `slashLocal` in agent.ts). This copy did not, so a prompt whose
+         * text starts with `/` — including `/reason`, which the demo answer
+         * tells a first-time reader to try — hashed here as the injected form
+         * and there as the raw one. The digests could never agree, and the
+         * conversation quarantined itself on the next open with
+         * INFERENCE_REQUEST_DIGEST_MISMATCH. The agent is the authority on what
+         * it sent; this rebuild has to model it exactly.
+         */
+        const slashLocal = payload.content.trimStart().startsWith("/");
         messages.push({
           role: "user",
-          content: injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection),
+          content: slashLocal
+            ? payload.content
+            : injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection),
           ...(images.length ? { images: [...images] } : {}),
         });
         active.request = {
@@ -1404,7 +1475,7 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "turn.context.selected") {
+    if (type === "turn.context.selected") {
       const turn = requireActive(event);
       const selection = canonicalContextSelection(payload?.contextSelection);
       const verified = selection ? await verifyContextSelection(selection) : false;
@@ -1416,7 +1487,7 @@ async function validateProtocol(
         : false;
       if (
         !turn ||
-        event.operationId ||
+        eventOperationId ||
         turn.step !== -1 ||
         turn.inference ||
         turn.tools.length ||
@@ -1429,9 +1500,7 @@ async function validateProtocol(
         !queryVerified ||
         !scopeVerified
       ) {
-        add({
-          ...eventLocation(event),
-          code: !selection
+        addEventFinding(add, event, !selection
             ? "TURN_CONTEXT_INVALID"
             : !verified
               ? "TURN_CONTEXT_DIGEST_MISMATCH"
@@ -1439,24 +1508,24 @@ async function validateProtocol(
                 ? "TURN_CONTEXT_QUERY_MISMATCH"
                 : !scopeVerified
                   ? "TURN_CONTEXT_SCOPE_MISMATCH"
-                  : "TURN_CONTEXT_LIFECYCLE_INVALID",
-          category: "protocol",
-          message: "Turn context must be canonical, verified, policy-allowed, unique, and journaled before inference.",
-        });
+                  : "TURN_CONTEXT_LIFECYCLE_INVALID", "Turn context must be canonical, verified, policy-allowed, unique, and journaled before inference.");
         continue;
       }
       const message = messages[turn.request.messageIndex];
       if (!message || message.role !== "user") {
-        add({ ...eventLocation(event), code: "TURN_CONTEXT_LIFECYCLE_INVALID", category: "protocol", message: "Turn context has no matching user request." });
+        addEventFinding(add, event, "TURN_CONTEXT_LIFECYCLE_INVALID", "Turn context has no matching user request.");
         continue;
       }
-      messages[turn.request.messageIndex] = {
-        ...message,
-        content: injectContextSelection(
-          injectLiveEnvironment(turn.request.content, turn.request.liveEnvironment),
-          selection,
-        ),
-      };
+      // Same exemption as the request site above and as agent.ts.
+      messages[turn.request.messageIndex] = turn.request.content.trimStart().startsWith("/")
+        ? { ...message, content: turn.request.content }
+        : {
+          ...message,
+          content: injectContextSelection(
+            injectLiveEnvironment(turn.request.content, turn.request.liveEnvironment),
+            selection,
+          ),
+        };
       turn.contextSelected = true;
       if (turn.request.liveEnvironment || selection.hits.length) {
         lastContextMessage = { index: turn.request.messageIndex, content: turn.request.content };
@@ -1464,12 +1533,12 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === TASK_PLAN_NOTE_EVENT_TYPE) {
+    if (type === TASK_PLAN_NOTE_EVENT_TYPE) {
       const turn = requireActive(event);
       const note = canonicalTaskPlanNote(payload);
       if (
         !turn ||
-        event.operationId ||
+        eventOperationId ||
         turn.step !== -1 ||
         turn.inference ||
         turn.tools.length ||
@@ -1480,12 +1549,7 @@ async function validateProtocol(
         turn.planRestated ||
         !note
       ) {
-        add({
-          ...eventLocation(event),
-          code: "TURN_PLAN_NOTE_INVALID",
-          category: "protocol",
-          message: "A work-plan restatement must be a canonical, unique note journaled after this turn's compaction and before inference.",
-        });
+        addEventFinding(add, event, "TURN_PLAN_NOTE_INVALID", "A work-plan restatement must be a canonical, unique note journaled after this turn's compaction and before inference.");
         continue;
       }
       turn.planRestated = true;
@@ -1493,7 +1557,7 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "inference.started") {
+    if (type === "inference.started") {
       const turn = requireActive(event);
       if (!turn || !payload) continue;
       if (
@@ -1501,15 +1565,10 @@ async function validateProtocol(
         turn.request?.content.trim() &&
         !turn.contextSelected
       ) {
-        add({
-          ...eventLocation(event),
-          code: "TURN_CONTEXT_REQUIRED_MISSING",
-          category: "protocol",
-          message: "Inference started without the turn-context selection required by the immutable session manifest.",
-        });
+        addEventFinding(add, event, "TURN_CONTEXT_REQUIRED_MISSING", "Inference started without the turn-context selection required by the immutable session manifest.");
       }
       const step = payload.step;
-      const operationId = event.operationId;
+      const operationId = eventOperationId;
       if (
         !operationId ||
         seenOperations.has(operationId) ||
@@ -1518,40 +1577,35 @@ async function validateProtocol(
         (step as number) !== turn.step + 1 ||
         turn.tools.some((tool) => !tool.terminal)
       ) {
-        add({ ...eventLocation(event), code: "INFERENCE_LIFECYCLE_INVALID", category: "protocol", message: "Inference operation is reused, out of order, overlapping, or starts before tools are terminal." });
+        addEventFinding(add, event, "INFERENCE_LIFECYCLE_INVALID", "Inference operation is reused, out of order, overlapping, or starts before tools are terminal.");
         continue;
       }
       if (
-        payload.providerId !== session.manifest.providerId ||
-        payload.model !== effectiveModel ||
+        !sessionInferenceProviderIdMatches(session.manifest, payload.providerId) ||
+        payload.model !== turn.model ||
         !POSTURES.has(String(payload.posture))
       ) {
-        add({ ...eventLocation(event), code: "INFERENCE_BINDING_MISMATCH", category: "protocol", message: "Inference provider, model, or posture does not match the pinned session/runtime vocabulary." });
+        addEventFinding(add, event, "INFERENCE_BINDING_MISMATCH", "Inference provider, model, or posture does not match the pinned session/runtime vocabulary.");
       }
       if (
         turn.request?.liveEnvironment &&
         turn.request.liveEnvironment.inference.posture !== payload.posture
       ) {
-        add({
-          ...eventLocation(event),
-          code: "TURN_LIVE_ENVIRONMENT_POSTURE_MISMATCH",
-          category: "protocol",
-          message: "The live-environment transport posture differs from the inference operation it describes.",
-        });
+        addEventFinding(add, event, "TURN_LIVE_ENVIRONMENT_POSTURE_MISMATCH", "The live-environment transport posture differs from the inference operation it describes.");
       }
       const idempotencyKey = `${session.id}:${turn.id}:${String(step)}`;
       if (payload.idempotencyKey !== idempotencyKey || !DIGEST_PATTERN.test(String(payload.requestDigest))) {
-        add({ ...eventLocation(event), code: "INFERENCE_REQUEST_METADATA_INVALID", category: "protocol", message: "Inference idempotency key or request digest is invalid." });
+        addEventFinding(add, event, "INFERENCE_REQUEST_METADATA_INVALID", "Inference idempotency key or request digest is invalid.");
       } else {
         const expectedRequestDigest = await sha256(stableStringify({
-          model: effectiveModel,
+          model: turn.model,
           systemPromptDigest: session.manifest.systemPromptDigest,
           messages: boundInferenceHistoryImages(messages),
           tools: session.manifest.tools,
           idempotencyKey,
         } as unknown as JsonValue));
         if (expectedRequestDigest !== payload.requestDigest) {
-          add({ ...eventLocation(event), code: "INFERENCE_REQUEST_DIGEST_MISMATCH", category: "protocol", message: "Inference request digest does not match the canonical transcript prefix." });
+          addEventFinding(add, event, "INFERENCE_REQUEST_DIGEST_MISMATCH", "Inference request digest does not match the canonical transcript prefix.");
         }
       }
       seenOperations.add(operationId);
@@ -1566,7 +1620,7 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "inference.usage") {
+    if (type === "inference.usage") {
       /*
        * Two inferences can bill a session, and only one of them is a turn step.
        * The other is Auto Approve's safety review, which runs between a tool
@@ -1579,42 +1633,42 @@ async function validateProtocol(
        * now. Nothing here can carry a response, a receipt or a message, so the
        * relaxation admits token counts and nothing else.
        */
-      const turnOfEvent = active && event.turnId === active.id && !active.terminal ? active : undefined;
-      const stepUsage = Boolean(turnOfEvent?.inference && event.operationId === turnOfEvent.inference.operationId);
+      const turnOfEvent = active && eventTurnId === active.id && !active.terminal ? active : undefined;
+      const stepUsage = Boolean(turnOfEvent?.inference && eventOperationId === turnOfEvent.inference.operationId);
       const reviewOfPendingCall = Boolean(turnOfEvent?.tools.some((tool) =>
-        tool.call.id === event.operationId && tool.requested && !tool.decision && !tool.terminal));
+        tool.call.id === eventOperationId && tool.requested && !tool.decision && !tool.terminal));
       const reviewOfPendingLocalCommand = Boolean(activeLocal
         && !activeLocal.approved
-        && event.turnId === activeLocal.turnId
-        && event.operationId === activeLocal.operationId);
+        && eventTurnId === activeLocal.turnId
+        && eventOperationId === activeLocal.operationId);
       // The third payer: an ancillary inference that already declared itself,
       // such as the request that named this conversation.
-      const ancillary = Boolean(event.operationId
-        && ancillaryInferences.get(event.operationId) === event.turnId);
+      const ancillary = Boolean(eventOperationId
+        && ancillaryInferences.get(eventOperationId) === eventTurnId);
       if (!payload || (!stepUsage && !reviewOfPendingCall && !reviewOfPendingLocalCommand && !ancillary)) {
-        add({ ...eventLocation(event), code: "INFERENCE_USAGE_ORPHANED", category: "protocol", message: "Usage event does not match an active inference or a tool action pending a decision." });
+        addEventFinding(add, event, "INFERENCE_USAGE_ORPHANED", "Usage event does not match an active inference or a tool action pending a decision.");
         continue;
       }
       for (const tokenField of ["inputTokens", "outputTokens"] as const) {
         const value = payload[tokenField];
         if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < 0)) {
-          add({ ...eventLocation(event), code: "INFERENCE_USAGE_INVALID", category: "protocol", message: "Usage token counts must be non-negative safe integers." });
+          addEventFinding(add, event, "INFERENCE_USAGE_INVALID", "Usage token counts must be non-negative safe integers.");
           break;
         }
       }
       continue;
     }
 
-    if (event.type === "assistant.completed") {
+    if (type === "assistant.completed") {
       const turn = requireActive(event);
-      if (!turn || !payload || !turn.inference || event.operationId !== turn.inference.operationId) {
-        add({ ...eventLocation(event), code: "ASSISTANT_ORPHANED", category: "protocol", message: "Assistant event does not terminate the active inference." });
+      if (!turn || !payload || !turn.inference || eventOperationId !== turn.inference.operationId) {
+        addEventFinding(add, event, "ASSISTANT_ORPHANED", "Assistant event does not terminate the active inference.");
         continue;
       }
       const message = asPlainRecord(payload.message);
       const finishReason = payload.finishReason;
       if (!message || message.role !== "assistant" || typeof message.content !== "string" || !FINISH_REASONS.has(String(finishReason))) {
-        add({ ...eventLocation(event), code: "ASSISTANT_MESSAGE_INVALID", category: "protocol", message: "Assistant payload has an invalid canonical message or finish reason." });
+        addEventFinding(add, event, "ASSISTANT_MESSAGE_INVALID", "Assistant payload has an invalid canonical message or finish reason.");
         turn.inference = undefined;
         continue;
       }
@@ -1627,23 +1681,23 @@ async function validateProtocol(
       messages.push(canonicalMessage);
       if (toolCalls.length > 0) {
         if (finishReason !== "tool-calls" || payload.responseDigest !== undefined || payload.receipt !== undefined) {
-          add({ ...eventLocation(event), code: "TOOL_ASSISTANT_TERMINAL_INVALID", category: "protocol", message: "Assistant tool-call phase has inconsistent terminal metadata." });
+          addEventFinding(add, event, "TOOL_ASSISTANT_TERMINAL_INVALID", "Assistant tool-call phase has inconsistent terminal metadata.");
         }
         const localIds = new Set<string>();
         for (const call of toolCalls) {
           if (localIds.has(call.id) || seenOperations.has(call.id)) {
-            add({ ...eventLocation(event), code: "TOOL_CALL_ID_REUSED", category: "protocol", message: "Tool-call ID is duplicated or reused as another operation." });
+            addEventFinding(add, event, "TOOL_CALL_ID_REUSED", "Tool-call ID is duplicated or reused as another operation.");
           }
           localIds.add(call.id);
         }
         turn.tools = toolCalls.map((call) => ({ call, requested: false }));
       } else {
         if (finishReason === "tool-calls" || !DIGEST_PATTERN.test(String(payload.responseDigest))) {
-          add({ ...eventLocation(event), code: "FINAL_ASSISTANT_TERMINAL_INVALID", category: "protocol", message: "Final assistant event has inconsistent finish or response-digest metadata." });
+          addEventFinding(add, event, "FINAL_ASSISTANT_TERMINAL_INVALID", "Final assistant event has inconsistent finish or response-digest metadata.");
         }
         const expectedResponseDigest = await sha256(message.content);
         if (expectedResponseDigest !== payload.responseDigest) {
-          add({ ...eventLocation(event), code: "RESPONSE_DIGEST_MISMATCH", category: "receipt", message: "Assistant response does not match its response digest." });
+          addEventFinding(add, event, "RESPONSE_DIGEST_MISMATCH", "Assistant response does not match its response digest.", "trace");
         }
         const receiptId = validateReceipt(
           payload.receipt,
@@ -1652,7 +1706,7 @@ async function validateProtocol(
           String(payload.responseDigest),
           event,
           add,
-          effectiveModel,
+          turn.model,
         );
         turn.finalAssistant = {
           responseDigest: String(payload.responseDigest),
@@ -1664,11 +1718,11 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "tool.requested") {
+    if (type === "tool.requested") {
       const turn = requireActive(event);
-      if (!turn || !payload || turn.inference || !event.operationId) continue;
+      if (!turn || !payload || turn.inference || !eventOperationId) continue;
       const call = asPlainRecord(payload.call);
-      const expected = turn.tools.find((tool) => tool.call.id === event.operationId);
+      const expected = turn.tools.find((tool) => tool.call.id === eventOperationId);
       if (
         !call ||
         !expected ||
@@ -1677,19 +1731,19 @@ async function validateProtocol(
         call.name !== expected.call.name ||
         !jsonEqual(call.arguments, expected.call.arguments)
       ) {
-        add({ ...eventLocation(event), code: "TOOL_REQUEST_MISMATCH", category: "protocol", message: "Tool request does not match a unique call declared by the preceding assistant message." });
+        addEventFinding(add, event, "TOOL_REQUEST_MISMATCH", "Tool request does not match a unique call declared by the preceding assistant message.");
         continue;
       }
       expected.requested = true;
-      seenOperations.add(event.operationId);
+      seenOperations.add(eventOperationId);
       counts.toolOperations += 1;
       continue;
     }
 
-    if (event.type === "tool.approved" || event.type === "tool.denied") {
+    if (type === "tool.approved" || type === "tool.denied") {
       const turn = requireActive(event);
-      if (!turn || !payload || !event.operationId) continue;
-      const tool = turn.tools.find((candidate) => candidate.call.id === event.operationId);
+      if (!turn || !payload || !eventOperationId) continue;
+      const tool = turn.tools.find((candidate) => candidate.call.id === eventOperationId);
       if (
         !tool ||
         !tool.requested ||
@@ -1697,17 +1751,17 @@ async function validateProtocol(
         payload.callId !== tool.call.id ||
         payload.name !== tool.call.name
       ) {
-        add({ ...eventLocation(event), code: "TOOL_DECISION_INVALID", category: "protocol", message: "Tool decision is duplicated or does not match a requested call." });
+        addEventFinding(add, event, "TOOL_DECISION_INVALID", "Tool decision is duplicated or does not match a requested call.");
         continue;
       }
-      tool.decision = event.type === "tool.approved" ? "approved" : "denied";
-      if (event.type === "tool.approved") {
+      tool.decision = type === "tool.approved" ? "approved" : "denied";
+      if (type === "tool.approved") {
         const issue = approvalProvenanceIssue(payload.approval, effectiveApprovalMode);
-        if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
+        if (issue) addEventFinding(add, event, "TOOL_APPROVAL_PROVENANCE_INVALID", issue);
       }
-      if (event.type === "tool.denied") {
+      if (type === "tool.denied") {
         if (typeof payload.content !== "string") {
-          add({ ...eventLocation(event), code: "TOOL_DENIAL_INVALID", category: "protocol", message: "Tool denial lacks its canonical tool-message content." });
+          addEventFinding(add, event, "TOOL_DENIAL_INVALID", "Tool denial lacks its canonical tool-message content.");
         } else {
           messages.push({ role: "tool", toolCallId: tool.call.id, content: payload.content });
         }
@@ -1717,10 +1771,10 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "tool.resulted" || event.type === "tool.failed") {
+    if (type === "tool.resulted" || type === "tool.failed") {
       const turn = requireActive(event);
-      if (!turn || !payload || !event.operationId) continue;
-      const tool = turn.tools.find((candidate) => candidate.call.id === event.operationId);
+      if (!turn || !payload || !eventOperationId) continue;
+      const tool = turn.tools.find((candidate) => candidate.call.id === eventOperationId);
       if (
         !tool ||
         tool.decision !== "approved" ||
@@ -1729,30 +1783,30 @@ async function validateProtocol(
         payload.name !== tool.call.name ||
         typeof payload.content !== "string"
       ) {
-        add({ ...eventLocation(event), code: "TOOL_TERMINAL_INVALID", category: "protocol", message: "Tool terminal is duplicated, unapproved, or does not match its request." });
+        addEventFinding(add, event, "TOOL_TERMINAL_INVALID", "Tool terminal is duplicated, unapproved, or does not match its request.");
         continue;
       }
-      if (event.type === "tool.resulted" && typeof payload.isError !== "boolean") {
-        add({ ...eventLocation(event), code: "TOOL_RESULT_INVALID", category: "protocol", message: "Tool result must include an explicit isError boolean." });
+      if (type === "tool.resulted" && typeof payload.isError !== "boolean") {
+        addEventFinding(add, event, "TOOL_RESULT_INVALID", "Tool result must include an explicit isError boolean.");
       }
-      tool.terminal = event.type === "tool.resulted" ? "resulted" : "failed";
+      tool.terminal = type === "tool.resulted" ? "resulted" : "failed";
       counts.terminalToolOperations += 1;
       messages.push({ role: "tool", toolCallId: tool.call.id, content: payload.content });
       continue;
     }
 
-    if (event.type === "turn.completed") {
+    if (type === "turn.completed") {
       const turn = requireActive(event);
       if (!turn || !payload) continue;
       if (
-        event.operationId ||
+        eventOperationId ||
         turn.inference ||
         turn.tools.some((tool) => !tool.terminal) ||
         !turn.finalAssistant ||
         payload.responseDigest !== turn.finalAssistant.responseDigest ||
         payload.receiptId !== turn.finalAssistant.receiptId
       ) {
-        add({ ...eventLocation(event), code: "TURN_COMPLETION_INVALID", category: "protocol", message: "Turn completed without a matching final assistant, receipt, or fully terminal operations." });
+        addEventFinding(add, event, "TURN_COMPLETION_INVALID", "Turn completed without a matching final assistant, receipt, or fully terminal operations.");
       }
       turn.terminal = "completed";
       counts.completedTurns += 1;
@@ -1760,24 +1814,18 @@ async function validateProtocol(
       continue;
     }
 
-    if (event.type === "turn.failed" || event.type === "turn.cancelled") {
+    if (type === "turn.failed" || type === "turn.cancelled") {
       const turn = requireActive(event);
       if (!turn || !payload) continue;
-      if (event.operationId || typeof payload.error !== "string") {
-        add({ ...eventLocation(event), code: "TURN_TERMINAL_INVALID", category: "protocol", message: "Failed or cancelled turn has invalid terminal metadata." });
+      if (eventOperationId || typeof payload.error !== "string") {
+        addEventFinding(add, event, "TURN_TERMINAL_INVALID", "Failed or cancelled turn has invalid terminal metadata.");
       }
       const unresolved = Boolean(turn.inference) || turn.tools.some((tool) => !tool.terminal);
       if (unresolved) {
-        add({
-          ...eventLocation(event),
-          code: "OPERATION_OUTCOME_UNKNOWN",
-          category: "completeness",
-          severity: "warning",
-          message: "Turn terminated with an operation whose durable outcome is unknown.",
-        });
+        addEventFinding(add, event, "OPERATION_OUTCOME_UNKNOWN", "Turn terminated with an operation whose durable outcome is unknown.", "completeness", "warning");
       }
-      turn.terminal = event.type === "turn.failed" ? "failed" : "cancelled";
-      if (event.type === "turn.failed") counts.failedTurns += 1;
+      turn.terminal = type === "turn.failed" ? "failed" : "cancelled";
+      if (type === "turn.failed") counts.failedTurns += 1;
       else counts.cancelledTurns += 1;
       active = undefined;
       /*
@@ -1793,40 +1841,18 @@ async function validateProtocol(
   }
 
   if (!sawCreation) {
-    add({ code: "SESSION_CREATION_MISSING", category: "protocol", message: "Journal has no canonical session.created event." });
+    add("SESSION_CREATION_MISSING", "protocol", "Journal has no canonical session.created event.");
   } else if (projectedTitle !== session.title) {
-    add({
-      code: "SESSION_TITLE_SNAPSHOT_MISMATCH",
-      category: "manifest",
-      message: "The title projected from creation and rename events differs from the session record.",
-      severity: "warning",
-    });
+    add("SESSION_TITLE_SNAPSHOT_MISMATCH", "manifest", "The title projected from creation and rename events differs from the session record.", undefined, "warning");
   }
   if (session.manifest.lineage && !sawForkContext) {
-    add({
-      code: "FORK_CONTEXT_SEED_MISSING",
-      category: "protocol",
-      message: "A fork manifest has no verified destination context-seed event.",
-    });
+    add("FORK_CONTEXT_SEED_MISSING", "protocol", "A fork manifest has no verified destination context-seed event.");
   }
   if (active) {
-    add({
-      code: "TURN_INCOMPLETE",
-      category: "completeness",
-      severity: "warning",
-      message: `Turn ${active.id} has no durable terminal event.`,
-      turnId: active.id,
-      operationId: active.inference?.operationId,
-    });
+    add("TURN_INCOMPLETE", "completeness", `Turn ${active.id} has no durable terminal event.`, { turnId: active.id, operationId: active.inference?.operationId }, "warning");
   }
   if (activeLocal) {
-    add({
-      code: "LOCAL_COMMAND_INCOMPLETE",
-      category: "completeness",
-      message: `Client-only local command ${activeLocal.turnId} has no durable terminal event.`,
-      turnId: activeLocal.turnId,
-      operationId: activeLocal.operationId,
-    });
+    add("LOCAL_COMMAND_INCOMPLETE", "completeness", `Client-only local command ${activeLocal.turnId} has no durable terminal event.`, { turnId: activeLocal.turnId, operationId: activeLocal.operationId });
   }
   return counts;
 }
@@ -1911,7 +1937,7 @@ function provenanceMatchesContextPolicy(
   effectiveModel: string = manifest.model,
 ): boolean {
   return provenance?.adapterId === adapterId &&
-    provenance.providerId === manifest.providerId &&
+    sessionInferenceProviderIdMatches(manifest, provenance.providerId) &&
     provenance.model === effectiveModel &&
     (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
 }
@@ -1919,11 +1945,11 @@ function provenanceMatchesContextPolicy(
 function parseToolCalls(
   value: unknown,
   event: DurableEvent,
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
 ): ToolCall[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
-    add({ ...eventLocation(event), code: "TOOL_CALLS_INVALID", category: "protocol", message: "Assistant toolCalls must be an array." });
+    addEventFinding(add, event, "TOOL_CALLS_INVALID", "Assistant toolCalls must be an array.");
     return [];
   }
   const calls: ToolCall[] = [];
@@ -1931,11 +1957,11 @@ function parseToolCalls(
     const call = asPlainRecord(candidate);
     if (
       !call ||
-      boundedString(call.id, 512) === undefined ||
-      boundedString(call.name, 256) === undefined ||
+      !boundedString(call.id, 512) ||
+      !boundedString(call.name, 256) ||
       !inspectJson(call.arguments, DEFAULT_LIMITS).valid
     ) {
-      add({ ...eventLocation(event), code: "TOOL_CALL_INVALID", category: "protocol", message: "Assistant declared an invalid tool call." });
+      addEventFinding(add, event, "TOOL_CALL_INVALID", "Assistant declared an invalid tool call.");
       continue;
     }
     calls.push(call as unknown as ToolCall);
@@ -1944,12 +1970,11 @@ function parseToolCalls(
 }
 
 /**
- * Whose request this receipt claims to be for.
+ * Whose request this trace receipt belongs to.
  *
- * Shared with the naming inference, which produces a genuine receipt for a
- * request that is not a turn step: its digests bind a prompt this journal
- * deliberately does not carry, so identity is everything that can be checked
- * there, and it is checked identically to a turn's.
+ * A naming inference is not a turn step, so identity is the only common
+ * property the audit can check there. A final assistant event also validates
+ * request and response digests below.
  */
 function receiptIdentityMatches(
   receipt: Record<string, unknown> | undefined,
@@ -1957,18 +1982,16 @@ function receiptIdentityMatches(
   turnId: string,
   effectiveModel: string = session.manifest.model,
 ): boolean {
-  const bindings = asPlainRecord(receipt?.bindings);
   return Boolean(
     receipt
     && receipt.version === 1
     && boundedString(receipt.receiptId, 2_048)
     && receipt.sessionId === session.id
     && receipt.turnId === turnId
-    && receipt.provider === session.manifest.providerId
+    && sessionInferenceProviderIdMatches(session.manifest, receipt.provider)
     && (receipt.model === undefined || receipt.model === effectiveModel)
-    && POSTURES.has(String(receipt.posture))
-    && bindings
-    && bindings.algorithm === "SHA-256",
+    && (receipt.requestDigest === undefined || DIGEST_PATTERN.test(String(receipt.requestDigest)))
+    && (receipt.responseDigest === undefined || DIGEST_PATTERN.test(String(receipt.responseDigest))),
   );
 }
 
@@ -1978,18 +2001,17 @@ function validateReceipt(
   turn: TurnState,
   responseDigest: string,
   event: DurableEvent,
-  add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  add: AddFinding,
   effectiveModel: string,
 ): string | undefined {
   const receipt = asPlainRecord(value);
-  const bindings = asPlainRecord(receipt?.bindings);
   const receiptId = boundedString(receipt?.receiptId, 2_048);
   if (!receiptIdentityMatches(receipt, session, turn.id, effectiveModel)) {
-    add({ ...eventLocation(event), code: "RECEIPT_IDENTITY_MISMATCH", category: "receipt", message: "Receipt does not match the session, turn, provider, model, or digest algorithm." });
+    addEventFinding(add, event, "RECEIPT_IDENTITY_MISMATCH", "Trace receipt does not match the session, turn, provider, model, or digest shape.", "trace");
     return receiptId;
   }
-  if (bindings?.requestDigest !== turn.inference?.requestDigest || bindings?.responseDigest !== responseDigest) {
-    add({ ...eventLocation(event), code: "RECEIPT_BINDING_MISMATCH", category: "receipt", message: "Receipt request/response bindings do not match the audited turn." });
+  if (receipt?.requestDigest !== turn.inference?.requestDigest || receipt?.responseDigest !== responseDigest) {
+    addEventFinding(add, event, "RECEIPT_BINDING_MISMATCH", "Trace receipt request/response digests do not match the audited turn.", "trace");
   }
   return receiptId;
 }
@@ -2042,7 +2064,7 @@ function finishReport(args: {
       chain: categoryPasses("chain") && categoryPasses("anchor"),
       manifest: categoryPasses("manifest"),
       protocol: categoryPasses("protocol"),
-      receiptBindings: categoryPasses("receipt"),
+      traceBindings: categoryPasses("trace"),
       complete,
     },
     counts: Object.freeze({ ...args.counts }),
@@ -2087,16 +2109,16 @@ function isDurableEventShape(value: Record<string, unknown>): boolean {
   return (
     Number.isSafeInteger(value.version) &&
     value.version === 1 &&
-    boundedString(value.eventId, 512) !== undefined &&
-    boundedString(value.sessionId, 512) !== undefined &&
+    !!boundedString(value.eventId, 512) &&
+    !!boundedString(value.sessionId, 512) &&
     Number.isSafeInteger(value.sequence) &&
     (value.sequence as number) > 0 &&
-    boundedString(value.recordedAt, 128) !== undefined &&
-    boundedString(value.previousDigest, 128) !== undefined &&
-    boundedString(value.digest, 128) !== undefined &&
-    boundedString(value.type, 128) !== undefined &&
-    (value.turnId === undefined || boundedString(value.turnId, 512) !== undefined) &&
-    (value.operationId === undefined || boundedString(value.operationId, 512) !== undefined) &&
+    !!boundedString(value.recordedAt, 128) &&
+    !!boundedString(value.previousDigest, 128) &&
+    !!boundedString(value.digest, 128) &&
+    !!boundedString(value.type, 128) &&
+    (value.turnId === undefined || !!boundedString(value.turnId, 512)) &&
+    (value.operationId === undefined || !!boundedString(value.operationId, 512)) &&
     Object.prototype.hasOwnProperty.call(value, "payload")
   );
 }
@@ -2153,7 +2175,7 @@ function inspectJson(
  * carrying `approval: null` verified clean, and one claiming Full Access
  * authority inside a session pinned to ask-first verified clean too. A field no
  * side of the contract validates is not evidence — it is decoration that looks
- * like evidence, which is worse than nothing on a proof surface.
+ * like a supported record, which is worse than an explicit unknown.
  *
  * The mode is compared against whichever mode was in force at this point in
  * the chain — the manifest's pin as amended by every `session.approval-policy-

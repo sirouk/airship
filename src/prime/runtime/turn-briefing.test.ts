@@ -83,7 +83,7 @@ describe("the prompt a root conversation is actually sent", () => {
     expect(prompt).toContain("Working directory: /workspace");
     expect(prompt).toContain("Current date: ");
     expect(prompt).toContain("Runtime: prime-runtime");
-    expect(prompt).toContain("Security posture: local");
+    expect(prompt).toContain("Inference path: local");
   });
 
   it("names every tool the session pinned, not a six-entry constant", async () => {

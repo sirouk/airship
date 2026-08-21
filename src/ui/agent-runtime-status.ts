@@ -26,27 +26,23 @@ import {
   formatAgentRuntimeStatusLine,
   getAgentRuntimeStatus,
   type AgentRuntimeStatus,
-  type AgentRuntimeStatusEvidence,
+  type AgentRuntimeStatusRecord,
 } from "../prime/runtime/agent-runtimes";
 
 /**
- * Which record class the pin came from, phrased for the tag's full sentence.
- * The engine *kind* is the gate's business; this is the rest of the story —
- * that the session was sealed by its first prime turn, or that airship turn
- * history is what owns it — so the resting tag and the gate's refusal read
- * as one system.
+ * Neutral detail for the record class that carried the engine pin. A marker is
+ * a stored selection, not a statement about the engine's integrity or origin.
  */
-const EVIDENCE_DETAIL: Readonly<Record<AgentRuntimeStatusEvidence, string>> = Object.freeze({
-  seal: "This session's first prime turn sealed it to the prime engine.",
-  "prime-events": "Prime journal records pin this session to the prime engine.",
-  "airship-history": "Airship turn records pin this session to the airship-core engine.",
+const RECORD_DETAIL: Readonly<Record<AgentRuntimeStatusRecord, string>> = Object.freeze({
+  "selection-marker": "The journal records Prime as the selected engine for this session.",
+  "legacy-selection-marker": "A historical journal marker records Prime as the selected engine for this session.",
+  "prime-records": "Prime journal records select the Prime engine for this session.",
+  "airship-history": "Airship turn records select the airship-core engine for this session.",
   /*
-   * Names no engine, deliberately, and that is what kept this sentence true
-   * across two reversals of which engine the gate actually defaults to. The
-   * authority computes `defaultEngine`; this line says only what is true of
-   * the journal and leaves the engine name to the value rendered beside it.
+   * Names no engine. The authority supplies `defaultEngine`, so this sentence
+   * remains correct if the gate's default changes.
    */
-  empty: "No engine evidence in this journal yet; the engine below is the one this session would start on.",
+  empty: "No engine-selection record is present; the engine below is the one this session would start on.",
 });
 
 /**
@@ -61,8 +57,8 @@ const EVIDENCE_DETAIL: Readonly<Record<AgentRuntimeStatusEvidence, string>> = Ob
 export function renderAgentRuntimeStatus(status: AgentRuntimeStatus): ComponentChild {
   const line = formatAgentRuntimeStatusLine(status);
   const detail = status.canForkSwitch && status.forkRemedy
-    ? `${EVIDENCE_DETAIL[status.evidenceType]} ${status.forkRemedy}`
-    : EVIDENCE_DETAIL[status.evidenceType];
+    ? `${RECORD_DETAIL[status.recordType]} ${status.forkRemedy}`
+    : RECORD_DETAIL[status.recordType];
   return h(
     "span",
     {
@@ -70,7 +66,7 @@ export function renderAgentRuntimeStatus(status: AgentRuntimeStatus): ComponentC
       // more instrument on the bar without styling of its own.
       class: "eyebrow agent-runtime-status",
       "data-engine": status.pinnedEngine ?? "unpinned",
-      "data-evidence": status.evidenceType,
+      "data-record": status.recordType,
       title: detail,
     },
     line,

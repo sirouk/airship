@@ -1,57 +1,49 @@
-# PRIME runtime — remaining milestones (post landing state)
+# Prime runtime — follow-up milestones
 
-The milestone account after the current landing state (all suites green;
-session authority in flight). Every item names its next event explicitly,
-so the runner never invents resumes.
+Status: the stock Prime runtime is integrated. Session authority, deterministic
+conversation titles, runtime selection, context compaction, fork admission,
+JavaScript kernel execution, tools, and subagents are production paths. This
+file lists optional follow-up work; it is not a claim that the shipped runtime
+is still "in flight."
 
-## M6.1 — Session authority finish (running now)
-Deliver `src/prime/runtime/session.ts` (turn bridge: jounal-parity convert,
-airship vocabulary, guardrails, receipts, kernel wiring) + `runtime.ts`
-(facade) + their tests per `SRC_PRIME_SPEC.md`. Acceptance: byte-parity
-tests green, terminal guarantee under abort green.
+## Host-scheduled goals and heartbeats
 
-## M6.2 — Runtime gate (after 6.1)
-Implement `docs/PRIME-RUNTIME-GATE.md` in `src/load-agent-runtime.ts` +
-session manifest pin + `inspect_agent_runtimes`-style capability surface so
-the deck can report runtime state honestly (like `inspect_execution_runtimes`
-does for workers). UI plumbing lands after the acceptance checklist.
+The journal and tool vocabulary can record goal and heartbeat state. A future
+page-lifetime scheduler may emit due ticks while the page is open. It must use a
+host-owned timer, persist no credential, and never imply background execution
+after the browser suspends or closes the page.
 
-## M6.3 — System-prompt integration
-Compose `getSystemPrompt` in the session from `src/prime/system-prompt.ts`
-fragments (runtime facts + harness prompt-notes + project instructions +
-capability inventory + continuation policy) with the content-addressed
-cache the composer exposes, instead of the manifest default verbatim prompt.
+## Skill authoring
 
-## M6.4 — Compaction trigger
-Port the threshold state machine (`input+output ≥ contextWindow - reserve`
-pre-turn, keepRecentTokens 20k) into the session's `shouldStopAfterTurn`
-seam, reusing `src/core/context-compressor.ts` as the summarizer (its
-context-policy pinner is manifest-authoritative). Compact events are
-prime events; canonical context at the next step keeps the
-`context.summary.updated` shape so fork-context still works.
+Registered `SKILL.md` entries and prompt blocks are supported. A future
+skill-creator surface may add guided authoring and validation. It must write
+through the same bounded profile/workspace authorities as other edits; it does
+not receive an ambient filesystem or shell.
 
-## M6.5 — Goals + heartbeat tick scheduler
-Goal accounting (input+output counted per non-error assistant) and due
-heartbeats as journaled `prime.heartbeat.due` events, driven by a page-
-lifetime timer seam the host owns. The data-plane CRUD tools already ship;
-this adds the scheduler.
+## Optional MCP transport
 
-## M6.6 — OAuth-family providers via bridge
-Bring the anthropic-oauth/codex/copilot surfaces through
-`src/inference/bridge/` (extension companion), since browser-side OAuth
-flows land where device codes + PKCE live.
+A reviewed Streamable HTTP adapter may be added for user-configured MCP
+servers. It must use explicit destinations, page-memory credentials, bounded
+payloads, aborts, and the existing approval policy. No socket or localhost
+privilege is implied by the static build.
 
-## M6.7 — Fork-context admission
-Adopt `src/core/fork-context.ts` lineage-sealed sessions in the session
-authority (resume v2 semantics: lineage pinned, seed verified, then fork).
+## Optional Python kernel selection
 
-## M6.8 — MCP transport seam
-Optional: MCP-streamable-HTTP clients for desktop-adjacent providers
-(sockets-free) gated on extension bridge.
+The separately tested Pyodide engine remains an environment-qualified module.
+Making it a stock session choice requires a visible engine selector, durable
+binding, equivalent protocol authentication, and browser/live-pack gates. The
+stock Prime session therefore continues to report JavaScript honestly.
 
-## Seams already named, deliberately not on this list
-- kernel namespace snapshot/restore (dill) — restore seam deferred (named
-  in the kernel capability record)
-- skill-creator tool (upstream CLI-side builder) — deferred; SKILL.md +
-  SKILL prompt blocks land in skills.ts
-- `export-html` semantic if session export is wanted later
+## Provider authorization boundary
+
+Provider account authorization is not a hidden Prime milestone. The stock
+static build exposes browser-direct API-key setup. The optional extension may
+relay a reviewed request that already has authority, but it does not acquire an
+OAuth grant or create a provider sign-in flow.
+
+## Explicitly deferred
+
+- kernel namespace snapshot/restore;
+- unattended execution after browser suspension or close;
+- provider-specific privileged runtimes;
+- HTML export, unless a bounded local export contract is defined.

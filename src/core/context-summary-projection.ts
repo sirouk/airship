@@ -556,8 +556,7 @@ export function truncateUtf8(value: string, maximum: number): string {
 }
 
 function isSecurityPosture(value: unknown): value is SecurityPosture {
-  return value === "local" || value === "plaintext-remote" ||
-    value === "encrypted-unattested" || value === "encrypted-attested";
+  return value === "local" || value === "plaintext-remote";
 }
 
 function boundedRatio(value: unknown, minimum: number, maximum: number): boolean {

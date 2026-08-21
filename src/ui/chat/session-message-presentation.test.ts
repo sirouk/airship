@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../../core/contracts";
 import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
-import { createLocalReceipt, type ConversationReceipt } from "../../receipts/types";
+import { createLocalReceipt, type ConversationReceipt } from "../../core/conversation-receipt";
 import { EventJournal } from "../../core/journal";
 import { MemoryJournalBackend } from "../../core/memory-journal";
 import { createSessionManifest } from "../../core/session-manifest";
@@ -11,6 +11,7 @@ import type { CanonicalMessage } from "../../core/contracts";
 import { auditSessionHistory } from "../../core/session-audit";
 import { selectProfileActiveConversation } from "../../sessions/profile-cockpit";
 import { SessionLibrary } from "../../sessions/library";
+import { materializeSessionMessages } from "../../sessions/domain";
 import {
   SessionMessagePresentationError,
   describeSessionPresentationFault,
@@ -113,6 +114,62 @@ describe("presentSessionMessages", () => {
     // rows agree about where the turn began.
     expect(view.rows.find((row) => row.turnId === "turn-2" && row.role === "user")?.sourcePoint)
       .toEqual(assistant.turnStartPoint);
+  });
+
+  /*
+   * "The command ran" and "the command worked" are different facts. A tool step
+   * that answered `File not found` writes `local.command.completed` with
+   * `isError: true`; reading only the event name badged that turn COMPLETED
+   * after a reload while the live transcript, which reads the result, called it
+   * failed — one turn with two dispositions depending on when you looked.
+   */
+  /*
+   * PRIME is the default engine, so this record is on nearly every
+   * conversation. Reaching the unread fallback made every resumed conversation
+   * open by telling its reader that this build cannot replay a record this
+   * build writes itself, one operation before rendering it.
+   */
+  it("says which runtime a conversation is pinned to instead of disowning the record", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("prime.session.runtime.selected", undefined, {
+        runtime: "prime",
+        selectedBy: "runtime-gate",
+        at: "2026-08-21T00:00:00.000Z",
+      }),
+    ]);
+    const value = input(events);
+    const view = presentSessionMessages({ ...value, audit: { ...value.audit, status: "incomplete" } });
+    const marker = view.markers.at(-1);
+
+    expect(marker?.detail).toContain("runtime");
+    expect(marker?.detail).not.toContain("cannot replay");
+  });
+
+  it("badges an errored local tool result as a failed turn on both rows", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      localDraft("local.command.requested", "local-error", "operation-1", {
+        content: "/read notes/definitely-not-here.md",
+        toolName: "read_file",
+        arguments: { path: "notes/definitely-not-here.md" },
+      }),
+      localDraft("local.command.approved", "local-error", "operation-1", {
+        toolName: "read_file",
+      }),
+      localDraft("local.command.completed", "local-error", "operation-1", {
+        toolName: "read_file",
+        content: "File not found: notes/definitely-not-here.md",
+        isError: true,
+      }),
+    ]);
+    const value = input(events);
+    const view = presentSessionMessages({ ...value, audit: { ...value.audit, status: "incomplete" } });
+
+    for (const role of ["user", "assistant"] as const) {
+      expect(view.rows.find((row) => row.turnId === "local-error" && row.role === role))
+        .toMatchObject({ turnStatus: "failed" });
+    }
   });
 
   it("replays completed, denied, and failed local commands between ordinary agent turns", () => {
@@ -355,8 +412,18 @@ describe("presentSessionMessages", () => {
 
     expect(view.auditStatus).toBe("incomplete");
     expect(view.rows).toHaveLength(2);
+    /*
+     * Unfinished, and in provider context — which is what actually happens.
+     *
+     * `materializeMessages` drops only failed turns and unsalvaged cancelled
+     * ones, so an unterminated turn's request IS replayed to the model on the
+     * next turn. This row used to be labelled "excluded", which was a false
+     * statement about the turn and, because `materializeSessionMessages` says
+     * "included" for the same journal, a disagreement that `validateHistory`
+     * then refused the whole presentation over.
+     */
     expect(view.rows.every((row) =>
-      row.turnStatus === "incomplete" && row.providerContext === "excluded"
+      row.turnStatus === "incomplete" && row.providerContext === "included"
     )).toBe(true);
     expect(view.rows[1]?.parts).toEqual([]);
   });
@@ -993,7 +1060,6 @@ async function auditProfileManifest() {
       workspaceBinding: { kind: "active-workspace" },
       memoryScope: "profile",
       approvalMode: "ask-first",
-      minimumPosture: "local",
     },
   });
 }
@@ -1036,6 +1102,44 @@ describe("a turn still in flight projects the row its live stream is addressed t
     expect(assistant?.turnStatus).toBe("incomplete");
     // And the finished turn beside it is untouched by the running one.
     expect(view.rows.find((row) => row.role === "assistant" && row.turnId === "turn-1")?.turnStatus).toBe("completed");
+  });
+
+  /*
+   * The two projections of one journal have to agree, or nobody can return to
+   * a conversation that is still answering.
+   *
+   * `resumeLibrarySessionNow` hands this function the bounded transcript's own
+   * per-turn metadata as `history` — the same pairing `app.tsx`'s
+   * `presentationHistory` builds — precisely so a projection that has drifted
+   * is refused rather than displayed. Both sides derive from the same events,
+   * so for a turn in flight they must produce the same pair. They did not:
+   * `materializeSessionMessages` said `incomplete/included` and this file said
+   * `incomplete/excluded`, so `validateHistory` threw `HISTORY_MISMATCH` for
+   * every conversation with a live turn. Measured in Chromium: clicking a
+   * running conversation in the rail did nothing at all, and the topbar read
+   * "“Alpha” could not be replayed: Bounded history metadata disagrees with
+   * durable turn …". This is that exact pairing, built the way the shell
+   * builds it.
+   */
+  it("agrees with the bounded transcript projection of the same running turn", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "First", "First answer"),
+      draft("turn.requested", "turn-2", { content: "Still thinking" }),
+      draft("inference.started", "turn-2", { step: 0 }),
+    ]);
+    const materialized = materializeSessionMessages(events, {}, "session-1");
+    const history = materialized.messages.flatMap((message) => message.turnId
+      ? [{ turnId: message.turnId, turnStatus: message.turnStatus, providerContext: message.providerContext }]
+      : []);
+    expect(history.some((entry) => entry.turnId === "turn-2")).toBe(true);
+
+    const view = presentSessionMessages(input(events, { history }));
+    for (const entry of history) {
+      const row = view.rows.find((candidate) => candidate.turnId === entry.turnId);
+      expect(row?.turnStatus).toBe(entry.turnStatus);
+      expect(row?.providerContext).toBe(entry.providerContext);
+    }
   });
 });
 

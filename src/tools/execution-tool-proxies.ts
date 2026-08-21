@@ -5,6 +5,12 @@ import type { ToolRegistry } from "./registry";
 const MAX_CODE_CHARS = 64 * 1_024;
 const MAX_WASM_BASE64_CHARS = 5_600_000;
 
+const CODE_SCHEMA = Object.freeze({ type: "string", minLength: 1, maxLength: MAX_CODE_CHARS } as const);
+const STRING_1024_SCHEMA = Object.freeze({ type: "string", minLength: 1, maxLength: 1_024 } as const);
+const STRING_4096_SCHEMA = Object.freeze({ type: "string", maxLength: 4_096 } as const);
+const ARGUMENTS_SCHEMA = Object.freeze({ type: "array", maxItems: 64, items: STRING_4096_SCHEMA } as const);
+const ENVIRONMENT_SCHEMA = Object.freeze({ type: "object", maxProperties: 64, additionalProperties: STRING_4096_SCHEMA } as const);
+
 type ExecutionPack = typeof import("../execution/execution-runtime-pack");
 let executionPack: Promise<ExecutionPack> | undefined;
 
@@ -21,7 +27,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
       inputSchema: {
         type: "object",
         properties: {
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
+          code: CODE_SCHEMA,
           timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
         },
         required: ["code"],
@@ -35,7 +41,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
       inputSchema: {
         type: "object",
         properties: {
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
+          code: CODE_SCHEMA,
           calls: {
             type: "array",
             maxItems: 16,
@@ -84,13 +90,13 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
         type: "object",
         properties: {
           runtime: { type: "string", enum: ["javascript-worker", "wasi-preview1", "python-pyodide"] },
-          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
+          code: CODE_SCHEMA,
           wasmBase64: { type: "string", minLength: 12, maxLength: MAX_WASM_BASE64_CHARS },
-          wasmPath: { type: "string", minLength: 1, maxLength: 1_024 },
-          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
-          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
-          sourcePath: { type: "string", minLength: 1, maxLength: 1_024 },
+          wasmPath: STRING_1024_SCHEMA,
+          args: ARGUMENTS_SCHEMA,
+          env: ENVIRONMENT_SCHEMA,
+          workspaceRoot: STRING_1024_SCHEMA,
+          sourcePath: STRING_1024_SCHEMA,
           writeBack: { type: "boolean" },
           timeoutMs: { type: "integer", minimum: 50, maximum: 10_000, description: "Bounds the job's own statements only. A python-pyodide cold start is bounded separately (up to 30 s) and reported as bootMs, so total wall clock can exceed this." },
         },
@@ -124,10 +130,10 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
       inputSchema: {
         type: "object",
         properties: {
-          script: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
-          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
-          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
+          script: CODE_SCHEMA,
+          workspaceRoot: STRING_1024_SCHEMA,
+          args: ARGUMENTS_SCHEMA,
+          env: ENVIRONMENT_SCHEMA,
           writeBack: { type: "boolean" },
           timeoutMs: { type: "integer", minimum: 50, maximum: 30_000 },
         },
@@ -153,10 +159,10 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
       inputSchema: {
         type: "object",
         properties: {
-          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
+          workspaceRoot: STRING_1024_SCHEMA,
           command: { type: "string", minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
-          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
+          args: ARGUMENTS_SCHEMA,
+          env: ENVIRONMENT_SCHEMA,
           timeoutMs: { type: "integer", minimum: 1_000, maximum: 120_000 },
           writeBack: { type: "boolean" },
         },

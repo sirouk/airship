@@ -59,6 +59,26 @@ export interface ClientEncryptedWorkspacePort extends WorkspacePort {
   readonly encryptionBoundary: "airship-client-envelope-v1";
 }
 
+/**
+ * A workspace that can also seal bytes the caller owns, under the same key it
+ * already encrypts its own objects with — without handing that key out.
+ *
+ * This exists so a person can take a *sealed* work bundle off this device. The
+ * alternative was to give a route the Vault's `WorkspaceRootKey`, and the key
+ * custody rule in this product is that the key stays inside the object that
+ * holds it. The caller supplies a namespace so two unrelated sealed artifacts
+ * can never be opened as one another, and receives ordinary bytes back.
+ *
+ * Only a Vault-backed workspace implements it. Page memory has no key, so the
+ * sealed choice is simply unavailable there, and the surface says so rather
+ * than implying an encryption that is not happening.
+ */
+export interface PortableSealPort {
+  sealPortable(namespace: string, plaintext: Uint8Array): Promise<Uint8Array>;
+  openPortable(namespace: string, sealed: Uint8Array): Promise<Uint8Array>;
+}
+
+
 export class WorkspaceConflictError extends Error {
   constructor(message = "The workspace file changed before this operation completed.") {
     super(message);
@@ -105,6 +125,48 @@ export const CONTEXT_ROUTING_MIRROR_PATH = "/workspace/.airship/context/routing-
 export function isAirshipReservedPath(path: string): boolean {
   const normalized = normalizeWorkspacePath(path);
   return normalized === "/workspace/.airship" || normalized.startsWith("/workspace/.airship/");
+}
+
+/**
+ * Where an attached local folder appears inside `/workspace`.
+ *
+ * One reserved directory, declared beside the other workspace path rules
+ * rather than inside the lazily fetched implementation, because two eager
+ * consumers have to recognise it without pulling the File System Access code
+ * into first paint: the Git worktree binding, which must never mirror a
+ * person's own folder into Airship's object database, and the shell's decision
+ * about whether to fetch that code at all.
+ */
+export const LOCAL_FOLDER_MOUNT_ROOT = "/workspace/local";
+
+/**
+ * The durable marker that says a folder was attached in this browser profile.
+ *
+ * The handle itself lives in IndexedDB, because a `FileSystemDirectoryHandle`
+ * is structured-cloneable and nothing else can hold one. This key holds no
+ * handle and grants no access; it exists so a boot that has never attached a
+ * folder can decide not to fetch the local-folder pack at all.
+ */
+export const LOCAL_FOLDER_ATTACHMENT_KEY = "airship.workspace.local-folder.v1";
+
+/**
+ * The marker, per Profile.
+ *
+ * Every other storage tier is siloed by Profile — the workspace subtree, the
+ * Git object database, the memory scope, the terminal metadata — and this one
+ * was not: one `localStorage` key and one IndexedDB record meant a folder
+ * opened while reading under one Profile was mounted into `/workspace/local`
+ * for every other Profile in the browser, including ones created afterwards.
+ * The Profile is part of the key so that crossing cannot be expressed.
+ */
+export function localFolderAttachmentKey(profileId: string): string {
+  return `${LOCAL_FOLDER_ATTACHMENT_KEY}.${profileId}`;
+}
+
+/** True for the reserved mount root itself and for anything inside it. */
+export function isLocalFolderMountPath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path);
+  return normalized === LOCAL_FOLDER_MOUNT_ROOT || normalized.startsWith(`${LOCAL_FOLDER_MOUNT_ROOT}/`);
 }
 
 /** Private implementation records that must never enter model retrieval. */

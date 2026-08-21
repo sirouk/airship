@@ -1,41 +1,66 @@
-# src/prime/kernel — pyodide engine port notes
+# src/prime/kernel — dormant persistent Pyodide research notes
 
-Port of prime-agent's IPython kernel semantics (port-manifest §3.1,
-semantic invariant 24) onto a persistent in-worker CPython (pyodide pack,
-pinned `314.0.2`), re-hosted inside airship as the second engine of the
-prime kernel. The baseline `javascript` engine (kernel-host.ts +
-kernel-worker-source.ts) predates this file, is untouched behaviorally,
-and stays the reference for everything the two engines share.
+This directory retains a direct research port of prime-agent's IPython kernel
+semantics (port-manifest §3.1, semantic invariant 24) onto persistent in-worker
+CPython using the pinned Pyodide `314.0.2` pack. It is **dormant and not
+activation-safe**. Production `createKernelEngine("pyodide")` always throws
+`PyodideEngineQuarantinedError`; `engines.ts` does not import the direct class or
+its worker generator. The stock product constructs `PrimeKernelHost` and runs
+the job-scoped `javascript` engine.
 
 ## Files
 
 | file | role | upstream anchor |
 |---|---|---|
 | `pyodide-worker-source.ts` | worker runtime generator (`pyodideKernelWorkerSource(budgets, assetBase)`) | CPython cell loop of `kernel/index.ts` + `tools/ipython.ts` RLM bootstrap |
-| `pyodide-engine.ts` | `PyodideKernelEngine`: dedicated worker lifecycle for the pyodide engine | `KernelManager` (ZMQ host) |
-| `engines.ts` | `createKernelEngine(kind, opts)` engine selection + shared `PrimeKernelEngine` interface | n/a (upstream has exactly one engine) |
+| `pyodide-engine.ts` | dormant direct `PyodideKernelEngine` research class; direct construction is not activation-safe | `KernelManager` (ZMQ host) |
+| `engines.ts` | production selector: constructs JavaScript and fails closed for Pyodide without importing the research class | n/a (upstream has exactly one engine) |
 | `kernel-contract.ts` (+) | additive: `ready` carries optional `bootMs`/`version`; new `boot-failed` worker frame; `KernelEngineDescription` capability record | ExecuteResult shape honesty |
 | `kernel-host.ts` (+) | additive only: `describe()` and the `kernelTrustedWorkerUrl` export alias | n/a |
 | `pyodide-engine.test.ts` | scripted-worker lane (always on) + live pinned-pack lane (`PRIME_PYODIDE_LIVE=1`) | kernel driver tests |
 
+## Activation quarantine
+
+A Python cell can create an `asyncio` task that survives the cell result. The
+later task and a later cell both reach the same registered JavaScript `pat`
+module. Lexical worker capabilities authenticate the browser controller, but
+there is no unforgeable in-realm fact that tells `pat.call` which Python cell or
+task invoked it. Cancelling all tasks is also not enforceable against Python
+monkeypatching and cancellation suppression without terminating the worker and
+therefore losing the persistent namespace.
+
+For that reason, the factory message is stable and fail-closed:
+
+> The persistent Pyodide kernel is quarantined: cross-cell asyncio task
+> provenance cannot be proven, so createKernelEngine cannot activate it.
+
+The direct class and its scripted/live tests remain only to study persistent
+namespace and isolation behavior. Passing those tests does not qualify the
+class for product activation. Activation requires a provenance primitive that
+survives hostile Python code, or a design that terminates the interpreter at
+every job boundary.
+
 ## Design decisions
 
-1. **Separate adapter, not an engine flag.** `PrimeKernelHost` keeps its
-   exact code paths (its tests lock them); `PyodideKernelEngine` mirrors
-   its public surface — `start/exec/cancel/terminate/restart/onEvent/
-   description` plus `describe()` — with the pyodide deltas written out in
-   full. `engines.ts` is the one place a session picks the interpreter; the
-   switch is exhaustive, so a new `KernelEngine` kind fails at compile time.
-   JavaScript behavior is byte-identical: the only edits to kernel-host.ts
-   are the additive `describe()` and an export alias of the existing
-   trusted-worker policy, neither reachable from javascript execution paths.
+1. **Dormant direct adapter, not an engine flag.**
+   `PyodideKernelEngine` mirrors the stock host surface —
+   `start/exec/cancel/terminate/restart/onEvent/description` plus `describe()` —
+   so direct research can compare lifecycle semantics. The production selector
+   does not import it and always rejects the `"pyodide"` kind with the named
+   asyncio-provenance quarantine. This keeps the persistent source and pack out
+   of the activation graph rather than relying on a caller to remember an
+   environment flag.
 
 2. **Ready probe mirrors airship's pyodide pattern exactly.** Module
    worker from a freshly minted blob URL under the same blob-only
    TrustedTypes policy, `loadPyodide({ indexURL, fullStdLib: false })`
-   from the same-origin pinned pack at `/execution-packs/pyodide/` (served
-   by `scripts/pyodide-assets.ts`, which already refuses a mismatched
-   node_modules/pyodide). The ready frame posts once CPython, the ambient
+   from the same-origin pinned pack below Vite's validated `BASE_URL`, for
+   example `/execution-packs/pyodide/` at root or
+   `/airship/execution-packs/pyodide/` on Pages (served by
+   `scripts/pyodide-assets.ts`, which refuses a mismatched
+   node_modules/pyodide). Browser construction accepts only that exact resolved
+   base; `ports.assetBase` cannot select a second asset. The ready frame posts
+   once CPython, the ambient
    removals, and the namespace bootstrap all exist, carrying `bootMs` and
    the runtime `version`; the engine fails closed if that version is not
    the pin (deployment skew is named, never booted through).
@@ -69,11 +94,16 @@ and stays the reference for everything the two engines share.
    seq-countered, payload-capped per call by `maxBridgePayloadBytes`,
    counted per job by `maxBridgeCallsPerJob`). Round-trips work mid-await
    (the JS promise is resolved by the host's bridge-response while the
-   Python coroutine is suspended), and unresolved calls drain with a named
-   rejection when the job ends. `pat.progress(text)` writes to stdout;
-   `pat.sleep(ms)` is the cooperative cancellation checkpoint. The
-   eleven-line bootstrap is deliberately minimal: no `print_to` helper —
-   stdout is the rendered path and `pat.progress` covers annotations.
+   Python coroutine is suspended). The host registers each admitted bridge
+   effect before invoking the port and withholds finished/crashed publication
+   until that exact set settles. If a port waits on a job queued behind the
+   active job, the queue is cancelled before drain; new jobs are refused while
+   draining, which breaks that same-engine dependency cycle without publishing
+   an early result. Worker-side unresolved calls also receive a named rejection
+   when the cell ends. `pat.progress(text)` writes to stdout; `pat.sleep(ms)` is
+   the cooperative cancellation checkpoint. The three-line bootstrap is
+   deliberately minimal: no `print_to` helper — stdout is the rendered path and
+   `pat.progress` covers annotations.
 
 5. **Cancellation is cooperative-then-terminate, honestly named.** CPython
    cannot be interrupted mid-statement (no SharedArrayBuffer interrupt
@@ -111,9 +141,9 @@ Budgets are `KernelBudgets` (DEFAULT_KERNEL_BUDGETS): 256 Ki source chars,
 1 Mi chars per stream (live frames always emit, chunked ≤ 4096 chars; the
 durable capture is what the budget binds), 1 MiB serialized value
 (`{primeValue:"truncated", limitBytes}` marker), 1000 bridge calls/job,
-1 MiB bridge payload, 64 queued jobs. Host→worker: init (unused by both
-engines; budgets serialize into the template), exec, cancel,
-bridge-response, terminate. Worker→host: ready (+bootMs/version),
+1 MiB bridge payload, 64 queued jobs. Host→worker: init (the exact
+generation capability; Pyodide waits for it before loading the pack), exec,
+cancel, bridge-response, terminate. Worker→host: ready (+bootMs/version),
 boot-failed, stdout/stderr, bridge-request, finished.
 
 ## Honest deltas vs upstream IPython
@@ -166,12 +196,13 @@ which is the same thing spelled out:
 
     PRIME_PYODIDE_LIVE=1 npx vitest run src/prime/kernel/pyodide-engine.test.ts
 
-The script exists because every other opt-in lane has one — `test:vault:live`,
-`test:chutes:live` — and a lane reachable only by retyping its environment
-variable out of a document is a lane that does not get run. All thirteen of
-these tests were skipping on every machine until it was added.
+The script exists because every other opt-in lane has one — `test:vault:live`
+among them — and a lane reachable only by retyping its environment variable
+out of a document is a lane that does not get run.
 
-The live lane runs node:worker_threads under a small parentPort↔self shim
-passed through `ports.workerFactory` with a filesystem `assetBase`; the
-message protocol, worker source, budgets, and ready handshake are the
-shipped ones, not test doubles.
+The live lane runs `node:worker_threads` under a small `parentPort`↔`self`
+shim passed through `ports.workerFactory`; the source generator receives the
+pinned local filesystem pack base. It executes the real research worker source,
+budgets, protocol, and ready handshake rather than a scripted test double. This
+checks direct-class behavior. It does **not** lift the asyncio-provenance
+quarantine or make the class activation-safe.

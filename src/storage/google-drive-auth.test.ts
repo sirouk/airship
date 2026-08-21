@@ -29,9 +29,13 @@ describe("deployment configuration for the Google Drive vault", () => {
       } } } }),
     );
     await authorizer.prepare();
+    const pending = authorizer.authorize();
+    const rejected = expect(pending).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
     // A padded value would reach Google's token client verbatim and fail there
     // with an opaque error instead of being normalized at the accepting edge.
     expect(sentClientId).toBe(configured);
+    authorizer.reset();
+    await rejected;
   });
 
   it("agrees with the authorizer about which client IDs are constructible", () => {
@@ -116,6 +120,85 @@ describe("browser-only Google account authorization", () => {
     expect(configuredScope.split(" ")).toEqual(GOOGLE_ACCOUNT_SCOPES);
   });
 
+  it("ignores a prior client callback after reset so it cannot satisfy a later account request", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    const callbacks: Array<(response: Record<string, unknown>) => void> = [];
+    const requests: number[] = [];
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      "123456789012-airship.apps.googleusercontent.com",
+      provider,
+      async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+        const clientGeneration = callbacks.length;
+        callbacks.push(options.callback as (response: Record<string, unknown>) => void);
+        return { requestAccessToken: () => { requests.push(clientGeneration); } };
+      } } } }),
+    );
+
+    await authorizer.prepare();
+    const stale = authorizer.authorize();
+    const staleRejected = expect(stale).rejects.toMatchObject({
+      name: "GoogleDriveAuthorizationRequiredError",
+      message: "Google authorization was cleared.",
+    });
+    authorizer.reset();
+    await staleRejected;
+
+    await authorizer.prepare();
+    const current = authorizer.authorize();
+    let currentSettled = false;
+    void current.finally(() => { currentSettled = true; });
+    callbacks[0]?.({
+      access_token: "stale-account-token",
+      expires_in: 3_600,
+      scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+    });
+    await Promise.resolve();
+    expect(currentSettled).toBe(false);
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
+
+    callbacks[1]?.({
+      access_token: "current-account-token",
+      expires_in: 3_600,
+      scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+    });
+    await expect(current).resolves.toMatchObject({ accessToken: "current-account-token" });
+    await expect(provider.getAccessToken()).resolves.toMatchObject({ accessToken: "current-account-token" });
+    expect(requests).toEqual([0, 1]);
+  });
+
+  it("does not let prepare completion from before reset reactivate authorization", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    let releaseLoader!: () => void;
+    let clients = 0;
+    const loader = vi.fn(async () => {
+      await new Promise<void>((resolve) => { releaseLoader = resolve; });
+      return { accounts: { oauth2: { initTokenClient: () => {
+        clients += 1;
+        return { requestAccessToken: () => {} };
+      } } } };
+    });
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      "123456789012-airship.apps.googleusercontent.com",
+      provider,
+      loader,
+    );
+
+    const stalePrepare = authorizer.prepare();
+    authorizer.reset();
+    releaseLoader();
+    await stalePrepare;
+    expect(() => authorizer.authorize()).toThrow("Prepare Google Identity Services");
+    expect(clients).toBe(0);
+
+    await authorizer.prepare();
+    const pending = authorizer.authorize();
+    const rejected = expect(pending).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
+    expect(clients).toBe(1);
+    authorizer.reset();
+    await rejected;
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
   it("replaces an expired grant in place without persisting or rebuilding the GIS authority", async () => {
     const provider = new MemoryOnlyGoogleAccessTokenProvider();
     const callbacks: Array<(response: Record<string, unknown>) => void> = [];
@@ -182,17 +265,20 @@ describe("browser-only Google account authorization", () => {
     expect(attempts).toBe(2);
   });
 
-  it("releases a chooser that never calls back instead of wedging later authorization", async () => {
+  it("ignores a timed-out client callback so only the fresh retry can win", async () => {
     vi.useFakeTimers();
     try {
       const provider = new MemoryOnlyGoogleAccessTokenProvider();
-      let requests = 0;
+      const callbacks: Array<(response: Record<string, unknown>) => void> = [];
+      const requests: number[] = [];
       const authorizer = new GoogleIdentityServicesAuthorizer(
         "123456789012-airship.apps.googleusercontent.com",
         provider,
-        async () => ({ accounts: { oauth2: { initTokenClient: () => ({
-          requestAccessToken: () => { requests += 1; },
-        }) } } }),
+        async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+          const clientGeneration = callbacks.length;
+          callbacks.push(options.callback as (response: Record<string, unknown>) => void);
+          return { requestAccessToken: () => { requests.push(clientGeneration); } };
+        } } } }),
       );
       await authorizer.prepare();
       const stalled = authorizer.authorize();
@@ -204,9 +290,25 @@ describe("browser-only Google account authorization", () => {
       await rejected;
 
       const retry = authorizer.authorize();
-      expect(requests).toBe(2);
-      authorizer.reset();
-      await expect(retry).rejects.toMatchObject({ name: "GoogleDriveAuthorizationRequiredError" });
+      let retrySettled = false;
+      void retry.finally(() => { retrySettled = true; });
+      callbacks[0]?.({
+        access_token: "stale-timeout-token",
+        expires_in: 3_600,
+        scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+      });
+      await Promise.resolve();
+      expect(retrySettled).toBe(false);
+      await expect(provider.getAccessToken()).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
+
+      callbacks[1]?.({
+        access_token: "current-retry-token",
+        expires_in: 3_600,
+        scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+      });
+      await expect(retry).resolves.toMatchObject({ accessToken: "current-retry-token" });
+      await expect(provider.getAccessToken()).resolves.toMatchObject({ accessToken: "current-retry-token" });
+      expect(requests).toEqual([0, 1]);
     } finally {
       vi.useRealTimers();
     }

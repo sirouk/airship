@@ -80,7 +80,7 @@ test("the collapsed rail is an icon strip that fits inside itself and still coun
   // shorter product. Their names moved into `title`, which carries the scope
   // the visible label never did.
   const primary = page.getByRole("navigation", { name: "Primary" });
-  for (const destination of ["Chat", "Workspace", "Memory", "Proof", "Vault", "Connection", "Account"] as const) {
+  for (const destination of ["Chat", "Workspace", "Memory", "Vault", "Providers"] as const) {
     await expect(primary.getByRole("button", { name: destination, exact: true })).toHaveCount(1);
   }
 
@@ -88,16 +88,16 @@ test("the collapsed rail is an icon strip that fits inside itself and still coun
    * The collapse is not paid for by the keyboard. Pressing the control leaves
    * focus on it, and the peek must not treat that as "a keyboard user is
    * reading labels" — but a real keyboard traversal still must. So: focus the
-   * Proof row the way the keyboard does, and the labels come back.
+   * Providers row the way the keyboard does, and the labels come back.
    */
   const railWidthNow = () => page.locator(".sidebar .rail").evaluate((rail) => rail.getBoundingClientRect().width);
   expect(await railWidthNow()).toBeLessThanOrEqual(84);
-  await primary.getByRole("button", { name: "Proof", exact: true }).evaluate((button: HTMLElement) => {
+  await primary.getByRole("button", { name: "Providers", exact: true }).evaluate((button: HTMLElement) => {
     button.focus({ focusVisible: true } as FocusOptions);
   });
   await page.keyboard.press("ArrowUp");
   await expect.poll(railWidthNow).toBeGreaterThan(200);
-  await expect(primary.getByRole("button", { name: "Proof", exact: true }).locator(".nav-item__label")).toBeVisible();
+  await expect(primary.getByRole("button", { name: "Providers", exact: true }).locator(".nav-item__label")).toBeVisible();
 });
 
 test("the collapsed rail opens its conversations beside itself, at a width that holds their titles", async ({ page }, testInfo) => {

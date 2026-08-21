@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
+import { setProfilePresentationDensity } from "./support/density";
 
 const PREFERENCES_KEY = "airship.display-preferences.v1";
 
@@ -18,7 +19,13 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
       approvalMode: "ask-first",
     }));
   }, { key: PREFERENCES_KEY });
-  await mockOllama(page);
+  const invokedModels: string[] = [];
+  await mockOllama(page, async (route) => {
+    const body = route.request().postDataJSON() as { model?: unknown };
+    if (typeof body.model === "string") invokedModels.push(body.model);
+    await cors(route, 200, ollamaSse("OK"), "text/event-stream");
+  });
+  await setProfilePresentationDensity(page, "Balanced");
   await page.goto("/#connection");
 
   const fabric = page.locator(".provider-fabric");
@@ -32,13 +39,11 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
 
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
   /*
-   * The control is named by the field it sets and describes its value, which is
-   * the naming contract the whole product follows: a voice user says "Ollama
-   * session model", and the pinned model is read out after it rather than
-   * welded into the name. So the provider is asserted on the name and the model
-   * id on what the chip actually shows.
+   * The active provider is named on the conversation-model control, while the
+   * selected model remains visible as its value. The name also states that a
+   * new selection changes this conversation in place.
    */
-  const modelChip = page.getByRole("button", { name: /Ollama session model/u });
+  const modelChip = page.getByRole("button", { name: /Ollama conversation model/u });
   await expect(modelChip).toBeVisible();
   await expect(modelChip).toContainText("gemma3");
 
@@ -52,14 +57,63 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
   await expect(composer).toBeEnabled({ timeout: 30_000 });
   await composer.fill("Reply with a short local greeting.");
   await composer.press("Enter");
-  await expect(page.locator(".message.assistant").last()).toContainText("OK", { timeout: 20_000 });
+  const response = page.locator(".message.assistant").last();
+  await expect(response).toContainText("OK", { timeout: 20_000 });
 
+  // A completed local-provider turn keeps neutral provider, model, and run-id
+  // metadata with the answer.
+  const runDetails = response.getByRole("button", { name: /^Run details\. Provider /u });
+  await expect(runDetails).toBeVisible({ timeout: 20_000 });
+  await expect(runDetails).toContainText(/^Run · .+ · .+$/u);
+  await runDetails.click();
+  const runPanel = response.getByRole("group", { name: "Run details" });
+  await expect(runPanel.locator('[data-field="origin"]')).toContainText("Local run record");
+  await expect(runPanel.locator('[data-field="model"] code')).toHaveText("gemma3:latest");
+  await runPanel.getByRole("button", { name: "Done" }).click();
+
+  // The durable model override projects onto the exact same connection. The
+  // next turn and its trace use qwen without changing the Profile default or
+  // weakening the provider/transport/protocol pins.
+  await modelChip.click();
+  await page.getByRole("listbox", { name: /Ollama conversation model/u })
+    .getByRole("option", { name: "qwen3:latest" })
+    .click();
+  await expect(modelChip).toContainText("qwen3", { timeout: 20_000 });
+  await composer.fill("Reply after the in-place model change.");
+  await composer.press("Enter");
+  const switchedResponse = page.locator(".message.assistant").last();
+  await expect(switchedResponse).toContainText("OK", { timeout: 20_000 });
+  const switchedRunDetails = switchedResponse.getByRole("button", { name: /^Run details\. Provider /u });
+  await switchedRunDetails.click();
+  await expect(switchedResponse.getByRole("group", { name: "Run details" }).locator('[data-field="model"] code'))
+    .toHaveText("qwen3:latest");
+  expect(invokedModels.at(-1)).toBe("qwen3:latest");
+
+  const conversationUrl = page.url();
   await page.goto("/#connection");
-  const activeCard = page.locator(".provider-fabric article.provider-connection", { hasText: "Ollama" });
+  const fabricAfterTurn = page.locator(".provider-fabric");
+  const activeCard = fabricAfterTurn.locator("article.provider-connection", { hasText: "Ollama" });
   await activeCard.getByRole("button", { name: "Disconnect" }).click();
   await expect(activeCard.getByText(/conversation stays readable/u)).toBeVisible();
   await activeCard.getByRole("button", { name: "Confirm disconnect" }).click();
-  await expectConversationTrustAxis(page, /^Ollama · disconnected/u);
+  await expect(activeCard).toHaveCount(0);
+  await expect(fabricAfterTurn.locator(".provider-fabric__notice")).toContainText(
+    "Ollama was released from page memory. This conversation remains readable and permanently pinned to that released generation",
+  );
+
+  // The released route stays visible as a read-only session pin. A refused
+  // send leaves the operator's prompt in place and names the exact recovery.
+  await page.getByRole("button", { name: "Open session" }).click();
+  await expect(page).toHaveURL(conversationUrl);
+  const releasedModel = page.getByRole("button", { name: /Ollama session model/u });
+  await expect(releasedModel).toContainText("qwen3");
+  const preservedPrompt = "Keep this prompt while the local route is released.";
+  await composer.fill(preservedPrompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(composer).toHaveValue(preservedPrompt);
+  await expect(page.locator(".composer-notice")).toContainText(
+    /remains read-only; reconnect its exact provider connection to continue/u,
+  );
 });
 
 test("a stopped queue stays paused across conversation switches and reconnects", async ({ page, context }, testInfo) => {
@@ -83,7 +137,7 @@ test("a stopped queue stays paused across conversation switches and reconnects",
   let releaseActiveTurn: (() => void) | undefined;
   await mockOllama(page, async (route) => {
     chatRequests += 1;
-    if (chatRequests === 2) {
+    if (chatRequests === 1) {
       await new Promise<void>((resolve) => {
         releaseActiveTurn = resolve;
       });
@@ -93,7 +147,7 @@ test("a stopped queue stays paused across conversation switches and reconnects",
     await cors(
       route,
       200,
-      ollamaSse(chatRequests === 1 ? "PREFLIGHT" : "SENT_BY_PERSON"),
+      ollamaSse("SENT_BY_PERSON"),
       "text/event-stream",
     );
   });
@@ -105,12 +159,12 @@ test("a stopped queue stays paused across conversation switches and reconnects",
   await chooseOllamaModel(page, connected);
   await connected.getByRole("button", { name: "Use in new conversation" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
-  await expect.poll(() => chatRequests).toBe(1);
+  expect(chatRequests).toBe(0);
 
   const composer = page.getByRole("combobox", { name: "Message Airship" });
   await composer.fill("active slow turn");
   await composer.press("Enter");
-  await expect.poll(() => chatRequests).toBe(2);
+  await expect.poll(() => chatRequests).toBe(1);
   await composer.fill("queued follow-up must remain paused");
   await composer.press("Enter");
   await expect(page.locator(".composer-queue")).toBeVisible();
@@ -133,25 +187,25 @@ test("a stopped queue stays paused across conversation switches and reconnects",
   await sourceRow.click();
   await expect(page).toHaveURL(sourceUrl);
 
-  expect(chatRequests).toBe(2);
+  expect(chatRequests).toBe(1);
   await expect(page.locator(".composer-queue")).toContainText("paused after Stop");
   await context.setOffline(true);
   await page.waitForTimeout(300);
   await context.setOffline(false);
   await page.waitForTimeout(500);
-  expect(chatRequests).toBe(2);
+  expect(chatRequests).toBe(1);
   await expect(page.locator(".composer-queue")).toBeVisible();
   await expect(page.getByRole("article", { name: "Your message" })
     .filter({ hasText: "queued follow-up must remain paused" })).toHaveCount(0);
 
   await page.locator(".composer-queue").getByRole("button", { name: "Send now" }).click();
-  await expect.poll(() => chatRequests).toBe(3);
+  await expect.poll(() => chatRequests).toBe(2);
   await expect(page.locator(".composer-queue")).toBeHidden();
   await expect(page.getByRole("article", { name: "Your message" })
     .filter({ hasText: "queued follow-up must remain paused" })).toHaveCount(1);
 });
 
-test("Skills explains why its pinned conversation cannot start during an active turn", async ({ page }, testInfo) => {
+test("Skills starts its pinned conversation while another turn is still running", async ({ page }, testInfo) => {
   test.skip(
     testInfo.project.name !== "desktop-chromium",
     "One deterministic held-turn journey is sufficient; responsive Skills coverage runs separately.",
@@ -172,10 +226,10 @@ test("Skills explains why its pinned conversation cannot start during an active 
   let releaseActiveTurn: (() => void) | undefined;
   await mockOllama(page, async (route) => {
     chatRequests += 1;
-    if (chatRequests === 2) {
+    if (chatRequests === 1) {
       await new Promise<void>((resolve) => { releaseActiveTurn = resolve; });
     }
-    await cors(route, 200, ollamaSse(chatRequests === 1 ? "PREFLIGHT" : "HELD_TURN"), "text/event-stream");
+    await cors(route, 200, ollamaSse("HELD_TURN"), "text/event-stream");
   });
 
   try {
@@ -185,12 +239,12 @@ test("Skills explains why its pinned conversation cannot start during an active 
     const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
     await chooseOllamaModel(page, connected);
     await connected.getByRole("button", { name: "Use in new conversation" }).click();
-    await expect.poll(() => chatRequests).toBe(1);
+    expect(chatRequests).toBe(0);
 
     const composer = page.getByRole("combobox", { name: "Message Airship" });
     await composer.fill("Hold this turn while I inspect Skills.");
     await composer.press("Enter");
-    await expect.poll(() => chatRequests).toBe(2);
+    await expect.poll(() => chatRequests).toBe(1);
 
     // Skills and Capabilities are intentionally not permanent rail rows. The
     // profile control beside the agent name is their entry point now; opening
@@ -200,56 +254,32 @@ test("Skills explains why its pinned conversation cannot start during an active 
     await page.getByRole("navigation", { name: "Agent configuration" })
       .getByRole("button", { name: "Skills", exact: true }).click();
     await expect(page).toHaveURL(/#skills$/u);
+    /*
+     * A running turn used to disable this control and explain itself. The
+     * engine always ran turns per conversation; the shell was the only thing
+     * serialising them, so the honest answer is that the control works and the
+     * held turn keeps running in the conversation that owns it.
+     */
     const start = page.getByRole("button", { name: "New conversation with this set" });
-    await expect(start).toBeDisabled();
-    await expect(start).toHaveAttribute("aria-describedby", "skill-conversation-start-status");
-    await expect(page.locator("#skill-conversation-start-status"))
-      .toHaveText("Stop the active turn before starting a new conversation.");
+    await expect(start).toBeEnabled();
+    await expect(page.locator("#skill-conversation-start-status")).toHaveCount(0);
+    await start.click();
+    await expect(page).toHaveURL(/#chat/u);
     await page.screenshot({ path: testInfo.outputPath("skills-active-turn.png"), animations: "disabled" });
+
+    // The new conversation is immediately usable, and the held turn is still
+    // held in the conversation that owns it.
+    const started = page.getByRole("combobox", { name: "Message Airship" });
+    await expect(started).toBeEnabled();
+    expect(chatRequests).toBe(1);
 
     releaseActiveTurn?.();
     releaseActiveTurn = undefined;
-    await expect(start).toBeEnabled({ timeout: 20_000 });
-    await expect(page.locator("#skill-conversation-start-status")).toHaveCount(0);
   } finally {
     releaseActiveTurn?.();
   }
 });
 
-/**
- * AMENDED: the four trust axes stopped rendering as four topbar pills.
- *
- * The topbar carries one chip that states the weakest claim true of this
- * browser tab and counts every axis behind it; the inference axis is scoped to
- * the conversation, so its verbatim label is stated at rest in the session bar
- * and in full in the sheet the chip opens (`topbar.tsx:30`,
- * `platform-shell.tsx:454`). This route has no session bar, which is exactly
- * why the sheet is the right place to read it from here — the claim was
- * re-presented, not deleted.
- *
- * Stronger than the button check it replaces: it additionally proves the chip
- * is honest about how many claims it hides, that the sheet opens and closes,
- * and that a released pin is still filed as a claim about *this conversation*
- * rather than quietly promoted to a property of the tab.
- */
-async function expectConversationTrustAxis(page: Page, label: RegExp): Promise<void> {
-  const chip = page.getByRole("button", { name: /^Runtime trust for this browser tab\./u });
-  /*
-   * "4 axes." became "4 runtime claims. 2 of them are scoped to this
-   * conversation and are stated in the session bar." — the noun a person can
-   * act on instead of the one the code uses, and it now says which of them
-   * belong to the conversation rather than to the tab. Asserted as the count
-   * and its noun, so the sentence around it can keep improving.
-   */
-  await expect(chip).toHaveAccessibleName(/\s\d+ runtime claims\./u);
-  await chip.click();
-  const sheet = page.getByRole("dialog", { name: "Runtime trust" });
-  await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole("region", { name: "This conversation" }).getByRole("button", { name: label }))
-    .toBeVisible();
-  await sheet.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(sheet).toBeHidden();
-}
 
 async function mockOllama(
   page: Page,
@@ -277,6 +307,17 @@ async function mockOllama(
             format: "gguf",
             family: "gemma3",
             parameter_size: "4.3B",
+            quantization_level: "Q4_K_M",
+          },
+        }, {
+          name: "qwen3:latest",
+          size: 4_200_000_000,
+          digest: "sha256:model-switch-acceptance",
+          modified_at: "2026-07-20T00:00:00Z",
+          details: {
+            format: "gguf",
+            family: "qwen3",
+            parameter_size: "8B",
             quantization_level: "Q4_K_M",
           },
         }],

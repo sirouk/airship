@@ -15,6 +15,7 @@ import { encodeWorkspaceBytes } from "../workspace/content-codec";
 // but fetch_url must not silently restore an arbitrary pre-egress half-MiB cap.
 const MAX_FETCH_LIMIT = 8 * 1_024 * 1_024;
 const DEFAULT_FETCH_LIMIT = MAX_FETCH_LIMIT;
+const NODE_WEBCONTAINER_ROUTE = "node-webcontainer";
 
 
 type EgressAttempt = Readonly<{
@@ -40,10 +41,6 @@ const lazyClientNodeEgress: ClientNodeEgressPort = {
     return (await sharedClientNodeEgress).fetch(target, init);
   },
 };
-
-function defaultClientNodeEgress(): ClientNodeEgressPort {
-  return lazyClientNodeEgress;
-}
 
 export function registerNetworkTools(
   registry: ToolRegistry,
@@ -75,7 +72,7 @@ export function registerNetworkTools(
           maxBytes: { type: "integer", minimum: 1_024, maximum: MAX_FETCH_LIMIT },
           ...(webBodies === "any" ? { as: { type: "string", enum: ["auto", "text", "base64"] } } : {}),
           via: { type: "string", enum: webEgress === "node-first"
-            ? ["auto", "browser", "node-webcontainer"]
+            ? ["auto", "browser", NODE_WEBCONTAINER_ROUTE]
             : ["auto", "browser"] },
         },
         required: ["url"],
@@ -91,8 +88,8 @@ export function registerNetworkTools(
         : args.as === "text" || args.as === "base64" ? args.as : "auto";
       const via = args.via === "browser"
         ? "browser"
-        : args.via === "node-webcontainer" && webEgress === "node-first"
-          ? "node-webcontainer"
+        : args.via === NODE_WEBCONTAINER_ROUTE && webEgress === "node-first"
+          ? NODE_WEBCONTAINER_ROUTE
           : "auto";
       const attempts: EgressAttempt[] = [];
 
@@ -103,7 +100,7 @@ export function registerNetworkTools(
         return undefined;
       };
       const attemptNode = async () => {
-        const engine = clientNodeEgress ?? defaultClientNodeEgress();
+        const engine = clientNodeEgress ?? lazyClientNodeEgress;
         let engineResult: NodeEgressResult;
         try {
           engineResult = await engine.fetch(url, { maxBytes, signal: context.signal });
@@ -125,7 +122,7 @@ export function registerNetworkTools(
           && profileRefusesBody(as, engineResult.contentType, engineResult.bytes)
         ) {
           attempts.push(unsupportedContentAttempt(
-            "node-webcontainer",
+            NODE_WEBCONTAINER_ROUTE,
             engineResult.contentType,
             engineResult.status,
             engineResult.transportAttempts,
@@ -134,14 +131,14 @@ export function registerNetworkTools(
         }
         attempts.push(engineAttempt(engineResult));
         if (engineResult.ok && engineResult.status >= 200 && engineResult.status < 300) {
-          return await deliver({
+          return deliver({
             url: engineResult.finalUrl || url.toString(),
             requested: url,
             status: engineResult.status,
             contentType: engineResult.contentType,
             truncated: engineResult.truncated,
             bytes: engineResult.bytes,
-            via: "node-webcontainer",
+            via: NODE_WEBCONTAINER_ROUTE,
             as,
             workspace,
             ...(engineResult.transportAttempts !== undefined
@@ -155,7 +152,7 @@ export function registerNetworkTools(
       if (via === "browser" || webEgress === "browser-only") {
         return await attemptBrowser() ?? egressFailure(url, attempts);
       }
-      if (via === "node-webcontainer") {
+      if (via === NODE_WEBCONTAINER_ROUTE) {
         return await attemptNode() ?? egressFailure(url, attempts);
       }
       // Agent Profile default: the reviewed Node http/https relay owns web
@@ -289,32 +286,28 @@ async function browserRoute(
 }
 
 function engineAttempt(result: NodeEgressResult): EgressAttempt {
+  const common = {
+    route: NODE_WEBCONTAINER_ROUTE,
+    ...(result.transportAttempts !== undefined ? { transportAttempts: result.transportAttempts } : {}),
+  } as const;
   if (result.ok) {
     if (result.status >= 200 && result.status < 300) {
-      return {
-        route: "node-webcontainer",
-        code: "ok",
-        message: "Answered.",
-        retryable: false,
-        ...(result.transportAttempts !== undefined ? { transportAttempts: result.transportAttempts } : {}),
-      };
+      return { ...common, code: "ok", message: "Answered.", retryable: false };
     }
     return {
-      route: "node-webcontainer",
+      ...common,
       code: "http",
       message: `The origin returned HTTP ${result.status} through the client Node egress engine.`,
       retryable: result.status >= 500,
       status: result.status,
-      ...(result.transportAttempts !== undefined ? { transportAttempts: result.transportAttempts } : {}),
     };
   }
   return {
-    route: "node-webcontainer",
+    ...common,
     code: result.code,
     message: result.message,
     retryable: result.code !== "url" && result.code !== "config",
     ...(result.status !== undefined ? { status: result.status } : {}),
-    ...(result.transportAttempts !== undefined ? { transportAttempts: result.transportAttempts } : {}),
   };
 }
 
@@ -454,7 +447,7 @@ function egressFailure(url: URL, attempts: readonly EgressAttempt[]) {
     .map((attempt) => `${attempt.route === "browser" ? "Direct browser fetch" : "Client Node egress engine (containerized Node shipped with this client; no browser CORS)"}: ${attempt.message}`)
     .join(" ");
   const finalAttempt = attempts[attempts.length - 1];
-  const nodeAttempt = attempts.find((attempt) => attempt.route === "node-webcontainer");
+  const nodeAttempt = attempts.find((attempt) => attempt.route === NODE_WEBCONTAINER_ROUTE);
   // Node-first is the Profile's authoritative route. Preserve its exhausted
   // provider error as the headline even when the browser fallback then hits CORS.
   const reportedAttempt = nodeAttempt ?? finalAttempt;

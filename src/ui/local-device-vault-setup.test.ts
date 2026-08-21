@@ -53,7 +53,7 @@ describe("local device Vault setup boundaries", () => {
 
   it("refuses the acknowledgement while its own seal says nothing has left the page", () => {
     /*
-     * Measured (J058): with the Seal reading verbatim "Not copied or downloaded
+     * Measured (J058): with the StatusMark reading verbatim "Not copied or downloaded
      * yet.", the checkbox below it was `disabled: false`; one click advanced
      * the ceremony to `acknowledged` and "The recovery value is no longer
      * rendered." A screen that knows the fact which makes the next click

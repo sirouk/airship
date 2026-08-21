@@ -18,12 +18,23 @@ export type ApprovalRisk = "observe" | "change" | "communicate" | "execute" | "i
  * a decision on the record; an expiry is the absence of one, and the record is
  * not entitled to invent the difference.
  *
+ * `withdrawn` is the same defect one step earlier. Four page events take a
+ * live request off the table without anybody being asked anything: the
+ * approval dialog's chunk fails to load, the shell unmounts, a conversation's
+ * approval mode changes under an outstanding prompt, and the turn that raised
+ * the request is aborted — by Stop, by a profile switch, or by a storage
+ * transition. All four called the page-wide settle helper the person's own
+ * Deny button calls, so the journal read `source: "human"` and "Denied without
+ * approval" for a question that was never answered — and, for the failed chunk,
+ * never shown.
+ *
  * `ApprovalDecision` stays two-valued on purpose: it is the gate every caller
- * fails closed on, and an expiry must keep failing closed exactly as before.
- * The outcome is the wider fact, kept beside the decision rather than folded
- * into it, so no reader can count an expiry as a denial without saying so.
+ * fails closed on, and an expiry or a withdrawal must keep failing closed
+ * exactly as before. The outcome is the wider fact, kept beside the decision
+ * rather than folded into it, so no reader can count either as a denial
+ * without saying so.
  */
-export type ApprovalOutcome = ApprovalDecision | "expired";
+export type ApprovalOutcome = ApprovalDecision | "expired" | "unavailable" | "withdrawn";
 
 export type PendingApproval = Readonly<{
   id: string;
@@ -43,7 +54,12 @@ export type ApprovalBrokerSnapshot = Readonly<{
   /** Requests still demanding an answer. The shell goes inert for exactly these. */
   pending: readonly PendingApproval[];
   /**
-   * Requests the person put down without answering.
+   * Requests waiting for a decision that is not being demanded right now.
+   *
+   * Two things land here: a request the person put down with Escape, and a
+   * request raised by a conversation that is not the one on screen (see
+   * `focusSession`). Both are live, both are on their original clock, and
+   * neither makes anything inert.
    *
    * Escape used to file a denial, so the two reflexes a chat surface trains —
    * Escape to dismiss, Enter on the focused control — destroyed a typed command
@@ -98,15 +114,39 @@ const MAX_SETTLED_OUTCOMES = 256;
  *
  * The reason string is what the journal keeps and what Memory and the message
  * transcript read back, so two writers of it drift into two accounts of the
- * same event. The `deny` sentence names no author because this broker denies
- * for four different reasons — the person pressed Deny, the turn aborted, the
- * queue was full, the operation identity repeated — and only the first is a
- * person refusing. Expiry says plainly that nobody answered.
+ * same event. The `deny` sentence still names no author, because the same word
+ * is what the person's own Deny button and their "deny everything waiting"
+ * control both file, and both are a person refusing. Expiry, withdrawal and a
+ * full queue each say plainly that nobody answered, and which of the three it
+ * was.
  */
 export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
   if (outcome === "allow") return "Allowed once by the user.";
   if (outcome === "expired") return "No decision was recorded; the request expired before the user answered it.";
+  if (outcome === "withdrawn") return "No decision was recorded; the page withdrew this request before anyone answered it.";
+  if (outcome === "unavailable") {
+    return "Nobody was asked: this page already held the most approval requests it allows at once, so the effect did"
+      + " not run. Answer the requests that are waiting, then ask for this one again.";
+  }
   return "Denied without approval; the effect did not run.";
+}
+
+/**
+ * True only when a person actually answered the question.
+ *
+ * `allow` and `deny` are the two things `decide` can file, and `decide` is
+ * reachable from nothing but a control a person operates. Everything else in
+ * this vocabulary is the absence of an answer: an expiry ran the clock out
+ * while nobody was at the screen, `withdrawn` took the question away before
+ * anyone answered it, and `unavailable` never put the question on screen at
+ * all. The record's `source` field is the one place that difference survives
+ * into the journal, so it is derived here rather than spelled out at each of
+ * the four writers — three of which read only `unavailable` and so filed every
+ * expiry as a refusal a person made, directly against the sentence beside it
+ * saying that no decision was recorded.
+ */
+export function approvalWasAnswered(outcome: ApprovalOutcome): boolean {
+  return outcome === "allow" || outcome === "deny";
 }
 
 /** The identity a request is filed and settled under, shared so a lookup cannot rebuild it differently. */
@@ -128,6 +168,7 @@ export class ApprovalBroker {
   private readonly maxPending: number;
   private readonly decisionTimeoutMs: number;
   private readonly now: () => string;
+  private focused: string | undefined;
 
   constructor(options: ApprovalBrokerOptions = {}) {
     this.maxPending = integerWithin(options.maxPending ?? DEFAULT_MAX_PENDING, 1, 128, "maxPending");
@@ -184,6 +225,25 @@ export class ApprovalBroker {
   }
 
   /**
+   * The conversation on screen, so this broker can tell an interruption from an
+   * errand.
+   *
+   * Turns run per conversation, and one broker serves all of them. A request
+   * from the thread a person is reading is the interruption it has always been.
+   * A request from a thread answering in the background is not: making the
+   * whole shell inert for it stops the work somebody is doing to ask about work
+   * they are not looking at. Those arrive postponed — same queue, same clock,
+   * same closed gate, and reachable from the non-modal bar the moment the
+   * person chooses to answer them.
+   *
+   * Unset means every request is an interruption, which is the behaviour before
+   * a conversation is bound and the behaviour of any host that never calls this.
+   */
+  focusSession(sessionId: string | undefined): void {
+    this.focused = sessionId;
+  }
+
+  /**
    * The outcome of one settled request, consumed once by whatever writes the
    * record for it.
    *
@@ -200,8 +260,24 @@ export class ApprovalBroker {
 
   request(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision> {
     const id = approvalRequestId(context);
-    if (context.signal.aborted || this.entries.size >= this.maxPending || this.entries.has(id)) {
-      this.remember(id, "deny");
+    if (context.signal.aborted) {
+      // The turn is already gone, so nobody will be shown this question. Same
+      // reason as the `abort` listener below: see `ApprovalOutcome`.
+      this.remember(id, "withdrawn");
+      return Promise.resolve("deny");
+    }
+    /*
+     * The gate closes, and the record says nobody was asked.
+     *
+     * A full queue and a repeated operation identity both refuse without ever
+     * putting a request on screen, and both used to be remembered as `deny` —
+     * which the mode policy then journaled with `source: "human"` and the
+     * sentence "Denied without approval". Background conversations can fill
+     * this cap without the person seeing any of it, so that record was a
+     * refusal attributed to someone who was never shown the question.
+     */
+    if (this.entries.size >= this.maxPending || this.entries.has(id)) {
+      this.remember(id, "unavailable");
       return Promise.resolve("deny");
     }
 
@@ -223,11 +299,23 @@ export class ApprovalBroker {
     } satisfies PendingApproval);
 
     return new Promise<ApprovalDecision>((resolve) => {
-      const abort = () => this.settle(id, "deny");
+      /*
+       * A cancelled turn takes the question away; it does not answer it.
+       *
+       * This settled `deny`, which `approvalWasAnswered` reads as a person
+       * having decided, so `createApprovalModePolicy` journaled `source:
+       * "human"` and "Denied without approval" for a request nobody was ever
+       * shown — the same defect the three page paths above were fixed for, on
+       * the one path a person reaches by pressing Stop. The gate is unchanged:
+       * `withdrawn` still resolves `deny` below.
+       */
+      const abort = () => this.settle(id, "withdrawn");
       // Not `deny`: the clock running out is the absence of a decision, and the
       // record that reads this must not report it as one the person made.
       const timer = setTimeout(() => this.settle(id, "expired"), this.decisionTimeoutMs);
       this.entries.set(id, { request, resolve, timer, signal: context.signal, abort });
+      // Filed as waiting rather than as a demand: see `focusSession`.
+      if (this.focused !== undefined && context.sessionId !== this.focused) this.postponed.add(id);
       context.signal.addEventListener("abort", abort, { once: true });
       this.emit();
     });
@@ -243,8 +331,31 @@ export class ApprovalBroker {
     return this.settle(id, decision);
   }
 
-  denyAll(): void {
-    for (const id of [...this.entries.keys()]) this.settle(id, "deny");
+  /**
+   * Settle every live request, or only the ones one conversation raised, and
+   * say who is doing it.
+   *
+   * `human` is the person's own "Deny pending request" control, and only that
+   * control: a refusal on the record. `page` is the shell settling requests
+   * nobody was asked — the approval dialog's chunk failed to load, the shell is
+   * unmounting, or a conversation's approval mode changed under an outstanding
+   * prompt. All four callers used to reach this by the same name and file the
+   * same `deny`, so three of them wrote a person's refusal into the journal for
+   * a question that was never answered.
+   *
+   * The gate is unchanged: `withdrawn` resolves `deny` exactly as before, so
+   * every one of these still fails closed. Only the record can tell them apart.
+   *
+   * The scoped form answers a change that belongs to one conversation —
+   * re-moding a thread may not reinterpret a request a *different* thread is
+   * still waiting on, and with turns running per conversation that is no longer
+   * a hypothetical.
+   */
+  settleAll(actor: "human" | "page", sessionId?: string): void {
+    const outcome = actor === "human" ? "deny" : "withdrawn";
+    for (const [id, entry] of [...this.entries]) {
+      if (sessionId === undefined || entry.request.sessionId === sessionId) this.settle(id, outcome);
+    }
   }
 
   private settle(id: string, outcome: ApprovalOutcome): boolean {
@@ -255,12 +366,12 @@ export class ApprovalBroker {
     clearTimeout(entry.timer);
     entry.signal.removeEventListener("abort", entry.abort);
     this.remember(id, outcome);
-    // An expiry still fails closed at the gate — only the record it leaves
-    // behind distinguishes it from a refusal.
-    entry.resolve(outcome === "expired" ? "deny" : outcome);
+    // Everything but an explicit allow fails closed at the gate — only the
+    // record each one leaves behind distinguishes it from a refusal.
+    entry.resolve(outcome === "allow" ? "allow" : "deny");
     this.emit();
     const settlement = Object.freeze({ request: entry.request, outcome });
-    for (const listener of this.settleListeners) listener(settlement);
+    for (const listener of this.settleListeners) notifyObserver(listener, settlement);
     return true;
   }
 
@@ -273,7 +384,20 @@ export class ApprovalBroker {
 
   private emit(): void {
     const snapshot = this.snapshot();
-    for (const listener of this.listeners) listener(snapshot);
+    for (const listener of this.listeners) notifyObserver(listener, snapshot);
+  }
+}
+
+/**
+ * A subscriber observes; it does not participate. Settlement already resolved
+ * before these loops run, so a throwing view could not unsettle a request — but
+ * it could stop every later subscriber from hearing about it.
+ */
+function notifyObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control approval settlement.
   }
 }
 

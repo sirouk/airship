@@ -1,7 +1,7 @@
-import type { ConversationReceipt } from "../../receipts/types";
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
 import type { SessionPresentationMarker } from "./session-message-presentation";
 import { densityAllows, usePresentationDensity } from "../density";
+import { DeferredRunDetails } from "./deferred-run-details";
 
 /**
  * What an empty conversation says, in one place.
@@ -28,6 +28,25 @@ export const TRANSCRIPT_INTRO_DEMO_LINE = "Chat needs a model provider; this com
 export const TRANSCRIPT_INTRO_RUNTIME_LINE = "The edge runtime is ready in this tab, with no account.";
 
 /**
+ * What Airship is, before a person types anything.
+ *
+ * Measured on the first screen of a cold load, both viewports: the body text
+ * contained no occurrence of "browser" and none of "no server". The whole
+ * self-description was the wordmark and the eyebrow "EDGE RUNTIME", and the
+ * paragraph that does explain the product only arrived after a message had
+ * been sent. Somebody who opens the link and reads was told what would not be
+ * saved and that the composer is a demo, and never told what they had opened.
+ *
+ * Three plain facts, in the words a newcomer already has, and each one is what
+ * the code does: the client is static and runs in the page, no Airship service
+ * is behind it, and nothing asks for an account. It renders in every density,
+ * beside the two sentences that already survive one, because "what is this" is
+ * the same class of answer as "what will persist".
+ */
+export const TRANSCRIPT_INTRO_WHAT_LINE =
+  "Airship runs in your browser. There is no Airship server and no account to create.";
+
+/**
  * The seed message's body, which the three lines above now say between them.
  *
  * Kept as a constant rather than a literal because it is also the suffix that
@@ -48,13 +67,16 @@ export const TRANSCRIPT_SEED_BODY =
  * lines already say is subtracted. Whether a message is a seed at all is
  * decided by its own flag, not by this function.
  */
-export function transcriptIntroNote(content: string | undefined): string | undefined {
+export function transcriptIntroNote(
+  content: string | undefined,
+  seedBody: typeof TRANSCRIPT_SEED_BODY,
+): string | undefined {
   if (!content) return undefined;
-  const note = content.endsWith(TRANSCRIPT_SEED_BODY)
-    ? content.slice(0, content.length - TRANSCRIPT_SEED_BODY.length)
-    : content;
-  const trimmed = note.trim();
-  return trimmed.length > 0 && trimmed !== TRANSCRIPT_SEED_BODY ? trimmed : undefined;
+  const trimmed = content.trim();
+  const note = trimmed.endsWith(seedBody)
+    ? trimmed.slice(0, -seedBody.length).trim()
+    : trimmed;
+  return note || undefined;
 }
 
 /**
@@ -110,6 +132,14 @@ export function TranscriptIntro({
   return (
     <section class="transcript-intro" aria-label="About this conversation">
       <div class="transcript-intro__copy">
+        {/* First, because it is the question a newcomer asks first. Held to the
+            same two states that already decide whether this component says
+            anything at minimal density: nothing kept yet, or no provider yet.
+            Somebody who has chosen storage and connected a model has answered
+            it, and gets the quiet screen the density asks for. It reuses
+            the lead's own recipe under its own name, so the density contract
+            that asserts what the lead mounts stays unambiguous. */}
+        {unsaved || demo ? <p class="transcript-intro__what">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}
         {note ? <p class="transcript-intro__note">{note}</p> : null}
         {unsaved ? (
           <p class="transcript-intro__unsaved">
@@ -149,12 +179,6 @@ export function TranscriptIntro({
 
 export type TranscriptMarkerProps = Readonly<{
   marker: SessionPresentationMarker;
-  /**
-   * Opens Proof at this marker's receipt. Only markers that record a billed
-   * provider request have one, so the control appears only where there is
-   * something to open.
-   */
-  onOpenProof?: (receipt: ConversationReceipt) => void;
 }>;
 
 /**
@@ -171,14 +195,12 @@ export type TranscriptMarkerProps = Readonly<{
  * event type, so a marker on screen can be found in the journal it came from,
  * and so a record this build cannot read still says exactly where it is.
  *
- * Where the record is an out-of-turn *inference* — today, the naming call — it
- * also carries a receipt, and this is the only surface that can hand that
- * receipt to Proof: turn receipts arrive on assistant rows, and a record with no
- * row had no route at all. A receipt nothing can open is not evidence.
+ * Historical or imported out-of-turn inference records can carry a receipt.
+ * The neutral run metadata stays visible even though the record is not an
+ * assistant row. Current conversation naming is local and creates no request.
  */
-export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps) {
+export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
   const density = usePresentationDensity();
-  const receipt = marker.receipt;
   return (
     <div
       class="transcript-marker"
@@ -187,6 +209,7 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
       aria-label={`Session record. ${marker.detail}`}
     >
       <p class="transcript-marker__detail">{marker.detail}</p>
+      {marker.receipt ? <DeferredRunDetails receipt={marker.receipt} /> : null}
       {/* The inherited turns, readable. The count in the sentence above was the
           only evidence a branch carried anything, and it sat over an empty
           transcript showing the newcomer empty state — so the person was asked
@@ -207,26 +230,12 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
         </details>
       ) : null}
       {/* The provenance line is raw detail — sequence, kind, digest — which
-          the mantra puts one deliberate action away, always; and the proof
-          verb is proof chrome, which retires with the density. The record's
-          own sentence above is neither. */}
+          the mantra puts one deliberate action away, always. The record's own
+          sentence above is neither. */}
       {densityAllows("raw", density) ? (
         <p class="transcript-marker__provenance">
           {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
         </p>
-      ) : null}
-      {receipt && onOpenProof && densityAllows("proof", density) ? (
-        <button
-          type="button"
-          class="transcript-marker__proof"
-          // The receipt id is in the name because a conversation can hold more
-          // than one of these records, and "Open proof" alone would give a
-          // screen-reader user several identically named controls.
-          aria-label={`Open proof for receipt ${receipt.receiptId}`}
-          onClick={() => onOpenProof(receipt)}
-        >
-          Open proof
-        </button>
       ) : null}
     </div>
   );

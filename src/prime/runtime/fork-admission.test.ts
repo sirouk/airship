@@ -6,11 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  createSessionManifest,
-  materializeMessages,
-  runTurn,
-} from "../../core/agent";
+import { createSessionManifest, materializeMessages, runTurn } from "../../core/agent";
 import type {
   InferenceEvent,
   InferenceRequest,

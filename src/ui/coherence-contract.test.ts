@@ -1,128 +1,93 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-describe("progressive disclosure coherence contract", () => {
-  it("does not render the account dashboard before a readable account exists", async () => {
-    const source = await readFile(new URL("./billing-view.tsx", import.meta.url), "utf8");
-    // AMENDED: the gate no longer names which credential methods exist — that
-    // is Connection's fact, and a build without the sign-in exchange made the
-    // old sentence a promise Account had no input to keep. The page-memory
-    // contract, which Account does own, is still pinned verbatim.
-    expect(source).toContain("Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.");
-    expect(source).toContain("{accountReadable ? <>{snapshot?.issues.length");
-    /*
-     * AMENDED: the gate is a component of its own now, because the strip lists
-     * only connected providers — so with nothing connected there is no Chutes
-     * tab left to hang a "not connected" panel from, and the gate is the whole
-     * route rather than one tab of it. The ordering that carries the disclosure
-     * is therefore where it is *rendered*, not where its markup is declared:
-     * the gate stands in the strip's place, above the provider panel.
-     */
-    expect(source).toContain("</> : <BillingAccountGate online={online} onOpenAccess={onOpenAccess} />}");
-    expect(source.indexOf("<BillingAccountGate online={online}"))
-      .toBeLessThan(source.indexOf('{selectedProvider === "chutes" ? <div'));
-    expect(source).toContain("billing-gate-preview");
+const [app, connections, boundary, navigation, profileDomain, runDetails, deferredRunDetails] = await Promise.all([
+  readFile(new URL("./app.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./provider-connections-view.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../inference/transport-boundary-label.ts", import.meta.url), "utf8"),
+  readFile(new URL("./navigation-model.ts", import.meta.url), "utf8"),
+  readFile(new URL("../profiles/domain.ts", import.meta.url), "utf8"),
+  readFile(new URL("./chat/run-details.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./chat/deferred-run-details.tsx", import.meta.url), "utf8"),
+]);
+
+describe("provider-neutral product coherence", () => {
+  it("uses one truthful transport-boundary vocabulary in shell and connection route", () => {
+    expect(boundary).toContain('case "provider-tls": return "Provider TLS · browser direct"');
+    expect(boundary).toContain('case "loopback-local": return "This machine · loopback"');
+    expect(app).toContain('import { providerBoundaryLabel } from "../inference/transport-boundary-label"');
+    expect(connections).toContain('import { providerBoundaryLabel } from "../inference/transport-boundary-label"');
+    expect(app).toContain("providerBoundaryLabel(route.pin.provider.transportBoundary)");
+    expect(connections).toContain("providerBoundaryLabel(entry.provider.transportBoundary)");
   });
 
-  // Replaces "puts the source task before mobile posture detail", which pinned
-  // an ordering *between two renderings of the same facts*: a desktop-only
-  // three-card grid and a phone-only disclosure. Ordering them correctly was
-  // never the invariant worth having — rendering them once was. This is the
-  // stronger form: exactly one posture element, at every width, and the trust
-  // facts computed in exactly one place, so the 660-character transport
-  // paragraph cannot be printed twice on one screen again.
-  it("states the source posture exactly once, at every width", async () => {
+  it("offers official, API-key, and local providers through one connection surface", () => {
+    expect(connections).toContain("browserInferenceFabric");
+    expect(connections).toContain("Cloud providers");
+    expect(connections).toContain("API-key methods");
+    expect(connections).toContain("Local model servers");
+    expect(connections).toContain("onActivate(route");
+    expect(connections).not.toMatch(/strict-proof|attestation|confidential-authority/iu);
+  });
+
+  it("profiles govern concrete runtime and workspace boundaries, not proof floors", () => {
+    const manager = app.slice(app.indexOf("function ProfileManagerView({"));
+    for (const field of [
+      "workspaceBinding",
+      "memoryScope",
+      "approvalMode",
+      "webEgress",
+      "webBodies",
+      "skillModes",
+    ]) expect(`${manager}
+${profileDomain}`).toContain(field);
+    expect(manager).not.toMatch(/minimumPosture|postureFloor|proofLevel/iu);
+    expect(profileDomain).not.toMatch(/postureFloor|proofLevel/iu);
+    expect(profileDomain).toContain("Digest-only historical input");
+  });
+
+  it("presents receipts as operable local run metadata without upgraded claims", () => {
+    const card = app.slice(app.indexOf("function MessageCard("), app.indexOf("function ProfileManagerView({"));
+    expect(app).toContain('import { DeferredRunDetails } from "./chat/deferred-run-details"');
+    expect(card).toContain("message.receipt ? <DeferredRunDetails receipt={message.receipt} /> : null");
+    expect(deferredRunDetails).toContain(
+      'const loadRunDetails = () => import("./run-details").then(({ RunDetails }) => RunDetails);',
+    );
+    expect(deferredRunDetails).toContain(
+      "export const DeferredRunDetails = createDeferredComponent(loadRunDetails);",
+    );
+    expect(runDetails).toContain("<Popover");
+    expect(runDetails).toContain('triggerClass="receipt-chip"');
+    expect(runDetails).toContain("Run details. Provider");
+    expect(runDetails).toContain("receipt.receiptId");
+    expect(runDetails).toContain("receipt.responseDigest");
+    expect(runDetails).toContain("Authenticity not proven");
+    expect(runDetails).not.toContain('role="note"');
+    expect(runDetails).not.toContain("title={");
+    expect(runDetails).not.toMatch(/attestation|navigate|proof|verdict|sealed/iu);
+  });
+
+  it("keeps one global Providers destination and no retired trust route", () => {
+    expect(navigation).toContain('access: "#connection"');
+    expect(navigation).toContain('destination("access", "Providers", "Setup", "global")');
+    expect(navigation).not.toMatch(/#proof|#attestations|#billing|TrustHub/iu);
+    expect(app).not.toMatch(/<ProofScreen|<AttestationsScreen|<BillingScreen/u);
+  });
+
+  it("states source capabilities once without duplicating desktop and phone facts", async () => {
     const source = await readFile(new URL("./sources-view.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("./sources-view.css", import.meta.url), "utf8");
-    expect(source.match(/class="git-sources-trust-disclosure"/gu)).toHaveLength(1);
-    expect(source.match(/<SourceTrustFacts /gu)).toHaveLength(1);
-    expect(source).not.toContain("git-sources-trust-desktop");
+    expect(source.match(/class="git-sources-facts-disclosure"/gu)).toHaveLength(1);
+    expect(source.match(/<SourceFacts /gu)).toHaveLength(1);
+    expect(source).not.toContain("git-sources-facts-desktop");
     expect(source.match(/capabilities\.remote\.detail/gu)).toHaveLength(1);
-    expect(styles).not.toMatch(/\.git-sources-trust-disclosure\s*\{[^}]*display:\s*none/u);
+    expect(styles).not.toMatch(/\.git-sources-facts-disclosure\s*\{[^}]*display:\s*none/u);
   });
 
-  it("keeps global service navigation in the rail instead of a duplicate top strip", async () => {
-    const source = await readFile(new URL("./platform-shell.tsx", import.meta.url), "utf8");
-    const styles = await readFile(new URL("./platform-shell.css", import.meta.url), "utf8");
-    expect(source).not.toContain("TrustHubTabs");
-    expect(source).not.toContain("TRUST_TABS");
-    expect(styles).not.toContain(".trust-hub-tabs");
-  });
-
-  /*
-   * The last four places one turn was described in more than one language.
-   *
-   * Each of these is a string a reader meets, so each is asserted against the
-   * source that renders it rather than against a helper. They are source scans
-   * because the defect is always a *second* spelling appearing beside the
-   * canonical one, and only the file can prove the second spelling is gone.
-   */
-  it("speaks one vocabulary for a connection boundary, a profile field and an authority class", async () => {
-    const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
-    const attestations = await readFile(new URL("./attestations-view.tsx", import.meta.url), "utf8");
-
-    // One boundary label, defined once, in the file that renders the model
-    // card. "E2EE · evidence recorded" read as a verdict about the turn when
-    // the fact it stated was that this connection has no proof gate.
-    expect(app).not.toContain('return "E2EE');
-    expect(app).not.toContain("function activeConnectionBoundaryLabel");
-    expect(app).toContain('import { activeConnectionProofLabel, ModelControl } from "./model-control";');
-    expect(app.match(/activeConnectionProofLabel\(connection\)/gu)).toHaveLength(1);
-    expect(app.match(/e2eeBoundaryLabel/gu)).toHaveLength(4);
-
-    // One name for the profile field the catalog card, the select and the
-    // revision strip all show within 400px of each other.
-    expect(app).not.toContain("Minimum posture");
-    // Both chips now read the field's name from one exported constant rather
-    // than repeating the string. Counting literals was the weaker form of this
-    // assertion: two identical literals satisfy it and can still be edited
-    // apart, whereas two references to the same constant cannot drift at all.
-    expect(app.match(/prefix=\{PROFILE_POSTURE_FIELD_LABEL\}/gu)).toHaveLength(2);
-    expect(app).not.toContain('prefix="Minimum proof"');
-
-    // "Established" is retired as a state word: it meant *recorded* on the
-    // claim rail and *unproven* in the metric 183px away.
-    expect(attestations).toContain('return "No verification authority";');
-    expect(attestations).not.toContain("established");
-  });
-
-  it("states one ceiling sentence, in one direction, on every surface that states it", async () => {
-    const facts = await readFile(new URL("./claim-stack-facts.ts", import.meta.url), "utf8");
-    const model = await readFile(new URL("./attestations-model.ts", import.meta.url), "utf8");
-    const view = await readFile(new URL("./attestations-view.tsx", import.meta.url), "utf8");
-    // The rule caps a declared verification and stops there. Three surfaces
-    // stated it as "every non-unavailable claim is shown as an assertion",
-    // which was the rule as `assertedState()` mis-implemented it — and which
-    // now stands above a matrix that may read "Failed".
-    for (const source of [facts, model, view]) {
-      expect(source).not.toContain("non-unavailable claim");
-      expect(source).toMatch(/declared failure keeps (?:its )?full weight/u);
-    }
-  });
-
-  it("gives the claim-state legend one word per state in the accessible tree too", async () => {
-    const proof = await readFile(new URL("./proof-view.tsx", import.meta.url), "utf8");
-    // Left to `SEAL_LABELS`, the `none` dot announced "Not checked" directly
-    // before the visible "No evidence": a fifth state word audible only to the
-    // readers who cannot see the one beside it.
-    expect(proof).toContain('density="dot" size={16} label={entry.word} />{entry.word}');
-  });
-
-  it("renders no second verdict-shaped pill beside the Proof route's hero verdict", async () => {
-    const inspector = await readFile(new URL("./proof-inspector.tsx", import.meta.url), "utf8");
-    const styles = await readFile(new URL("./shell.css", import.meta.url), "utf8");
-    // The chip is gone from the heading and the CSS family retired with it …
-    expect(inspector).not.toContain('class="proof-level"');
-    expect(styles).not.toContain(".proof-level");
-    // … and the declaration it carried is re-presented, under the label that
-    // names its author, beside the posture and provider it belongs with.
-    expect(inspector).toContain("<dt>Declared proof level</dt><dd>{proofLevelLabel(receipt.proofLevel)}</dd>");
-  });
-
-  it("keeps the Google Drive setup on the active Airship design-token vocabulary", async () => {
+  it("keeps Google Drive setup on the active design-token vocabulary", async () => {
     const styles = await readFile(new URL("./google-drive-setup.css", import.meta.url), "utf8");
     expect(styles).toContain("var(--density-panel-pad)");
     expect(styles).toContain("var(--surface-soft)");
-    expect(styles).not.toMatch(/var\(--(?:space-\d|surface-[01]|text\b|muted\b)/u);
+    expect(styles).not.toMatch(/var\(--(?:space-\d|surface-[01]|text|muted)/u);
   });
 });

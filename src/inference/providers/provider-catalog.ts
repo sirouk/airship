@@ -45,6 +45,17 @@ export class InferenceProviderCatalog {
     return entry;
   }
 
+  unregister(providerId: string, expectedRevision?: number): boolean {
+    const id = identifier(providerId, "Provider ID");
+    const current = this.#providers.get(id);
+    if (!current || (expectedRevision !== undefined && current.revision !== expectedRevision)) {
+      return false;
+    }
+    this.#providers.delete(id);
+    this.#revision += 1;
+    return true;
+  }
+
   get(providerId: string): ProviderCatalogEntry | undefined {
     return this.#providers.get(providerId);
   }
@@ -73,15 +84,10 @@ export function normalizeProvider(raw: InferenceProviderDescriptor): InferencePr
   const id = identifier(raw.id, "Provider ID");
   const label = boundedText(raw.label, "Provider label", 128);
   const boundary = raw.transportBoundary;
-  if (
-    boundary !== "e2ee-attestable"
-    && boundary !== "provider-tls"
-    && boundary !== "loopback-local"
-  ) {
+  if (boundary !== "provider-tls" && boundary !== "loopback-local") {
     throw new TypeError("The inference transport boundary is invalid.");
   }
   const protocols = new Set([
-    "chutes-e2ee-v1",
     "openai-responses",
     "openai-chat-completions",
     "anthropic-messages",
@@ -113,7 +119,9 @@ export function normalizeProvider(raw: InferenceProviderDescriptor): InferencePr
     oauth,
     authMethods,
     capabilities: [...capabilitySet],
-    documentationUrl: httpsUrl(raw.documentationUrl, "Provider documentation URL"),
+    ...(raw.documentationUrl
+      ? { documentationUrl: httpsUrl(raw.documentationUrl, "Provider documentation URL") }
+      : {}),
   }) as InferenceProviderDescriptor;
 }
 

@@ -1,7 +1,7 @@
 /**
  * The prime RLM tool surface end-to-end over the REAL registry primitives
  * (src/prime/subagents/registry.ts) wired with the in-memory doubles from
- * ../subagents/test-utils. These are thin-tool tests: the pins are the
+ * ../subagents/test-utils.test-support. These are thin-tool tests: the pins are the
  * translation and pre-check layers (admission-only spawn, data-shaped
  * refusals, depth ladder, receipts, bounded observe), while the deep
  * orchestration itself is covered by the registry's own suite.
@@ -22,8 +22,8 @@ import {
 } from "./rlm-tools";
 import { AGENT_FAMILY_REACH_ERROR, PrimeAgentRegistry } from "../subagents/registry";
 import type { PrimeHarnessEntry, PrimeHarnessScope, PrimeHarnessStore } from "../runtime/types-prime";
-import { createAttached, createFakeClock, createFakeFactory, createFakeIds, createOwner, flush, makeMessage } from "../subagents/test-utils";
-import { makeToolContext } from "./test-utils";
+import { createAttached, createFakeClock, createFakeFactory, createFakeIds, createOwner, flush, makeMessage } from "../subagents/test-utils.test-support";
+import { makeToolContext } from "./test-utils.test-support";
 
 /** Map-backed harness double; a twin of the admission.test.ts double (test-utils carries none). */
 function createFakeHarnessStore(): { store: PrimeHarnessStore; entries: Map<string, PrimeHarnessEntry> } {

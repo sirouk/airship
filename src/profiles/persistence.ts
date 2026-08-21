@@ -1,3 +1,4 @@
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -11,10 +12,10 @@ import type { ObjectRecord, ObjectStore } from "../storage/object-store";
 import { managedProfileRevisions, type ProfileCatalog, type ProfileEditorSettings } from "./catalog";
 import {
   createGlobalSkillSettings,
-  createProfileRevision,
   createSkillRevision,
   createThemeManifest,
   MAX_CATALOG_SKILLS,
+  validateProfileRevision,
   type ProfileRevision,
   type SkillRevision,
   type ThemeManifest,
@@ -82,16 +83,37 @@ export class MemoryProfileCatalogStore implements ProfileCatalogStore {
     if (this.checkpoint) return Object.freeze({ checkpoint: this.checkpoint, disposition: "existing" });
     const normalized = await validateProfileCatalog(catalog);
     const digest = await profileCatalogDigest(normalized);
+    // Validation and hashing yield. Re-check immediately before assignment so
+    // two initializers cannot both publish different generation-one catalogs.
+    if (this.checkpoint) return Object.freeze({ checkpoint: this.checkpoint, disposition: "existing" });
     this.checkpoint = checkpoint(1, digest, normalized, memoryVersionTag(1, digest));
     return Object.freeze({ checkpoint: this.checkpoint, disposition: "created" });
   }
 
   async commit(expected: ProfileCatalogCheckpoint, catalog: ProfileCatalog): Promise<ProfileCatalogCheckpoint> {
+    // Snapshot caller-owned CAS authority once before validation or hashing.
+    const expectedGeneration = expected.generation;
+    const expectedDigest = expected.digest;
+    const expectedVersionTag = expected.versionTag;
     const current = this.checkpoint;
-    if (!current || !sameCheckpoint(current, expected)) throw new ProfileCatalogConflictError();
+    if (!current || !sameCheckpointAuthority(
+      current,
+      expectedGeneration,
+      expectedDigest,
+      expectedVersionTag,
+    )) throw new ProfileCatalogConflictError();
     const normalized = await validateProfileCatalog(catalog);
     const digest = await profileCatalogDigest(normalized);
-    const generation = current.generation + 1;
+    // A competing commit can win during either await. Only the writer whose
+    // exact checkpoint is still current may advance the generation.
+    const latest = this.checkpoint;
+    if (!latest || !sameCheckpointAuthority(
+      latest,
+      expectedGeneration,
+      expectedDigest,
+      expectedVersionTag,
+    )) throw new ProfileCatalogConflictError();
+    const generation = latest.generation + 1;
     this.checkpoint = checkpoint(generation, digest, normalized, memoryVersionTag(generation, digest));
     return this.checkpoint;
   }
@@ -226,7 +248,7 @@ export async function profileCatalogDigest(catalog: ProfileCatalog): Promise<str
  */
 function rejectPoisonKeys(value: unknown, depth = 0): void {
   // The deepest shape this record owns is roughly five levels; 24 is the same
-  // fail-closed posture the billing payload walk takes, not a guess at it.
+  // fail-closed ceiling used by the other persisted payload readers.
   if (depth > 24) throw new Error("Profile catalog exceeds its structural depth.");
   if (!isRecord(value)) return;
   for (const key of ["__proto__", "prototype", "constructor"] as const) {
@@ -263,9 +285,7 @@ export async function validateProfileCatalog(value: unknown): Promise<ProfileCat
   }));
   const profiles = await Promise.all(profileValues.map(async (candidate) => {
     if (!isRecord(candidate) || typeof candidate.revision !== "string") throw new Error("Profile catalog revision is invalid.");
-    const rebuilt = await createProfileRevision(candidate as unknown as ProfileRevision);
-    if (rebuilt.revision !== candidate.revision) throw new Error(`Profile ${rebuilt.profileId} failed its revision check.`);
-    return rebuilt;
+    return validateProfileRevision(candidate as unknown as ProfileRevision);
   }));
 
   assertUnique(themes.map((theme) => theme.themeId), "theme ID");
@@ -348,10 +368,15 @@ function checkpoint(
   return Object.freeze({ generation, digest, catalog, versionTag });
 }
 
-function sameCheckpoint(left: ProfileCatalogCheckpoint, right: ProfileCatalogCheckpoint): boolean {
-  return left.generation === right.generation
-    && left.digest === right.digest
-    && left.versionTag === right.versionTag;
+function sameCheckpointAuthority(
+  current: ProfileCatalogCheckpoint,
+  generation: unknown,
+  digest: unknown,
+  versionTag: unknown,
+): boolean {
+  return current.generation === generation
+    && current.digest === digest
+    && current.versionTag === versionTag;
 }
 
 function memoryVersionTag(generation: number, digest: string): string {
@@ -408,9 +433,6 @@ function assertUnique(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Profile catalog contains a duplicate ${label}.`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[A-Za-z0-9_-]{43}$/u.test(value);

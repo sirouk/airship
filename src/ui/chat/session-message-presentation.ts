@@ -4,7 +4,7 @@ import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "../../core/fo
 import type { DurableEvent, SessionRecord } from "../../core/journal";
 import { SESSION_BOOKKEEPING_EVENT_TYPES } from "../../core/journal";
 import type { SessionAuditReport } from "../../core/session-audit";
-import type { ConversationReceipt } from "../../receipts/types";
+import type { ConversationReceipt } from "../../core/conversation-receipt";
 import {
   ASSISTANT_LENGTH_FINISH,
   messagePartsFromFacts,
@@ -104,13 +104,11 @@ export type SessionPresentationMarker = Readonly<{
    */
   turnId?: string;
   /**
-   * The receipt for the billed request this marker records.
+   * The bounded receipt for the provider request this marker records.
    *
-   * A naming call is a real, paid, attestation-producing request, and its
-   * receipt was being minted, validated and journaled while no surface could
-   * open it — which is exactly the state a receipt exists to prevent. It is
-   * carried here so the transcript row that reports the request can also hand
-   * Proof the identity that resolves it.
+   * A naming call has no answer row, so its receipt travels with the marker.
+   * Local Run details can then show the same provider, model, identifiers,
+   * timestamps, and digests as an ordinary turn.
    */
   receipt?: Readonly<ConversationReceipt>;
   /**
@@ -380,8 +378,23 @@ export function presentSessionMessages(
 
   for (const group of groups) {
     const turnStatus = groupTerminalStatus(group);
+    /*
+     * What the next request will actually carry, not what this row looks like.
+     *
+     * `materializeMessages` drops a failed turn and an unsalvaged cancelled one
+     * and carries everything else, so an *unterminated* turn's request is
+     * replayed as provider history — and `providerContextDisposition` in
+     * `sessions/domain.ts`, the bounded projection of the same journal, says so.
+     * This copy said `!== "completed"`, which made "excluded" a false statement
+     * about a turn still in flight and, worse, made the two projections
+     * disagree: `validateHistory` below refused the whole presentation with
+     * `HISTORY_MISMATCH` for every conversation whose turn was running, so
+     * returning to a running conversation could not open it at all.
+     */
     const providerContext: SessionPresentationProviderContext =
-      group.kind === "local-command" || turnStatus !== "completed" ? "excluded" : "included";
+      group.kind === "local-command" || turnStatus === "failed" || turnStatus === "cancelled"
+        ? "excluded"
+        : "included";
     validateHistory(group.turnId, turnStatus, providerContext, history.get(group.turnId));
 
     const projectedUpperBound = estimatedPartCount(group);
@@ -550,12 +563,11 @@ function groupTurns(
   /**
    * `operationId` → `turnId` for each ancillary inference this page declared.
    *
-   * The naming request is billed, so it emits `inference.usage` under the same
-   * fresh identity as its `conversation.named` record. That type is turn-scoped
-   * by prefix and has no `turn.requested` boundary, so it would be refused here
-   * while `auditSessionHistory` admits it against exactly this map. Admitted on
-   * the same terms — the declaring record must come first, and both IDs must
-   * match it — so an ordinary orphaned usage event stays the violation it is.
+   * Historical sessions can contain a provider naming request with
+   * `inference.usage` under the same identity as its `conversation.named`
+   * record. New sessions title locally and never emit either side channel.
+   * The bounded legacy reader admits the pair only when the declaring record
+   * comes first and both IDs match, so orphaned usage remains a violation.
    */
   const ancillaryInferences = new Map<string, string>();
   let active: TurnGroup | undefined;
@@ -622,7 +634,7 @@ function groupTurns(
        * conversations wrote it into the middle of whichever you were reading —
        * three of them in a row directly above the composer, in a thread whose
        * actual content was two messages. The record is untouched: the head
-       * advances, the audit names the type, and Proof lists every one. This
+       * advances and the local audit names the type. This
        * only declines to narrate it back to the person who caused it by
        * clicking.
        */
@@ -749,7 +761,7 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
         presentable: true,
         detail: forkContextDetail(seed),
         // Re-validated above, so these are the exact messages the branch's
-        // provider context was sealed with — not a reconstruction of them.
+        // provider context was recorded with — not a reconstruction of them.
         carriedContext: Object.freeze(seed.messages.map((message) => Object.freeze({
           role: message.role,
           content: message.content,
@@ -798,6 +810,23 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
       ...base,
       presentable: true,
       detail: "Token usage for the inference that named this conversation.",
+    });
+  }
+  /*
+   * The engine this conversation is pinned to. PRIME is the default, so this
+   * record is on nearly every conversation, and reaching the fallback made
+   * every resumed conversation open by claiming this build cannot replay a
+   * record this build writes itself — the lie of a second kind named above,
+   * shown to a returning reader as the first line of their own transcript.
+   */
+  if (event.type === "prime.session.runtime.selected" || event.type === "prime.session.runtime.seal") {
+    const runtime = typeof payload?.runtime === "string" ? presentableTitle(payload.runtime) : undefined;
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: runtime
+        ? `This conversation runs on the ${runtime} runtime, recorded when its first turn was admitted.`
+        : "The runtime this conversation is pinned to, recorded when its first turn was admitted.",
     });
   }
   return Object.freeze({
@@ -1134,13 +1163,19 @@ function validateTurnReceipt(
 function groupTerminalStatus(group: TurnGroup): SessionPresentationTurnStatus {
   if (group.kind === "agent") return agentTerminalStatus(group.terminal);
   if (!group.terminal) return "incomplete";
-  if (
-    group.terminal.type === "local.command.completed" ||
-    group.terminal.type === "local.command.denied"
-  ) {
-    return "completed";
-  }
   const payload = record(group.terminal.payload);
+  if (group.terminal.type === "local.command.completed") {
+    /*
+     * "The command ran" and "the command worked" are different facts. A tool
+     * step that answered `File not found` writes `local.command.completed` with
+     * `isError: true`, and reading only the event name badged that turn
+     * COMPLETED on a card whose own text said the step failed — while the live
+     * transcript, which reads the result, called it failed. One turn, one
+     * disposition, on both sides of a reload.
+     */
+    return payload?.isError === true ? "failed" : "completed";
+  }
+  if (group.terminal.type === "local.command.denied") return "completed";
   return payload?.cancelled === true ? "cancelled" : "failed";
 }
 

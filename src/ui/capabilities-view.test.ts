@@ -10,7 +10,7 @@ import {
   runtimeAction,
   runtimeBoundary,
   runtimeGlyph,
-  sealStateForCapabilitySummary,
+  statusStateForCapabilitySummary,
 } from "./capabilities-view";
 
 const source = await readFile(new URL("./capabilities-view.tsx", import.meta.url), "utf8");
@@ -51,15 +51,15 @@ describe("capability summary evidence", () => {
   });
 
   it("does not verify a completed inspection unless every reported runtime is ready", () => {
-    expect(sealStateForCapabilitySummary([])).toBe("checking");
-    expect(sealStateForCapabilitySummary([{ state: "ready" }, { state: "ready" }])).toBe("verified");
-    expect(sealStateForCapabilitySummary([{ state: "ready" }, { state: "installable" }])).toBe("asserted");
-    expect(sealStateForCapabilitySummary([{ state: "unavailable" }, { state: "installable" }])).toBe("none");
-    expect(sealStateForCapabilitySummary([{ state: "failed" }, { state: "unavailable" }])).toBe("failed");
+    expect(statusStateForCapabilitySummary([])).toBe("checking");
+    expect(statusStateForCapabilitySummary([{ state: "ready" }, { state: "ready" }])).toBe("verified");
+    expect(statusStateForCapabilitySummary([{ state: "ready" }, { state: "installable" }])).toBe("asserted");
+    expect(statusStateForCapabilitySummary([{ state: "unavailable" }, { state: "installable" }])).toBe("none");
+    expect(statusStateForCapabilitySummary([{ state: "failed" }, { state: "unavailable" }])).toBe("failed");
   });
 
   it("surfaces inspection failure independently of cached runtime rows", () => {
-    expect(sealStateForCapabilitySummary([{ state: "ready" }], true)).toBe("failed");
+    expect(statusStateForCapabilitySummary([{ state: "ready" }], true)).toBe("failed");
   });
 });
 
@@ -67,7 +67,6 @@ describe("runtime card presentation", () => {
   it("gives every shell runtime the terminal mark and leaves the rest on the model mark", () => {
     expect(runtimeGlyph(capability())).toBe("terminal");
     expect(runtimeGlyph(capability({ id: "node-webcontainer", shell: "webcontainer-jsh" }))).toBe("terminal");
-    expect(runtimeGlyph(capability({ id: "wasix", shell: "unavailable" }))).toBe("terminal");
     expect(runtimeGlyph(capability({ id: "javascript-worker", shell: "none" }))).toBe("model");
     expect(runtimeGlyph(capability({ id: "python-pyodide", shell: "none" }))).toBe("model");
     // Derived from the record, not from an id: nothing here may special-case a
@@ -177,15 +176,6 @@ describe("unavailable runtime boundary copy", () => {
       .toBe("Activation is running now.");
   });
 
-  it("reserves the release-level sentence for a runtime the release genuinely does not offer", () => {
-    // wasix is declared unavailable in the static table, so it carries no host
-    // blocker and keeps reading as unadvertised.
-    const wasix = new ClientExecutionRuntime().capabilities().find(({ id }) => id === "wasix");
-    expect(wasix?.state).toBe("unavailable");
-    expect(wasix?.blocker).toBeUndefined();
-    expect(runtimeBoundary(wasix!)).toEqual({ condition: "No activation path is advertised by this release." });
-  });
-
   it("names the cross-origin isolation blocker on a page that is not isolated", () => {
     // Node has no `document`, so node-webcontainer resolves to the first host
     // branch; the point under test is that a host branch produces a structured
@@ -242,7 +232,7 @@ describe("live load surface", () => {
    * not fit has to wrap, not truncate.
    */
   it("wraps the observed-at claim and the stat-tile sentence rather than truncating either", () => {
-    const seal = styles.slice(styles.indexOf('.capability-summary > .seal[data-density="chip"] .seal__label'));
+    const seal = styles.slice(styles.indexOf('.capability-summary > .status-mark[data-density="chip"] .status-mark__label'));
     expect(seal.slice(0, seal.indexOf("}"))).toContain("white-space: normal");
     const tile = styles.slice(styles.indexOf(".capability-signal-strip dd"));
     const declarations = tile.slice(0, tile.indexOf("}"));
@@ -252,7 +242,7 @@ describe("live load surface", () => {
   });
 
   /*
-   * `Seal` renders its root as a `<span>`, so `.capability-summary > span` — a
+   * `StatusMark` renders its root as a `<span>`, so `.capability-summary > span` — a
    * rule written for the approval-policy sentence at the far end of the row,
    * which is read back towards the pill and so is set right — also reached the
    * freshness pill. That was invisible only while the pill could not wrap. The
@@ -263,12 +253,12 @@ describe("live load surface", () => {
    */
   it("sets the freshness pill from its own glyph at every width, not from the sentence beside it", () => {
     for (const rule of [...styles.matchAll(/\.capability-summary > span[^{]*\{[^}]*text-align[^}]*\}/gu)].map((match) => match[0])) {
-      expect(rule).toContain(":not(.seal)");
+      expect(rule).toContain(":not(.status-mark)");
     }
     // The sentence keeps both of its readings: set right across the row, and
     // left once the phone stack puts it under the pill rather than opposite it.
-    expect(styles).toContain(".capability-summary > span:not(.seal) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }");
-    expect(styles).toContain(".capability-summary > span:not(.seal) { text-align: left; }");
+    expect(styles).toContain(".capability-summary > span:not(.status-mark) { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }");
+    expect(styles).toContain(".capability-summary > span:not(.status-mark) { text-align: left; }");
   });
 });
 

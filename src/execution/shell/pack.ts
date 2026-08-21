@@ -1,5 +1,6 @@
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../../workspace/content-codec";
 import {
+  isLocalFolderMountPath,
   isWorkspaceControlPlanePath,
   normalizeWorkspacePath,
   WorkspaceConflictError,
@@ -19,6 +20,22 @@ import { runShellScript } from "./run";
 
 const WORKSPACE_ROOT = "/workspace";
 const EXCLUDED = new Set<string>(AIRSHIP_SH_EXCLUDED_SEGMENTS);
+/**
+ * A folder attached from this device is not workspace state, in either direction.
+ *
+ * A snapshot/write-back tier is a copy: every listed file is read out of the
+ * `WorkspacePort` and every changed file is written back through it, with no
+ * approval request anywhere on that path — the tool broker reviewed the *call*,
+ * whose arguments name `/workspace` and never the folder. `namesAttachedFolder`
+ * in `src/approvals/modes.ts` therefore cannot see it, so a write-back rooted at
+ * `/workspace` landed on the person's own disk under Auto Approve and Full
+ * Access with nobody asked. The Terminal already refuses this for the same
+ * reason (`ATTACHED_FOLDER_REFUSAL` in `src/terminal/workspace-sync.ts`); the
+ * execution tiers now refuse it too.
+ */
+const ATTACHED_FOLDER_EXCLUSION =
+  "This runtime does not carry the folder you attached from this device: it copies files and writes them back with"
+  + " no approval request, and that folder is written in place. Nothing on your device was changed.";
 
 type Snapshot = Readonly<{
   root: string;
@@ -95,6 +112,8 @@ async function captureWorkspace(workspace: WorkspacePort, rootInput: string): Pr
   const entries = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    // A folder attached from this device is not workspace state; see `egressRefusal`.
+    .filter(({ path }) => !isLocalFolderMountPath(path))
     .filter(({ path }) => !relativeSegments(path, root).some((segment) => EXCLUDED.has(segment)));
   if (entries.length > AIRSHIP_SH_MAX_FILES) {
     throw new Error(`airship-sh workspace snapshot exceeds ${AIRSHIP_SH_MAX_FILES} files.`);
@@ -214,6 +233,7 @@ function relativeSegments(path: string, root: string): string[] {
 }
 
 function egressRefusal(path: string, root: string): string | undefined {
+  if (isLocalFolderMountPath(path)) return `${ATTACHED_FOLDER_EXCLUSION} Refused: ${path}`;
   if (isWorkspaceControlPlanePath(path)) return `airship-sh workspace excludes control-plane path: ${path}`;
   const excluded = relativeSegments(path, root).find((segment) => EXCLUDED.has(segment));
   return excluded ? `airship-sh workspace excludes the ${excluded} path segment.` : undefined;

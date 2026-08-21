@@ -109,7 +109,6 @@ case "${choice}" in
       # a host port Docker picks keeps `up` from failing on a machine that
       # already serves 80 — which local mode must never require.
       export CADDY_HTTP_BIND="80"
-      export VITE_AIRSHIP_PUBLIC_ORIGIN="http://localhost:${CADDY_PORT}"
       export AIRSHIP_PUBLIC_BASE_PATH="/"
       echo -e "${YELLOW}Local mode: http://localhost:${CADDY_PORT} — no TLS, no domain.${NC}"
     else
@@ -124,16 +123,10 @@ case "${choice}" in
     echo "  Port:        ${CADDY_PORT}"
     echo "  TLS:         ${CADDY_TLS}"
     echo "  Base path:   ${AIRSHIP_PUBLIC_BASE_PATH}"
-    echo "  App origin:  ${VITE_AIRSHIP_PUBLIC_ORIGIN}"
     if [ -z "${VITE_GOOGLE_CLIENT_ID:-}" ]; then
       echo -e "  Vault default: ${YELLOW}ephemeral${NC} (no Google client ID configured)"
     else
       echo -e "  Vault default: google-drive"
-    fi
-    if [ -z "${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID:-}" ]; then
-      echo -e "  Chutes sign-in: ${YELLOW}api-key${NC} (no public client ID configured)"
-    else
-      echo -e "  Chutes sign-in: oauth"
     fi
     echo
 

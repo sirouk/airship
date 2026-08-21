@@ -175,13 +175,33 @@ isolation-test prefix as possible residue with `inventory: "unknown-after-failed
 
 ## Local S3-compatible development
 
-A MinIO/LocalStack-style service is supported only as an explicit lab:
+A MinIO/LocalStack-style service is supported only as an explicit lab, and only
+a build that asked for it contains one:
 
 ```ts
 import { LocalLabSetup } from "../src/ui/local-lab-setup";
 
 <LocalLabSetup onConfigure={(request) => vault.configure(request)} />
 ```
+
+`VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` is a *composition* switch, not a permission
+switch. `src/local-lab-build.ts` reads it as a build-time literal, and
+`vite.config.ts` externalizes `s3-object-store.ts`, `vault/local-lab.ts`,
+`ui/local-lab-setup.tsx` and `ui/local-lab-vault.ts` in a build that did not set
+it, so a stock artifact carries none of them — no S3 request signing, no baked
+MinIO endpoint or disposable keys, no lab setup panel or stylesheet, no S3
+configuration grammar, no Cognito diagnostic, and no selector, Preferences or
+Vault copy that names the destination. `VaultCoordinator.configure()` refuses in
+a stock build for the same reason. `assertStockReleaseExcludesLocalLab` in
+`scripts/release-gate.mjs` fails the release if any of it reappears, matching
+both artifact paths and payload sentinels; the orphan chunk it was written for
+is a dynamic-import target the bundler emits even after the branch that called
+it is folded away.
+
+A stock build still states plainly which destinations exist — Ephemeral, Local
+Device, and Google Drive where a client ID is configured — and names no fourth.
+`npm test` runs the unit suite as a lab build; `npm run test:stock` re-runs the
+storage-choice suites as a stock build, so both modes are asserted.
 
 HTTP, path-style addressing, and non-expiring credentials are enabled only for
 `localhost`, `127.0.0.1`, or `[::1]` in this mode. Passing the same credential
@@ -307,17 +327,18 @@ run required for production.
 `vaultProviderRequirements(config)` is the machine-readable deployment
 contract. It returns:
 
-- exact S3 and Cognito/OIDC origins for CSP `connect-src`;
+- exact S3 and Cognito/OIDC origins for runtime validation and deployment review;
 - GET/PUT plus SigV4, conditional-write, and Range request headers for CORS;
 - ETag, length, range, modification, region, and request-ID response headers;
 - memory-only expiring credential/reset requirements; and
 - the exact per-subject list/object IAM prefix.
 
-The public static build cannot safely accept arbitrary endpoints at runtime:
-its CSP must name the exact object and credential origins in both `index.html`
-and `public/_headers`. A user-selected arbitrary S3 origin requires a packaged
-client whose policy is generated for that origin. Do not weaken this with
-`connect-src https:` or provider-wide wildcards.
+The public static build accepts user-selected HTTPS endpoints under its
+intentional `connect-src https:` grant. Configuration still validates exact
+credential-free URLs and credentials remain scoped to those configured
+endpoints. Wildcard hosts and remote plaintext origins remain prohibited. A
+fixed deployment can narrow the policy to exact object, identity, and inference
+origins when CSP-level egress isolation matters more than endpoint portability.
 
 Bucket/IAM/CORS details remain normative in
 [AWS_S3_REFERENCE.md](AWS_S3_REFERENCE.md). In particular, direct browser

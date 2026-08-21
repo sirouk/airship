@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "./client-ciphertext-cache";
 import { CiphertextCachingObjectStore, classifyVaultImmutableCiphertext } from "./caching-object-store";
-import { MemoryObjectStore } from "./memory-object-store";
+import { MemoryObjectStore } from "./memory-object-store.test-support";
 import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore, type ReclaimableObjectStore } from "./object-store";
 
 describe("ciphertext caching ObjectStore", () => {

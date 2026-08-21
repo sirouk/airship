@@ -45,9 +45,8 @@ export type GitAdapterCapabilities = Readonly<{
     requiresCors: boolean;
     credentialPersistence: "none" | "memory-only" | "host-managed";
     /**
-     * Exact origins this build's own Content-Security-Policy lets Git Smart
-     * HTTP reach. Empty means no remote can be contacted from this page at all,
-     * whatever the remote's CORS policy says.
+     * Exact origins this build's Git egress policy lets Smart HTTP reach.
+     * Empty means no remote can be contacted, whatever its CORS policy says.
      */
     permittedOrigins: readonly string[];
     detail: string;

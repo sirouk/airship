@@ -1,5 +1,4 @@
 import type {
-  CanonicalMessage,
   InferenceRequest,
   InferenceTransport,
 } from "../core/contracts";
@@ -13,13 +12,14 @@ import {
 import { createBrowserLocalModelProvider } from "./local/provider";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
-  ProviderTransportError,
-  XaiBrowserTransport,
+  OpenAiCompatibleBrowserTransport,
+  ResponsesBrowserTransport,
+  type BrowserCloudTransportOptions,
 } from "./providers/browser-cloud";
 import { InferenceConnectionRegistry } from "./providers/connection-registry";
 import {
   type InferenceAvailabilitySnapshot,
+  type InferenceAuthMethod,
   type InferenceConnectionMetadata,
   type InferenceModelDescriptor,
   type InferenceProviderDescriptor,
@@ -27,16 +27,18 @@ import {
   type SessionInferenceRoutePin,
 } from "./providers/contracts";
 import { InferenceModelCatalog } from "./providers/model-catalog";
+import { createOpenAiCompatibleProvider, type OpenAiCompatibleProviderInput } from "./providers/openai-compatible-provider";
 import { OFFICIAL_CLOUD_PROVIDERS } from "./providers/official-providers";
-import { InferenceProviderCatalog } from "./providers/provider-catalog";
+import { InferenceProviderCatalog, normalizeProvider } from "./providers/provider-catalog";
+import { boundedText, credential } from "./providers/validation";
 import {
   createInferenceAvailabilitySnapshot,
   pinInferenceRoute,
   resolvePinnedInferenceRoute,
 } from "./providers/session-route";
 
-export type BrowserCloudProviderId = "openai" | "anthropic" | "xai";
-export type BrowserFabricProviderId = BrowserCloudProviderId | LocalModelProviderKind;
+export type BrowserCloudProviderId = "openai" | "anthropic" | "xai" | "chutes";
+export type BrowserFabricProviderId = string;
 
 export type BrowserInferenceConnection = Readonly<{
   connection: InferenceConnectionMetadata;
@@ -54,12 +56,24 @@ export type BrowserCloudCatalogTransport = InferenceTransport & Readonly<{
   listModels(signal?: AbortSignal): Promise<readonly InferenceModelDescriptor[]>;
 }>;
 
+/**
+ * A subscriber observes; it does not participate. A bare fan-out lets one
+ * throwing view abort the transaction publishing the change.
+ */
+function notifyObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control the transaction that emitted this.
+  }
+}
+
 type Listener = () => void;
 
 export type BrowserInferenceFabricOptions = Readonly<{
   cloudTransportFactory?: (
-    providerId: BrowserCloudProviderId,
-    options: ConstructorParameters<typeof OpenAiBrowserTransport>[0],
+    provider: InferenceProviderDescriptor,
+    options: BrowserCloudTransportOptions,
   ) => BrowserCloudCatalogTransport;
   localProviderFactory?: (
     kind: LocalModelProviderKind,
@@ -123,51 +137,90 @@ export class BrowserInferenceFabric {
   }
 
   async connectCloud(args: Readonly<{
-    providerId: BrowserCloudProviderId;
+    providerId: string;
+    /** A user-owned descriptor staged transactionally with its first connection. */
+    provider?: InferenceProviderDescriptor;
     connectionId?: string;
     label?: string;
     apiKey: string;
     acknowledgeDirectBrowserCredentialRisk: true;
     signal?: AbortSignal;
   }>): Promise<BrowserInferenceConnection> {
-    args.signal?.throwIfAborted();
-    const provider = this.providers.require(args.providerId).provider;
+    /*
+     * `args` belongs to the caller and may be a proxy or expose accessors. Read
+     * every field once before any asynchronous boundary, then validate and use
+     * only these local values for both discovery and promotion. This prevents a
+     * getter from offering one credential/provider/signal to discovery and a
+     * different one to the committed authority.
+     */
+    const rawProviderId = args.providerId;
+    const rawProvider = args.provider;
+    const rawConnectionId = args.connectionId;
+    const rawLabel = args.label;
+    const rawApiKey = args.apiKey;
+    const acknowledged = args.acknowledgeDirectBrowserCredentialRisk;
+    const rawSignal = args.signal;
+
+    const providerId = assertIdentifier(rawProviderId, "Provider ID");
+    const requestedConnectionId = rawConnectionId === undefined
+      ? undefined
+      : assertIdentifier(rawConnectionId, "Connection ID");
+    const requestedLabel = optionalConnectionLabel(rawLabel);
+    const apiKey = credential(rawApiKey, "Inference API key");
+    if (acknowledged !== true) {
+      throw new Error("Direct browser credential use requires explicit acknowledgement.");
+    }
+    const signal = optionalAbortSignal(rawSignal);
+    signal?.throwIfAborted();
+
+    const provider = rawProvider === undefined
+      ? this.providers.require(providerId).provider
+      : snapshotProviderDescriptor(rawProvider);
+    if (provider.id !== providerId) {
+      throw new TypeError("The custom provider descriptor does not match its provider ID.");
+    }
+    const stagingProviders = new InferenceProviderCatalog([provider]);
+    const currentProvider = this.providers.get(provider.id);
+    if (currentProvider && providerSemantics(currentProvider.provider) !== providerSemantics(provider)) {
+      throw new Error(`Inference provider ${provider.id} is already bound to another endpoint.`);
+    }
     const method = provider.authMethods.find((candidate) => candidate.kind === "api-key");
     if (!method || method.kind !== "api-key") {
       throw new Error(`${provider.label} has no configured API-key method.`);
     }
-    if (!args.acknowledgeDirectBrowserCredentialRisk) {
-      throw new Error("Direct browser credential use requires explicit acknowledgement.");
-    }
+    const connectionLabel = requestedLabel || `${provider.label} · page memory`;
+    // Validate the derived default before the staging registry reads it.
+    boundedText(connectionLabel, "Connection label", 128);
     const connectionId = this.#reserveConnectionId(
-      args.connectionId ?? this.#freshConnectionId(args.providerId),
+      requestedConnectionId ?? this.#freshConnectionId(providerId),
     );
-    const stagingConnections = new InferenceConnectionRegistry(this.providers, this.#now);
+    const stagingConnections = new InferenceConnectionRegistry(stagingProviders, this.#now);
+    let providerRegistration: Readonly<{ created: boolean; revision: number }> | undefined;
     try {
       /*
-       * Discovery borrows the proposed key from an isolated page-memory
-       * registry. The live registry is untouched until the candidate has
-       * proved that it can enumerate at least one model.
+       * Discovery borrows the proposed key from isolated page-memory catalogs.
+       * The live provider, connection, and model authorities stay untouched
+       * until the endpoint returns a valid non-empty model roster.
        */
       const stagedConnection = stagingConnections.connectApiKey({
         id: connectionId,
         providerId: provider.id,
         authMethodId: method.id,
-        label: args.label?.trim() || `${provider.label} · page memory`,
-        apiKey: args.apiKey,
+        label: connectionLabel,
+        apiKey,
       });
-      const stagedTransport = this.#cloudTransportFactory(args.providerId, {
+      const stagedTransport = this.#cloudTransportFactory(provider, {
         connectionId,
         connectionGeneration: stagedConnection.generation,
         connections: stagingConnections,
       });
-      const discovered = await stagedTransport.listModels(args.signal);
+      const discovered = await stagedTransport.listModels(signal);
       if (discovered.length === 0) {
         throw new Error(`${provider.label} returned no models to this credential.`);
       }
-      args.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       const checkedAt = this.#nowIso();
-      const stagingModels = new InferenceModelCatalog(this.providers);
+      const stagingModels = new InferenceModelCatalog(stagingProviders);
       stagingModels.replaceConnectionModels(
         stagedConnection.id,
         stagedConnection.generation,
@@ -175,13 +228,31 @@ export class BrowserInferenceFabric {
         discovered,
       );
 
+      /*
+       * Construct the long-lived transport before publishing any live
+       * authority. A factory/configuration failure must not even revise the
+       * provider catalog; the transport does not lease the credential until a
+       * later request.
+       */
+      const promotedGeneration = this.connections.nextGeneration(connectionId);
+      const committedTransport = this.#cloudTransportFactory(provider, {
+        connectionId,
+        connectionGeneration: promotedGeneration,
+        connections: this.connections,
+        maxOutputTokensForModel: (modelId) =>
+          this.models.get(connectionId, promotedGeneration, modelId)?.maxOutputTokens,
+      });
+      providerRegistration = this.#ensureProvider(provider);
       const connection = this.connections.connectApiKey({
         id: connectionId,
         providerId: provider.id,
         authMethodId: method.id,
-        label: args.label?.trim() || `${provider.label} · page memory`,
-        apiKey: args.apiKey,
+        label: connectionLabel,
+        apiKey,
       });
+      if (connection.generation !== promotedGeneration) {
+        throw new Error("The reserved inference generation changed during promotion.");
+      }
       const committedModels = bindModels(discovered, connection, provider.id);
       this.models.replaceConnectionModels(
         connection.id,
@@ -199,29 +270,22 @@ export class BrowserInferenceFabric {
           source: "live-probe",
           checkedAt,
         },
-        invoke: { state: "unknown", source: "live-probe", checkedAt },
+        // The descriptor exposes an inference route. Access is exercised by
+        // the person's first turn, never by a hidden billable prompt.
+        invoke: { state: "available", source: "provider-declared" },
       });
-      const transport = this.#bindTransport(
-        this.#cloudTransportFactory(args.providerId, {
-          connectionId: connection.id,
-          connectionGeneration: connection.generation,
-          connections: this.connections,
-          /*
-           * The transport outlives every model selection, so a per-model
-           * output ceiling can only be read at request time. It resolves
-           * against the live catalog row for this exact credential
-           * generation and stays undefined until something declares one.
-           */
-          maxOutputTokensForModel: (modelId) =>
-            this.models.get(connection.id, connection.generation, modelId)?.maxOutputTokens,
-        }),
-        connection,
-      );
+      const transport = this.#bindTransport(committedTransport, connection);
       this.#transports.set(connection.id, transport);
       this.#emit();
       return this.#requireVisible(connection.id);
     } catch (error) {
       this.#rollbackCandidate(connectionId);
+      if (
+        providerRegistration?.created
+        && !this.connections.snapshot().connections.some((entry) => entry.providerId === provider.id)
+      ) {
+        this.providers.unregister(provider.id, providerRegistration.revision);
+      }
       throw error;
     } finally {
       /*
@@ -233,6 +297,52 @@ export class BrowserInferenceFabric {
     }
   }
 
+  async connectOpenAiCompatible(args: Readonly<{
+    provider: OpenAiCompatibleProviderInput;
+    connectionId?: string;
+    connectionLabel?: string;
+    apiKey: string;
+    acknowledgeDirectBrowserCredentialRisk: true;
+    signal?: AbortSignal;
+  }>): Promise<BrowserInferenceConnection> {
+    // Snapshot this entry point independently. `createOpenAiCompatibleProvider`
+    // must await SHA-256, so no caller-owned accessor may remain to be read
+    // after that digest starts.
+    const rawProvider = args.provider;
+    const rawConnectionId = args.connectionId;
+    const rawConnectionLabel = args.connectionLabel;
+    const rawApiKey = args.apiKey;
+    const acknowledged = args.acknowledgeDirectBrowserCredentialRisk;
+    const rawSignal = args.signal;
+
+    const requestedConnectionId = rawConnectionId === undefined
+      ? undefined
+      : assertIdentifier(rawConnectionId, "Connection ID");
+    const connectionLabel = optionalConnectionLabel(rawConnectionLabel);
+    const apiKey = credential(rawApiKey, "Inference API key");
+    if (acknowledged !== true) {
+      throw new Error("Direct browser credential use requires explicit acknowledgement.");
+    }
+    const signal = optionalAbortSignal(rawSignal);
+    signal?.throwIfAborted();
+    // The creator reads and validates all nested provider fields synchronously
+    // before returning this digest promise.
+    const providerPromise = createOpenAiCompatibleProvider(rawProvider);
+    const provider = await providerPromise;
+    signal?.throwIfAborted();
+    return await this.connectCloud({
+      providerId: provider.id,
+      provider,
+      ...(requestedConnectionId === undefined
+        ? {}
+        : { connectionId: requestedConnectionId }),
+      ...(connectionLabel === undefined ? {} : { label: connectionLabel }),
+      apiKey,
+      acknowledgeDirectBrowserCredentialRisk: true,
+      ...(signal === undefined ? {} : { signal }),
+    });
+  }
+
   async connectLocal(args: Readonly<{
     kind: LocalModelProviderKind;
     connectionId?: string;
@@ -240,7 +350,30 @@ export class BrowserInferenceFabric {
     options?: LocalProviderOptions;
     signal?: AbortSignal;
   }>): Promise<BrowserInferenceConnection> {
-    args.signal?.throwIfAborted();
+    /*
+     * `args` and `args.options` belong to the caller. Snapshot every supported
+     * field before invoking a factory or crossing the discovery await. The
+     * frozen copy prevents accessors or later mutation from giving discovery
+     * one local authority and promotion another.
+     */
+    const rawKind = args.kind;
+    const rawConnectionId = args.connectionId;
+    const rawLabel = args.label;
+    const rawOptions = args.options;
+    const rawSignal = args.signal;
+    // Read all nested option accessors before validating or using any field.
+    const options = snapshotLocalProviderOptions(rawOptions);
+    const snapshot = Object.freeze({
+      kind: assertLocalProviderKind(rawKind),
+      connectionId: rawConnectionId === undefined
+        ? undefined
+        : assertIdentifier(rawConnectionId, "Connection ID"),
+      label: optionalConnectionLabel(rawLabel),
+      options,
+      signal: optionalAbortSignal(rawSignal),
+    });
+    snapshot.signal?.throwIfAborted();
+
     /*
      * The current fabric contract registers local endpoints as `local-none`.
      * Passing a credential resolver through to the provider would therefore
@@ -249,41 +382,50 @@ export class BrowserInferenceFabric {
      * Fail closed until authenticated-local custody has its own reviewed auth
      * method and generation-bound registry path.
      */
-    if (args.options?.credential) {
+    if (snapshot.options?.credential) {
       throw new Error(
         "Authenticated local-model endpoints require a dedicated page-memory authority; "
         + "this local-none connection accepts only an unauthenticated loopback service.",
       );
     }
-    const provider = this.#localProviderFactory(args.kind, args.options);
+    // Keep the injectable provider seam, but give it only the immutable copy.
+    const provider = this.#localProviderFactory(snapshot.kind, snapshot.options);
+    // A provider may expose its URL through a getter or a mutable URL object.
+    // Copy it once so descriptor, identifier, and both registry stages agree.
+    const endpoint = snapshotLocalProviderEndpoint(provider.endpoint);
     const descriptor = localProviderDescriptor(
-      args.kind,
-      provider.endpoint,
-      localProviderId(args.kind, provider.endpoint),
+      snapshot.kind,
+      endpoint,
+      localProviderId(snapshot.kind, endpoint),
     );
+    const authMethodId = `${snapshot.kind}-loopback`;
+    const connectionLabel = snapshot.label
+      ?? `${descriptor.label} · ${endpoint.origin}`;
+    boundedText(connectionLabel, "Connection label", 128);
     const connectionId = this.#reserveConnectionId(
-      args.connectionId ?? this.#freshConnectionId(args.kind),
+      snapshot.connectionId ?? this.#freshConnectionId(snapshot.kind),
     );
     try {
       /*
-       * Probe and normalize into isolated catalogs first. A failed endpoint,
-       * empty directory, invalid model row, or cancellation therefore cannot
-       * revise a live provider or replace a working connection.
+       * Discover and normalize into isolated catalogs first. Successful model
+       * discovery is the readiness check; a second health request here would
+       * hit the endpoint twice before promotion. A failed endpoint, empty
+       * directory, invalid model row, or cancellation therefore cannot revise
+       * a live provider or replace a working connection.
        */
       const stagingProviders = new InferenceProviderCatalog([descriptor]);
       const stagingConnections = new InferenceConnectionRegistry(stagingProviders, this.#now);
       const stagedConnection = stagingConnections.connectLocal({
         id: connectionId,
         providerId: descriptor.id,
-        authMethodId: `${args.kind}-loopback`,
-        label: args.label?.trim() || `${descriptor.label} · ${provider.endpoint.origin}`,
+        authMethodId,
+        label: connectionLabel,
       });
-      const health = await provider.probeHealth(args.signal);
       const connected = await connectLocalProvider(provider, {
         connectionId,
         connectionGeneration: stagedConnection.generation,
         providerId: descriptor.id,
-      }, args.signal);
+      }, snapshot.signal);
       if (connected.models.length === 0) {
         throw new Error(`${descriptor.label} is reachable but has no installed models.`);
       }
@@ -296,28 +438,28 @@ export class BrowserInferenceFabric {
       );
       stagingConnections.updateHealth(stagedConnection.id, {
         state: "ready",
-        checkedAt: health.checkedAt,
+        checkedAt: connected.discovery.fetchedAt,
       });
       stagingConnections.updateCapabilities(stagedConnection.id, {
         "models:list": {
           state: "available",
           source: "live-probe",
-          checkedAt: health.checkedAt,
+          checkedAt: connected.discovery.fetchedAt,
         },
         invoke: {
           state: "unknown",
           source: "live-probe",
-          checkedAt: health.checkedAt,
+          checkedAt: connected.discovery.fetchedAt,
         },
       });
-      args.signal?.throwIfAborted();
+      snapshot.signal?.throwIfAborted();
 
       this.#ensureProvider(descriptor);
       const connection = this.connections.connectLocal({
         id: connectionId,
         providerId: descriptor.id,
-        authMethodId: `${args.kind}-loopback`,
-        label: args.label?.trim() || `${descriptor.label} · ${provider.endpoint.origin}`,
+        authMethodId,
+        label: connectionLabel,
       });
       const committedModels = bindModels(connected.models, connection, descriptor.id);
       this.models.replaceConnectionModels(
@@ -328,15 +470,15 @@ export class BrowserInferenceFabric {
       );
       this.connections.updateHealth(connection.id, {
         state: "ready",
-        checkedAt: health.checkedAt,
+        checkedAt: connected.discovery.fetchedAt,
       });
       this.connections.updateCapabilities(connection.id, {
         "models:list": {
           state: "available",
           source: "live-probe",
-          checkedAt: health.checkedAt,
+          checkedAt: connected.discovery.fetchedAt,
         },
-        invoke: { state: "unknown", source: "live-probe", checkedAt: health.checkedAt },
+        invoke: { state: "available", source: "provider-declared" },
       });
       this.#transports.set(
         connection.id,
@@ -353,91 +495,40 @@ export class BrowserInferenceFabric {
   }
 
   /**
-   * A protected, deliberately tiny inference proves that the selected model
-   * can actually invoke through this exact credential generation. Catalog
-   * visibility alone is never promoted to invoke authorization.
+   * Select a model without sending a hidden provider request.
+   *
+   * Model discovery already checked the configured catalog path. The first
+   * user turn exercises inference access and may consume provider quota; model
+   * selection itself is local and only pins the exact authority generation.
    */
   async activate(
     connectionId: string,
     modelId: string,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<ActivatedInferenceRoute> {
+    signal.throwIfAborted();
     const connection = this.connections.require(connectionId);
     const provider = this.providers.require(connection.providerId);
     const transport = this.#transports.get(connection.id);
     if (!transport) throw new Error("The selected inference transport is no longer in page memory.");
     const model = this.models.require(connection.id, connection.generation, modelId);
-    try {
-      await verifyInvocation(transport, modelId, signal);
-    } catch (error) {
-      /*
-       * A 400 from the invocation probe is the provider judging the model,
-       * not the network: a directory row that can never answer this endpoint
-       * (embedding, image and moderation listings share the model directory)
-       * would otherwise stay selectable and burn a doomed probe on every
-       * press. Record the verdict back onto the row in the exact vocabulary
-       * the success path uses, so the catalog renders it as observed
-       * unavailable. Every other failure — 5xx, timeouts, refusals to
-       * connect — stays retryable and leaves the row untouched.
-       */
-      if (
-        error instanceof ProviderTransportError
-        && error.code === "http"
-        && error.status === 400
-        && this.models.get(connection.id, connection.generation, modelId) === model
-        && this.#transports.get(connection.id) === transport
-      ) {
-        this.#markProbeVerdict(connection, modelId);
-      }
-      throw error;
-    }
-    /*
-     * The protected request is asynchronous. A disconnect/reconnect or public
-     * catalog revision can occur while it is in flight. Never apply the old
-     * probe result to a replacement credential, revised provider endpoint, or
-     * changed model row merely because it reused the same visible IDs.
-     */
     const currentConnection = this.connections.get(connection.id);
     const currentProvider = this.providers.get(connection.providerId);
-    const currentModel = this.models.get(connection.id, connection.generation, modelId);
     if (
       !currentConnection
       || currentConnection.generation !== connection.generation
       || currentProvider?.revision !== provider.revision
-      || currentModel !== model
+      || this.models.get(connection.id, connection.generation, modelId) !== model
       || this.#transports.get(connection.id) !== transport
     ) {
-      throw new Error(
-        "The inference authority changed while model invocation was being checked. Retry against the current connection.",
-      );
+      throw new Error("The inference authority changed while the model was being selected. Retry against the current connection.");
     }
-    const checkedAt = this.#nowIso();
-    this.connections.updateHealth(connection.id, { state: "ready", checkedAt });
-    this.connections.updateCapabilities(connection.id, {
-      invoke: { state: "available", source: "live-probe", checkedAt },
-    });
-    const currentModels = this.models.forConnection(connection.id, connection.generation);
-    this.models.replaceConnectionModels(
-      connection.id,
-      connection.generation,
-      connection.providerId,
-      currentModels.map((model) => model.id === modelId
-        ? Object.freeze({
-            ...model,
-            availability: Object.freeze({
-              state: "available" as const,
-              source: "live-probe" as const,
-              observedAt: checkedAt,
-            }),
-          })
-        : model),
-    );
     const pin = pinInferenceRoute(this.providers, this.connections, this.models, {
       connectionId: connection.id,
       modelId,
-      pinnedAt: checkedAt,
+      pinnedAt: this.#nowIso(),
     });
-    this.#emit();
+    signal.throwIfAborted();
     return Object.freeze({
       pin,
       transport,
@@ -532,38 +623,6 @@ export class BrowserInferenceFabric {
     return disconnected;
   }
 
-  /*
-   * Write an authoritative probe refusal onto the catalog row it is about.
-   *
-   * Deliberately only the availability row, mirroring what `activate` writes
-   * on success rather than inventing a second vocabulary: the picker and the
-   * availability snapshot already render `unavailable` as not-selectable, and
-   * the row's `source` still describes the directory listing that produced
-   * the model's id and label — a request refusal is not that listing.
-   */
-  #markProbeVerdict(
-    connection: InferenceConnectionMetadata,
-    modelId: string,
-  ): void {
-    const observedAt = this.#nowIso();
-    this.models.replaceConnectionModels(
-      connection.id,
-      connection.generation,
-      connection.providerId,
-      this.models.forConnection(connection.id, connection.generation).map((model) =>
-        model.id === modelId
-          ? Object.freeze({
-              ...model,
-              availability: Object.freeze({
-                state: "unavailable" as const,
-                source: "live-probe" as const,
-                observedAt,
-              }),
-            })
-          : model),
-    );
-    this.#emit();
-  }
 
   #reserveConnectionId(baseValue: string): string {
     const base = assertIdentifier(baseValue, "Connection ID");
@@ -595,17 +654,18 @@ export class BrowserInferenceFabric {
     return `${providerId}-${token.slice(0, 64)}`;
   }
 
-  #ensureProvider(descriptor: InferenceProviderDescriptor): void {
+  #ensureProvider(descriptor: InferenceProviderDescriptor): Readonly<{ created: boolean; revision: number }> {
     const current = this.providers.get(descriptor.id);
     if (!current) {
-      this.providers.register(descriptor);
-      return;
+      const registered = this.providers.register(descriptor);
+      return Object.freeze({ created: true, revision: registered.revision });
     }
     if (providerSemantics(current.provider) !== providerSemantics(descriptor)) {
       throw new Error(
         `Inference provider ${descriptor.id} is already bound to another endpoint.`,
       );
     }
+    return Object.freeze({ created: false, revision: current.revision });
   }
 
   #rollbackCandidate(connectionId: string): void {
@@ -649,7 +709,7 @@ export class BrowserInferenceFabric {
   }
 
   #emit(): void {
-    for (const listener of this.#listeners) listener();
+    for (const listener of this.#listeners) notifyObserver(listener, undefined);
   }
 }
 
@@ -737,19 +797,36 @@ class AuthorityBoundInferenceTransport implements InferenceTransport {
 }
 
 type CloudCatalogTransport =
-  | OpenAiBrowserTransport
+  | ResponsesBrowserTransport
   | AnthropicBrowserTransport
-  | XaiBrowserTransport;
+  | OpenAiCompatibleBrowserTransport;
 
+/**
+ * The wire a descriptor declares decides the transport. Nothing here reads a
+ * provider ID.
+ *
+ * This used to `switch (provider.id)` over openai/anthropic/xai, which made
+ * three names the only ones the canonical seam could serve: `normalizeProvider`
+ * accepted a user descriptor declaring `openai-responses` or
+ * `anthropic-messages`, and then this function refused it. Each transport now
+ * reads its origin, catalog and wire details from the descriptor it is given,
+ * so a reviewed first-party provider and a descriptor someone wrote this
+ * morning take the identical path.
+ */
 function cloudTransport(
-  providerId: BrowserCloudProviderId,
-  options: ConstructorParameters<typeof OpenAiBrowserTransport>[0],
+  provider: InferenceProviderDescriptor,
+  options: BrowserCloudTransportOptions,
 ): CloudCatalogTransport {
-  switch (providerId) {
-    case "openai": return new OpenAiBrowserTransport(options);
-    case "anthropic": return new AnthropicBrowserTransport(options);
-    case "xai": return new XaiBrowserTransport(options);
+  if (provider.transportBoundary !== "provider-tls") {
+    throw new Error(`${provider.label} has no browser-cloud transport.`);
   }
+  switch (provider.protocol) {
+    case "openai-responses": return new ResponsesBrowserTransport(provider, options);
+    case "anthropic-messages": return new AnthropicBrowserTransport(provider, options);
+    case "openai-compatible":
+    case "openai-chat-completions": return new OpenAiCompatibleBrowserTransport(provider, options);
+  }
+  throw new Error(`${provider.label} has no browser-cloud transport.`);
 }
 
 function localProviderDescriptor(
@@ -832,6 +909,221 @@ function bindModels(
   }));
 }
 
+function assertLocalProviderKind(value: LocalModelProviderKind): LocalModelProviderKind {
+  if (value !== "ollama" && value !== "lm-studio") {
+    throw new TypeError("Local inference provider kind is invalid.");
+  }
+  return value;
+}
+
+/**
+ * Copy every supported option out of a caller-owned object exactly once. The
+ * stock providers may revisit fields while applying endpoint and HTTP policy;
+ * they must only ever revisit this plain frozen copy.
+ */
+function snapshotLocalProviderOptions(
+  raw: LocalProviderOptions | undefined,
+): LocalProviderOptions | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || (typeof raw !== "object" && typeof raw !== "function")) {
+    throw new TypeError("Local inference provider options are invalid.");
+  }
+  const pageUrl = raw.pageUrl;
+  const endpoint = raw.endpoint;
+  const credentialResolver = raw.credential;
+  const fetchImpl = raw.fetch;
+  const timeoutMs = raw.timeoutMs;
+  const maxResponseBytes = raw.maxResponseBytes;
+  const maxModels = raw.maxModels;
+  return Object.freeze({
+    ...(pageUrl === undefined ? {} : { pageUrl }),
+    ...(endpoint === undefined ? {} : { endpoint }),
+    ...(credentialResolver === undefined ? {} : { credential: credentialResolver }),
+    ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
+    ...(maxModels === undefined ? {} : { maxModels }),
+  });
+}
+
+function snapshotLocalProviderEndpoint(value: URL): URL {
+  if (!value || typeof value !== "object") {
+    throw new TypeError("Local inference provider endpoint is invalid.");
+  }
+  const href = value.href;
+  if (typeof href !== "string") {
+    throw new TypeError("Local inference provider endpoint is invalid.");
+  }
+  return new URL(href);
+}
+
+function optionalConnectionLabel(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new TypeError("Connection label is invalid.");
+  const trimmed = value.trim();
+  return trimmed ? boundedText(trimmed, "Connection label", 128) : undefined;
+}
+
+function optionalAbortSignal(value: AbortSignal | undefined): AbortSignal | undefined {
+  if (value === undefined) return undefined;
+  if (!(value instanceof AbortSignal)) {
+    throw new TypeError("Inference cancellation signal is invalid.");
+  }
+  return value;
+}
+
+/**
+ * Copy a caller-owned descriptor into plain arrays, objects, and primitives
+ * before catalog normalization. `normalizeProvider` legitimately revisits
+ * fields while checking cross-field invariants; doing that against accessors
+ * would allow the descriptor to change meaning during one connection attempt.
+ */
+function snapshotProviderDescriptor(
+  raw: InferenceProviderDescriptor,
+): InferenceProviderDescriptor {
+  if (!raw || typeof raw !== "object") {
+    throw new TypeError("Inference provider metadata is invalid.");
+  }
+  const version = raw.version;
+  const id = raw.id;
+  const label = raw.label;
+  const protocol = raw.protocol;
+  const transportBoundary = raw.transportBoundary;
+  const baseUrl = raw.baseUrl;
+  const modelsUrl = raw.modelsUrl;
+  const rawOauth = raw.oauth;
+  const rawAuthMethods = raw.authMethods;
+  const rawCapabilities = raw.capabilities;
+  const documentationUrl = raw.documentationUrl;
+
+  if (!Array.isArray(rawAuthMethods)) {
+    throw new TypeError("Provider authentication methods are invalid.");
+  }
+  if (!Array.isArray(rawCapabilities)) {
+    throw new TypeError("Provider capabilities are invalid.");
+  }
+  const authMethods = Array.from(rawAuthMethods, snapshotAuthMethod);
+  const capabilities = Array.from(rawCapabilities);
+  return normalizeProvider({
+    version,
+    id,
+    label,
+    protocol,
+    transportBoundary,
+    baseUrl,
+    ...(modelsUrl === undefined ? {} : { modelsUrl }),
+    oauth: snapshotProviderOauth(rawOauth),
+    authMethods,
+    capabilities,
+    ...(documentationUrl === undefined ? {} : { documentationUrl }),
+  });
+}
+
+function snapshotProviderOauth(
+  raw: InferenceProviderDescriptor["oauth"],
+): InferenceProviderDescriptor["oauth"] {
+  if (!raw || typeof raw !== "object") {
+    throw new TypeError("Provider OAuth availability is required.");
+  }
+  const state = raw.state;
+  const detail = raw.detail;
+  if (state === "configured-public-pkce") {
+    const authMethodId = raw.authMethodId;
+    return { state, authMethodId, detail };
+  }
+  return { state, detail };
+}
+
+const FORBIDDEN_PUBLIC_OAUTH_FIELDS = new Set([
+  "clientsecret",
+  "client_secret",
+  "client-secret",
+  "tokenendpointauthsecret",
+]);
+
+function snapshotAuthMethod(raw: InferenceAuthMethod): InferenceAuthMethod {
+  if (!raw || typeof raw !== "object") {
+    throw new TypeError("Provider authentication method is invalid.");
+  }
+  const id = raw.id;
+  const kind = raw.kind;
+  const label = raw.label;
+  const browserUse = raw.browserUse;
+  if (kind === "api-key") {
+    const apiKey = raw as Extract<InferenceAuthMethod, { kind: "api-key" }>;
+    const rawHeader = apiKey.header;
+    const warning = apiKey.warning;
+    if (!rawHeader || typeof rawHeader !== "object") {
+      throw new TypeError("Provider API-key header is invalid.");
+    }
+    const name = rawHeader.name;
+    const scheme = rawHeader.scheme;
+    return {
+      id,
+      kind,
+      label,
+      header: { name, scheme },
+      browserUse: browserUse as Extract<InferenceAuthMethod, { kind: "api-key" }>["browserUse"],
+      warning,
+    };
+  }
+  if (kind === "oauth-public-pkce") {
+    for (const key of Object.keys(raw)) {
+      if (FORBIDDEN_PUBLIC_OAUTH_FIELDS.has(key.toLowerCase())) {
+        throw new TypeError("Public PKCE metadata cannot contain a client secret.");
+      }
+    }
+    const oauth = raw as Extract<InferenceAuthMethod, { kind: "oauth-public-pkce" }>;
+    const authorizationEndpoint = oauth.authorizationEndpoint;
+    const tokenEndpoint = oauth.tokenEndpoint;
+    const clientId = oauth.clientId;
+    const rawRedirectUris = oauth.redirectUris;
+    const rawScopes = oauth.scopes;
+    const tokenEndpointAuthMethod = oauth.tokenEndpointAuthMethod;
+    const codeChallengeMethod = oauth.codeChallengeMethod;
+    const rawReview = oauth.review;
+    if (!Array.isArray(rawRedirectUris) || !Array.isArray(rawScopes)) {
+      throw new TypeError("OAuth lists are invalid.");
+    }
+    if (!rawReview || typeof rawReview !== "object") {
+      throw new TypeError("OAuth review metadata is invalid.");
+    }
+    const reviewId = rawReview.id;
+    const reviewedAt = rawReview.reviewedAt;
+    const sourceUrl = rawReview.sourceUrl;
+    return {
+      id,
+      kind,
+      label,
+      authorizationEndpoint,
+      tokenEndpoint,
+      clientId,
+      redirectUris: Array.from(rawRedirectUris),
+      scopes: Array.from(rawScopes),
+      tokenEndpointAuthMethod,
+      codeChallengeMethod,
+      browserUse: browserUse as Extract<
+        InferenceAuthMethod,
+        { kind: "oauth-public-pkce" }
+      >["browserUse"],
+      review: { id: reviewId, reviewedAt, sourceUrl },
+    };
+  }
+  if (kind === "local-none") {
+    return {
+      id,
+      kind,
+      label,
+      browserUse: browserUse as Extract<
+        InferenceAuthMethod,
+        { kind: "local-none" }
+      >["browserUse"],
+    };
+  }
+  // Preserve an invalid discriminant for the catalog's canonical validator.
+  return { id, kind, label, browserUse } as InferenceAuthMethod;
+}
+
 function providerSemantics(provider: InferenceProviderDescriptor): string {
   return JSON.stringify({
     id: provider.id,
@@ -871,33 +1163,6 @@ function fnv1a(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
-}
-
-async function verifyInvocation(
-  transport: InferenceTransport,
-  model: string,
-  signal: AbortSignal,
-): Promise<void> {
-  const requestId = randomUuid();
-  const message: CanonicalMessage = {
-    role: "user",
-    content: "Reply with OK.",
-  };
-  const request: InferenceRequest = {
-    requestId,
-    sessionId: `connection-probe-${requestId}`,
-    turnId: `turn-${requestId}`,
-    model,
-    systemPrompt: "This is a bounded Airship connection check. Reply only with OK.",
-    messages: [message],
-    tools: [],
-    idempotencyKey: `airship-connection-probe-${requestId}`,
-  };
-  let completed = false;
-  for await (const event of transport.stream(request, signal)) {
-    if (event.type === "completed") completed = true;
-  }
-  if (!completed) throw new Error("The provider ended the authorization probe without completing it.");
 }
 
 export const browserInferenceFabric = new BrowserInferenceFabric();

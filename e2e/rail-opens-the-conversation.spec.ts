@@ -52,10 +52,11 @@ async function startTurn(page: Page, text: string): Promise<void> {
 
 async function finishTurn(page: Page, text: string): Promise<void> {
   await expect(page.locator(".transcript")).toContainText(text);
-  // The rail's `+` is disabled exactly while a turn holds the composer, so this
-  // is the app itself saying the turn is over.
-  await expect(page.getByRole("navigation", { name: "Primary" })
-    .locator('button[aria-label="New conversation"]')).toBeEnabled();
+  // The composer's Stop, which exists exactly while *this* conversation holds a
+  // turn. It used to be the rail's `+` that answered this, and the `+` no longer
+  // knows: turns run per conversation, so starting another one is never
+  // refused. The claim being made is unchanged — this conversation is finished.
+  await expect(page.getByRole("button", { name: "Stop turn" })).toHaveCount(0);
   // Past the second re-list as well, so the next step starts from settled rows.
   await expect(railRows(page).filter({ hasText: text })).toHaveCount(1);
 }
@@ -81,12 +82,13 @@ async function newConversation(page: Page): Promise<void> {
 async function clickRowWhenTheTurnReleases(page: Page, rowText: string): Promise<void> {
   await railRows(page).filter({ hasText: rowText }).first().waitFor();
   const clicked = await page.evaluate(async (needle: string) => {
-    const plus = () => document.querySelector(
-      '.rail-recents__header button[aria-label="New conversation"]',
-    ) as HTMLButtonElement | null;
+    // Stop is present for as long as this conversation's turn is; its removal
+    // is the composer being handed back. The rail's `+` used to stand in for
+    // this and cannot any more — it is never disabled now.
+    const answering = () => document.querySelector(".composer .send-button.stop");
     const started = performance.now();
     while (performance.now() - started < 20_000) {
-      if (plus()?.disabled === false) break;
+      if (!answering()) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const row = [...document.querySelectorAll("#airship-recent-conversations .recent-conversation")]

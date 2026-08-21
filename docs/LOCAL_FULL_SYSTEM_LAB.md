@@ -1,170 +1,56 @@
 # Local full-system lab
 
-The Airship lab is a reproducible developer environment for exercising the
-static browser client, deterministic agent, workspace/tools, sessions, local
-Git, context indexing, profiles/skills/themes, proof surfaces, and a real
-S3-compatible encrypted-state contract. It does not fabricate Chutes TEE,
-billing, OAuth, or payment responses. Connect a real memory-only `cak_` or
-`cpk_` credential when those external-service paths are under test.
+The local lab is a reproducible developer setup for the static Airship client,
+a disposable S3-compatible vault target, and the normal browser workflows that
+do not require a public deployment.
+
+The lab is opt-in at build time. `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` composes the
+S3 adapter, the loopback endpoint and the lab's selector copy into a build;
+every other build carries none of it, and the release gate fails a stock
+artifact that does. `npm run lab:start` sets that variable itself, for the Vite
+server it owns, and also supplies a syntactically valid placeholder
+`VITE_GOOGLE_CLIENT_ID` so the Drive route is reachable in the lab. A plain
+`npm run dev` therefore shows neither the MinIO destination nor Google Drive.
+
+## What it covers
+
+- the Vite app on `http://127.0.0.1:4173`;
+- disposable local storage infrastructure for Vault testing;
+- sessions, workspace, editor, terminal, Git, and agent flows;
+- local validation of the browser-only product boundary.
+
+It does **not** fabricate third-party provider guarantees. If you want to test a
+real cloud provider, connect it manually from the UI with a disposable key.
 
 ## Start
 
-Requirements: Node.js 22.13+, Rust, `uv`, Docker with Compose, the repository
-dependencies installed, and — for the final Chutes-API step of the full gate
-only — a `chutes-api` checkout in the parent directory. That step runs outside
-this repository; every other step is reproducible from this repository alone.
+Requirements: Node.js 22.13+, Docker with Compose, and repository dependencies.
+`npm run lab:start` owns port 4173; stop any other dev server first.
 
 ```sh
-cd /path/to/airship
-npm install
+npm ci
 npm run lab:start
 npm run lab:status
 ```
 
-The checked-in Airship registration is confidential in the currently deployed
-Chutes service. Start the lab with its client ID and secret in the local process
-to enable Chutes sign-in; the browser extension is not an OAuth credential
-broker:
+Useful helper commands:
 
 ```sh
-AIRSHIP_CHUTES_OAUTH_CLIENT_ID='cid_…' \
-AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET='csc_…' \
-npm run lab:start
-```
-
-If the lab already owns a Vite process, the same command safely restarts only
-that process while leaving the MinIO volume intact. A configured invocation
-always restarts so a rotated secret cannot remain captured by the old process.
-The state file records the public client ID and a configured boolean only; it
-never records the secret or a derivative of it. `npm run lab:status` reports
-**localhost token handler ready** after the same-origin exchange is available.
-
-On `http://localhost:4173`, Airship creates the authorization request and S256
-PKCE proof in the browser, then sends authorization-code, refresh, and
-revocation operations to the same-origin handler. That handler pins the Airship
-client ID, callback, origin, grant types, request fields, response size, and
-upstream token endpoint before adding the secret.
-The secret is never sent to JavaScript, written to the lab state file, bundled
-into `dist/`, logged, or stored in MinIO.
-
-The no-content same-origin readiness check must pass before authorization. A
-shared confidential secret
-must never be embedded in a PWA, WASM module, browser extension, or distributed
-companion binary: a user who controls that device can recover it. Ordinary edge
-distribution therefore uses public-client PKCE; the confidential loopback
-handler is the working local operator facility.
-
-`lab:start` is idempotent for a lab-owned Airship Vite server on
-`http://localhost:4173`; otherwise it starts one and records its PID, log, and
-non-secret bridge shape under ignored `.airship-lab/`. It refuses to adopt an unrelated process on the
-port because it cannot prove that process is loopback-bound. It starts
-digest-pinned MinIO and `mc` images,
-binds both ports to IPv4 loopback, creates `airship-dev`, applies browser CORS,
-and creates a bucket-scoped disposable identity. It never stops a Vite process
-it did not start.
-
-The lab UI is also bound to IPv4 loopback by default because its recovery-key
-and credential forms are intentionally local. `npm run dev:lan` exists for a
-deliberate UI-only LAN check, but the disposable S3 lab remains loopback-only;
-do not expose its known fixture credentials or ports to a network.
-
-Open <http://localhost:4173>. Google Drive remains the ordinary-user default,
-even while this isolated MinIO harness is running. To exercise the disposable
-S3 path, open **Vault** and select **S3-compatible / MinIO**. That explicit
-selection auto-configures, probes, and adopts the baked loopback lab; wait for
-**Encrypted state synced** before testing reload durability. The harness never
-selects or adopts MinIO for an ordinary Google Drive browser session. If the
-automatic handoff fails, `npm run lab:status` prints the exact diagnostic fields
-for **Configure connection** and the manual live probe. Preferences → Durability
-can switch to fully Ephemeral page memory and back; the transition migrates the
-workspace, journal, browser-Git registry, and conventional `.git` state before replacing the active runtime. A
-ready probe proves the tested storage primitives. It does not, by itself,
-certify multi-device convergence or make MinIO a production tenant service.
-
-MinIO's operator console is available at <http://127.0.0.1:9901>. Its root
-identity is infrastructure-only. Airship receives the printed bucket-scoped
-probe identity. All credentials are known local fixtures, so the service must
-remain loopback-only and disposable.
-
-## Exercise the product
-
-1. Chat with the deterministic local provider; try `/ls`, `/read README.md`,
-   and `/write notes/lab.md` followed by content.
-2. Use Workspace Explorer to expand folders, open multiple editable tabs,
-   save with revision fencing, move files by drag/drop or the mobile action
-   sheet, then open **Workspace → Editor → Source Control** for full diffs,
-   and **Advanced source controls** inside it for branches, worktrees, and
-   remote operations. Import a public GitHub snapshot; the same snapshot must
-   appear in both **Explorer** and **Source Control** and remain after reload
-   in Vault mode.
-3. Switch profiles and themes, change global/per-profile Skills, and inspect
-   the Memory relationship graph.
-4. Inspect Sessions, fork a session, run Proof audit, and review the local
-   receipt/attestation distinction.
-5. Use `inspect_execution_runtimes`, `execute_javascript`, or `execute_code`
-   with a WASI command artifact. For Python, approve
-   `install_execution_runtime` with `python-pyodide` once, then use
-   `execute_code`; the interpreter remains disposable and is never persisted
-   to the Vault. Node projects may explicitly activate `node-webcontainer` and
-   use `execute_node_project`; provider delivery may fail or exceed the bounded
-   30-second boot, in which case Airship must remain non-ready.
-6. Optionally use **Sign in to Chutes** through the configured local OAuth
-   bridge, or connect a real Chutes `cpk_`; select a model, invoke a turn, and
-   open the exact receipt under **Proof → Endpoint evidence**. Missing deployed
-   CORS/verifiers must remain visibly partial or unavailable; the lab never
-   manufactures a green TEE badge.
-
-## Full gate
-
-```sh
+npm run lab:logs
+npm run lab:storage
 npm run lab:test
 ```
 
-This runs, in order:
+`npm run lab:storage` starts MinIO only and no Vite, for a caller that owns its
+own web server — the Playwright matrix needs a server with no synthetic Google
+registration. `npm run lab:test` builds and gates a *stock* artifact even when
+the lab flag is exported in your shell.
 
-- TypeScript, static-security, Vitest, production build, and release gates;
-- both Rust suites;
-- an actual MinIO preflight for Airship's signed PUT headers and live MinIO
-  conditional create/CAS/range/list plus encrypted journal/workspace
-  conformance, followed by a real `runTurn` that publishes an explicitly
-  approved encrypted context generation, retrieves its selected expert over an
-  exact HTTP `Range`, injects it into inference, and verifies the encrypted
-  journal; and
-- Chutes API evidence-scope, OAuth/IDP, and ingress-CORS regression tests,
-  which `uv run pytest` executes inside a sibling `../chutes-api` checkout
-  (`scripts/local-lab.mjs`). Without that checkout the first four phases pass
-  over several minutes and the fifth dies spawning `uv` in a directory that
-  does not exist, which reads as a broken `uv` install rather than a missing
-  prerequisite.
-
-The Node conformance runner reports browser CORS separately. The bucket itself
-is configured for the browser origin, but production provider CORS/IAM and real
-Chutes behavior are never inferred from this local run.
-
-Use `npm run lab:status` for authoritative HTTP readiness and
-`npm run lab:logs` for diagnostics.
-
-For an explicit real-provider smoke test, supply a disposable credential only
-to the child process (never source or browser storage):
-
-```sh
-CHUTES_TEST_API_KEY='cpk_…' \
-CHUTES_TEST_MODEL='zai-org/GLM-5.2-TEE' \
-npm run test:chutes:live
-```
-
-This exercises model discovery, instance/nonce acquisition, request
-encryption, authenticated streaming, receipt finalization, journal persistence,
-and the independent session audit. It remains opt-in and skipped without the
-environment variable because it invokes a billable external service.
-
-## Stop and destroy
+## Stop
 
 ```sh
 npm run lab:stop
 ```
 
-This stops only a Vite server owned by the lab, stops Compose, and permanently
-removes the MinIO volume. All lab objects, recovery-test state, and scoped local
-identities are intentionally unrecoverable. An externally started Vite server
-is left running.
+The lab is intentionally disposable. It is for local integration work, not for
+long-lived personal data.

@@ -15,11 +15,15 @@
  * is the worst thing this module can do.
  *
  * Performance envelope: bounded by the memory document's own ceiling of 512
- * records. Blocking keeps verification to a handful of pairs even at that
- * bound, so a full pass stays in single-digit milliseconds on a phone. The
- * 32-bit hash family is deliberate: at this scale the Mersenne-prime family
- * Graphify's port uses buys nothing measurable, and `Math.imul` families avoid
- * BigInt allocation entirely.
+ * records. Blocking is cheap on varied prose, but a corpus of one repeated
+ * template — the shape a generated fact list takes — collides in every band,
+ * so verification is what actually decides the cost. Measured on such a
+ * worst-case 512-record corpus: ~55ms on a developer laptop and ~400ms on a
+ * shared CI runner, with the numeric gate turning most candidate pairs away
+ * before either the token or the character lane runs. The 32-bit hash family
+ * is deliberate: at this scale the Mersenne-prime family Graphify's port uses
+ * buys nothing measurable, and `Math.imul` families avoid BigInt allocation
+ * entirely.
  */
 
 import { isContentTerm, tokenize } from "./bm25";
@@ -135,15 +139,39 @@ type PreparedDocument = Readonly<{
   normalized: string;
   unigrams: ReadonlySet<string>;
   contentTerms: number;
+  /** Every digit run in the normalized text, sorted and joined. See `numericLiterals`. */
+  numbers: string;
   signature: Uint32Array | undefined;
 }>;
+
+/**
+ * The precise part of a remembered fact.
+ *
+ * "42 bar" and "43 bar" are two facts, but neither the token lane nor the
+ * character lane can see that. `tokenize` drops one-digit runs entirely and
+ * treats a two-digit run as a function word, so "3 attempts" and "9 attempts"
+ * carry identical token sets; Jaro-Winkler reads one differing character in a
+ * long sentence as 0.99 similar. Both gates therefore reported a merge — the
+ * one outcome this module calls its worst.
+ *
+ * Numbers are exactly where a single character changes the fact, so two records
+ * that BOTH name numbers may only merge on similarity when they name the same
+ * numbers. A record with no numeral is not contradicting one that has it — "90
+ * days" and "ninety days" are one fact in two wordings — so that pair still
+ * goes to the ordinary gates. This can never create a merge; it only withholds
+ * one, which is the safe direction for a lane that discards a record.
+ */
+function numericLiterals(normalized: string): string {
+  return (normalized.match(/\p{N}+/gu) ?? []).sort().join(" ");
+}
 
 function prepare(normalized: string): PreparedDocument {
   const { terms, contentTerms } = signatureTerms(normalized);
   const unigrams: Set<string> = new Set(terms);
+  const numbers = numericLiterals(normalized);
   const grams = contentTerms >= DEDUP_MIN_CONTENT_TERMS ? shingles(terms) : [];
   if (!grams.length) {
-    return Object.freeze({ normalized, unigrams, contentTerms, signature: undefined });
+    return Object.freeze({ normalized, unigrams, contentTerms, numbers, signature: undefined });
   }
   // Shingle strings intern to corpus-stable ids; ids are hashed, never the
   // raw strings, so the inner loop is integer arithmetic only.
@@ -166,7 +194,7 @@ function prepare(normalized: string): PreparedDocument {
     }
     signature[p] = min;
   }
-  return Object.freeze({ normalized, unigrams, contentTerms, signature });
+  return Object.freeze({ normalized, unigrams, contentTerms, numbers, signature });
 }
 
 function containment(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
@@ -226,6 +254,9 @@ export function jaroWinkler(a: string, b: string): number {
  */
 function verify(a: PreparedDocument, b: PreparedDocument): number {
   if (!a.contentTerms || !b.contentTerms) return -1;
+  // Cheapest gate first, and the only one that reads the precise part of the
+  // fact rather than its wording.
+  if (a.numbers && b.numbers && a.numbers !== b.numbers) return -1;
   if (containment(a.unigrams, b.unigrams) < DEDUP_MIN_CONTAINMENT) return -1;
   if (a.signature && b.signature) {
     const estimate = estimateSignatureOverlap(a.signature, b.signature);

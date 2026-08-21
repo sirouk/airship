@@ -272,7 +272,6 @@ async function setup() {
             workspaceBinding: { kind: "active-workspace" },
             memoryScope,
             approvalMode: "ask-first",
-            minimumPosture: "local",
           }
           : { ...base, version: 1 },
       });

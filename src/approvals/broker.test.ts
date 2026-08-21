@@ -175,6 +175,111 @@ describe("ApprovalBroker", () => {
     expect(broker.takeOutcome(approvalRequestId(allowed))).toBe("allow");
   });
 
+  /*
+   * Turns run per conversation, so a page-wide denial is a page-wide claim.
+   *
+   * The shell denies outstanding requests when the visible conversation's
+   * approval mode changes, on the rule that a prompt belongs to the policy that
+   * created it. Opening a thread pinned to a different mode changes that value
+   * without changing anything about a thread still answering in the background,
+   * and denying its request would file a refusal nobody made.
+   */
+  it("denies one conversation's requests without touching another's", async () => {
+    const broker = new ApprovalBroker();
+    const here = { ...context(), sessionId: "here" };
+    const there = { ...context(), sessionId: "there" };
+    const mine = broker.request(writeTool, { path: "a.md" }, here);
+    const theirs = broker.request(writeTool, { path: "b.md" }, there);
+    expect(broker.snapshot().pending).toHaveLength(2);
+
+    broker.settleAll("page", "here");
+    await expect(mine).resolves.toBe("deny");
+    expect(broker.snapshot().pending.map((request) => request.sessionId)).toEqual(["there"]);
+    // Still closed, and no longer a decision: nobody was asked about a mode change.
+    expect(broker.takeOutcome(approvalRequestId(here))).toBe("withdrawn");
+
+    // The page-wide form still exists, and still means every conversation:
+    // teardown and a failed dialog chunk are page-wide losses of authority.
+    broker.settleAll("page");
+    await expect(theirs).resolves.toBe("deny");
+    expect(broker.snapshot().pending).toHaveLength(0);
+  });
+
+  /*
+   * `settleAll` is the only helper that takes a whole page's worth of live
+   * requests off the table, and four callers reach it: the person's own "Deny
+   * pending request" control, the failed approval-dialog chunk, the shell's
+   * teardown, and a conversation whose approval mode changed. The first is a
+   * refusal; the other three are the absence of one. They used to be one word.
+   */
+  it("distinguishes the person's refusal from a request the page withdrew", async () => {
+    const broker = new ApprovalBroker();
+    const settled: string[] = [];
+    broker.subscribeSettled((settlement) => settled.push(settlement.outcome));
+    const refused = broker.request(writeTool, { path: "a.md" }, { ...context(), operationId: "refused" });
+    broker.settleAll("human");
+    await expect(refused).resolves.toBe("deny");
+    expect(broker.takeOutcome(approvalRequestId({ ...context(), operationId: "refused" }))).toBe("deny");
+    expect(approvalOutcomeReason("deny")).toBe("Denied without approval; the effect did not run.");
+
+    const withdrawn = broker.request(writeTool, { path: "b.md" }, { ...context(), operationId: "withdrawn" });
+    broker.settleAll("page");
+    // Fails closed exactly as before. Only the record can tell the two apart.
+    await expect(withdrawn).resolves.toBe("deny");
+    expect(broker.takeOutcome(approvalRequestId({ ...context(), operationId: "withdrawn" }))).toBe("withdrawn");
+    expect(settled).toEqual(["deny", "withdrawn"]);
+  });
+
+  /*
+   * One sentence for all three automatic callers, and deliberately parallel to
+   * the expiry sentence beside it: both are the absence of a decision. It does
+   * not claim nobody was *asked*, because a conversation whose approval mode
+   * changed may well have had its prompt on screen; what is true of all three
+   * is that nobody answered before the page took the question away.
+   */
+  it("says a withdrawal is the absence of a decision, not a refusal", () => {
+    expect(approvalOutcomeReason("withdrawn"))
+      .toBe("No decision was recorded; the page withdrew this request before anyone answered it.");
+    expect(approvalOutcomeReason("withdrawn")).not.toMatch(/denied/iu);
+  });
+
+  /*
+   * The modal dialog is the shell's only self-inflicted inert state, and turns
+   * run in parallel. A request from the thread on screen is the interruption it
+   * has always been; a request from a thread answering in the background may
+   * not stop the work somebody is doing to ask about work they are not looking
+   * at, so it is filed as waiting on the same clock.
+   */
+  it("files a request from a background conversation as waiting, not as a demand", async () => {
+    const broker = new ApprovalBroker();
+    broker.focusSession("here");
+    const mine = broker.request(writeTool, { path: "a.md" }, { ...context(), sessionId: "here" });
+    const theirs = broker.request(writeTool, { path: "b.md" }, { ...context(), sessionId: "there", operationId: "operation-2" });
+
+    const snapshot = broker.snapshot();
+    expect(snapshot.pending.map((entry) => entry.sessionId)).toEqual(["here"]);
+    expect(snapshot.deferred.map((entry) => entry.sessionId)).toEqual(["there"]);
+    // Waiting is not decided: same queue, same clock, same closed gate.
+    expect(snapshot.deferred[0]!.expiresAt).toBeTruthy();
+
+    // And it is reachable: the bar's Review is `resume`, which asks it here.
+    expect(broker.resume(snapshot.deferred[0]!.id)).toBe(true);
+    expect(broker.snapshot().pending).toHaveLength(2);
+
+    broker.settleAll("page");
+    await expect(mine).resolves.toBe("deny");
+    await expect(theirs).resolves.toBe("deny");
+  });
+
+  it("treats every conversation as the foreground until a host says otherwise", async () => {
+    const broker = new ApprovalBroker();
+    const decision = broker.request(writeTool, {}, { ...context(), sessionId: "unbound" });
+    expect(broker.snapshot().pending).toHaveLength(1);
+    expect(broker.snapshot().deferred).toHaveLength(0);
+    broker.settleAll("page");
+    await expect(decision).resolves.toBe("deny");
+  });
+
   it("auto-allows configured read effects but brokers mutations", async () => {
     const broker = new ApprovalBroker();
     const policy = createBrokeredApprovalPolicy(broker);
@@ -182,7 +287,7 @@ describe("ApprovalBroker", () => {
     await expect(policy.review(readTool, {}, context())).resolves.toBe("allow");
     const mutation = policy.review(writeTool, {}, context());
     expect(broker.snapshot().pending).toHaveLength(1);
-    broker.denyAll();
+    broker.settleAll("page");
     await expect(mutation).resolves.toBe("deny");
   });
 });

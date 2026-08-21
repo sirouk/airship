@@ -11,7 +11,7 @@ import {
   cloneBoundaryNote,
   remoteBoundaryParagraphs,
   remoteTransportLabel,
-  sourcePostureFacts,
+  sourceFacts,
   sourceRemoteOperation,
 } from "./sources-view";
 import { isRemoteOriginPermitted } from "../git/validation";
@@ -139,7 +139,7 @@ describe("unified patch parsing", () => {
    * The first version of this test hand-wrote `diff --git` headers, and the
    * parser it was proving keyed its file boundary on exactly that string —
    * which neither `renderPatch` in git/workspace-adapter.ts nor the one in
-   * git/memory-adapter.ts has ever written. Both emit `--- a/<path>` /
+   * git/memory-adapter.test-support.ts has ever written. Both emit `--- a/<path>` /
    * `+++ b/<path>` / `@@` and nothing else. So the test passed, and every
    * commit touching two or more files rendered its second header as a red
    * deleted line reading `-- a/second.ts` at a fabricated line number.
@@ -149,7 +149,7 @@ describe("unified patch parsing", () => {
    * cases are the adapter shape first, then the git-remote shape.
    */
   it("does not number a second file's header as a deleted line of the first", () => {
-    // Exactly what workspace-adapter.ts / memory-adapter.ts concatenate: no
+    // Exactly what workspace-adapter.ts / memory-adapter.test-support.ts concatenate: no
     // `diff --git` line anywhere in the document.
     const parsed = parseUnifiedPatch([
       "--- a/first.ts",
@@ -259,7 +259,7 @@ describe("diff panel copy", () => {
 
 describe("source posture", () => {
   it("merges the two durability pills only while the two scopes agree", () => {
-    const merged = sourcePostureFacts(capabilities(), { state: "ephemeral", detail: "Workspace files exist only in this page runtime." });
+    const merged = sourceFacts(capabilities(), { state: "ephemeral", detail: "Workspace files exist only in this page runtime." });
     const durability = merged.filter((fact) => fact.id.startsWith("durability"));
     expect(durability).toHaveLength(1);
     // Scoped even when merged, so it can never read byte-identically to the
@@ -272,7 +272,7 @@ describe("source posture", () => {
     expect(durability[0]?.detail).toContain("Workspace files exist only in this page runtime.");
     expect(durability[0]?.detail).toContain("A genuine .git object database");
 
-    const split = sourcePostureFacts(
+    const split = sourceFacts(
       capabilities({ storage: { backend: "encrypted-workspace", durable: true, detail: "Git objects are written to the adopted vault." } }),
       { state: "ephemeral", detail: "Workspace files exist only in this page runtime." },
     );
@@ -280,17 +280,17 @@ describe("source posture", () => {
   });
 
   it("does not call a transport ready when no origin is reachable with it", () => {
-    const blocked = sourcePostureFacts(
+    const blocked = sourceFacts(
       capabilities({ remote: { ...capabilities().remote, permittedOrigins: [] } }),
       { state: "ephemeral", detail: "x" },
     );
     expect(blocked.find((fact) => fact.id === "remote")?.state).toBe("attention");
-    const reachable = sourcePostureFacts(capabilities(), { state: "ephemeral", detail: "x" });
+    const reachable = sourceFacts(capabilities(), { state: "ephemeral", detail: "x" });
     expect(reachable.find((fact) => fact.id === "remote")?.state).toBe("asserted");
   });
 
   it("states the transport paragraph exactly once, as the remote fact's detail", () => {
-    const facts = sourcePostureFacts(capabilities(), { state: "ephemeral", detail: "x" });
+    const facts = sourceFacts(capabilities(), { state: "ephemeral", detail: "x" });
     const printed = facts.filter((fact) => fact.detail.includes("isomorphic-git speaks Smart HTTP"));
     expect(printed).toHaveLength(1);
     expect(printed[0]?.id).toBe("remote");
@@ -303,7 +303,7 @@ describe("source posture", () => {
   });
 
   it("never claims durability the adapter does not have", () => {
-    const facts = sourcePostureFacts(capabilities(), { state: "ephemeral", detail: "x" });
+    const facts = sourceFacts(capabilities(), { state: "ephemeral", detail: "x" });
     expect(facts.find((fact) => fact.id === "storage")?.state).toBe("none");
     expect(facts.find((fact) => fact.id === "version-bound")?.state).toBe("asserted");
   });
@@ -352,7 +352,7 @@ describe("remote reachability", () => {
       withFeatures({ remote: { ...capabilities().remote, permittedOrigins: ["http://localhost:4173"] } }),
       { url: "https://github.com/o/n.git" },
     ).join(" ");
-    expect(paragraphs).toContain("Content-Security-Policy");
+    expect(paragraphs).toContain("Git remote policy");
     expect(paragraphs).toContain("https://github.com");
     expect(paragraphs).toContain("http://localhost:4173");
     // Custody is not what stands in the way when no request is ever sent.
@@ -371,7 +371,7 @@ describe("remote reachability", () => {
   it("blames the adapter, not the policy, when no transport is installed at all", () => {
     // The memory and encrypted-workspace adapters declare transport "none" and
     // no permitted origin, yet snapshot import registers a real GitHub
-    // `origin`. Reaching for the CSP sentence there would tell the operator to
+    // `origin`. Reaching for the remote-policy sentence there would tell the operator to
     // go fix a policy that is not what stands in the way.
     const paragraphs = remoteBoundaryParagraphs(
       capabilities({
@@ -385,7 +385,7 @@ describe("remote reachability", () => {
       { url: "https://github.com/o/n.git" },
     );
     expect(paragraphs).toEqual(["this adapter has no direct CORS-safe Git HTTP or host-provider transport"]);
-    expect(paragraphs.join(" ")).not.toContain("Content-Security-Policy");
+    expect(paragraphs.join(" ")).not.toContain("Git remote policy");
     expect(paragraphs.join(" ")).not.toContain("no origin at all");
   });
 

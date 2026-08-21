@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BrowserGitClient } from "./client";
 import { GitAbortError, GitCapabilityError, GitConcurrencyError, GitDomainError, GitVersionConflictError } from "./errors";
-import { MemoryGitAdapter } from "./memory-adapter";
+import { MemoryGitAdapter } from "./memory-adapter.test-support";
 
 const now = () => "2026-07-18T12:00:00.000Z";
 

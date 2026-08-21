@@ -174,7 +174,15 @@ export function MenuSelect({
     optionRefs.current[activeIndex]?.focus({ preventScroll: true });
   }, [activeIndex, open]);
 
-  useEffect(() => {
+  /*
+   * Layout, not passive: the listbox renders with `aria-expanded="true"` in the
+   * same commit that schedules this, so a deferred effect left one frame in
+   * which an open menu answered neither Escape nor an outside click. A pointer
+   * that opened a menu and pressed Escape immediately kept it open, and the
+   * repository's own anchored-menu gate failed 27 times in 50 runs on exactly
+   * that window. Escape at 0 ms failed; at 5 ms it worked.
+   */
+  useLayoutEffect(() => {
     if (!open) return;
     /*
      * Dismissal asks about the two boxes a reader can press, not about the host.
@@ -194,32 +202,35 @@ export function MenuSelect({
       if (!insideTrigger && !insidePanel) close(false);
     };
     /*
-     * A sheet is dismissible from wherever the keyboard is; an anchored panel is
-     * not, and that asymmetry is the whole rule.
+     * An open menu is dismissible from wherever the keyboard is.
      *
      * The option buttons below already handle Escape, and they are where focus
-     * is on every open this component performs itself. What they cannot cover is
-     * a sheet whose focus has gone elsewhere — a tap on the panel's own padding
-     * drops focus to `<body>`, and from there Escape reached nothing while a
-     * panel drawn over the route stayed drawn. `popover.tsx` carries the same
-     * asymmetry for the same measured reason.
+     * is on every open this component performs itself. What they could not
+     * cover is focus anywhere else: a pointer click leaves focus on the trigger,
+     * and a tap on the panel's own padding drops it to `<body>`. This handler
+     * was gated on sheet mode and returned early whenever focus was still
+     * inside the root, so from the trigger — the single most likely place for
+     * it to be — Escape reached nothing and the listbox stayed open with
+     * `aria-expanded="true"`. That also made the repository's own
+     * anchored-menu gate fail intermittently, because its Escape between widths
+     * silently did nothing.
      *
-     * Nothing is stopped or prevented here: the keypress did not come from
-     * inside this menu, so it still belongs to whoever else is listening, and
-     * focus is left where the reader put it rather than yanked back to a trigger
-     * they may not have touched. The option handler keeps its own Escape,
-     * `stopPropagation` and all — this only fires when focus is outside.
+     * Nothing is stopped or prevented here: the keypress may not have come from
+     * inside this menu, so it still belongs to whoever else is listening. The
+     * option handler keeps its own Escape, `stopPropagation` and all, so focus
+     * returns to the trigger when the reader was on an option and stays where
+     * they put it otherwise.
      */
-    const handleSheetEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !sheet) return;
-      if (root.current?.contains(document.activeElement)) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (root.current?.contains(document.activeElement) && document.activeElement !== trigger.current) return;
       close(false);
     };
     document.addEventListener("pointerdown", handleOutsidePointer, true);
-    document.addEventListener("keydown", handleSheetEscape);
+    document.addEventListener("keydown", handleEscape);
     return () => {
       document.removeEventListener("pointerdown", handleOutsidePointer, true);
-      document.removeEventListener("keydown", handleSheetEscape);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [open, sheet]);
 

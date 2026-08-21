@@ -1,5 +1,5 @@
 import { sha256 } from "../core/hash";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspaceEntry, type WorkspacePort } from "../workspace/contracts";
+import { isLocalFolderMountPath, isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspaceEntry, type WorkspacePort } from "../workspace/contracts";
 import type {
   ClientIndex,
   EmbeddedChunk,
@@ -13,6 +13,7 @@ import { FlatClientIndex } from "./flat-index";
 import { HashEmbeddingProvider } from "./hash-embeddings";
 import { IncrementalWorkspaceIndexer } from "./incremental-indexer";
 
+const DISPOSED_ERROR = "The context engine has been disposed.";
 const DEFAULT_DIMENSIONS = 384;
 const DEFAULT_MAX_FILE_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_MAX_CHUNK_CHARACTERS = 1_200;
@@ -84,17 +85,17 @@ export function classifyRetrievalHit(
 ): RetrievalConfidenceVerdict {
   if (hit.lexicalScore > 0) return Object.freeze({ confidence: "confident" as const });
   /*
-   * Any real embedding model, wherever it runs.
+   * A real embedding model.
    *
    * The bootstrap sentence below is a specific claim — that hashing tokens into
    * buckets makes unrelated text score by collision — and it is true only of
-   * `HashEmbeddingProvider`. Left unwidened, the first wordless hit from a
-   * 4096-dimension Qwen model computed on confidential compute would have been
-   * explained to the reader as a hash collision, which is not merely unhelpful
-   * but false about how that number was produced.
+   * `HashEmbeddingProvider`. Left unwidened, the first wordless hit from the
+   * semantic model would have been explained to the reader as a hash
+   * collision, which is not merely unhelpful but false about how that number
+   * was produced.
    */
-  if (posture === "local-semantic" || posture === "confidential-remote") {
-    const engine = posture === "local-semantic" ? "the local semantic model" : "the confidential embedding model";
+  if (posture === "local-semantic") {
+    const engine = "the local semantic model";
     return hit.denseScore >= SEMANTIC_DENSE_FLOOR
       ? Object.freeze({ confidence: "confident" as const })
       : Object.freeze({
@@ -360,7 +361,7 @@ export class ClientContextEngine {
   }
 
   subscribe(listener: (state: ClientContextEngineState) => void): () => void {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     this.listeners.add(listener);
     listener(this.state);
     return () => this.listeners.delete(listener);
@@ -368,7 +369,7 @@ export class ClientContextEngine {
 
   /** Schedule the latest authoritative workspace entry snapshot for indexing. */
   updateWorkspace(entries: readonly WorkspaceEntry[]): Promise<ClientContextGeneration> {
-    if (this.disposed) return Promise.reject(new ClientContextUnavailableError("The context engine has been disposed."));
+    if (this.disposed) return Promise.reject(new ClientContextUnavailableError(DISPOSED_ERROR));
     let snapshot: NormalizedWorkspaceSnapshot;
     try {
       snapshot = normalizeSnapshot(entries);
@@ -416,7 +417,7 @@ export class ClientContextEngine {
   }
 
   async search(query: string, options: ClientContextSearchOptions = {}): Promise<ClientContextSearchResult> {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     const normalizedQuery = boundedQuery(query);
     const limit = boundedInteger(options.limit ?? 8, "Search result limit", 1, 50);
     if (this.state.phase !== "ready" || !this.active || this.running || this.pending) {
@@ -487,7 +488,7 @@ export class ClientContextEngine {
 
   /** Discard the rebuildable memory index before changing embedding providers. */
   resetMaterialization(): void {
-    if (this.disposed) throw new ClientContextUnavailableError("The context engine has been disposed.");
+    if (this.disposed) throw new ClientContextUnavailableError(DISPOSED_ERROR);
     if (this.running || this.pending || this.pumping) throw new ClientContextUnavailableError("The context engine is still refreshing.");
     this.cancelSearch(new DOMException("The context materialization was reset.", "AbortError"));
     void this.active?.index.clear();
@@ -498,7 +499,7 @@ export class ClientContextEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    const error = new ClientContextUnavailableError("The context engine has been disposed.");
+    const error = new ClientContextUnavailableError(DISPOSED_ERROR);
     this.running?.controller.abort(error);
     if (this.running) rejectWaiters(this.running, error);
     if (this.pending) rejectWaiters(this.pending, error);
@@ -689,7 +690,22 @@ function rejectWaiters(run: RefreshRun, error: unknown): void {
 function normalizeSnapshot(entries: readonly WorkspaceEntry[]): NormalizedWorkspaceSnapshot {
   if (!Array.isArray(entries) || entries.length > MAX_SNAPSHOT_ENTRIES) throw new TypeError("The workspace revision snapshot is invalid or too large.");
   const seen = new Set<string>();
-  const normalized = entries.filter((entry) => !isWorkspaceControlPlanePath(entry.path)).map((entry) => {
+  /*
+   * Control-plane records are excluded because they are Airship's own private
+   * state. A folder the person attached from their own device is excluded for
+   * the opposite reason: it is entirely theirs. This index is page memory, but
+   * "Publish context" writes its chunks — file text included — into the Vault,
+   * and the tier that opened the folder promises it is copied nowhere. The
+   * folder stays fully reachable by path through `read_file`, `list_files`,
+   * `search_text` and the editor; it is only absent from the derived index.
+   *
+   * This is the single fence for both directions: `updateWorkspace` normalizes
+   * the entries it is handed here, and `assertWorkspaceSnapshot` normalizes its
+   * own re-listing here, so the two cannot disagree about what was indexed.
+   */
+  const normalized = entries
+    .filter((entry) => !isWorkspaceControlPlanePath(entry.path) && !isLocalFolderMountPath(entry.path))
+    .map((entry) => {
     const path = normalizeWorkspacePath(entry.path);
     if (path === "/workspace" || seen.has(path)) throw new TypeError("Workspace revision snapshots require unique file paths.");
     seen.add(path);

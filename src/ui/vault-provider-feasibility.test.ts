@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import { VAULT_BACKENDS, vaultBackendUnavailableReason } from "./platform-shell";
 
 const appSource = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
@@ -20,10 +21,26 @@ const changeVaultProvider = appSource.match(
 describe("unopenable vault destinations are not selectable", () => {
   it("names the reason for every destination this deployment cannot reach", () => {
     expect(vaultBackendUnavailableReason("google-drive", undefined)).toContain("no Google OAuth client ID");
-    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }))
-      .toContain("loopback origin");
+    if (LOCAL_LAB_BUILD) {
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, false))
+        .toContain("host-composed local MinIO lab");
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }, true))
+        .toContain("loopback origin");
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, true))
+        .toBeUndefined();
+    } else {
+      // Unreachable *and* unnamed: a stock build states the refusal without
+      // describing a destination it does not carry.
+      for (const location of [{ hostname: "localhost" }, { hostname: "airship.example" }]) {
+        for (const enabled of [false, true]) {
+          const reason = vaultBackendUnavailableReason("local-lab", undefined, location, enabled);
+          expect(reason).toContain("does not include that storage destination");
+          expect(reason).not.toMatch(/minio|loopback|s3/iu);
+        }
+      }
+    }
     for (const backend of ["local-device", "ephemeral"] as const) {
-      expect(vaultBackendUnavailableReason(backend, undefined, { hostname: "airship.example" })).toBeUndefined();
+      expect(vaultBackendUnavailableReason(backend, undefined, { hostname: "airship.example" }, false)).toBeUndefined();
     }
     expect(VAULT_BACKENDS).toContain("google-drive");
   });
@@ -49,17 +66,23 @@ describe("unopenable vault destinations are not selectable", () => {
     expect(changeVaultProvider.slice(guard)).toContain("The current Vault was left attached.");
   });
 
-  it("greys the same destinations in the Vault selector instead of describing them as prose", () => {
-    expect(vaultViewSource).toContain("const unopenable = providerUnopenableReason(profile.id);");
-    expect(vaultViewSource).toContain("...(unopenable ? { disabled: true } : {}),");
-    // The old suffix made an unreachable destination read as a live choice.
-    expect(vaultViewSource).not.toContain("— unavailable in this build");
+  it("filters the Vault selector and states a historical selection separately", () => {
+    const selector = vaultViewSource.slice(
+      vaultViewSource.indexOf('<div class="vault-provider-selector"'),
+      vaultViewSource.indexOf("{localDevice ? ("),
+    );
+    expect(selector).toContain("options={providerProfiles.map((profile) => ({");
+    expect(selector).toContain("selectedProviderUnavailable");
+    expect(selector).toContain('role="alert"');
+    expect(selector).not.toContain("disabled: true");
   });
 
-  it("keeps the Preferences Durability row on the same predicate", () => {
+  it("keeps Preferences on the same filtered set and explicit refusal", () => {
     const platformShell = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const platformOverlays = readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8");
     const durability = platformShell.match(/export function durabilityOptions\([\s\S]*?\n\}\n/u)?.[0] ?? "";
-    expect(durability).toContain("vaultBackendUnavailableReason(");
-    expect(durability).toContain("...(reason ? { disabled: true } : {}),");
+    expect(durability).toContain("vaultBackendsForSelector(input)");
+    expect(platformOverlays).toContain("const durabilityUnavailable = vaultBackendUnavailableReason(");
+    expect(platformOverlays).toContain('role={durabilityUnavailable ? "alert" : undefined}');
   });
 });

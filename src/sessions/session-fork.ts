@@ -6,7 +6,15 @@ import {
   prepareForkContext,
   sealForkContextSeed,
 } from "../core/fork-context";
-import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
+import {
+  projectedSessionApprovalMode,
+  projectedSessionContextPolicy,
+  projectedSessionModel,
+  type DurableEvent,
+  type EventJournal,
+  type SessionRecord,
+} from "../core/journal";
+import { assertValidSessionInferenceBinding } from "../core/inference-binding";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import { DEFAULT_SESSION_INSPECTION_LIMITS, type SessionInspectionLimits } from "./domain";
 import {
@@ -14,6 +22,14 @@ import {
   type ForkSessionRequest,
   type SessionForkResult,
 } from "./library";
+
+/**
+ * What a branch of an imported conversation is told, when nobody named the
+ * manifest it should be pinned to.
+ */
+export const IMPORTED_CONVERSATION_FORK_REFUSAL =
+  "This conversation arrived in a bundle file. A branch of it has to be pinned to this device's own profile,"
+  + " not to the instructions that came with it; use “Fork to continue”.";
 
 /** Lazy implementation: a user who never forks a conversation never fetches it. */
 export async function forkSession(
@@ -28,9 +44,33 @@ export async function forkSession(
   const source = await journal.getSession(sourceSessionId);
   throwIfAborted(request.signal);
   if (!source) throw new Error(`Unknown session: ${sourceSessionId}`);
+  /*
+   * A branch of a conversation that arrived in a file is pinned by this device
+   * or not made at all.
+   *
+   * Without `request.manifest` a fork inherits `manifestAtBoundary(source)` —
+   * the source's whole manifest, including the `systemPrompt` sent to the
+   * provider on every turn the branch ever takes. For a conversation this
+   * browser composed that is exactly right. For one that arrived in a bundle it
+   * is the refusal in `IMPORTED_CONVERSATION_REFUSAL` undone by another door:
+   * the import is held because its instructions were written somewhere else,
+   * and the branch would carry those instructions into a conversation that is
+   * *not* held and can take turns. `forkHeldConversation`, the Sessions view
+   * and the `sessions.fork` command all pass this device's own manifest and are
+   * unaffected; the transcript's Fork/Edit/Retry did not, which is the one call
+   * site this closes. Checked here rather than at that call site so a later
+   * caller cannot reopen it by forgetting.
+   */
+  if (source.importedAt !== undefined && !request.manifest) {
+    throw new SessionForkConflictError(IMPORTED_CONVERSATION_FORK_REFUSAL);
+  }
   if (
     request.expectedSourceHead &&
-    (request.expectedSourceHead.sequence !== source.headSequence || request.expectedSourceHead.digest !== source.headDigest)
+    (
+      request.expectedSourceHead.sequence !== source.headSequence ||
+      request.expectedSourceHead.digest !== source.headDigest ||
+      (request.expectedSourceHead.incarnation !== undefined && request.expectedSourceHead.incarnation !== source.headIncarnation)
+    )
   ) {
     throw new SessionForkConflictError();
   }
@@ -91,7 +131,7 @@ export async function forkSession(
   const forkedAt = now();
   if (!Number.isFinite(Date.parse(forkedAt))) throw new Error("The session library clock returned an invalid timestamp.");
   const title = forkTitle(request.title, source.title);
-  const manifest = structuredClone(request.manifest ?? source.manifest);
+  const manifest = structuredClone(request.manifest ?? manifestAtBoundary(source.manifest, sourcePrefix));
   manifest.createdAt = forkedAt;
   manifest.lineage = {
     version: 1,
@@ -186,7 +226,7 @@ function resolveForkBoundary(
  * before it is an audited ancillary inference record carrying its own IDs.
  * Requiring that event itself to be session-scoped rejected Edit/Retry after a
  * completed conversation-naming call. The following request plus the prefix
- * audit below are the stronger proof: this exact digest ended the quiescent
+ * audit below is the stronger record: this exact digest ended the quiescent
  * prefix from which the next turn began.
  */
 function isImmediatePreTurnBoundary(
@@ -205,6 +245,22 @@ function isSessionScopedBoundary(event: DurableEvent): boolean {
   return event.turnId === undefined && event.operationId === undefined;
 }
 
+function manifestAtBoundary(
+  source: SessionManifest,
+  prefix: readonly DurableEvent[],
+): SessionManifest {
+  const model = projectedSessionModel(prefix, source.model) ?? source.model;
+  const contextPolicy = projectedSessionContextPolicy(prefix, source.contextPolicy);
+  const manifest = structuredClone(source);
+  manifest.model = model;
+  if (manifest.inferenceBinding) {
+    manifest.inferenceBinding = { ...manifest.inferenceBinding, modelId: model };
+  }
+  if (contextPolicy === null || contextPolicy === undefined) delete manifest.contextPolicy;
+  else manifest.contextPolicy = contextPolicy;
+  return manifest;
+}
+
 function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[]): SessionRecord {
   const boundary = prefix.at(-1);
   if (!boundary) throw new SessionForkConflictError("The source journal has no auditable creation boundary.");
@@ -217,9 +273,17 @@ function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[
       title = payload.title;
     }
   }
+  const model = projectedSessionModel(prefix, source.manifest.model);
+  const contextPolicy = projectedSessionContextPolicy(prefix, source.manifest.contextPolicy);
+  const approvalMode = projectedSessionApprovalMode(prefix, undefined);
   return {
     ...structuredClone(source),
     title,
+    ...(model && model !== source.manifest.model ? { modelOverride: model } : { modelOverride: undefined }),
+    ...(contextPolicy !== source.manifest.contextPolicy
+      ? { contextPolicyOverride: contextPolicy }
+      : { contextPolicyOverride: undefined }),
+    ...(approvalMode ? { approvalModeOverride: approvalMode } : { approvalModeOverride: undefined }),
     updatedAt: boundary.recordedAt,
     headSequence: boundary.sequence,
     headDigest: boundary.digest,
@@ -227,7 +291,9 @@ function sessionAtBoundary(source: SessionRecord, prefix: readonly DurableEvent[
 }
 
 function sameHead(left: SessionRecord, right: SessionRecord): boolean {
-  return left.headSequence === right.headSequence && left.headDigest === right.headDigest;
+  return left.headSequence === right.headSequence
+    && left.headDigest === right.headDigest
+    && left.headIncarnation === right.headIncarnation;
 }
 
 function forkTitle(requested: string | undefined, sourceTitle: string): string {
@@ -254,6 +320,7 @@ function validateForkManifest(manifest: SessionManifest): void {
   ) {
     throw new TypeError("Fork manifest does not satisfy a supported bounded session protocol shape.");
   }
+  assertValidSessionInferenceBinding(manifest);
 }
 
 function assertSessionId(value: string): void {

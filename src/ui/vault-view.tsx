@@ -1,14 +1,16 @@
+import { formatBytes } from "../core/bytes";
 import { useId, useRef, useState } from "preact/hooks";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
-import { vaultBackendUnavailableReason, type VaultBackend } from "./platform-shell";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
+import { vaultBackendUnavailableReason, vaultBackendsForSelector, type VaultBackend, type VaultBackendSelectorAvailability } from "./platform-shell";
 import { BrandLogo } from "./brand-icons";
 import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 import "./vault-view.css";
 
 /**
@@ -72,9 +74,9 @@ export type VaultViewProps = {
   /** Erases the ephemeral posture's return-ledger witness, and nothing else. */
   onEraseContinuityRecord?: () => void;
   /**
-   * Storage maintenance. Renderable only while a verified runtime exists —
+   * Storage maintenance. Renderable only while an active runtime exists —
    * the sweep needs the adopted workspace and queue, and a reclaim affordance
-   * on an unverified route would be a promise the route cannot keep.
+   * on an inactive route would be a promise the route cannot keep.
    */
   reclaimAvailable?: boolean;
   reclaimBusy?: boolean;
@@ -101,7 +103,7 @@ export const PROVIDER_FACT_ROWS: readonly (readonly [ProviderFactKey, string])[]
   ["lose", "What can lose it"],
 ] as const);
 
-type ProviderProfile = Readonly<{
+export type ProviderProfile = Readonly<{
   id: VaultBackend;
   title: string;
   /** Verbatim option description; unchanged from the shipped selector. */
@@ -111,7 +113,7 @@ type ProviderProfile = Readonly<{
   facts: Readonly<Record<ProviderFactKey, string>>;
 }>;
 
-export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
+export const STOCK_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
   Object.freeze({
     id: "ephemeral",
     title: "Ephemeral",
@@ -175,27 +177,56 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
       lose: "Deleting the Drive folder",
     }),
   }),
-  Object.freeze({
-    id: "local-lab",
-    title: "S3-compatible / MinIO",
-    // This rung used to describe the S3 adapter's theoretical capability — "in
-    // your bucket", "Reaches other devices: Yes" — but `createLocalLabConfigureRequest`
-    // can only build `mode: "local-development"`, which `validateVaultS3Configuration`
-    // confines to a loopback hostname and `changeVaultProvider` to a loopback
-    // page. There is no shippable configuration behind the promise, so the row
-    // answers for the one mode this build can construct.
-    description: "Loopback development lab",
-    note: "On a loopback lab endpoint nothing is cloud-synchronized. Encrypted journal and workspace state travel directly between this device and the selected storage provider.",
-    facts: Object.freeze({
-      survives: "Yes · encrypted in your loopback lab",
-      offline: "No · needs the endpoint",
-      reach: "No · loopback only",
-      supply: "A loopback endpoint and disposable keys",
-      keep: "A recovery key",
-      lose: "Deleting the lab bucket",
-    }),
-  }),
 ] as const);
+
+/**
+ * The lab's column, carried by a lab build alone.
+ *
+ * `LOCAL_LAB_BUILD` folds to `false` in a stock artifact, so nothing reads the
+ * constant below and the bundler may drop it — but only if every `Object.freeze`
+ * call in the initialiser is marked pure. The outer call was; the nested `facts`
+ * call was not, so dropping the outer object left the inner call standing as a
+ * bare side-effecting statement, and a stock release shipped 231 B of the lab's
+ * six comparison facts — copy naming a loopback endpoint, disposable keys and a
+ * lab bucket — in the Sessions pack, where nothing could ever render it. Both
+ * annotations are load-bearing.
+ */
+export function localLabProviderProfile(): ProviderProfile {
+  return LOCAL_LAB_PROVIDER_PROFILE;
+}
+
+const LOCAL_LAB_PROVIDER_PROFILE: ProviderProfile = /* @__PURE__ */ Object.freeze({
+  id: "local-lab",
+  title: "S3-compatible / MinIO",
+  // This profile describes only the host-composed loopback lab. It makes no
+  // claim that a stock build can configure an arbitrary S3 provider.
+  description: "Loopback development lab",
+  note: "On a loopback lab endpoint nothing is cloud-synchronized. Encrypted journal and workspace state travel directly between this device and the selected storage provider.",
+  facts: /* @__PURE__ */ Object.freeze({
+    survives: "Yes · encrypted in your loopback lab",
+    offline: "No · needs the endpoint",
+    reach: "No · loopback only",
+    supply: "A loopback endpoint and disposable keys",
+    keep: "A recovery key",
+    lose: "Deleting the lab bucket",
+  }),
+});
+
+const KNOWN_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
+  ...STOCK_PROVIDER_PROFILES,
+  ...(LOCAL_LAB_BUILD ? [LOCAL_LAB_PROVIDER_PROFILE] : []),
+]);
+
+function providerProfileForBackend(backend: VaultBackend): ProviderProfile {
+  return KNOWN_PROVIDER_PROFILES.find((profile) => profile.id === backend)!;
+}
+
+/** Maps the shell's single availability contract onto Vault's richer copy. */
+export function providerProfilesForSelector(
+  input: VaultBackendSelectorAvailability = {},
+): readonly ProviderProfile[] {
+  return Object.freeze(vaultBackendsForSelector(input).map(providerProfileForBackend));
+}
 
 /**
  * Build-time Drive availability, decided by the product's one availability
@@ -266,9 +297,14 @@ export function VaultView({
     && !isGoogleDriveConfiguration(snapshot.config)
     ? snapshot.config
     : undefined;
-  const localObjectStore = s3Configuration?.mode === "local-development";
+  const localObjectStore = LOCAL_LAB_BUILD && s3Configuration?.mode === "local-development";
   const adoptedDrive = runtimeAdopted && googleDrive;
-  const driveInBuild = googleDriveAvailableInBuild(import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined);
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+  const location = typeof window === "undefined" ? undefined : window.location;
+  const localLabEnabled = LOCAL_LAB_BUILD;
+  const selectorAvailability = { googleClientId, location, localLabEnabled };
+  const providerProfiles = providerProfilesForSelector(selectorAvailability);
+  const driveInBuild = googleDriveAvailableInBuild(googleClientId);
   /**
    * Drive is the selected provider and this build cannot open it.
    *
@@ -277,28 +313,13 @@ export function VaultView({
    * what decides whether the route's primary action leads anywhere.
    */
   const driveUnavailable = provider === "google-drive" && !driveInBuild;
-  /**
-   * Why this build cannot open a destination, in the one place that decides it.
-   *
-   * The same predicate answers for Preferences' Durability row and for
-   * `changeVaultProvider`'s precondition, so the selector cannot offer a
-   * destination the shell would then refuse — or, worse, detach the adopted
-   * Vault for.
-   */
+  /** One refusal protects the selector, its historical value, and the switch. */
   const providerUnopenableReason = (backend: VaultBackend): string | undefined =>
-    vaultBackendUnavailableReason(
-      backend,
-      import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined,
-      typeof window === "undefined" ? undefined : window.location,
-    );
+    vaultBackendUnavailableReason(backend, googleClientId, location, localLabEnabled);
+  const selectedProviderUnavailable = providerUnopenableReason(provider);
   const compare = useRef<HTMLDetailsElement>(null);
   const providerControl = useRef<HTMLDivElement>(null);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
-  // Open at the moment of choice where the six-by-four matrix is legible.
-  // A phone renders it as 24 stacked blocks, so there it stays one tap away
-  // behind a trigger that names every column it contains.
-  const [compareDefault] = useState(() =>
-    typeof window === "undefined" || window.matchMedia("(min-width: 681px)").matches);
 
   const state = vaultState({
     phase: snapshot.phase,
@@ -331,10 +352,10 @@ export function VaultView({
         {/* One status family. The pill used to carry its own colour ramp keyed
             off `snapshot.phase` and a `data-adopted` flag, while the band 40px
             below coloured itself from `vaultState()` — two encodings of one
-            state that could disagree. Both now read the same seal. */}
+            state that could disagree. Both now read the same status mark. */}
         <span class="vault-view__phase" role="status" aria-live="polite">
-          <Seal
-            state={sealForState(state)}
+          <StatusMark
+            state={statusMarkForState(state)}
             label={vaultPhaseLabel({
               state,
               phase: snapshot.phase,
@@ -347,15 +368,15 @@ export function VaultView({
       </div>
 
       {usage ? (
-        <dl class="vault-usage" data-connected="true" aria-label={`${PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider} usage`}>
+        <dl class="vault-usage" data-connected="true" aria-label={`${providerProfileForBackend(provider).title} usage`}>
           <div class="vault-usage__cell">
             <dt><VaultBackendMark backend={provider} size={16} /> Stored</dt>
             <dd>{usage.bytes !== undefined
               ? usage.quotaBytes !== undefined
-                ? `${formatVaultBytes(usage.bytes)} of ${formatVaultBytes(usage.quotaBytes)}`
-                : formatVaultBytes(usage.bytes)
+                ? `${formatBytes(usage.bytes)} of ${formatBytes(usage.quotaBytes)}`
+                : formatBytes(usage.bytes)
               : usage.quotaBytes !== undefined
-                ? `Of ${formatVaultBytes(usage.quotaBytes)}`
+                ? `Of ${formatBytes(usage.quotaBytes)}`
                 : "Not measurable"}</dd>
           </div>
           <div class="vault-usage__cell">
@@ -369,7 +390,7 @@ export function VaultView({
       ) : null}
 
       <div class="vault-view__state" data-state={state}>
-        <Seal state={sealForState(state)} label={SEAL_WORD[state]} density="dot" size={24} />
+        <StatusMark state={statusMarkForState(state)} label={STATUS_WORD[state]} density="dot" size={24} />
         <div class="vault-view__state-copy">
           {/* A requirement in the failure register was the first thing a person read
               after pressing "Keep future conversations" on the loss report —
@@ -381,7 +402,7 @@ export function VaultView({
             : ephemeral ? "Ephemeral · page memory only"
             : adoptedDrive ? "Google Drive · encrypted"
             : runtimeAdopted ? "Encrypted object store · runtime adopted"
-            : snapshot.phase === "ready" ? "Storage contract verified · runtime not adopted"
+            : snapshot.phase === "ready" ? "Storage checks passed · runtime not active"
             : status.headline}</strong>
           {/* When the probe has run, the two outcome cells below carry both
               sentences. Repeating one here would restate a claim 40px above
@@ -393,8 +414,8 @@ export function VaultView({
                 ? "No cloud or device Vault is attached. Use this mode for disposable work, or select a durable provider before closing the page."
               : runtimeAdopted
               ? adoptedDrive
-                ? "This browser is using the verified client-encrypted Google Drive workspace and journal adapters. Cross-device sync is not evaluated by this probe."
-                : "The active browser runtime uses the verified encrypted workspace and journal adapters. Cross-device sync is not evaluated by this probe."
+                ? "This browser is using the client-encrypted Google Drive workspace and journal adapters. Cross-device sync is not evaluated by this probe."
+                : "The active browser runtime uses the configured encrypted workspace and journal adapters. Cross-device sync is not evaluated by this probe."
               : snapshot.message}</p>
           ) : null}
           {!localDevice && snapshot.phase === "disconnected"
@@ -456,16 +477,16 @@ export function VaultView({
         <ul class="vault-view__outcomes" aria-label="Vault outcomes">
           <li>
             <span>Storage contract</span>
-            <Seal state="verified" label="Verified" density="dot" size={16} />
-            <strong>Verified</strong>
+            <StatusMark state="verified" label="Checks passed" density="dot" size={16} />
+            <strong>Checks passed</strong>
             <p>{status.headline} — {snapshot.message}</p>
           </li>
           <li>
             <span>Runtime adoption</span>
-            <Seal state={runtimeAdopted ? "verified" : "attention"} label={runtimeAdopted ? "Adopted" : "Not adopted"} density="dot" size={16} />
+            <StatusMark state={runtimeAdopted ? "verified" : "attention"} label={runtimeAdopted ? "Adopted" : "Not adopted"} density="dot" size={16} />
             <strong>{runtimeAdopted ? "Adopted" : "Not adopted"}</strong>
             <p>{runtimeAdopted
-              ? "This browser runtime writes the workspace and journal through the verified encrypted adapters."
+              ? "This browser runtime writes the workspace and journal through the configured encrypted adapters."
               : "The storage contract passed, but this active runtime is still page-memory until adoption completes. Anything you do now is ephemeral."}</p>
             {!runtimeAdopted && adoptionNotice ? <p class="vault-view__warning" role="alert">{adoptionNotice}</p> : null}
           </li>
@@ -481,34 +502,35 @@ export function VaultView({
           value={provider}
           disabled={providerSwitching}
           leading={(option) => <span class="vault-provider-selector__mark" aria-hidden="true"><VaultBackendMark backend={option.value as VaultBackend} size={16} /></span>}
-          options={PROVIDER_PROFILES.map((profile) => {
-            // Availability is a selectability fact, not a description suffix.
-            // Rendered as prose only, Drive stayed choosable on a build with no
-            // client ID — and choosing it released the attached Vault before
-            // anything asked whether the destination could be opened.
-            const unopenable = providerUnopenableReason(profile.id);
-            return {
-              value: profile.id,
-              label: profile.title,
-              description: unopenable ?? profile.description,
-              ...(unopenable ? { disabled: true } : {}),
-            };
-          })}
+          options={providerProfiles.map((profile) => ({
+            value: profile.id,
+            label: profile.title,
+            description: profile.description,
+          }))}
           onChange={(value) => onProviderChange(value as VaultBackend)}
         />
         {providerSwitching ? <span role="status">Moving the active runtime safely…</span> : null}
-        <details class="vault-provider-compare" ref={compare} open={compareDefault && snapshot.phase === "disconnected" && !localDeviceStatus}>
-          <summary>Compare all four storage options — what survives a closed tab, offline reach, cross-device reach, what you supply, what you keep, and what can lose it</summary>
+        {selectedProviderUnavailable ? <p class="vault-view__warning" role="alert">{selectedProviderUnavailable}</p> : null}
+        {/* Open at the moment of choice, on every screen. It used to open only
+            above 680px, so the one link a first-time person is given for this
+            decision — "Keep it on this device →" in the chat transcript —
+            landed on a phone with the six answers folded away, while "Choose a
+            durable provider" on the same route opened them. The table already
+            stacks into one card per question below 1023px, so opening it on a
+            phone costs a scroll, not a layout. Its columns come from the same
+            filtered profiles as the selector, so it advertises no provider the
+            control itself omits. */}
+        <details class="vault-provider-compare" ref={compare} open={snapshot.phase === "disconnected" && !localDeviceStatus}>
+          <summary>Compare {providerProfiles.length} storage options — what survives a closed tab, offline reach, cross-device reach, what you supply, what you keep, and what can lose it</summary>
           <table>
-            <caption>Every provider answers the same six questions, so the columns can be read across.</caption>
+            <caption>Every offered provider answers the same six questions, so the columns can be read across.</caption>
             <thead>
               <tr>
                 <th scope="col">Question</th>
-                {PROVIDER_PROFILES.map((profile) => (
+                {providerProfiles.map((profile) => (
                   <th key={profile.id} scope="col" data-current={profile.id === provider ? "true" : "false"}>
                     <span class="vault-provider-compare__heading"><VaultBackendMark backend={profile.id} size={15} />{profile.title}</span>
                     {profile.id === provider ? <small>Selected</small> : null}
-                    {providerUnopenableReason(profile.id) ? <small>Unavailable here</small> : null}
                   </th>
                 ))}
               </tr>
@@ -517,20 +539,17 @@ export function VaultView({
               {PROVIDER_FACT_ROWS.map(([key, label]) => (
                 <tr key={key}>
                   <th scope="row">{label}</th>
-                  {PROVIDER_PROFILES.map((profile) => (
+                  {providerProfiles.map((profile) => (
                     <td key={profile.id} data-provider={profile.title} data-current={profile.id === provider ? "true" : "false"}>{profile.facts[key]}</td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
-          {/* The four provider sentences, verbatim, one rung down: they are
-              paragraphs, and a paragraph in a comparison cell is unreadable in
-              four columns. */}
           <details class="vault-provider-notes">
-            <summary>How each of the four works, in the provider's own words</summary>
+            <summary>How each offered provider works</summary>
             <dl>
-              {PROVIDER_PROFILES.map((profile) => (
+              {providerProfiles.map((profile) => (
                 <div key={profile.id} data-current={profile.id === provider ? "true" : "false"}>
                   <dt>{profile.title}</dt>
                   <dd>{profile.note}</dd>
@@ -587,12 +606,12 @@ export function VaultView({
           {snapshot.phase === "ready" && (
             <details class="vault-view__evidence" open>
               <summary class="vault-view__evidence-summary">
-                <span class="vault-view__scope">Live evidence</span>
-                <strong>Provider contract verified</strong>
+                <span class="vault-view__scope">Probe results</span>
+                <strong>Storage checks passed</strong>
                 <span class="vault-view__evidence-count">{readinessTally(snapshot.evidence.readiness)}</span>
                 <code>{snapshot.evidence.runId}</code>
               </summary>
-              <ul class="vault-view__readiness" aria-label="Verified vault capabilities">
+              <ul class="vault-view__readiness" aria-label="Vault capability checks">
                 <Readiness label="Conditional create" value={snapshot.evidence.readiness.conditionalCreate} />
                 <Readiness label="Compare and swap" value={snapshot.evidence.readiness.compareAndSwap} />
                 <Readiness label="Exact ranges" value={snapshot.evidence.readiness.exactRange} />
@@ -612,7 +631,7 @@ export function VaultView({
                     ))}
                   </ul>
                   <p class="vault-view__warning">{snapshot.evidence.cleanup.warning}</p>
-                  <p>{snapshot.evidence.createdKeys.length} immutable probe object keys are available in the machine-readable evidence.</p>
+                  <p>{snapshot.evidence.createdKeys.length} immutable probe object keys are available in the machine-readable probe results.</p>
                 </div>
               </details>
             </details>
@@ -640,12 +659,12 @@ export function VaultView({
           /> : null}
 
           <details class="vault-view__requirements">
-            <summary>Deployment requirements — authorization lifetime, CSP origins, CORS methods and the authorized object boundary</summary>
+            <summary>Deployment requirements — authorization lifetime, network origins, CORS methods and the authorized object boundary</summary>
             <div class="vault-view__details">
               <p>Authorization is expiring and memory-only; it is reset on logout, account switch, and disconnect.</p>
-              <p>CSP <code>connect-src</code> origins:</p>
-              <ul>{snapshot.requirements.cspConnectSrc.map((origin) => <li key={origin}><code>{origin}</code></li>)}</ul>
-              <p>Direct browser requests must support {snapshot.requirements.cors.allowedMethods.join("/")} and expose ETag, range, and length headers used by the verified contract.</p>
+              <p>Network origins:</p>
+              <ul>{snapshot.requirements.networkOrigins.map((origin) => <li key={origin}><code>{origin}</code></li>)}</ul>
+              <p>Direct browser requests must support {snapshot.requirements.cors.allowedMethods.join("/")} and expose ETag, range, and length headers used by the storage checks.</p>
               <p>Authorized object boundary: <code>{snapshot.requirements.authorization.objectPrefix}</code></p>
             </div>
           </details>
@@ -713,7 +732,7 @@ export function VaultView({
       {wipeAvailable && onWipeStorage ? (
         <section class="vault-danger" aria-label="Storage danger zone">
           <div class="vault-danger__copy">
-            <strong>Wipe {PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider}</strong>
+            <strong>Wipe {providerProfileForBackend(provider).title}</strong>
             <span>{wipeStorageNote(provider)}</span>
           </div>
           <button
@@ -725,8 +744,8 @@ export function VaultView({
           >{wipeBusy ? "Wiping…" : "Wipe storage"}</button>
           {wipeConfirmOpen ? (
             <ConfirmDialog
-              title={`Wipe ${PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider}?`}
-              titleDetail={PROVIDER_PROFILES.find((profile) => profile.id === provider)?.description ?? ""}
+              title={`Wipe ${providerProfileForBackend(provider).title}?`}
+              titleDetail={providerProfileForBackend(provider).description}
               confirmLabel="Yes, wipe it"
               confirmDisabled={wipeBusy}
               destructive
@@ -762,7 +781,7 @@ export const VAULT_RELEASE_ACTION_LABEL = "Switch to ephemeral · keep a page co
 /** What actually survives the release, named per provider rather than per label. */
 export function vaultReleaseNote(provider: VaultBackend): string {
   const page = "This page keeps working in memory until you close the tab.";
-  const profile = PROVIDER_PROFILES.find((candidate) => candidate.id === provider);
+  const profile = providerProfileForBackend(provider);
   // A provider switch can leave the preference on `ephemeral` for a frame while
   // the old snapshot still renders. "Your encrypted Ephemeral data" would be a
   // sentence about a store that does not exist.
@@ -852,18 +871,18 @@ function ContextFabricPanel({
 }
 
 function Readiness({ label, value }: { label: string; value: "verified" | "not-evaluated" }) {
-  return <li data-value={value}><span>{label}</span><strong>{value === "verified" ? "Verified" : "Not evaluated"}</strong></li>;
+  return <li data-value={value}><span>{label}</span><strong>{value === "verified" ? "Passed" : "Not evaluated"}</strong></li>;
 }
 
 export type VaultStateId = "ephemeral" | "unset" | "attached" | "probing" | "verified" | "adopted" | "blocked";
 
-const SEAL_WORD: Readonly<Record<VaultStateId, string>> = Object.freeze({
+const STATUS_WORD: Readonly<Record<VaultStateId, string>> = Object.freeze({
   ephemeral: "Not checked",
   unset: "Attention",
-  attached: "Asserted",
+  attached: "Attached",
   probing: "Checking",
   verified: "Attention",
-  adopted: "Verified",
+  adopted: "Ready",
   blocked: "Failed",
 });
 
@@ -893,21 +912,21 @@ export function vaultPhaseLabel(input: Readonly<{
   if (input.localDevice) {
     return input.state === "verified" ? "Encrypted device Vault ready" : "Not set up yet";
   }
-  // A verified contract is not an adopted runtime. Saying only "Contract
-  // verified" while the workspace is still in page memory is the overclaim
+  // Passing storage checks does not activate the runtime. Saying only "checks passed"
+  // while the workspace is still in page memory would overstate the result
   // this product exists to avoid.
-  if (input.phase === "ready") return "Contract verified · not adopted";
+  if (input.phase === "ready") return "Checks passed · not active";
   return input.phaseLabel;
 }
 
-export function sealForState(state: VaultStateId): SealState {
+export function statusMarkForState(state: VaultStateId): StatusMarkState {
   switch (state) {
     case "ephemeral": return "none";
     case "unset": return "attention";
     case "attached": return "asserted";
     case "probing": return "checking";
-    // A verified contract without an adopted runtime is not a green state; it
-    // is an incomplete one, and the seal has to say so before the copy does.
+    // Passing checks without an active runtime is incomplete, so the status
+    // mark must show attention before the copy explains why.
     case "verified": return "attention";
     case "adopted": return "verified";
     case "blocked": return "failed";
@@ -1029,34 +1048,21 @@ export function attachedSummary(rows: readonly AttachedRow[]): string {
 
 type VaultReadiness = Extract<VaultSnapshot, { phase: "ready" }>["evidence"]["readiness"];
 
-/** Counted, never hard-coded. A check that was not evaluated is never "verified". */
+/** Counted, never hard-coded. A check that was not evaluated never passes. */
 export function readinessTally(readiness: VaultReadiness): string {
   const values: readonly string[] = Object.values(readiness);
-  const verified = values.filter((value) => value === "verified").length;
-  const pending = values.length - verified;
+  const passed = values.filter((value) => value === "verified").length;
+  const pending = values.length - passed;
   return pending === 0
-    ? `${verified} of ${values.length} checks verified`
-    : `${verified} of ${values.length} checks verified · ${pending} not evaluated`;
+    ? `${passed} of ${values.length} checks passed`
+    : `${passed} of ${values.length} checks passed · ${pending} not evaluated`;
 }
 
 function localDeviceUsage(status: LocalDeviceVaultStatus): string {
   const { usageBytes, quotaBytes } = status.readiness;
   if (usageBytes === undefined) return "Not reported";
-  if (quotaBytes === undefined) return formatVaultBytes(usageBytes);
-  return `${formatVaultBytes(usageBytes)} of ${formatVaultBytes(quotaBytes)}`;
-}
-
-function formatVaultBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "Unknown";
-  if (value < 1024) return `${Math.floor(value)} B`;
-  const units = ["KiB", "MiB", "GiB"] as const;
-  let amount = value / 1024;
-  let unit: (typeof units)[number] = units[0];
-  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
-    amount /= 1024;
-    unit = units[index]!;
-  }
-  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
+  if (quotaBytes === undefined) return formatBytes(usageBytes);
+  return `${formatBytes(usageBytes)} of ${formatBytes(quotaBytes)}`;
 }
 
 /**
@@ -1084,7 +1090,7 @@ function phaseCopy(snapshot: VaultSnapshot): { label: string; headline: string }
     case "disconnected": return { label: "Disconnected", headline: "No vault claim" };
     case "configured": return { label: "Configured", headline: "Configuration only" };
     case "probing": return { label: "Testing", headline: "Live checks in progress" };
-    case "ready": return { label: "Contract verified", headline: "Browser storage contract passed" };
+    case "ready": return { label: "Checks passed", headline: "Browser storage contract passed" };
     case "degraded": return { label: "Not ready", headline: "Strict mode blocked" };
   }
 }

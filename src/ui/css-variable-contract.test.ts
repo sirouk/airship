@@ -356,48 +356,31 @@ function disabledRulesWithOpacity(text: string): readonly string[] {
 /**
  * Every `color` declaration in the product that spends a verdict metal.
  *
- * Ordered `file selector token`. Seventeen carry a word, not a glyph: the
- * session status word, the error part, the claim-group header, the connect
- * lane's failure line, three provider-health lines, the approval diff's
- * deletions, the audit state, both topbar posture chips, both attestation
- * chips, the Git conflict note and the removed-line emphasis are all text at
- * caption size. `.seal` rules paint a glyph and a label together, and only the
+ * Ordered `file selector token`. Many carry a word, not a glyph: the session
+ * status word, error part, provider-health lines, approval diff deletions,
+ * Git conflict note, and removed-line emphasis are all text at
+ * caption size. `.status-mark` rules paint a glyph and a label together, and only the
  * `[data-density="chip"]` variant lifts the label. All of them now read on an
  * AA-clearing hex because the token moved; this list is the record of who
  * depends on that.
  */
 const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
-  "ui/chat.css .claim-group--failed > header --v-failed",
   "ui/chat.css .message-part.part-error --v-failed",
   "ui/chat.css .session-status-chip__word[data-state=\"failed\"] --v-failed",
   // The quarantine card's glyph, and the rail row's "Needs review" line: a
   // conversation that will not reopen is marked in the list a person scans,
   // in words rather than in colour alone.
   "ui/chat/resume-report.css .resume-report--quarantine > svg --v-failed",
-  "ui/connect/connect-surface.css .connect-lane__failure --v-failed",
   "ui/provider-connections-view.css .provider-fabric__error --v-failed",
   "ui/provider-connections-view.css .provider-health.expired --v-failed",
   "ui/provider-connections-view.css .provider-health.offline --v-failed",
-  "ui/provider-fabric-panel.css .provider-fabric__error --v-failed",
   "ui/routes.css .approval-diff del --v-failed",
-  "ui/routes.css .audit-check-grid .fail > .seal --v-failed",
   // Added by the raise, not despite it: this rule carried a hand-written
   // #e4877e precisely because --v-failed was sub-AA on a raised surface.
-  "ui/routes.css .audit-state.invalid --v-failed",
-  /*
-   * These four are not new text uses — they are four that this ledger could
-   * never see. Each spelled the token `var(--danger)`, one of the three live
-   * aliases for the failed hue, so a scanner looking for `--v-failed` walked
-   * straight past a billing error, the archive route's destructive verb, the
-   * danger disclosure's open state and the runway warning. That is the concrete
-   * cost of three names for one role: the tripwire above was watching two
-   * thirds of the product. `routes.css` now names the canonical token, so they
-   * appear here and are held to the same 4.5:1 floor as the rest.
-   */
-  "ui/routes.css .billing-alert.error --v-failed",
+  /* Destructive profile actions use the canonical failed token so they remain
+     inside the same contrast tripwire as every other failed-state label. */
   "ui/routes.css .profile-archive-zone .danger --v-failed",
   "ui/routes.css .profile-danger-disclosure[open] > summary --v-failed",
-  "ui/routes.css .runway-card > p --v-failed",
   // Remove, on a card holding a skill someone wrote. Same role as the profile
   // archive action above it: the only destructive verb on the surface.
   "ui/routes.css .skill-authoring .danger --v-failed",
@@ -407,24 +390,24 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   // A refused new-conversation attempt is owned by the same initiating route;
   // the ordinary active-turn reason stays muted and never spends this token.
   "ui/routes.css .skills-toolbar > .skills-toolbar-status.failure --v-failed",
-  "ui/shell.css .attestation-chip.asserted --copper",
-  "ui/shell.css .attestation-chip.failed --v-failed",
   "ui/shell.css .recent-conversation--thread .recent-conversation__blocked --v-failed",
-  "ui/shell.css .seal[data-state=\"asserted\"] --copper",
-  "ui/shell.css .seal[data-state=\"failed\"] --v-failed",
-  "ui/shell.css .topbar-posture-chip[data-state=\"failed\"] --v-failed",
-  "ui/shell.css .topbar-posture-chip__elsewhere[data-state=\"failed\"] --v-failed",
+  "ui/shell.css .status-mark[data-state=\"asserted\"] --copper",
+  "ui/shell.css .status-mark[data-state=\"failed\"] --v-failed",
   // The authoring panel's refusal sentence — the verbatim message from
   // `domain.ts` or `catalog.ts` explaining why a save did not happen.
   "ui/skill-editor.css .skill-editor-status --v-failed",
   "ui/sources-view.css .conflicted .git-delta --v-failed",
   "ui/sources-view.css .git-conflict-note --v-failed",
   "ui/sources-view.css .git-diff-lines .removed b --v-failed",
-  "ui/terminal-view.css .terminal-panel__bar .seal[data-state=failed] --v-failed",
+  "ui/terminal-view.css .terminal-panel__bar .status-mark[data-state=failed] --v-failed",
   // The vault danger zone's one destructive verb. It carries words in the
   // failed hue, so it is held to the same 4.5:1 word floor as every other
   // site named above.
   "ui/vault-view.css .vault-danger__action --v-failed",
+  // The move-work panel's one refusal voice: a conversation or memory record
+  // this import will not overwrite, and the error line above the panel. Both
+  // state the refusal in words first; the metal only agrees with them.
+  "ui/work-bundle-view.css .work-bundle__refused --v-failed",
   /*
    * Source Control's status letters. The workbench rail printed all five
    * deltas in the same brass, so "deleted" and "added" were one glyph apart
@@ -438,7 +421,7 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
 ]);
 
 /**
- * The five `:disabled { opacity }` rules still outside this package's files.
+ * The remaining `:disabled { opacity }` rules still outside this package's files.
  *
  * Each is the same defect as the one deleted from `tokens.css`: opacity
  * multiplies against whatever is behind, so six alphas (.42 through .72) over
@@ -447,7 +430,6 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
  * for all of them, so each line below is a deletion, not a rewrite.
  */
 const DISABLED_OPACITY_LEDGER = Object.freeze([
-  "ui/attestations-view.css .attestations-view button:disabled",
   "ui/chat.css .slash-command-menu button:disabled",
   "ui/context-view.css .client-context-view button:disabled",
   "ui/sources-view.css .git-sources button:disabled",

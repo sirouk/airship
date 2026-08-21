@@ -52,7 +52,8 @@ test("the terminal names one directory in both spellings, never a third", async 
   // And it names the workspace spelling beside it rather than instead of it.
   await expect(bar.locator(".terminal-panel__mirror")).toHaveText("= /workspace");
   await expect(bar.locator(".sr-only")).toContainText(
-    "/home/airship-node/airship-workspace in the shell is the same directory as /workspace in Explorer, the Editor and Source Control.",
+    "/home/airship-node/airship-workspace in the shell is the same directory as /workspace in Explorer,"
+    + " the Editor and Source Control, except a folder you attached from this device.",
   );
 
   const setup = page.locator("details.terminal-route__setup");

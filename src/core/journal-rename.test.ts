@@ -56,7 +56,7 @@ describe("rename durability across every journal backend", () => {
    */
   async function backends() {
     const { WorkspaceRootKey } = await import("../storage/encrypted-envelope");
-    const { MemoryObjectStore } = await import("../storage/memory-object-store");
+    const { MemoryObjectStore } = await import("../storage/memory-object-store.test-support");
     const { EncryptedObjectJournalBackend } = await import("../storage/encrypted-object-journal");
     const { key } = await WorkspaceRootKey.generate();
     return [

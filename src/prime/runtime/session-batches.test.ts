@@ -8,12 +8,13 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { streamSimple } from "../ai/stream";
 import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   fauxToolCall,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/faux.test-support";
 import type { JsonValue, Tool, ToolContext, ToolExecutionResult } from "../../core/contracts";
 import { EventJournal } from "../../core/journal";
 import { MemoryJournalBackend } from "../../core/memory-journal";
@@ -77,6 +78,7 @@ async function fixture(tools: Tool[]): Promise<Readonly<{
     registry,
     approvalPolicy: allowAllForTests,
     model,
+    streamFn: streamSimple,
     onSignal(signal) {
       if (signal.type === "status") statuses.push(signal.status);
     },
@@ -107,12 +109,14 @@ describe("prime read-effect batching, journal evidence", () => {
     const started = Date.now();
     const result = await fix.session.prompt("run the batch");
     expect(result.outcome).toBe("completed");
-    // Settlement order is the actual concurrency witness: every start
-    // precedes every end, and ends land b(20) < c(50) < a(90).
-    expect(log).toEqual([
+    // Settlement order is the actual concurrency witness. Invocation starts
+    // may enter on adjacent microtasks in either order, but all three must
+    // start before any one ends, and ends land b(20) < c(50) < a(90).
+    const firstEnd = log.findIndex((entry) => entry.endsWith(":end"));
+    expect([...log.slice(0, firstEnd)].sort()).toEqual([
       "read_a:start", "read_b:start", "read_c:start",
-      "read_b:end", "read_c:end", "read_a:end",
     ]);
+    expect(log.slice(firstEnd)).toEqual(["read_b:end", "read_c:end", "read_a:end"]);
 
     // tool_execution_start / _end are the loop's progress vocabulary in
     // both engines, never journaled: the settlement-order proof rides the
@@ -152,15 +156,16 @@ describe("prime read-effect batching, journal evidence", () => {
     ]);
     const result = await fix.session.prompt("run the mixed batch");
     expect(result.outcome).toBe("completed");
-    // Barrier discipline: read_a settles before write_b starts; the second
-    // read run starts only after write_b settles, and d(5) settles before
-    // c(30) — concurrency inside the run, serialization across the barrier.
-    expect(log).toEqual([
+    // Barrier discipline: read_a settles before write_b starts, and the
+    // second read run starts only after write_b settles. Its invocations may
+    // enter adjacent microtasks in either order, but both start before d(5)
+    // settles and then c(30) settles — concurrency inside the run.
+    expect(log.slice(0, 4)).toEqual([
       "read_a:start", "read_a:end",
       "write_b:start", "write_b:end",
-      "read_c:start", "read_d:start",
-      "read_d:end", "read_c:end",
     ]);
+    expect([...log.slice(4, 6)].sort()).toEqual(["read_c:start", "read_d:start"]);
+    expect(log.slice(6)).toEqual(["read_d:end", "read_c:end"]);
     const events = await fix.journal.readEvents(fix.sessionId);
     const results = events.filter((event) => event.type === "tool.resulted");
     expect(results.map((event) => event.operationId)).toEqual(["call-a", "call-b", "call-c", "call-d"]);

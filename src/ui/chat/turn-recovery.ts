@@ -6,8 +6,8 @@ import type { ErrorPart, FooterPart, MessagePart, TextPart } from "./message-par
  *
  * Every non-cancelled failure closed with "Connection lost — partial response
  * kept.", including every failure that happened over a working connection: a
- * provider 500, a rejected E2EE nonce, a failed attestation, a rate limit, a
- * spent balance. Measured on a live HTTP 429 on a phone whose connection was
+ * provider 500, a rejected credential, a truncated stream, a rate limit, or
+ * an exhausted provider balance. Measured on a live HTTP 429 on a phone whose connection was
  * fine (`docs/design-review/journey-complaints.md`), where the transport's own
  * card said 429 and this footer, the last sentence under the answer, answered
  * it with the one cause that had not happened.
@@ -23,7 +23,7 @@ const FAILURE_CAUSE: Readonly<Record<RequestFailureKind, string>> = Object.freez
   unreachable: "Provider unreachable",
   credential: "Access rejected",
   "rate-limit": "Rate limit reached",
-  billing: "Out of credit",
+  quota: "Provider usage limit",
   provider: "Provider failed",
   unknown: "Turn failed",
 });

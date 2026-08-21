@@ -1,13 +1,31 @@
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { SESSION_LIBRARY_PAGE_SIZE, sessionListBound } from "./sessions-view";
+import { journalAdapterSentence, SESSION_LIBRARY_PAGE_SIZE, sessionListBound } from "./sessions-view";
 
 const [source, styles] = await Promise.all([
   readFile(new URL("./sessions-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("./sessions-view.css", import.meta.url), "utf8"),
 ]);
 const appSource = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
+
+describe("current journal adapter disclosure", () => {
+  it("distinguishes page memory from an adopted Local Device journal", () => {
+    expect(journalAdapterSentence("ephemeral")).toBe(
+      "Page-memory journal; remote availability is not inferred.",
+    );
+    expect(journalAdapterSentence("local")).toBe(
+      "Encrypted browser-managed storage on this device; no cloud sync is implied.",
+    );
+  });
+
+  it("renders the receipt assessment scope and complete receipt records in Sessions", () => {
+    expect(source).toContain("const receiptAssessment = integrity.pills.find((pill) => pill.key === \"receipts\")!");
+    expect(source).toContain("{receiptAssessment.detail}");
+    expect(source).toContain("<ReceiptTraceDetails receipt={receipt} includeAssessmentScope={false} />");
+    expect(source).toContain("{receipt.receiptId}");
+  });
+});
 
 /**
  * The library and its detail pane must agree about what is in scope.
@@ -92,29 +110,36 @@ describe("conversation library scope", () => {
     expect(source).toContain("Clear filters and show it");
   });
 
-  it("withdraws every mutating verb and no read-only one", () => {
+  it("withdraws mutating verbs out of scope and keeps the journal details readable", () => {
     expect(source).toContain("const mutationBlocked = busy || outOfResults;");
     expect(source).toContain("disabled={mutationBlocked || renaming}");
     expect(source).toContain('onClick={onPrepareFork} disabled={mutationBlocked}');
     expect(source).toContain("const resumeDisabled = mutationBlocked || active");
-    // Proof and the disclosures stay live: the facts on the pane are real and
-    // the reader may still want them.
-    expect(source).toContain("<button type=\"button\" onClick={onOpenProof}>");
-    expect(source).toContain("{outOfResults ? <p class=\"session-library-actions-caption\">{SESSION_OUT_OF_RESULTS_CAPTION}</p> : null}");
+    expect(source).toContain('>Rename</button>');
+    expect(source).toContain('Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}');
+    expect(source).toContain('Icon name="warning" size={16} />Delete');
+    expect(source).toContain('{outOfResults ? <p class="session-library-actions-caption">{SESSION_OUT_OF_RESULTS_CAPTION}</p> : null}');
+    expect(source).toContain('heading="Current journal adapter"');
+    expect(source).toContain('<DurabilityIndicator state={durability.state} detail={durability.detail} />');
+    expect(source).toContain('<strong>Manifest pins and transcript · {detail.transcript.messages.length} message');
+    expect(source).not.toContain('onOpenProof');
+    expect(source).not.toContain('Icon name="proof"');
+    expect(source).not.toContain('>Proof</button>');
   });
 });
 
 describe("conversation deletion scope", () => {
-  it("refreshes the shell projections and makes proof cleanup an explicit second scope", () => {
-    expect(source).toContain("onDeleted?: (sessionId: string, removeEvidence: boolean) => void | Promise<void>;");
-    expect(source).toContain("await onDeleted?.(deletedId, removeEvidence);");
-    expect(source).toContain('checked={removeEvidence}');
-    expect(source).toContain("Also remove this conversation’s endpoint evidence and pending evidence checks.");
-    expect(source).toContain("Leave this unchecked to keep its separately stored Proof evidence history.");
-    // A failed optional cleanup must not resurrect a journal row that was
-    // already removed; the announcement names the partial result instead.
-    expect(source).toContain("endpoint evidence was kept because cleanup failed.");
-    expect(appSource).toContain("async function adoptLibraryDelete(deletedSessionId: string, removeEvidence: boolean)");
+  it("keeps one explicit conversation-delete scope", () => {
+    expect(source).toContain("onDeleted?: (sessionId: string) => void | Promise<void>;");
+    expect(source).toContain("await onDeleted?.(deletedId);");
+    expect(source).toContain('title="Delete this conversation?"');
+    expect(source).toContain("Its transcript, every recorded step and its journal entries are removed");
+    expect(source).toContain("Forks already made from it keep their own copies.");
+    expect(source).toContain("This cannot be undone.");
+    expect(source).not.toContain('checked={removeEvidence}');
+    expect(source).not.toContain("endpoint evidence");
+    expect(source).not.toContain("Proof evidence history");
+    expect(appSource).toContain("function adoptLibraryDelete(deletedSessionId: string)");
     expect(appSource).toContain("onDeleted={adoptLibraryDelete}");
     expect(appSource).toContain("setSessionRevision((value) => value + 1);");
   });
@@ -164,6 +189,12 @@ describe("fork legibility", () => {
     expect(source).toContain("structural observation${detail.history.issues.length === 1 ? \"\" : \"s\"} below");
   });
 
+  it("keeps quarantine and audit results neutral and local to the journal", () => {
+    expect(source).toContain('? "History check passed · transcript cannot be replayed"');
+    expect(source).toContain('The local digest check passed and every event is intact. This runtime could not rebuild the transcript from them, so this conversation was not resumed and the rest of the vault was adopted without it.');
+    expect(source).not.toContain('Proof stays available here.');
+  });
+
   /*
    * The panel described the pre-seed contract.
    *
@@ -175,7 +206,7 @@ describe("fork legibility", () => {
   it("states that the branch inherits bounded ancestor context, not a blank slate", () => {
     expect(source).not.toContain("empty transcript");
     expect(source).not.toContain("clean fork");
-    expect(source).toContain("The branch inherits a bounded, digest-sealed copy of the ancestor context");
+    expect(source).toContain("The branch inherits a bounded copy of the ancestor context and records its digest and source head as lineage");
     expect(source).toContain('{busy ? "Creating…" : "Create fork"}');
   });
 
@@ -280,9 +311,18 @@ describe("conversation library below the full-width toolbar", () => {
     expect(source).toContain("onClick={() => void openSession(item.id)}");
     expect(source).toContain("onDblClick={() => void openSession(item.id)}");
     expect(source).toContain('if (event.key === "Enter" && item.id === selectedId) {');
-    // A refusal selects the row so the pane that explains it is what appears,
-    // rather than failing silently at the button that was pressed.
-    expect(source).toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
+    /*
+     * Open opens. Every inspected conversation is handed to the host, whatever
+     * its continuation verdict: a conversation that cannot be *continued* on
+     * this route is still readable, and refusing here left the row's one-press
+     * verb doing nothing visible on the route the person was already on. Only a
+     * journal this runtime could not read at all selects the row and explains
+     * itself in the pane.
+     */
+    expect(source).toContain("await onResume(inspectSession");
+    expect(source).not.toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
+    expect(source.slice(source.indexOf("async function openSession"), source.indexOf("async function resumeSelected")))
+      .toContain("setSelectedId(sessionId);\n      setDetailError(errorMessage(caught));");
     expect(styles).toContain(".session-library-open {");
   });
 
@@ -689,8 +729,8 @@ describe("conversation library space budget", () => {
   /*
    * Measured at 932x430, a phone held sideways: every media query in the sheet
    * asks about width, so none of them fired, and the pane laid itself out with
-   * a desktop's vertical room. The action row — Rename, Proof, Fork, Delete —
-   * ended up below the fold showing about 8px of each button's top corner.
+   * a desktop's vertical room. The action row — Rename, Fork, Delete — ended
+   * up below the fold showing about 8px of each button's top corner.
    */
   it("stops asking a 430px-tall viewport for 420px of pane and a stacked heading", () => {
     const short = styles.slice(styles.indexOf("@media (max-height: 560px) {"));

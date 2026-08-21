@@ -29,7 +29,7 @@ test("a failed boot chunk stops checking and offers a successful fresh reload", 
   });
 
   await page.goto("/#chat");
-  await expect(page.getByRole("heading", { name: "The local kernel did not start" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Airship did not start on this device" })).toBeVisible();
   await expect(page.getByText("this tab never became ready", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "Reload Airship" })).toBeVisible();
   expect(blockedRequests).toBeGreaterThan(0);
@@ -194,7 +194,7 @@ async function expectReadyShell(page: Page): Promise<void> {
   // The phone shell keeps a second `.runtime-line__text` in the DOM at every
   // width (twin-carrier policy); the non-phone carrier is the one this
   // desktop lane can read.
-  await expect(page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text")).toHaveText("Local kernel ready", { timeout: 20_000 });
+  await expect(page.locator(".runtime-line:not(.runtime-line--phone) .runtime-line__text")).toHaveText("Airship is ready on this device", { timeout: 20_000 });
 }
 
 async function openSurface(page: Page, surface: "Command Center" | "Preferences"): Promise<void> {

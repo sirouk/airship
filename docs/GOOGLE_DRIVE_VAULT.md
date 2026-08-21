@@ -47,7 +47,7 @@ backend exchange, or simulated silent refresh. When the short-lived token is
 near expiry, storage fails with `GoogleDriveAuthorizationRequiredError`; a new
 click/tap must obtain another token. Disconnect drops the token immediately.
 
-Google account authorization does **not** derive or recover the Airship E2EE
+Google account authorization does **not** derive or recover the Airship client-encryption
 root key. Google owns ciphertext, not decryption authority. A user must retain
 the one-time recovery material for another browser/device.
 
@@ -231,8 +231,8 @@ gates 1 or 2.
 3. Enable Google Drive API and configure the OAuth consent screen.
 4. Configure the public client ID at deployment time; never add a client secret.
    Airship reads it from `VITE_GOOGLE_CLIENT_ID`.
-5. Keep exact CSP grants for `accounts.google.com`, `www.googleapis.com`, and
-   `openidconnect.googleapis.com`; do not use provider wildcards.
+5. Keep the exact Google `script-src` and `frame-src` grants. HTTPS API egress
+   is covered by the dynamic endpoint policy; do not add wildcard script hosts.
 6. Run object-store conformance and encrypted composition probes before adopting
    the Drive runtime, then complete every release gate above before a production
    synchronization claim.

@@ -82,7 +82,10 @@ export class DemoInferenceTransport implements InferenceTransport {
 
     const answer =
       "Airship is running this turn entirely on your device with the deterministic demo provider. " +
-      "Try /write notes/hello.md followed by content, /read notes/hello.md, /reason followed by a thought, or /ls.";
+      // Typed verbatim, the old wording failed: unquoted words after the path
+      // bind positionally to the next parameter, so `/write notes/hello.md
+      // hello world` reported a revision conflict that had not happened.
+      "Try /write notes/hello.md \"hello there\", /read notes/hello.md, /reason followed by a thought, or /ls.";
     yield* textEvents(answer, signal);
     yield { type: "usage", inputTokens: Math.ceil(last.content.length / 4), outputTokens: Math.ceil(answer.length / 4) };
     yield { type: "completed", finishReason: "stop" };

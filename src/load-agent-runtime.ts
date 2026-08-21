@@ -12,11 +12,11 @@ export type AgentRuntimeKind = "airship-core" | "prime";
 export type { PrimeRuntimeKind as PrimeRuntimeKindAlias } from "./prime/runtime/runtime";
 
 /**
- * The evidence rule for which engine owns a session: presence of any
- * `prime.*` evidence pins the session prime; empty history (just the
- * creation record) is unclaimed land and primed by default. An engine flip
- * mid-history forks the evidence chain the same way a clock fork does,
- * so engines only run on the floors their journal has already seen.
+ * The journal rule for which engine owns a session: any `prime.*` record
+ * pins the session to Prime; empty history (just the creation record) is
+ * unclaimed land and uses Prime by default. An engine flip mid-history forks
+ * the recorded lineage, so engines only run on the histories they already own.
+ * This includes the current runtime-selection marker and the historical marker.
  */
 export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRuntimeKind | "unpinned" {
   for (const event of events) {
@@ -32,17 +32,16 @@ export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRu
 
 /**
  * The gate. `runtime` is an explicit caller override and is allowed only
- * against compatible journal evidence (fork semantics); omitted lets the
- * journal decide: prime for a fresh session, evidence-preserving for anything
+ * against compatible journal records (fork semantics); omitted lets the
+ * journal decide: Prime for a fresh session, record-preserving for anything
  * with history.
  *
  * PRIME IS THE DEFAULT ENGINE. Every unpinned journal — which is every
- * conversation the app has not yet run a turn in — opens on prime, and the
- * first prime turn seals that decision into the journal so the choice is
- * durable evidence rather than a runtime mood. airship-core keeps every
- * session whose journal already carries airship turn protocol; those only
- * change engines by forking, because an engine flip mid-history forks the
- * evidence chain the same way a clock fork does.
+ * conversation the app has not yet run a turn in — opens on Prime, and the
+ * first Prime turn writes a runtime-selection marker so the choice is durable.
+ * airship-core keeps every session whose journal already carries Airship turn
+ * protocol; those only change engines by forking, because an engine flip
+ * mid-history forks the recorded lineage.
  *
  * What made this reachable: `runPrimeTurn` now forwards the caller's
  * transport (see the credential-bridge note there), so the prime lane runs a
@@ -62,22 +61,26 @@ export function sessionRuntimeKind(events: readonly { type: string }[]): AgentRu
  * on, not a second one kept alive for the unconnected case.
  */
 export async function runTurn(options: RunTurnOptions & { runtime?: AgentRuntimeKind }): Promise<TurnResult> {
+  // The override is caller-owned authority. Snapshot it synchronously so it
+  // cannot change while the journal read or lazy engine import is in flight.
+  const callerRuntime = options.runtime;
+  const primeOptions = { ...options, runtime: callerRuntime };
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
-  const selection: AgentRuntimeKind = options.runtime ?? (history === "unpinned" ? "prime" : history);
+  const selection: AgentRuntimeKind = callerRuntime ?? (history === "unpinned" ? "prime" : history);
 
-  if (options.runtime !== undefined) {
-    if (options.runtime === "airship-core" && history === "prime") {
-      throw new Error(`runtime selection mismatch: this session is prime-pinned by journal evidence; fork the session to use the airship-core runtime.`);
+  if (callerRuntime !== undefined) {
+    if (callerRuntime === "airship-core" && history === "prime") {
+      throw new Error(`runtime selection mismatch: this session is prime-pinned by journal records; fork the session to use the airship-core runtime.`);
     }
-    if (options.runtime === "prime" && history === "airship-core") {
+    if (callerRuntime === "prime" && history === "airship-core") {
       throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the prime runtime.`);
     }
   }
 
   if (selection === "prime") {
     primeRuntimePromise ??= import("./prime/runtime/runtime");
-    return (await primeRuntimePromise).runPrimeTurn(options);
+    return (await primeRuntimePromise).runPrimeTurn(primeOptions);
   }
   agentRuntime ??= import("./core/agent");
   return (await agentRuntime).runTurn(options);

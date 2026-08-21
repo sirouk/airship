@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSessionManifest, materializeMessages, runTurn } from "./agent";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "./contracts";
+import { canonicalContextSummaryProvenance } from "./context-summary-projection";
 import {
   canonicalContextSummary,
   createInferenceTransportContextSummarizer,
@@ -122,6 +123,7 @@ describe("iterative context compressor", () => {
     const transport = new SummaryCaptureTransport();
     const summarizer = createInferenceTransportContextSummarizer({
       transport,
+      providerId: "provider",
       model: "provider/summary-model",
       sessionId: "session-summary-direct",
     });
@@ -150,9 +152,9 @@ describe("iterative context compressor", () => {
       provenance: {
         kind: "inference-transport-v1",
         adapterId: "airship/inference-transport-summary-v1",
-        providerId: transport.id,
+        providerId: "provider",
         model: "provider/summary-model",
-        posture: "encrypted-unattested",
+        posture: "plaintext-remote",
       },
     });
     if (typeof output === "string" || !output.provenance) throw new Error("Expected provenance-bearing output.");
@@ -170,6 +172,7 @@ describe("iterative context compressor", () => {
     };
     const summarizer = createInferenceTransportContextSummarizer({
       transport,
+      providerId: "test-provider",
       model: "test",
       sessionId: "session-no-recursion",
     });
@@ -225,6 +228,16 @@ describe("iterative context compressor", () => {
     const malformedAttempt = structuredClone(summary!);
     (malformedAttempt.summarizerAttempt as { failure: string }).failure = "unclassified";
     expect(canonicalContextSummary(malformedAttempt)).toBeUndefined();
+
+    expect(canonicalContextSummaryProvenance({
+      kind: "inference-transport-v1",
+      adapterId: "airship/inference-transport-summary-v1",
+      providerId: "test",
+      model: "test",
+      posture: "unsupported-remote",
+      requestDigest: await sha256("request"),
+      responseDigest: await sha256("response"),
+    })).toBeUndefined();
   });
 
   it("canonicalizes pinned summarizer policy before comparing session semantics", () => {
@@ -346,7 +359,7 @@ class CaptureTransport implements InferenceTransport {
 
 class SummaryCaptureTransport implements InferenceTransport {
   readonly id = "summary-capture";
-  readonly posture = "encrypted-unattested" as const;
+  readonly posture = "plaintext-remote" as const;
   readonly requests: InferenceRequest[] = [];
   async *stream(request: InferenceRequest): AsyncIterable<InferenceEvent> {
     this.requests.push(structuredClone(request));

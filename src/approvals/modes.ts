@@ -6,37 +6,62 @@ import type {
   ToolContext,
   ToolDefinition,
 } from "../core/contracts";
-import { approvalOutcomeReason, approvalRequestId, type ApprovalBroker } from "./broker";
+import { isLocalFolderMountPath } from "../workspace/contracts";
+import { approvalOutcomeReason, approvalRequestId, approvalWasAnswered, type ApprovalBroker } from "./broker";
 
 export type ApprovalMode = ApprovalProvenance["mode"];
 
-export type SafetyReviewResult = Readonly<{
-  verdict: "safe" | "unsafe" | "indeterminate";
-  reason: string;
-  requestId?: string;
-  model?: string;
-  /**
-   * What the review itself cost, when the transport reported it. Auto Approve
-   * issues one provider request per effectful action, so leaving this off the
-   * result made those requests structurally unrecordable rather than merely
-   * unrecorded. Absent means "not reported", never zero.
-   */
-  inputTokens?: number;
-  outputTokens?: number;
-}>;
-
-export type SafetyReview = (
-  tool: ToolDefinition,
-  displayArguments: JsonValue,
-  context: ToolContext,
-) => Promise<SafetyReviewResult>;
-
 const MAX_PROVENANCE = 512;
+
+/**
+ * Why a write to an attached folder is reviewed in every mode.
+ *
+ * The other two automatic reasons in this file both end in a confinement that
+ * is true — "its declared browser tool boundary", "its workspace path
+ * confinement" — and neither of them holds here. A folder the person opened
+ * from their own device is written in place: no copy, no Vault, no Git object
+ * database, and nothing Airship can undo. The mode still governs everything
+ * else; this one class of effect asks.
+ */
+const ATTACHED_FOLDER_REVIEW_REASON =
+  "This call names a folder on your own device, not the browser workspace. Airship writes such a folder in place,"
+  + " so nothing here can undo it — every approval mode reviews it.";
+
+/**
+ * True when these arguments name a path inside the folder mount.
+ *
+ * The question is asked of the arguments because no tool can answer it: every
+ * tool in `src/tools` takes one `/workspace`-rooted path and hands it to a
+ * `WorkspacePort`, and it is the composed port — not the tool — that decides a
+ * path under the reserved mount belongs to a real directory. `path`,
+ * `sourcePath`, `destinationPath` and `edits[].path` are four spellings
+ * already, so every string is normalised rather than a list of key names
+ * maintained here. A string that is not a workspace path at all throws in
+ * normalisation and is simply not one.
+ */
+function namesAttachedFolder(value: JsonValue): boolean {
+  if (typeof value === "string") {
+    try {
+      return isLocalFolderMountPath(value);
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) return value.some(namesAttachedFolder);
+  return typeof value === "object" && value !== null && Object.values(value).some(namesAttachedFolder);
+}
+
+function automaticReadProvenance(mode: ApprovalMode): ApprovalProvenance {
+  return {
+    mode,
+    source: "automatic-read",
+    reason: "Read-only browser tool effects are allowed automatically.",
+  };
+}
 
 export function createApprovalModePolicy(options: Readonly<{
   mode: ApprovalMode;
   broker: ApprovalBroker;
-  safetyReview?: SafetyReview;
 }>): ApprovalPolicy {
   const provenance = new Map<string, ApprovalProvenance>();
 
@@ -48,12 +73,20 @@ export function createApprovalModePolicy(options: Readonly<{
   return {
     async review(tool, argumentsValue, context) {
       if (tool.effect === "read") {
+        remember(context, automaticReadProvenance(options.mode));
+        return "allow";
+      }
+
+      // Ask First already asks, and its record already says a person answered.
+      if (options.mode !== "ask-first" && namesAttachedFolder(argumentsValue)) {
+        const decision = await options.broker.request(tool, argumentsValue, context);
+        const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
-          source: "automatic-read",
-          reason: "Read-only browser tool effects are allowed automatically.",
+          source: approvalWasAnswered(outcome) ? "human-fallback" : "unattended",
+          reason: `${ATTACHED_FOLDER_REVIEW_REASON} ${approvalOutcomeReason(outcome)}`,
         });
-        return "allow";
+        return decision;
       }
 
       if (options.mode === "full-access") {
@@ -80,52 +113,32 @@ export function createApprovalModePolicy(options: Readonly<{
         const outcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
         remember(context, {
           mode: options.mode,
-          source: "human",
+          // Never `human` for a request no person answered; see `approvalWasAnswered`.
+          source: approvalWasAnswered(outcome) ? "human" : "unattended",
           reason: approvalOutcomeReason(outcome),
         });
         return decision;
       }
 
-      let review: SafetyReviewResult;
-      try {
-        review = options.safetyReview
-          ? await options.safetyReview(tool, argumentsValue, context)
-          : { verdict: "indeterminate", reason: "No safety-review transport is available." };
-      } catch (error) {
-        review = {
-          verdict: "indeterminate",
-          reason: error instanceof Error ? `Safety review failed: ${error.message}` : "Safety review failed.",
-        };
-      }
-      if (review.verdict === "safe") {
+      // Auto Approve is a deterministic middle tier. It never asks the
+      // inference model to authorize its own action and never creates a hidden
+      // paid request. Registered write effects stay inside their declared
+      // browser/tool boundary; execute, network, and identity effects ask.
+      if (tool.effect === "write") {
         remember(context, {
           mode: options.mode,
-          source: "model-review",
-          reason: review.reason,
-          ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-          ...(review.model ? { reviewModel: review.model } : {}),
+          source: "bounded-browser-sandbox",
+          reason: "Allowed by Auto Approve's deterministic policy for a registered write effect inside its declared browser tool boundary.",
         });
         return "allow";
-      }
-      if (review.verdict === "unsafe") {
-        remember(context, {
-          mode: options.mode,
-          source: "model-review",
-          reason: review.reason,
-          ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-          ...(review.model ? { reviewModel: review.model } : {}),
-        });
-        return "deny";
       }
 
       const decision = await options.broker.request(tool, argumentsValue, context);
       const fallbackOutcome = options.broker.takeOutcome(approvalRequestId(context)) ?? decision;
       remember(context, {
         mode: options.mode,
-        source: "human-fallback",
-        reason: `${review.reason} ${approvalOutcomeReason(fallbackOutcome)}`,
-        ...(review.requestId ? { reviewRequestId: review.requestId } : {}),
-        ...(review.model ? { reviewModel: review.model } : {}),
+        source: approvalWasAnswered(fallbackOutcome) ? "human-fallback" : "unattended",
+        reason: `Auto Approve requires a person for ${tool.effect} effects. ${approvalOutcomeReason(fallbackOutcome)}`,
       });
       return decision;
     },
@@ -166,12 +179,9 @@ export type HumanIntentReview = Readonly<{
 /**
  * Adjudicate an effect the *person* proposed, not one the model asked for.
  *
- * Auto Approve's whole premise is "have a model review what the model wants to
- * do". When the proposer is the human at the keyboard — staging a commit,
- * importing a repository, probing a vault — asking a model for permission
- * inverts the relationship, and a model verdict of `unsafe` becomes a machine
- * vetoing its operator. So Auto Approve resolves to the same thing Ask First
- * does here: the person is asked.
+ * Human-proposed actions remain human decisions. Auto Approve only applies its
+ * deterministic write-effect rule to model-proposed tool calls; staging a
+ * commit, importing a repository, or probing storage still asks the person.
  *
  * Full Access is unchanged, because it is the person's own standing decision
  * that their actions need no prompt.
@@ -187,7 +197,19 @@ export async function decideHumanIntent(options: Readonly<{
   argumentsValue: JsonValue;
   context: ToolContext;
 }>): Promise<HumanIntentReview> {
-  if (options.mode === "full-access") {
+  /*
+   * "Reviewed in every approval mode" was true of the model-proposed path and
+   * false here. Under Full Access this returned `allow` without asking anyone
+   * and journaled `fullAccessReason("write")` — "its workspace path
+   * confinement" — for a call naming a folder on the person's own disk, which
+   * is the one place that confinement does not hold. The mode still governs
+   * everything else; this one class of effect asks, exactly as
+   * `createApprovalModePolicy` above makes it ask.
+   */
+  const folderReview = options.mode === "full-access"
+    && options.tool.effect !== "read"
+    && namesAttachedFolder(options.argumentsValue);
+  if (options.mode === "full-access" && !folderReview) {
     return Object.freeze({
       decision: "allow" as const,
       provenance: Object.freeze({
@@ -203,14 +225,46 @@ export async function decideHumanIntent(options: Readonly<{
     decision,
     provenance: Object.freeze({
       mode: options.mode,
-      source: "human" as const,
+      // Never `human` for a mode that says it will not ask and then asked: that
+      // is the fallback vocabulary the mode policy already uses for this exact
+      // class of effect. And never `human` at all unless a person answered.
+      source: !approvalWasAnswered(outcome)
+        ? "unattended" as const
+        : folderReview ? "human-fallback" as const : "human" as const,
       // The allow sentence stays its own: this is the one path where the person
       // proposed the effect as well as permitting it, and the record says so.
-      reason: outcome === "allow"
-        ? "Allowed once by the user, who proposed the action."
-        : approvalOutcomeReason(outcome),
+      reason: folderReview
+        ? `${ATTACHED_FOLDER_REVIEW_REASON} ${approvalOutcomeReason(outcome)}`
+        : outcome === "allow"
+          ? "Allowed once by the user, who proposed the action."
+          : approvalOutcomeReason(outcome),
     }),
   });
+}
+
+/**
+ * The approval mode the conversation on screen puts the page into.
+ *
+ * The shell reads this from whichever conversation is displayed, held or not,
+ * and every human-proposed effect — a Git commit and push, a GitHub import,
+ * the vault probe — is decided under it. A conversation that arrived in a
+ * bundle file therefore grants authority just by being opened, which is what
+ * the product tells a person to do with one: measured, a file landed
+ * `full-access` on the record and the composer read "Full Access". Its record
+ * and its pinned manifest were both written on another device, so a held
+ * import contributes no mode at all and this device's own preference governs.
+ */
+export function displayedSessionApprovalMode(
+  session: Readonly<{
+    importedAt?: string;
+    approvalModeOverride?: ApprovalMode;
+    manifest: Readonly<{ profile?: Readonly<{ version: number; approvalMode?: ApprovalMode }> }>;
+  }> | undefined,
+  preference: ApprovalMode,
+): ApprovalMode {
+  if (!session || session.importedAt !== undefined) return preference;
+  return session.approvalModeOverride
+    ?? (session.manifest.profile?.version === 2 ? session.manifest.profile.approvalMode ?? preference : preference);
 }
 
 /**
@@ -249,11 +303,7 @@ export function createHumanIntentPolicy(options: Readonly<{
       const reviewed: HumanIntentReview = tool.effect === "read"
         ? {
             decision: "allow",
-            provenance: {
-              mode: options.mode,
-              source: "automatic-read",
-              reason: "Read-only browser tool effects are allowed automatically.",
-            },
+            provenance: automaticReadProvenance(options.mode),
           }
         : await decideHumanIntent({ ...options, tool, argumentsValue, context });
       if (provenance.size >= MAX_PROVENANCE) provenance.delete(provenance.keys().next().value as string);

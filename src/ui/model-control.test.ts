@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { ActiveChutesConnection } from "../auth/connection";
 import {
-  activeConnectionProofLabel,
   modelControlActivity,
   modelControlOptions,
   safeModelControlErrorMessage,
@@ -11,41 +9,17 @@ import {
 const source = readFileSync(new URL("./model-control.tsx", import.meta.url), "utf8");
 const appSource = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 
-describe("active model proof label", () => {
-  it("shows policy before evidence and last-turn evidence only after protected invocation", () => {
-    const connection: ActiveChutesConnection = {
-      version: 1,
-      kind: "chutes-oauth",
-      credentialKind: "oauth-user-token",
-      provider: "chutes",
-      model: "model-1",
-      connectedAt: "2026-07-20T00:00:00.000Z",
-      posture: "encrypted-attested",
-      source: "manual-import",
-      invokeAuthorization: "unverified",
-    };
-    expect(activeConnectionProofLabel(connection)).toBe("E2EE · proof required");
-    expect(activeConnectionProofLabel({ ...connection, invokeAuthorization: "verified", lastInvokeAt: "2026-07-20T00:01:00.000Z" })).toBe("E2EE · last turn proved");
-    // The transient belongs to the control, not to the shared label: a
-    // `busy` branch here would have shipped a string with no production caller
-    // into the entry chunk once `app.tsx` started reading this function.
-    expect(source).not.toContain("E2EE · Switching");
-    expect(source).toContain('<span class="runtime-posture" role="status">Switching…</span>');
+describe("active model summary", () => {
+  it("keeps the active shape to provider and model only", () => {
+    expect(source).not.toContain("boundaryLabel");
+    expect(source).not.toContain("activeConnectionProofLabel");
   });
 
-  it("does not imply proof when the compatibility posture has no required gate", () => {
-    const connection: ActiveChutesConnection = {
-      version: 1,
-      kind: "chutes-api-key",
-      credentialKind: "inference-api-key",
-      provider: "chutes",
-      model: "model-1",
-      connectedAt: "2026-07-20T00:00:00.000Z",
-      posture: "encrypted-unattested",
-      source: "manual-import",
-      invokeAuthorization: "unverified",
-    };
-    expect(activeConnectionProofLabel(connection)).toBe("E2EE · no proof gate");
+  it("keeps switching as the control's own live region", () => {
+    expect(source).not.toContain("E2EE");
+    expect(source).not.toContain("proof");
+    expect(source).not.toContain("attestation");
+    expect(source).toContain('<span class="runtime-posture" role="status">Switching…</span>');
   });
 });
 

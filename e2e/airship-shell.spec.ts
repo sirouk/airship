@@ -112,84 +112,63 @@ test("desktop shell navigates real routes and presents a coherent session header
   await capture(page, testInfo, "desktop-shell.png");
 });
 
-test("compact runtime indicators disclose scoped detail without expanding the topbar", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop indicator disclosure contract");
+test("neutral topbar, session status, and run details expose current operational state", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop operational-detail contract");
+  await setProfilePresentationDensity(page, "Balanced");
   await openReadyApp(page);
 
-  // Four axis pills — the fourth truncated to `Secure hardware not c…` — are
-  // one chip that states the weakest claim in full and counts the rest. The
-  // detail sentence used to exist only in a `role="tooltip"` a touch user could
-  // never open; it is now a row in the sheet the chip opens, which is a
-  // stronger disclosure than the one this test was written to protect.
-  const runtime = page.locator(".topbar-posture-chip");
-  /*
-   * The contract, not whichever axis happens to be worst today.
-   *
-   * This pinned "Browser / Edge runtime", which only passed because it read the
-   * chip before the boot reload settled — the durability axis had not been
-   * evaluated yet, so the runtime axis was the worst thing known. Pinning the
-   * settled answer instead ("Not saved · Vault not set up") just moved the
-   * problem: it held in this file alone and failed in the full suite, because
-   * which claim is weakest legitimately depends on what the browser arrived
-   * with.
-   *
-   * The claim the chip actually makes is "I state the weakest of these four in
-   * full and count the rest", and its accessible name names that claim outright.
-   * So the test reads the weakest claim from the chip's own accessible name and
-   * requires the visible text to agree with it. That is the real contract, it
-   * cannot drift, and it fails loudly if the chip ever shows one axis while
-   * announcing another — which is the defect worth catching here.
-   */
-  const spoken = await runtime.getAttribute("aria-label") ?? "";
-  const weakest = /Weakest claim: (.+?)\./u.exec(spoken)?.[1];
-  expect(weakest, `the chip must name its weakest claim: ${spoken}`).toBeTruthy();
-  await expect(runtime).toContainText(weakest!);
-  await expect(runtime).toContainText("4 runtime claims");
-  expect(spoken).toContain("4 runtime claims");
-  const initialTopbar = await page.locator(".topbar").boundingBox();
+  const topbar = page.locator(".topbar");
+  await expect(topbar.getByRole("button", { name: "Open session" })).toContainText("Airship");
+  await expect(topbar.getByRole("button", { name: "Connect a model", exact: true })).toBeVisible();
+  await expect(topbar.locator(".topbar-destination")).toHaveText("Chat");
+  await expect(topbar.locator(".runtime-line__text")).not.toHaveText("");
+  const initialTopbar = await topbar.boundingBox();
   expect(initialTopbar).not.toBeNull();
-  await runtime.click();
-  const sheet = page.getByRole("dialog", { name: "Runtime trust" });
-  await expect(sheet).toContainText("The agent kernel executes in this browser.");
-  // The chip says four; the sheet must render four *axes*. The count is the
-  // chip's statement of its own cost, so it may not drift from what it hides.
-  //
-  // Scoped to `.trust-sheet__axes` because the sheet now also carries this
-  // conversation's facts — the bound model, what holds the credential, the
-  // pinned Skill set — which used to occupy a 44px slot each on the phone's
-  // session bar or a permanent line under the composer. They are facts, not
-  // posture axes, and they live in their own block precisely so that this
-  // count keeps meaning what the chip says it means.
-  await expect(sheet.locator(".trust-sheet__axes .claim-rows > button")).toHaveCount(4);
-  // And the facts are actually there: a collapse that renders nothing is a
-  // deletion, which is the failure this whole arrangement exists to avoid.
-  await expect(sheet.locator(".trust-sheet__facts .claim-rows > button").first()).toBeVisible();
-  const disclosedTopbar = await page.locator(".topbar").boundingBox();
+
+  // Durability and lifecycle are conversation facts now. One status control
+  // exposes both rows with the shared status-mark vocabulary.
+  const sessionStatus = page.locator(".session-status-chip");
+  await expect(sessionStatus).toHaveAttribute("aria-expanded", "false");
+  await expect(sessionStatus.locator(".status-mark")).toHaveCount(1);
+  await sessionStatus.click();
+  const statusPanel = page.getByRole("group", { name: "Session status" });
+  await expect(statusPanel).toBeVisible();
+  await expect(statusPanel.locator(".detail-rows > *")).toHaveCount(2);
+  await expect(statusPanel.locator(".detail-rows .status-mark")).toHaveCount(2);
+  await expect(statusPanel).toContainText("No turn has started in this session.");
+
+  const disclosedTopbar = await topbar.boundingBox();
   expect(disclosedTopbar).not.toBeNull();
   expect(disclosedTopbar!.height).toBe(initialTopbar!.height);
 
-  // The sheet is the disclosure, so it must be dismissible and re-openable by
-  // keyboard alone — the tooltip it replaces was hover-only and unreachable.
-  // `exact: true`, because accessible-name matching is a case-insensitive
-  // substring by default and the Vault claim row now ends "…until this tab
-  // closes". A loose "Close" matched both the dismiss button and a row that
-  // tells the truth about ephemerality — the test failed because the product
-  // got more honest, which is the wrong way round.
-  await sheet.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(sheet).toBeHidden();
-  /*
-   * The sheet gives the focus back, and that is the contract worth asserting.
-   *
-   * This called `.focus()` and then checked it took, which raced the dialog's
-   * own `useOpenerRestore` — the restore lands a tick after the close and could
-   * move focus out from under the explicit call, leaving "expected focused,
-   * received inactive". Waiting for the restore instead tests the behaviour a
-   * keyboard user actually depends on: close the disclosure and you are back on
-   * the control that opened it, ready to reopen it.
-   */
-  await expect(runtime).toBeFocused({ timeout: 20_000 });
+  // The disclosure returns focus to its trigger and can be opened again without
+  // a pointer.
+  await statusPanel.getByRole("button", { name: "Done" }).click();
+  await expect(statusPanel).toBeHidden();
+  await expect(sessionStatus).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Runtime trust" })).toBeVisible();
+  await expect(statusPanel).toBeVisible();
+  const keyboardDone = statusPanel.getByRole("button", { name: "Done" });
+  await keyboardDone.focus();
+  await expect(keyboardDone).toBeFocused();
+  await keyboardDone.press("Enter");
+  await expect(statusPanel).toBeHidden();
+  await expect(sessionStatus).toBeFocused();
+
+  // Per-turn provider and identifier data lives with the answer instead of in
+  // permanent shell chrome.
+  await page.getByRole("combobox", { name: "Message Airship" }).fill("Summarize this local run.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const response = page.locator(".message.assistant").last();
+  await expect(response).toBeVisible({ timeout: 20_000 });
+  const runDetails = response.getByRole("button", { name: /^Run details\. Provider /u });
+  await expect(runDetails).toBeVisible({ timeout: 20_000 });
+  await expect(runDetails).toContainText(/^Run · .+ · .+$/u);
+  await runDetails.click();
+  const runPanel = response.getByRole("group", { name: "Run details" });
+  await expect(runPanel.locator('[data-field="origin"]')).toContainText(/Provider metadata|Local run record/u);
+  await expect(runPanel.locator('[data-field="receipt-id"] code')).toHaveText(/^urn:receipt:/u);
+  await expect(runPanel.locator(".receipt-trace__scope")).toContainText("Authenticity not proven");
 });
 
 test("the first user turn gives a new conversation a useful thread title", async ({ page }, testInfo) => {
@@ -228,25 +207,25 @@ test("rapid duplicate local-command clicks admit only one slash action", async (
   await openReadyApp(page);
   const prompt = "/help";
   await page.getByRole("combobox", { name: "Message Airship" }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).evaluate((element) => {
-    const init = { bubbles: true, cancelable: true };
-    element.dispatchEvent(new MouseEvent("click", init));
-    element.dispatchEvent(new MouseEvent("click", init));
+  await page.getByRole("button", { name: "Send message" }).evaluate((element: HTMLButtonElement) => {
+    element.click();
+    element.click();
   });
 
-  await expect(page.getByText("Local command · excluded from model context").last()).toBeVisible();
   const matchingCommands = page.getByRole("article", { name: "Your message" }).filter({ hasText: prompt });
   await expect(matchingCommands).toHaveCount(1);
+  // The initial assistant row plus exactly one local result proves one action,
+  // without pinning the transient footer wording used during projection.
+  await expect(page.getByRole("article", { name: "Airship message" })).toHaveCount(2);
 });
 
-test("desktop navigation exposes profile tabs and Account with one active page", async ({ page }, testInfo) => {
+test("desktop navigation exposes profile tabs and Setup destinations with one active page", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop nested navigation contract");
   await openReadyApp(page);
   const navigation = page.getByRole("navigation", { name: "Primary" });
 
-  // AMENDED: the `AGENT` group of one is dissolved. The pinned profile row's
-  // `Manage profiles` control opens the manager *scoped to the pinned
-  // profile*, which is a scope the rail's Profiles row never carried.
+  // Profile configuration starts from the pinned profile row and keeps its
+  // nested Skills destination keyboard-addressable.
   await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
   await expect(page).toHaveURL(/#profiles$/);
   await page.getByRole("navigation", { name: "Agent configuration" }).getByRole("button", { name: "Skills", exact: true }).click();
@@ -254,11 +233,20 @@ test("desktop navigation exposes profile tabs and Account with one active page",
   await expect(page.getByRole("heading", { name: "Skills", level: 1 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Agent configuration" }).getByRole("button", { name: "Skills", exact: true })).toHaveAttribute("aria-current", "page");
 
-  await navigation.getByRole("button", { name: "Account", exact: true }).click();
-  await expect(page).toHaveURL(/#account$/);
-  await expect(page.getByRole("heading", { name: "Account", exact: true, level: 1 })).toBeVisible();
-  await expect(navigation.getByRole("button", { name: "Account", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(navigation.getByRole("button", { name: "Connection", exact: true })).not.toHaveAttribute("aria-current", "page");
+  // The neutral Setup routes are Vault and Providers. Each route selects only
+  // its own rail row and the topbar names the same destination.
+  await navigation.getByRole("button", { name: "Vault", exact: true }).click();
+  await expect(page).toHaveURL(/#vault$/);
+  await expect(page.getByRole("heading", { name: "Vault", exact: true, level: 1 })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Vault", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "Providers", exact: true })).not.toHaveAttribute("aria-current", "page");
+
+  await navigation.getByRole("button", { name: "Providers", exact: true }).click();
+  await expect(page).toHaveURL(/#connection$/);
+  await expect(page.locator(".topbar-destination")).toHaveText("Providers");
+  await expect(page.getByRole("heading", { name: "Cloud and local models", level: 2 })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Providers", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "Vault", exact: true })).not.toHaveAttribute("aria-current", "page");
 });
 
 test("route form menus use the styled accessible listbox contract", async ({ page }, testInfo) => {
@@ -325,8 +313,8 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
   if (!mobile) {
     const triggerBox = await provider.boundingBox();
     // The same panel, for the same reason: "the menu hangs below its trigger"
-    // is a claim about the box that is positioned, and an inner options list
-    // sits inside whatever padding that box carries.
+    // measures the box that is positioned; an inner options list sits inside
+    // whatever padding that box carries.
     const listBox = await providerList.evaluate((element) => {
       const panel = element.closest(".menu-select-popover") ?? element;
       const box = panel.getBoundingClientRect();
@@ -702,26 +690,29 @@ test("route gutter and density preferences apply consistently to the whole layou
   await page.screenshot({ path: testInfo.outputPath("compact-layout.png"), fullPage: true });
 });
 
-test("mobile session header groups wrap without overlap and profile switching remains usable", async ({ page }, testInfo) => {
+test("mobile session controls stay within the header and profile switching remains usable", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile profile and geometry contract");
   await openReadyApp(page);
-  // `.mobile-session-details` was a third rendering of a pair the desktop meta
-  // row and the topbar already showed, and it stacked two seal glyphs to do it.
-  // One chip renders one glyph; the durability sentence it kept in a `title` is
-  // visible body text in its popover for the first time.
+
   const sessionDetails = page.locator(".session-status-chip");
   await expect(sessionDetails).toBeVisible();
   const stage = await page.locator(".session-bar").boundingBox();
   const details = await page.locator(".session-bar__chips").boundingBox();
   expect(stage).not.toBeNull();
   expect(details).not.toBeNull();
-  await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · content not saved\./u);
-  await expect(sessionDetails.locator(".seal")).toHaveCount(1);
+  await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · content not saved\..*2 details\./u);
+  const restingMark = sessionDetails.locator(".status-mark");
+  await expect(restingMark).toHaveCount(1);
+  await expect(restingMark).toHaveAttribute("data-state", "attention");
+
   await sessionDetails.click();
-  const sessionState = page.locator(".session-status-popover .popover__panel");
+  const sessionState = page.getByRole("group", { name: "Session status" });
   await expect(sessionState).toContainText("Ephemeral · content not saved");
   await expect(sessionState).toContainText("This session journal exists only in page memory. Nothing is synced.");
+  await expect(sessionState.locator(".detail-rows > *")).toHaveCount(2);
+  await expect(sessionState.locator(".detail-rows .status-mark")).toHaveCount(2);
   await page.keyboard.press("Escape");
+  await expect(sessionState).toBeHidden();
   expect(details!.x).toBeGreaterThanOrEqual(stage!.x);
   expect(details!.x + details!.width).toBeLessThanOrEqual(stage!.x + stage!.width + 1);
   expect(details!.y).toBeGreaterThanOrEqual(stage!.y);

@@ -9,6 +9,8 @@ import {
   approvalDeadlineWarning,
   approvalDeferralNotice,
   approvalSettlementAnnouncement,
+  deferredArrivalNotice,
+  reviewLabel,
 } from "./approval-dock";
 
 function request(overrides: Partial<PendingApproval> = {}): PendingApproval {
@@ -157,5 +159,157 @@ describe("the deadline, which was inaudible", () => {
     expect(notice).toContain("04:58");
     expect(notice).toContain("Review write_file");
     expect(notice).not.toMatch(/denied/iu);
+  });
+
+});
+
+/*
+ * One broker serves every conversation, and turns run in parallel.
+ *
+ * The dialog is the shell's only self-inflicted inert state, so which requests
+ * may raise it is a product decision, not a queue order. A request from the
+ * thread on screen is the interruption it has always been; a request from a
+ * thread answering in the background is not allowed to stop the work a person
+ * is looking at, and the broker files it as waiting instead.
+ */
+describe("the deferred bar names the conversation that is asking", () => {
+  const here = request({ id: "here:turn:op", sessionId: "here" });
+
+  it("puts the conversation on the button and in the sentence about it", () => {
+    expect(reviewLabel(here, "Alpha")).toBe("Review write_file in Alpha");
+    expect(approvalDeferralNotice(here, Date.parse(here.requestedAt), "Alpha"))
+      .toContain("\u201cReview write_file in Alpha\u201d");
+  });
+
+  it("still reads correctly for a host that names no conversation", () => {
+    expect(reviewLabel(here)).toBe("Review write_file");
+    expect(approvalDeferralNotice(here, Date.parse(here.requestedAt))).toContain("\u201cReview write_file\u201d");
+  });
+});
+
+/*
+ * P3. A write approval is the last thing a person reads before an effect
+ * reaches their own disk, and it was telling them something it could not know.
+ *
+ * Measured in Chromium: `/write p3/notes.txt` over a file that already held
+ * `first-content-abcdef` rendered "Size delta: Not supplied" and a two-sided
+ * preview whose old side was "∅". `write_file` carries the new content and
+ * nothing about what it replaces, so neither claim was derived from anything;
+ * ∅ is a statement that the file is empty, and it was wrong.
+ */
+describe("the write preview claims only what the arguments carry", () => {
+  const overwrite = facts(request());
+  const replacement = facts(request({
+    toolName: "replace_text",
+    displayArguments: { path: "notes/hello.md", oldText: "hi", newText: "hello there" },
+  }));
+  const source = readFileSync(new URL("./approval-dock.tsx", import.meta.url), "utf8");
+
+  it("has no previous content to show for a create-or-overwrite", () => {
+    // The facts themselves are unchanged: this is what the panel is given.
+    expect(overwrite.after).toBe("hello there");
+    expect(overwrite.before).toBeUndefined();
+    expect(overwrite.byteDelta).toBeUndefined();
+    expect(replacement.before).toBe("hi");
+    expect(replacement.after).toBe("hello there");
+    expect(replacement.byteDelta).toBe(9);
+  });
+
+  it("renders two sides only when there are two, and never invents an empty one", () => {
+    // Nowhere but the comment that records why it left.
+    expect(source.split("\u2205")).toHaveLength(2);
+    expect(source).not.toContain("{facts.before || \"\u2205\"}");
+    expect(source).not.toContain("{facts.after || \"\u2205\"}");
+    // One side is drawn only when the arguments carry it, and the single value
+    // is labelled as what it is rather than as half of a comparison.
+    expect(source).toContain("facts.before === undefined ? null : <del>{facts.before}");
+    expect(source).toContain("New content, bounded. What it replaces is not read here.");
+    // The old two-sided-or-nothing condition is gone.
+    expect(source).not.toContain("facts.before !== undefined || facts.after !== undefined");
+  });
+
+  it("drops the size delta rather than reporting it as a missing argument", () => {
+    expect(source).not.toContain('<small>Size delta</small><strong>{facts.byteDelta === undefined ? "Not supplied"');
+    expect(source).toContain("{facts.byteDelta === undefined ? null : <div><small>Size delta</small>");
+    // The spoken description already omitted it; the two now agree.
+    expect(approvalConsequenceSummary(overwrite)).not.toContain("Size delta");
+    expect(approvalConsequenceSummary(replacement)).toContain("Size delta +9 bytes");
+  });
+});
+
+/*
+ * P5. "2 decisions waiting" rendered one name, one expiry and one button.
+ *
+ * Measured in Chromium with two conversations each holding an unanswered
+ * `/write`: the bar's whole body was
+ * `write_file · General conversation · expires in 05:00` and a single
+ * `Review write_file in General conversation`. The second request had no name
+ * a person could read and no control at all until the first was answered,
+ * while its own five minutes ran out.
+ */
+describe("every waiting decision is named and reachable", () => {
+  const source = readFileSync(new URL("./approval-dock.tsx", import.meta.url), "utf8");
+
+  it("renders a row per deferred request rather than only the first", () => {
+    expect(source).toContain("{snapshot.deferred.map((request) => {");
+    expect(source).toContain("broker.resume(request.id)");
+    expect(source).toContain("{reviewLabel(request, named)}");
+    // `deferred[0]` survives only as "is the bar on screen at all".
+    expect(source).not.toContain("broker.resume(waiting.id)");
+    expect(source).not.toContain("{waiting.toolName}");
+  });
+
+  it("keeps the count and the rows reading from the same list", () => {
+    expect(source).toContain('snapshot.deferred.length === 1 ? "1 decision waiting" : `${snapshot.deferred.length} decisions waiting`');
+  });
+});
+
+/*
+ * P6. The bar was a `role="group"` with no live region.
+ *
+ * Measured in Chromium: with a decision waiting, the only live regions carrying
+ * text were the transcript's — "Reviewing local /write-file", then "Command
+ * /write-file completed." — and the bar itself announced nothing. The one path
+ * that ever spoke was the Escape handler, which only fires for a request the
+ * person had just put down themselves.
+ */
+describe("a decision that arrives without being asked for says so, once", () => {
+  const source = readFileSync(new URL("./approval-dock.tsx", import.meta.url), "utf8");
+  const elsewhere = request({ id: "there:turn:op", sessionId: "there" });
+  const names = (sessionId: string) => sessionId === "there" ? "Alpha" : "Bravo";
+
+  it("names the tool, the conversation and the button that answers it", () => {
+    const spoken = deferredArrivalNotice([elsewhere], names);
+    expect(spoken).toContain("write_file is waiting for a decision in Alpha");
+    expect(spoken).toContain("\u201cReview write_file in Alpha\u201d");
+    // Honest about what did not happen: nothing was interrupted, nothing ran.
+    expect(spoken).toContain("Nothing was interrupted; nothing runs");
+    expect(spoken).toContain("until you answer");
+    expect(spoken).not.toMatch(/denied|approved|allowed/iu);
+  });
+
+  it("counts the rest instead of reading a list out loud", () => {
+    const spoken = deferredArrivalNotice(
+      [elsewhere, request({ id: "here:turn:op", sessionId: "here" })],
+      names,
+    );
+    expect(spoken).toContain("in Alpha, and 1 more with it");
+    expect(deferredArrivalNotice([], names)).toBe("");
+  });
+
+  it("speaks from its own region, not the outcome channel or the transcript's", () => {
+    // Three regions: settled outcomes, the assertive deadline, and this one.
+    expect(source.match(/class="sr-only" role="status" aria-live="polite" aria-atomic="true"/gu)).toHaveLength(2);
+    expect(source).toContain("aria-atomic=\"true\">{arrival}</span>");
+    expect(source).toContain("const [arrival, setArrival] = useState(\"\");");
+  });
+
+  it("says it once, and never twice for a request the person put down", () => {
+    expect(source).toContain("const spokenFor = useRef(new Set<string>());");
+    expect(source).toContain("const fresh = snapshot.deferred.filter((request) => !spokenFor.current.has(request.id));");
+    // Escape marks its own before deferring, so its sentence is not doubled.
+    expect(source).toContain("spokenFor.current.add(current.id);\n                announce.current(approvalDeferralNotice(");
+    // Rebuilt from the live snapshot, so the set cannot outgrow the queue.
+    expect(source).toContain("spokenFor.current = new Set(snapshot.deferred.map((request) => request.id));");
   });
 });

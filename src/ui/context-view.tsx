@@ -1,3 +1,4 @@
+import { formatBytes } from "../core/bytes";
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { RETRIEVAL_FLOOR_HEADING, isContextSupersession, type ClientContextCandidate, type ClientContextEngineState, type ClientContextSearchHit, type ClientContextSearchResult } from "../indexing/client-context-engine";
@@ -6,8 +7,7 @@ import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { Icon } from "./icons";
 import type { ContextFabricDriver } from "../retrieval/context-driver";
 import type { RetrievalCommitment, RoutedExpert } from "../retrieval/contracts";
-import { hasConfidentialAuthority, subscribeConfidentialAuthority, type EmbeddingMode } from "../indexing/semantic-browser-provider";
-import { CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT } from "./connect/egress-preflight";
+import type { EmbeddingMode } from "../indexing/semantic-browser-provider";
 import type { SemanticProviderState } from "../indexing/semantic-worker-provider";
 import type { FederatedMemorySearchState } from "../tools/federated-memory";
 import type { ProvenanceRow } from "./provenance-chip";
@@ -54,16 +54,6 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
   const [embeddingChange, setEmbeddingChange] = useState<"idle" | "changing">("idle");
-  /**
-   * Which chute the confidential engine resolved, once discovery has answered.
-   *
-   * Held as state rather than read at render because discovery is asynchronous
-   * and completes inside `setEmbeddingMode`; a render-time read would sample
-   * whatever the module happened to hold and never update again.
-   */
-  const [confidentialModelId, setConfidentialModelId] = useState<string | undefined>(() => runtime.getConfidentialEmbeddingModelId());
-  /** Whether a Chutes credential is in page memory right now. Never persisted. */
-  const [confidentialAvailable, setConfidentialAvailable] = useState(hasConfidentialAuthority);
   const [statusExpanded, setStatusExpanded] = useState(detailExpanded);
   const [draftQuery, setDraftQuery] = useState("");
   const [localSearchResult, setLocalSearchResult] = useState<ClientContextSearchResult>();
@@ -93,20 +83,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   useEffect(() => runtime.subscribe((state) => {
     setEngineState(state);
     setEmbeddingMode(runtime.getEmbeddingMode());
-    setConfidentialModelId(runtime.getConfidentialEmbeddingModelId());
   }), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
-  /*
-   * The credential can arrive or be released while this view is mounted, and
-   * the initial `useState` read would be a one-time sample of a module global.
-   * Re-read on subscribe as well: connecting between render and effect is a
-   * real ordering, and it would otherwise leave the control hidden until the
-   * next connection change.
-   */
-  useEffect(() => {
-    setConfidentialAvailable(hasConfidentialAuthority());
-    return subscribeConfidentialAuthority(setConfidentialAvailable);
-  }, []);
   useEffect(() => {
     void runtime.updateWorkspace(entries).catch((error: unknown) => {
       if (!isContextSupersession(error)) setLocalSearchError(undefined);
@@ -207,7 +185,6 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     try {
       await runtime.setEmbeddingMode(mode);
       setEmbeddingMode(mode);
-      setConfidentialModelId(runtime.getConfidentialEmbeddingModelId());
       setLocalSearchResult(undefined);
     } catch (error) {
       setEmbeddingMode(runtime.getEmbeddingMode());
@@ -215,12 +192,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
        * Beside the control, not in the search slot.
        *
        * This refusal used to be written to `localSearchError`, which renders
-       * only inside the retrieval panel — so a confidential engine that could
-       * not reach its chute produced a press, a pause, and a button that
-       * quietly stayed where it was. Measured in a browser: the engine row
-       * still read "Bootstrap active", nothing on the page said why, and the
-       * only trace of a failed remote call was a 503 in the console. An engine
-       * that refuses has to say so where it was chosen.
+       * only inside the retrieval panel. An engine that refuses has to say so
+       * where it was chosen.
        */
       setEngineFailure(error instanceof Error ? error.message : "The embedding engine could not be changed.");
     } finally {
@@ -269,8 +242,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
             <i class="context-index-status__chevron" aria-hidden="true" />
           </button>
           <p class="embedding-engine-state" role="status" aria-live="polite">
-            <span class={semanticTone(embeddingMode, semanticState, confidentialAvailable)} />
-            {embeddingStatus(embeddingMode, semanticState, embeddingChange, confidentialAvailable, semanticPackAvailable)}
+            <span class={semanticTone(embeddingMode, semanticState)} />
+            {embeddingStatus(embeddingMode, semanticState, embeddingChange, semanticPackAvailable)}
             {semanticState?.loadedBytes !== undefined ? <small>{formatBytes(semanticState.loadedBytes)}{semanticState.totalBytes ? ` / ${formatBytes(semanticState.totalBytes)}` : ""}</small> : null}
           </p>
           <div class="embedding-engine-actions" role="group" aria-label="Embedding engine">
@@ -282,51 +255,19 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               disabled={embeddingChange === "changing" || !semanticPackAvailable}
               title={semanticPackAvailable
                 ? "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback."
-                : "Local semantic is unavailable because this build does not include the verified model pack."}
+                : "Local semantic is unavailable because this build does not include the required model pack."}
               onClick={() => void changeEmbeddingMode("semantic")}
             >Local semantic</button>
-            {/*
-              * Offered when Chutes is connected — and also whenever it is the
-              * mode in force, even after a release. A `toggle` group whose
-              * selected member has been removed reports `aria-pressed="false"`
-              * on every remaining button, which is a screen reader being told
-              * that nothing is selected while an engine is demonstrably running.
-              * Disabled without an authority, so the group can state the mode
-              * without offering a press that would only fail.
-              */}
-            {confidentialAvailable || embeddingMode === "chutes" ? (
-              <button
-                type="button"
-                class={embeddingMode === "chutes" ? "selected" : ""}
-                aria-pressed={embeddingMode === "chutes"}
-                disabled={embeddingChange === "changing" || !confidentialAvailable}
-                title={CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}
-                onClick={() => void changeEmbeddingMode("chutes")}
-              >Confidential</button>
-            ) : null}
           </div>
         </div>
 
         {/*
-          * The one egress disclosure on this screen, beside the control that
-          * causes it rather than behind the disclosure the status row collapses.
-          * Rendered whenever the choice is *offered*, not once it is taken: a
-          * sentence that appears after the corpus has been sent is a receipt,
-          * and this is meant to be a decision.
-          */}
-        {confidentialAvailable || embeddingMode === "chutes" ? (
-          <p class="context-confidential-preflight" role="note">{CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}</p>
-        ) : null}
-
-        {/*
           * A refused engine, said where the engine was chosen.
           *
-          * The confidential engine has to ask Chutes which chutes embed and how
-          * wide their vectors are before it can hold an index, and any of that
-          * can fail — an unreadable catalog, a chute that answers no OpenAI
-          * embeddings path, a rate limit pinned to one instance. The provider's
-          * own sentence names which; repeating it here is the difference
-          * between a button that did nothing and a button that explained.
+          * A local semantic engine can still refuse when this build omits the
+          * required pack or the worker cannot initialize. Repeating the
+          * provider's own sentence here is the difference between a button
+          * that did nothing and a button that explained.
           */}
         {engineFailure ? <p class="context-engine-failure" role="alert">{engineFailure}</p> : null}
 
@@ -375,10 +316,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               <ContextMetric label="Refresh" value={generation ? formatMilliseconds(generation.timing.totalMs) : "—"} detail={generation ? `${formatMilliseconds(generation.timing.indexingMs)} indexing` : "no completed run"} />
               <ContextMetric label="Vector memory" value={chunks ? formatBytes(chunks.vectorBytes) : "—"} detail={generation ? `${generation.lineage.embeddingDimensions} dimensions` : "not allocated"} />
             </div>
-            {/* The eyebrow was the literal "Private embedding engine" for every
-                mode, which the confidential one makes false — so the heading is
-                per-mode too, not just the paragraph under it. */}
-            <p class="context-engine-note"><strong>{embeddingEngineNote(embeddingMode, confidentialModelId).title}</strong> {embeddingEngineNote(embeddingMode, confidentialModelId).body}</p>
+            <p class="context-engine-note"><strong>{embeddingEngineNote(embeddingMode).title}</strong> {embeddingEngineNote(embeddingMode).body}</p>
             <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
           </div>
         ) : null}
@@ -597,12 +535,11 @@ function ContextMetric({ label, value, detail, tone = "neutral" }: { label: stri
 
 /**
  * How each engine is named in a sentence. Exhaustive over `EmbeddingMode`: the
- * `never` arm is what turns a future fifth mode into a compile error instead of
+ * `never` arm is what turns a future third mode into a compile error instead of
  * a mislabelled index.
  */
 export function embeddingModeNoun(mode: EmbeddingMode): string {
   if (mode === "semantic") return "local semantic embeddings";
-  if (mode === "chutes") return "confidential remote embeddings";
   if (mode === "bootstrap") return "bootstrap embeddings";
   const unreachable: never = mode;
   return unreachable;
@@ -610,30 +547,12 @@ export function embeddingModeNoun(mode: EmbeddingMode): string {
 
 /**
  * The expanded panel's engine paragraph, per mode. Exhaustive for the same reason.
- *
- * `modelId` is what discovery resolved, not a constant. This sentence used to
- * name one model outright, which was the same assumption the rest of the
- * confidential path had already been rewritten to drop: the catalog is read
- * from Chutes, the width is probed, the choice is the person's — and then the
- * one sentence a person actually reads about where their text goes named a
- * model nobody had checked was serving. Undefined means discovery has not
- * answered yet, and the sentence says that rather than guessing.
  */
-export function embeddingEngineNote(mode: EmbeddingMode, modelId?: string): Readonly<{ title: string; body: string }> {
+export function embeddingEngineNote(mode: EmbeddingMode): Readonly<{ title: string; body: string }> {
   if (mode === "semantic") {
     return Object.freeze({
       title: "Private embedding engine · Semantic transformer.",
       body: "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback. Public model artifacts may be cached, but workspace text and vectors remain page-memory only.",
-    });
-  }
-  if (mode === "chutes") {
-    return Object.freeze({
-      title: "Remote embedding engine · Chutes confidential compute.",
-      // Deliberately not a second copy of the pre-flight sentence: that one is
-      // always on screen and owns the egress claim. This one describes the
-      // engine, and adds the two facts the pre-flight has no room for — which
-      // model, and what stays here.
-      body: `Chunk text is sent to ${modelId ? `the ${modelId} chute` : "the embedding chute you selected"} with your Chutes credential; the vectors come back here and, like every search, stay page-memory only. Every chute runs in a TEE, which is the only reason a remote engine is offered beside two on-device ones.`,
     });
   }
   if (mode === "bootstrap") {
@@ -660,14 +579,6 @@ export function indexSummaryText(sources: number, chunkCount: number, vectorByte
     `${formatInteger(chunkCount)} chunk${chunkCount === 1 ? "" : "s"}`,
   ];
   if (vectorBytes !== undefined) parts.push(formatBytes(vectorBytes));
-  /*
-   * A two-branch ternary over a three-member union printed "bootstrap
-   * embeddings" for confidential ones, so the one line that names the engine
-   * named the wrong engine — and named the *safest* wrong engine, in the
-   * accessible label of the collapsed status row as well as in its text. The
-   * union is exhaustive here now, so a fourth mode is a typecheck failure
-   * rather than another silent "bootstrap".
-   */
   parts.push(embeddingModeNoun(mode));
   return parts.join(" · ");
 }
@@ -915,7 +826,7 @@ function candidateSummary(byStatus: Readonly<Record<string, number>>): string {
 function searchStatusText(status: "idle" | "searching" | "cancelled" | "complete", result?: ClientContextSearchResult): string {
   if (status === "searching") return "Searching the active in-memory generation…";
   if (status === "cancelled") return "Search cancelled; no stale result was committed.";
-  if (status === "complete" && result) return `${resultCountText(result)} sealed to ${result.generationDigest}.`;
+  if (status === "complete" && result) return `${resultCountText(result)} recorded at ${result.generationDigest}.`;
   return "Search is cancellable and automatically invalidated by a workspace refresh.";
 }
 
@@ -957,7 +868,7 @@ function managedSearchStatusText(
   if (!query.trim()) return "The index stays ready while the shared query is empty.";
   if (phase !== "ready") return "The query will run when the current workspace generation becomes searchable.";
   if (status === "searching") return "Searching the active in-memory generation with the query above…";
-  if (status === "complete" && result) return `${resultCountText(result, "index result")} sealed to ${result.generationDigest}.`;
+  if (status === "complete" && result) return `${resultCountText(result, "index result")} recorded at ${result.generationDigest}.`;
   return "The shared query is ready to run against this exact workspace generation.";
 }
 
@@ -978,12 +889,6 @@ function formatInteger(value: number): string {
   return new Intl.NumberFormat().format(value);
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
-}
-
 function formatMilliseconds(milliseconds: number): string {
   return milliseconds < 1 ? `${milliseconds.toFixed(2)} ms` : `${milliseconds.toFixed(1)} ms`;
 }
@@ -996,7 +901,6 @@ export function embeddingStatus(
   mode: EmbeddingMode,
   state: SemanticProviderState | undefined,
   change: "idle" | "changing",
-  confidentialAvailable = true,
   semanticPackAvailable = true,
 ): string {
   /*
@@ -1008,12 +912,6 @@ export function embeddingStatus(
    * work `ClientContextRuntime.setEmbeddingMode` does: cancel, reset, rebuild.
    */
   if (change === "changing") return "Rebuilding the index for the selected engine…";
-  if (mode === "chutes") {
-    // Fail loudly rather than showing a running engine that cannot authorize.
-    return confidentialAvailable
-      ? "Confidential embeddings active · text leaves this page"
-      : "Confidential embeddings unavailable · Chutes is not connected";
-  }
   if (!semanticPackAvailable) return "Bootstrap active · local semantic not included in this build";
   if (mode === "bootstrap") return "Bootstrap active · no model loaded";
   if (!state || state.phase === "cold") return "Semantic selected · starts on first index operation";
@@ -1024,11 +922,7 @@ export function embeddingStatus(
   return state.phase;
 }
 
-export function semanticTone(mode: EmbeddingMode, state?: SemanticProviderState, confidentialAvailable = true): string {
-  // The confidential engine has no `SemanticProviderState` — it has no worker
-  // and nothing to download — so without its own arm it fell through to the
-  // `!state` neutral dot and looked identical to bootstrap.
-  if (mode === "chutes") return confidentialAvailable ? "ready" : "error";
+export function semanticTone(mode: EmbeddingMode, state?: SemanticProviderState): string {
   if (mode === "bootstrap" || !state) return "neutral";
   if (state.phase === "ready") return "ready";
   if (state.phase === "failed" || state.phase === "unavailable") return "error";

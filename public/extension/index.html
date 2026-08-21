@@ -151,10 +151,10 @@
           <h2 id="boundary">What installation does—and does not—grant</h2>
         </div>
         <dl>
-          <div><dt>Provider OAuth</dt><dd>The extension can transport only a supported, reviewed grant flow. It does not manufacture provider permission or embed a client secret.</dd></div>
+          <div><dt>Integration grants</dt><dd>The extension can transport only authority a configured integration already obtained. It does not start a provider sign-in flow, manufacture permission, or embed a client secret.</dd></div>
           <div><dt>Local storage</dt><dd>Disabled by default. When enabled from the popup, it accepts bounded encrypted Airship pages only; the Vault remains authoritative.</dd></div>
           <div><dt>Compute</dt><dd>Moves bounded hashing and vector ranking off the interface thread. It uses the browser’s available execution context and makes no unmeasured GPU claim.</dd></div>
-          <div><dt>Trust</dt><dd>Installing the extension changes reachability, not attestation. Provider and TEE evidence remain independently reported in Airship Proof.</dd></div>
+          <div><dt>Operational scope</dt><dd>Installing the extension changes reachability, not provider authority. Airship still reports provider state separately, and the extension creates no security assurance.</dd></div>
         </dl>
       </section>
       <footer class="page-footer">

@@ -13,6 +13,7 @@ async function olderReleaseCatalog(extraSkills: readonly SkillRevision[] = []): 
   const current = await createBuiltInProfileCatalog();
   const profiles = await Promise.all(current.profiles.map((profile) => createProfileRevision({
     ...profile,
+    version: 3,
     skillModes: Object.fromEntries(
       Object.entries(profile.skillModes).filter(([skillId]) => skillId !== "delivery-loop"),
     ),

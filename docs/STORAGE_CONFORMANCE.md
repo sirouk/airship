@@ -56,15 +56,19 @@ temporary session token. Exposed response headers include `ETag`,
 `Content-Range`, `Content-Length`, `Last-Modified`, provider request IDs, and
 version IDs when available.
 
-Airship's public default CSP allowlists only Chutes and the current Shelbynet
-API. An exact bucket or gateway origin must be added to both `index.html` and
-`public/_headers` in a provider-specific build/deployment. The two policies
-must remain byte-for-byte aligned because browsers intersect multiple CSPs.
-Airship does not use provider-wide wildcards or blanket `connect-src https:`:
-either would let a same-origin supply-chain compromise exfiltrate ciphertext
-and credentials to an attacker-owned bucket. Truly arbitrary runtime-selected
-S3 endpoints therefore require a packaged client policy rather than the public
-web build.
+Airship's public build intentionally permits HTTPS egress so a user can select
+a provider or storage endpoint at runtime. It still rejects wildcard sources,
+plaintext remote HTTP, and broad WebSocket schemes, and keeps all shipped
+policies aligned. Runtime configuration accepts credential-free HTTPS origins
+and sends credentials only to the configured object and identity endpoints.
+
+This flexibility expands the consequence of a same-origin script compromise:
+CSP alone cannot stop that script from contacting another HTTPS origin. The
+release boundary therefore keeps app code same-origin, reviews the few external
+script grants separately, encrypts stored content client-side, and relies on
+short-lived credentials plus exact IAM and CORS scope. A deployment that needs
+CSP-level origin isolation can replace `https:` with its fixed provider and
+storage origins, but that build cannot offer arbitrary endpoints.
 
 ### Lifecycle and operations
 

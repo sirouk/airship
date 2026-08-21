@@ -41,7 +41,7 @@ describe("durable same-thread approval policy changes", () => {
 
   it("lets the latest change win, projects it across journal backends, and survives the rename projection", async () => {
     const { WorkspaceRootKey } = await import("../storage/encrypted-envelope");
-    const { MemoryObjectStore } = await import("../storage/memory-object-store");
+    const { MemoryObjectStore } = await import("../storage/memory-object-store.test-support");
     const { EncryptedObjectJournalBackend } = await import("../storage/encrypted-object-journal");
     const { key } = await WorkspaceRootKey.generate();
     const backends = [

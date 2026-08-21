@@ -1,5 +1,6 @@
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import {
+  isLocalFolderMountPath,
   isWorkspaceControlPlanePath,
   normalizeWorkspacePath,
   WorkspaceConflictError,
@@ -232,6 +233,9 @@ async function captureWorkspace(
   const entries = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    // A folder attached from this device is not workspace state; see
+    // `assertAllowedWorkspacePath`.
+    .filter(({ path }) => !isLocalFolderMountPath(path))
     // The artifact is already loaded through its own 4 MiB budget. Leaving it
     // in the mount would re-apply the 512 KiB per-file mount cap to the very
     // binary being executed and would offer it back for writeback.
@@ -410,6 +414,15 @@ function relativeSegments(path: string, root: string): string[] {
 }
 
 function assertAllowedWorkspacePath(path: string, root: string): void {
+  // Same rule, same reason as `ATTACHED_FOLDER_EXCLUSION` in the shell pack: a
+  // write-back rooted at /workspace would land on the person's own disk with no
+  // approval request, because the reviewed arguments never named the folder.
+  if (isLocalFolderMountPath(path)) {
+    throw new Error(
+      "This runtime does not carry the folder you attached from this device: it copies files and writes them back"
+      + ` with no approval request, and that folder is written in place. Refused: ${path}`,
+    );
+  }
   if (isWorkspaceControlPlanePath(path)) throw new Error(`WASI workspace excludes control-plane path: ${path}`);
   const excluded = relativeSegments(path, root).find((segment) => EXCLUDED_SEGMENTS.has(segment));
   if (excluded) throw new Error(`WASI workspace excludes the ${excluded} path segment.`);

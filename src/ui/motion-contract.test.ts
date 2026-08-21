@@ -24,18 +24,15 @@ const PRESSED_FAMILIES = Object.freeze([
   ".nav-item",
   ".topbar button",
   ".small-button",
-  ".status-chip",
   ".starter-chip",
   ".workbench-dialog button",
   ".approval-dock button",
-  ".connect-lane button",
 ] as const);
 
 /** The overlays that must have an entrance. */
 const OVERLAYS = Object.freeze([
   ".command-palette",
   ".preferences-dialog",
-  ".trust-sheet",
   ".approval-dock",
   ".workbench-notice",
   ".transcript-jump",

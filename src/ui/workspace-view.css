@@ -961,11 +961,11 @@
 .scm-bar__action { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line-control); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface); }
 .scm-bar__action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-control)); color: var(--ink); background: var(--surface-raised); }
 /* The word "Refreshing…" was the only thing that said a read was in flight,
-   and a 32px square has no room for it. `seal-checking` is declared in
+   and a 32px square has no room for it. `status-mark-checking` is declared in
    shell.css — @keyframes names are global, and it already carries the
    reduced-motion opt-out this rotation needs. */
 .scm-bar__action[aria-busy="true"] { color: var(--accent); }
-.scm-bar__action[aria-busy="true"] svg { animation: seal-checking 1.4s linear infinite; }
+.scm-bar__action[aria-busy="true"] svg { animation: status-mark-checking 1.4s linear infinite; }
 /*
  * The repository row, on one line: what branch, how far it has drifted from
  * its upstream, which commit these changes are measured against, and how many

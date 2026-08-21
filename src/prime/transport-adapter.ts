@@ -1,3 +1,4 @@
+import { isRecord } from "../core/records";
 import type {
   CanonicalImageInput,
   CanonicalMessage,
@@ -9,6 +10,7 @@ import type {
   ToolCall as CanonicalToolCall,
   ToolDefinition,
 } from "../core/contracts";
+import type { ConversationReceipt } from "../core/conversation-receipt";
 import { usageCost } from "./ai/cost";
 import { AssistantMessageEventStream } from "./ai/event-stream";
 import type {
@@ -36,8 +38,8 @@ import type {
  * speaks.
  *
  * `InferenceTransport` (src/core/contracts.ts) is airship's evidence-bearing
- * wire: five event kinds, whole tool calls, optional receipts, structural
- * failure naming. `StreamFunction` (src/prime/ai/types.ts) is the ported
+ * wire: flat event kinds, whole tool calls, structural failure naming.
+ * `StreamFunction` (src/prime/ai/types.ts) is the ported
  * prime-agent vocabulary: block-scoped deltas (text / thinking / tool calls),
  * usage with cost accounting, and terminal `done` / `error` frames carrying
  * the final AssistantMessage. This module maps both directions so either side
@@ -46,18 +48,12 @@ import type {
  * Layering: this file type-imports from `../core/contracts` only and must not
  * import from `src/inference` — the same rule `core/inference-retry.ts`
  * follows when it reads transport failures structurally instead of importing
- * the error classes that carry them. The receipt type is extracted from the
- * `completed` event for the same reason, so `src/receipts` stays a one-way
- * dependency of `src/core`.
+ * the error classes that carry them.
  */
 
 /** Non-retryable verdict code used when a failure declined to name itself.
  * Exported because the producer and the validator must agree on the string. */
 export const UNNAMED_TRANSPORT_FAILURE_CODE = "unnamed-transport-error";
-
-/** Receipt carried by a canonical `completed` event, extracted so this module
- * never imports the receipts module the core contracts already depend on. */
-export type PrimeBridgeReceipt = NonNullable<Extract<InferenceEvent, { type: "completed" }>["receipt"]>;
 
 /**
  * Structural twin of `ProviderTransportError` (src/inference/providers/
@@ -86,8 +82,8 @@ export class PrimeBridgeTransportError extends Error {
 export type PrimeModelStreamOptions = Readonly<{
   /**
    * Canonical request identity. The prime `Context` carries no session or
-   * turn ids, so callers that need receipts bound to a real session must pin
-   * them here (per call, `StreamOptions.sessionId` overrides `sessionId`).
+   * turn ids, so callers that need requests addressed to a real session must
+   * pin them here (per call, `StreamOptions.sessionId` overrides `sessionId`).
    * Defaults exist only so the adapter is total: `turnId` falls back to the
    * per-call request id, which makes every stream its own degenerate turn.
    */
@@ -107,25 +103,14 @@ export type PrimeModelStreamOptions = Readonly<{
    * change state. Callers that know better declare it per tool.
    */
   toolEffect?: (tool: PrimeTool) => ToolDefinition["effect"];
-  /**
-   * Out-channel for the one thing the prime message vocabulary cannot hold:
-   * the receipt a canonical `completed` event may carry. `AssistantMessage`
-   * has no receipt field by design, so the receipt travels beside the stream
-   * instead of being smuggled into it.
-   */
-  onReceipt?: (receipt: PrimeBridgeReceipt) => void;
   /** Clock injection for deterministic tests. */
   now?: () => number;
+  /** Raw provider receipt side-channel; the prime message shape carries none. */
+  onReceipt?: (receipt: ConversationReceipt) => void;
 }>;
 
 export type PrimeModelStreamFunction = StreamFunction<Api, StreamOptions> & {
-  /**
-   * Receipt from the most recently completed stream, or undefined when that
-   * stream ended in error, was aborted, or its transport simply minted none.
-   * Reset at the start of every call: a failed call must never surface the
-   * receipt of an earlier, unrelated success.
-   */
-  getLastReceipt(): PrimeBridgeReceipt | undefined;
+  getLastReceipt(): ConversationReceipt | undefined;
 };
 
 export type PrimeStreamTransportOptions = Readonly<{
@@ -174,7 +159,7 @@ export function createTransportForPrimeModel(
   options?: PrimeModelStreamOptions,
 ): PrimeModelStreamFunction {
   const now = options?.now ?? (() => Date.now());
-  let lastReceipt: PrimeBridgeReceipt | undefined;
+  let lastReceipt: ConversationReceipt | undefined;
 
   const streamFn = ((boundModel: Model<Api>, context: Context, callOptions?: StreamOptions) => {
     // The closure model is authoritative: cost recomputation, api/provider
@@ -186,7 +171,6 @@ export function createTransportForPrimeModel(
     const requestId = randomUuid();
     const sessionId = callOptions?.sessionId ?? options?.sessionId ?? "prime";
     const turnId = options?.turnId ?? requestId;
-    lastReceipt = undefined;
     const request: InferenceRequest = {
       requestId,
       sessionId,
@@ -197,13 +181,13 @@ export function createTransportForPrimeModel(
       tools: (context.tools ?? []).map((tool) => toToolDefinition(tool, options?.toolEffect)),
       idempotencyKey: options?.idempotencyKey ?? `${sessionId}:${turnId}:${requestId}`,
     };
+    lastReceipt = undefined;
     void pumpTransportIntoPrimeStream(out, model, transport, request, signal, now, (receipt) => {
       lastReceipt = receipt;
       options?.onReceipt?.(receipt);
     });
     return out;
   }) as PrimeModelStreamFunction;
-
   streamFn.getLastReceipt = () => lastReceipt;
   return streamFn;
 }
@@ -225,7 +209,7 @@ async function pumpTransportIntoPrimeStream(
   request: InferenceRequest,
   signal: AbortSignal,
   now: () => number,
-  receiveReceipt: (receipt: PrimeBridgeReceipt) => void,
+  onReceipt: (receipt: ConversationReceipt) => void,
 ): Promise<void> {
   const output: AssistantMessage = {
     role: "assistant",
@@ -247,7 +231,12 @@ async function pumpTransportIntoPrimeStream(
     if (block.kind === "text") {
       out.push({ type: "text_end", contentIndex: block.contentIndex, content: block.content.text, partial: output });
     } else {
-      out.push({ type: "thinking_end", contentIndex: block.contentIndex, content: block.content.thinking, partial: output });
+      out.push({
+        type: "thinking_end",
+        contentIndex: block.contentIndex,
+        content: block.content.thinking,
+        partial: output,
+      });
     }
     block = undefined;
   };
@@ -284,7 +273,7 @@ async function pumpTransportIntoPrimeStream(
          * The premise the comment above used to carry — "the canonical
          * vocabulary carries no reasoning text" — stopped being true when
          * `reasoning-delta` joined `InferenceEvent`. Every vendor transport
-         * emits it: `chutes/openai.ts` from `delta.reasoning_content`,
+         * emits it: the openai-compatible lanes from `delta.reasoning_content`,
          * `browser-cloud.ts` from `delta.thinking`, the demo lane from
          * `/reason`. This branch simply did not exist, so on the prime lane —
          * which is now the default engine, and which reaches its provider
@@ -332,6 +321,7 @@ async function pumpTransportIntoPrimeStream(
         output.usage = usageFor(model, usageInput, usageOutput);
       } else if (event.type === "completed") {
         completed = event;
+        if (event.receipt) onReceipt(event.receipt as ConversationReceipt);
         break;
       }
     }
@@ -368,7 +358,6 @@ async function pumpTransportIntoPrimeStream(
 
   const reason = FINISH_REASON_TO_STOP_REASON[completed.finishReason];
   output.stopReason = reason;
-  if (completed.receipt) receiveReceipt(completed.receipt);
   out.push({ type: "done", reason, message: output });
 }
 
@@ -546,7 +535,11 @@ function structuralFailureName(
 ): Readonly<{ code: string; status?: number; retryAfter?: string }> | undefined {
   if (!(error instanceof Error)) return undefined;
   const carrier = error as unknown as Record<string, unknown>;
-  const named = typeof carrier.code === "string" ? carrier : isRecord(carrier.diagnostic) ? carrier.diagnostic : undefined;
+  const named = typeof carrier.code === "string"
+    ? carrier
+    : isRecord(carrier.diagnostic)
+      ? carrier.diagnostic
+      : undefined;
   const code = named?.code;
   if (typeof code !== "string") return undefined;
   const status = named?.status;
@@ -857,9 +850,6 @@ function safeJson(value: JsonValue): string | undefined {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Identity through core/id only — see the single-implementation contract. */
 import { randomUuid } from "../core/id";

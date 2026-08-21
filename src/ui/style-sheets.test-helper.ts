@@ -1,23 +1,21 @@
 import { readFile } from "node:fs/promises";
 
 /**
- * `styles.css` is an `@import` barrel, so reading it no longer reads the
- * cascade. The contract tests assert on the cascade — "does the rail rule that
- * wins actually say this" — not on a filename, so they read the barrel's own
- * members, concatenated in barrel order. That is the same text, in the same
- * order, that the browser resolves the barrel to.
- *
- * Only the sheets the barrel owns are listed. `platform-shell.css`,
- * `model-picker.css` and `menu-select.css` are imported by the barrel too, but
- * they are separate artifacts that individual tests read (and make negative
- * assertions about) by name, so folding them in here would silently widen
- * every `not.toContain` in the suite.
+ * Browser-equivalent order for every member of the `styles.css` barrel.
+ * Contract tests that inspect the cascade must see the same sheets and source
+ * order as the app; omitting a live member can make a negative assertion pass
+ * while the shipped selector still exists.
  */
 export const AIRSHIP_BARREL_SHEETS = Object.freeze([
+  "./platform-shell.css",
+  "./menu-select.css",
   "./tokens.css",
   "./shell.css",
   "./chat.css",
   "./routes.css",
+  "./durability-indicator.css",
+  "./popover.css",
+  "./search-field.css",
 ] as const);
 
 export async function readAirshipStyles(): Promise<string> {

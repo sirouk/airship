@@ -269,11 +269,20 @@ export interface AnthropicMessagesCompat {
   supportsLongCacheRetention?: boolean;
   /**
    * Anthropic requires `anthropic-dangerous-direct-browser-access: true` to
-   * accept CORS requests from browser origins. prime-agent-trans sets this by
-   * default for api.anthropic.com; set to false when proxying.
+   * accept CORS requests from browser origins. Upstream prime-agent sets this
+   * by default for api.anthropic.com; set to false when proxying.
    */
   directBrowserAccess?: boolean;
 }
+
+/** Compatibility metadata accepted by each wire protocol. */
+export type ApiCompat<TApi extends Api> = TApi extends "openai-completions"
+  ? OpenAICompletionsCompat
+  : TApi extends "openai-responses"
+    ? OpenAIResponsesCompat
+    : TApi extends "anthropic-messages"
+      ? AnthropicMessagesCompat
+      : never;
 
 export interface ModelCost {
   input: number;
@@ -296,13 +305,18 @@ export interface Model<TApi extends Api = Api> {
   maxTokens: number;
   featured?: boolean;
   headers?: Record<string, string>;
-  compat?: TApi extends "openai-completions"
-    ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
-      ? OpenAIResponsesCompat
-      : TApi extends "anthropic-messages"
-        ? AnthropicMessagesCompat
-        : never;
+  compat?: ApiCompat<TApi>;
+}
+
+/**
+ * Provider-wide wire defaults. They are keyed by provider and API rather than
+ * by endpoint hostname, so the same declaration works through a custom proxy.
+ * Per-model `compat` metadata remains authoritative over these defaults.
+ */
+export interface ProviderDescriptor<TApi extends Api = Api> {
+  api: TApi;
+  provider: Provider;
+  compat?: ApiCompat<TApi>;
 }
 
 /** The registry maps an api id to a provider implementation. */

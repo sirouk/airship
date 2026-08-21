@@ -26,6 +26,7 @@
  * AGENT_FAMILY_REACH_ERROR.
  */
 
+import { isRecord } from "../../core/records";
 import type { JsonValue, Tool, ToolExecutionResult } from "../../core/contracts";
 import { randomUuid } from "../../core/id";
 import { objectArguments, requiredString } from "../../tools/schema";
@@ -592,9 +593,6 @@ function canonicalHeartbeatRegistryState(value: unknown): HeartbeatRegistryState
   return Object.freeze({ schema: 1, records });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export type PrimeHeartbeatDeps = Readonly<{
   store: PrimeHeartbeatStateStore;

@@ -32,6 +32,7 @@ describe("live environment snapshots", () => {
     const snapshot = await sealLiveEnvironmentSnapshot({
       sessionId: "session-live",
       manifest,
+      model: manifest.model,
       toolDefinitions: [TOOL],
       transportPosture: "local",
       observation: observation("ready"),
@@ -49,12 +50,12 @@ describe("live environment snapshots", () => {
     expect(snapshot.workspaceIndex.workspaceId).toBe(manifest.workspaceId);
     expect(canonicalLiveEnvironmentSnapshot(structuredClone(snapshot))).toEqual(snapshot);
     expect(await verifyLiveEnvironmentSnapshot(snapshot)).toBe(true);
-    expect(liveEnvironmentScopeMatches(snapshot, "session-live", manifest)).toBe(true);
-    expect(liveEnvironmentScopeMatches(snapshot, "another-session", manifest)).toBe(false);
+    expect(liveEnvironmentScopeMatches(snapshot, "session-live", manifest, manifest.model)).toBe(true);
+    expect(liveEnvironmentScopeMatches(snapshot, "another-session", manifest, manifest.model)).toBe(false);
     expect(liveEnvironmentScopeMatches({
       ...snapshot,
       tools: { ...snapshot.tools, installed: [] },
-    }, "session-live", manifest)).toBe(false);
+    }, "session-live", manifest, manifest.model)).toBe(false);
     expect(injectLiveEnvironment("Inspect it.", snapshot)).toContain("[Airship live environment;");
   });
 
@@ -70,6 +71,7 @@ describe("live environment snapshots", () => {
     const snapshot = await sealLiveEnvironmentSnapshot({
       sessionId: "session-live",
       manifest,
+      model: manifest.model,
       toolDefinitions: [],
       transportPosture: "local",
       observation: observation("ready"),
@@ -85,6 +87,7 @@ describe("live environment snapshots", () => {
     await expect(sealLiveEnvironmentSnapshot({
       sessionId: "session-live",
       manifest,
+      model: manifest.model,
       toolDefinitions: [],
       transportPosture: "local",
       observation: {

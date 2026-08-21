@@ -6,7 +6,7 @@ Airship Companion
 
 ## Short description
 
-Local acceleration and reviewed provider reach for the Airship edge agent.
+Local acceleration and reviewed provider reach for the Airship browser agent.
 
 ## Full description
 
@@ -24,9 +24,10 @@ headers, and has fixed request, response, deadline, and concurrency ceilings.
 The encrypted cache is disabled by default and can be cleared from the popup.
 Airship’s Vault remains authoritative.
 
-Installing the extension does not authorize a provider account, create an
-attestation, or embed a provider client secret. Airship offers account
-authorization only when a separate reviewed provider grant flow is available.
+Installing the extension does not authorize a provider account, create a security
+assurance, or embed a provider client secret. The stock static product uses
+browser-direct API keys. The extension can transport only authority that a
+configured integration already obtained.
 
 ## Category
 
@@ -34,7 +35,7 @@ Developer Tools / Productivity
 
 ## Single-purpose statement
 
-Extend the Airship edge agent with bounded provider transport and opt-in local
+Extend the Airship browser agent with bounded provider transport and opt-in local
 acceleration while keeping provider credentials on the user’s device.
 
 ## Public URLs

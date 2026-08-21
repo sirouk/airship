@@ -9,8 +9,9 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { streamSimple } from "../ai/stream";
 import type { Model } from "../ai/types";
-import { type FauxProviderRegistration, registerFauxProvider } from "../ai/providers/faux";
+import { type FauxProviderRegistration, registerFauxProvider } from "../ai/faux.test-support";
 import { canonicalTaskPlanNote, runTurn } from "../../core/agent";
 import {
   canonicalContextSelection,
@@ -85,7 +86,7 @@ function makeStubTool(
  * default bytes-per-token basis and calibration stays silent).
  */
 class ScriptedBoundaryTransport implements InferenceTransport {
-  readonly id = "boundary-transport";
+  readonly id = "faux";
   readonly posture = "local" as const;
   readonly requests: InferenceRequest[] = [];
 
@@ -211,7 +212,6 @@ async function makeBoundaryFixture(options: Readonly<{
   tools?: Tool[];
   turnContext?: "required" | "disabled";
   contextPolicy?: SessionContextPolicy;
-  transportId?: string;
   journal?: EventJournal;
   manifest?: SessionManifest;
 }> = {}): Promise<BoundaryFixture> {
@@ -224,7 +224,7 @@ async function makeBoundaryFixture(options: Readonly<{
   for (const tool of options.tools ?? []) registry.register(tool);
   const manifest = options.manifest ?? await createSessionManifest({
     systemPrompt: SYSTEM_PROMPT,
-    providerId: options.transportId ?? new ScriptedBoundaryTransport().id,
+    providerId: model.provider,
     model: model.id,
     tools: registry.definitions(),
     workspaceId: WORKSPACE_ID,
@@ -248,7 +248,7 @@ function makeSession(
     registry: fixture.registry,
     approvalPolicy: allowAllForTests,
     model: fixture.model,
-    ...(transport ? { transport } : {}),
+    ...(transport ? { transport } : { streamFn: streamSimple }),
   });
 }
 
@@ -489,6 +489,7 @@ describe("PrimeAgentSession boundary semantics", () => {
       fixture.registry.attachLiveEnvironmentProvider(provider);
       const transport = new ScriptedBoundaryTransport();
       const session = makeSession(fixture, transport);
+      await fixture.journal.setSessionModel(fixture.sessionId, "boundary-model-switched");
       const result = await session.prompt("describe where you are");
       expect(result.outcome).toBe("completed");
 
@@ -503,7 +504,8 @@ describe("PrimeAgentSession boundary semantics", () => {
       expect(snapshot!.capturedAt).toBe(FIXED_NOW);
       expect(snapshot!.tools.manifestDigest).toBe(fixture.manifest.toolManifestDigest);
       expect(snapshot!.inference.providerId).toBe(fixture.manifest.providerId);
-      expect(snapshot!.inference.model).toBe(fixture.manifest.model);
+      expect(snapshot!.inference.model).toBe("boundary-model-switched");
+      expect(transport.requests[0]?.model).toBe("boundary-model-switched");
       expect(snapshot!.inference.posture).toBe("local");
 
       // The provider-visible request carries exactly the canonical injection.
@@ -716,7 +718,7 @@ describe("byte parity with core/agent.ts", () => {
      */
     const manifest = await createSessionManifest({
       systemPrompt: SYSTEM_PROMPT,
-      providerId: "boundary-transport",
+      providerId: model.provider,
       model: model.id,
       tools: registry.definitions(),
       workspaceId: WORKSPACE_ID,

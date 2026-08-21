@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalBroker } from "../approvals/broker";
-import { createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent } from "../approvals/modes";
+import {
+  createApprovalModePolicy,
+  createHumanIntentPolicy,
+  decideHumanIntent,
+  displayedSessionApprovalMode,
+  type ApprovalMode,
+} from "../approvals/modes";
+import { LOCAL_FOLDER_MOUNT_ROOT } from "../workspace/contracts";
 import { ToolRegistry } from "../tools/registry";
 import type { ToolContext, ToolDefinition } from "../core/contracts";
 
@@ -73,6 +80,108 @@ describe("human-initiated approvals", () => {
     expect(broker.snapshot().pending).toHaveLength(0);
   });
 
+  /*
+   * "A write that reaches an attached folder is reviewed in every approval
+   * mode" was true of the model-proposed path and false here. Measured: under
+   * Full Access this returned `allow` without asking anyone, and journaled
+   * "its workspace path confinement" — the exact confinement that does not
+   * hold for a folder on a person's own disk, which Airship writes in place
+   * and cannot undo.
+   */
+  it("asks about a folder on this device even under Full Access, and says why", async () => {
+    const broker = new ApprovalBroker();
+    const pending = decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { path: `${LOCAL_FOLDER_MOUNT_ROOT}/notes.md`, content: "x" },
+      context: context(),
+    });
+
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "allow");
+    const reviewed = await pending;
+
+    expect(reviewed.decision).toBe("allow");
+    expect(reviewed.provenance).toMatchObject({ mode: "full-access", source: "human-fallback" });
+    expect(reviewed.provenance.reason).toContain("names a folder on your own device");
+    expect(reviewed.provenance.reason).not.toContain("workspace path confinement");
+  });
+
+  it("refuses a folder write under Full Access when the person refuses it", async () => {
+    const broker = new ApprovalBroker();
+    const pending = decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { edits: [{ path: `${LOCAL_FOLDER_MOUNT_ROOT}/a/b.txt` }] },
+      context: context(),
+    });
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "deny");
+    expect((await pending).decision).toBe("deny");
+  });
+
+  it("leaves a browser-workspace path under Full Access exactly as it was", async () => {
+    const broker = new ApprovalBroker();
+    const reviewed = await decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { path: "/workspace/README.md", content: "x" },
+      context: context(),
+    });
+    expect(reviewed.decision).toBe("allow");
+    expect(reviewed.provenance).toMatchObject({ source: "bounded-browser-sandbox" });
+    expect(broker.snapshot().pending).toHaveLength(0);
+  });
+});
+
+/*
+ * The landing was not the worst of it.
+ *
+ * The shell reads the approval mode from whichever conversation is on screen,
+ * held or not, and every human-proposed effect — Git commit and push, GitHub
+ * import, the vault probe — is decided under it. So opening an imported
+ * conversation, which is exactly what the product tells a person to do with
+ * one, put the whole page into the mode the file named: the record's pin when
+ * a replay granted one, and the manifest's `profile.approvalMode` — which a
+ * file carries by construction — even when it did not.
+ */
+describe("a conversation that arrived in a file sets no approval mode", () => {
+  const manifest = (approvalMode: ApprovalMode) => ({
+    profile: { version: 2 as const, approvalMode },
+  });
+
+  it("uses this device's own preference for a held import, whatever the file says", () => {
+    expect(displayedSessionApprovalMode(
+      { importedAt: "2026-08-21T09:00:00.000Z", approvalModeOverride: "full-access", manifest: manifest("full-access") },
+      "ask-first",
+    )).toBe("ask-first");
+    expect(displayedSessionApprovalMode(
+      { importedAt: "2026-08-21T09:00:00.000Z", manifest: manifest("full-access") },
+      "auto-approve",
+    )).toBe("auto-approve");
+  });
+
+  it("still lets a conversation this device composed carry its own pin", () => {
+    expect(displayedSessionApprovalMode(
+      { approvalModeOverride: "full-access", manifest: manifest("ask-first") },
+      "ask-first",
+    )).toBe("full-access");
+    expect(displayedSessionApprovalMode({ manifest: manifest("auto-approve") }, "ask-first")).toBe("auto-approve");
+    expect(displayedSessionApprovalMode({ manifest: {} }, "auto-approve")).toBe("auto-approve");
+    expect(displayedSessionApprovalMode(undefined, "full-access")).toBe("full-access");
+  });
+
+  it("is the only thing the shell reads the visible conversation's mode from", () => {
+    expect(source).toContain(
+      "const pinnedApprovalMode = displayedSessionApprovalMode(activeSessionRecord, preferences.approvalMode);",
+    );
+    expect(source).not.toContain("activeSessionRecord?.approvalModeOverride");
+    expect(source).not.toContain("activeSessionRecord.manifest.profile.approvalMode");
+  });
+
   it("routes every human-proposed effect through the one helper that records it", () => {
     /*
      * The three surfaces that exist today, named — and then the scan that makes
@@ -133,7 +242,7 @@ describe("human-initiated approvals", () => {
  * It cannot happen, and this pins the three facts that make it so rather than
  * leaving them as an assumption in a review note. If any of them is ever
  * loosened — the dock moved inside the routed region, `approvalPending`
- * dropped from the inert set, `denyAll` removed from teardown — a route-change
+ * dropped from the inert set, `settleAll` removed from teardown — a route-change
  * abort becomes necessary and these assertions are where that is discovered.
  */
 describe("a pending decision cannot be navigated away from", () => {
@@ -144,7 +253,7 @@ describe("a pending decision cannot be navigated away from", () => {
    * which is the whole of what this contract is about, so the assertion follows
    * the component rather than the import.
    */
-  const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}";
+  const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} conversationName={conversationDisplayName} /> : null}";
 
   it("renders the dock outside the routed region, so a view change cannot unmount it", () => {
     expect(source).toContain(dock);
@@ -172,9 +281,32 @@ describe("a pending decision cannot be navigated away from", () => {
   });
 
   it("fails the decision closed if the page goes away under it", () => {
-    // The one exit that is not navigation. Teardown denies rather than
+    // The one exit that is not navigation. Teardown settles rather than
     // abandoning, so no awaited decision outlives the surface that asked for it.
-    expect(source).toContain("approvalBroker.denyAll();");
+    expect(source).toContain('approvalBroker.settleAll("page");');
+  });
+
+  /*
+   * Three of the four callers of the page-wide settle helper are the page
+   * itself: the approval dialog's chunk failed to load, the shell is
+   * unmounting, or a conversation's approval mode changed under an outstanding
+   * prompt. None of them asked anybody anything, and all three used to file the
+   * same `deny` the person's own control files — so the journal recorded a
+   * human refusal of a question that was never answered, and for the failed
+   * chunk was never even shown. The actor is now named at every call site, and
+   * these assertions are where a fourth automatic caller borrowing the person's
+   * word is caught.
+   */
+  it("names the page, not a person, on every automatic settle", () => {
+    // Failed dialog chunk, teardown, and a conversation whose mode changed.
+    expect(source.match(/approvalBroker\.settleAll\("page"(?:, sessionId)?\);/gu)).toHaveLength(3);
+    expect(source).toContain('approvalBroker.settleAll("page", sessionId);');
+    // Exactly one caller is a person, and it is the button that says so.
+    expect(source.match(/approvalBroker\.settleAll\("human"\);/gu)).toHaveLength(1);
+    expect(source).toContain(">Deny pending request</button>");
+    // The word a person's refusal is filed under may never be spelled by an
+    // automatic path again.
+    expect(source).not.toContain("approvalBroker.denyAll(");
   });
 });
 
@@ -251,22 +383,7 @@ describe("local slash commands", () => {
     expect(wrote).toBe("hi");
   });
 
-  it("cannot be vetoed by a model verdict the operator never gets to answer", async () => {
-    const unsafe = { verdict: "unsafe" as const, reason: "The model judged this command dangerous." };
-
-    // What the composer did before: an `unsafe` verdict is a terminal denial in
-    // `createApprovalModePolicy` — no dock prompt, no fallback — so a command
-    // the person typed themselves was refused by a model on their behalf.
-    const vetoBroker = new ApprovalBroker();
-    const vetoed = createApprovalModePolicy({
-      mode: "auto-approve",
-      broker: vetoBroker,
-      safetyReview: async () => unsafe,
-    });
-    expect(await vetoed.review(writeTool, { path: "notes.txt" }, localContext())).toBe("deny");
-    expect(vetoBroker.snapshot().pending).toHaveLength(0);
-
-    // What it does now: the person is asked, and there is no reviewer to ask.
+  it("keeps human-proposed effects under human authority in Auto Approve", async () => {
     const broker = new ApprovalBroker();
     const context = localContext();
     const pending = createHumanIntentPolicy({ mode: "auto-approve", broker })

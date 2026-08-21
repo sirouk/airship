@@ -43,7 +43,7 @@ describe("runtime connectivity truth", () => {
   it("uses one consistent, bounded explanation across runtime surfaces", () => {
     expect(OFFLINE_RUNTIME_LABEL).toBe("Offline · local only");
     expect(OFFLINE_RUNTIME_DETAIL).toContain("Remote inference, sync, and account reads are paused");
-    expect(OFFLINE_INLINE_REASON).toContain("Local commands, workspace, memory, and cached proof remain available");
+    expect(OFFLINE_INLINE_REASON).toContain("Local commands, workspace, memory, and cached records remain available");
   });
 
   it("blocks only remote composer work and keeps local command plans live", () => {

@@ -21,8 +21,6 @@ export type MobileNavigationProps = Readonly<{
    */
   chromeInert?: boolean;
   chatPending?: boolean | number;
-  proofPending?: boolean | number;
-  attestationPending?: boolean | number;
   onNavigate(view: NavigationView): void;
   onOpenMore(): void;
   onCloseMore(): void;
@@ -34,7 +32,7 @@ const primaryIcons: Readonly<Record<MobilePrimaryControlId, IconName>> = Object.
   chat: "chat",
   workspace: "workspace",
   memory: "memory",
-  trust: "proof",
+  providers: "access",
   more: "plus",
 });
 
@@ -50,8 +48,6 @@ const routeIcons: Readonly<Record<NavigationView, IconName>> = Object.freeze({
   capabilities: "terminal",
   skills: "skills",
   vault: "cloud",
-  billing: "billing",
-  proof: "proof",
   access: "access",
 });
 
@@ -60,8 +56,6 @@ export function MobileNavigation({
   moreOpen,
   chromeInert = false,
   chatPending = false,
-  proofPending = false,
-  attestationPending = false,
   onNavigate,
   onOpenMore,
   onCloseMore,
@@ -75,20 +69,17 @@ export function MobileNavigation({
   /**
    * Which route is live, whenever the current control's own label is not its
    * name. This is a *description*, not part of the control's name: "More" and
-   * "Trust" are the names every caller and test knows those controls by, and
-   * appending a destination would rename a control that has not changed.
+   * "Providers" are the names every caller and test know these controls by,
+   * and appending a destination would rename a control that has not changed.
    *
-   * The gate used to be `activeControl === "more"`, which left the three views
-   * that map to `trust` — vault, billing, access — announcing "Trust, current
-   * page" on a phone: a name that is no route, on a tab whose tap navigates to
-   * Proof and away from the page it claims to be. Three more routes — sessions
+   * The gate used to be `activeControl === "more"`, which left vault and
+   * provider setup announcing only the control name instead of the live route.
+   * Three more routes — sessions
    * under Chat, editor and terminal under Workspace — were as silent. The
    * control's own `view` is the test, so this can never again be true for one
    * family of routes and false for another.
    */
   const currentDestination = destinationHintForControl(activeControl, view);
-  const proofNoticeCount = pendingCount(proofPending);
-  const attestationNoticeCount = pendingCount(attestationPending);
   const chatNoticeCount = pendingCount(chatPending);
 
   useEffect(() => {
@@ -147,17 +138,8 @@ export function MobileNavigation({
         {MOBILE_PRIMARY_CONTROLS.map((control) => {
           const current = activeControl === control.id;
           const open = control.id === "more" && moreOpen;
-          const notice = control.id === "chat"
-            ? chatNoticeCount
-            : control.id === "trust"
-              ? attestationNoticeCount
-              : 0;
-          const noticeLabel = control.id === "chat"
-            ? completedTurnLabel(chatNoticeCount)
-            : control.id === "trust"
-              ? evidenceRecordLabel(attestationNoticeCount)
-              : undefined;
-          const proofPresence = control.id === "trust" && proofNoticeCount > 0 && notice === 0;
+          const notice = control.id === "chat" ? chatNoticeCount : 0;
+          const noticeLabel = control.id === "chat" ? completedTurnLabel(chatNoticeCount) : undefined;
 
           if (control.kind === "overlay") {
             /*
@@ -193,7 +175,7 @@ export function MobileNavigation({
               >
                 <Icon name={primaryIcons[control.id]} size={20} />
                 <span>{control.label}</span>
-                <NavigationBadge count={notice} label={noticeLabel} presence={proofPresence} />
+                <NavigationBadge count={notice} label={noticeLabel} />
               </button>
             );
           }
@@ -209,7 +191,7 @@ export function MobileNavigation({
             >
               <Icon name={primaryIcons[control.id]} size={20} />
               <span>{control.label}</span>
-              <NavigationBadge count={notice} label={noticeLabel} presence={proofPresence} />
+              <NavigationBadge count={notice} label={noticeLabel} />
             </button>
           );
         })}
@@ -311,8 +293,7 @@ export function MobileNavigation({
   );
 }
 
-function NavigationBadge({ count, label, presence = false }: { count: number; label?: string; presence?: boolean }) {
-  if (presence) return <><span class="mobile-nav__badge mobile-nav__badge--presence" aria-hidden="true" /><span class="sr-only">Proof available</span></>;
+function NavigationBadge({ count, label }: { count: number; label?: string }) {
   if (count === 0 || !label) return null;
   return (
     <>
@@ -331,11 +312,6 @@ function pendingCount(value: boolean | number): number {
 export function completedTurnLabel(count: number): string | undefined {
   if (count === 0) return undefined;
   return `${count} completed turn${count === 1 ? "" : "s"}`;
-}
-
-export function evidenceRecordLabel(count: number): string | undefined {
-  if (count === 0) return undefined;
-  return `${count} evidence record${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -358,8 +334,8 @@ export function currentDestinationLabel(view: NavigationView): string | undefine
  * The description a current control needs, or nothing when its label is already
  * the route's name.
  *
- * `Chat` on #chat needs no hint; `Trust` on #vault, `Chat` on #sessions and
- * `More` on #memory all do, and the rule that decides is the same one for all
+ * `Chat` on #chat needs no hint; `Providers` on #vault, `Chat` on #sessions
+ * and `More` on #memory all do, and the rule that decides is the same one for all
  * four families: does the control's own destination equal the live view.
  */
 export function destinationHintForControl(

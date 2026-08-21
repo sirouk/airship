@@ -1,41 +1,80 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Route } from "@playwright/test";
 
 /**
- * The one place where a dropped ARIA name was a lost fact, checked as a render.
- *
- * Each cell of the Chutes eligibility matrix is a glyph — `✓` or `—` — with the
- * word only ever present as an `aria-label` on the wrapping `<span>`. ARIA
- * forbids naming an element whose computed role is `generic`, so that label was
- * discarded and every cell announced a bare glyph. `src/ui/aria-name-contract`
- * stops the class from returning in source; this asserts the consequence the
- * source test cannot see, because "what name does the browser compute" is a
- * question only a browser answers. There is no DOM test environment in this
- * repo (no jsdom, no testing-library), so the render harness is this one.
+ * Capability names now belong to each discovered model. The old Chutes
+ * sign-in/key eligibility matrix no longer exists, so this browser contract
+ * checks the words exposed by the current provider catalog and selected-model
+ * group instead of assigning names to decorative matrix glyphs.
  */
-test("every eligibility mark announces a word, never its glyph", async ({ page }) => {
+test("every discovered capability is exposed by name in the model option and selected-model group", async ({ page }) => {
+  const catalogUrl = "https://capabilities.e2e.example/v1/models";
+  await page.route(catalogUrl, async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await cors(route, 204, "");
+      return;
+    }
+    await cors(route, 200, JSON.stringify({
+      object: "list",
+      data: [{
+        id: "named-capabilities-e2e",
+        input_modalities: ["text", "image"],
+        output_modalities: ["text"],
+        supported_features: ["tools", "reasoning", "structured_outputs"],
+      }],
+    }), "application/json");
+  });
+
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expect(page.locator(".topbar-destination")).toHaveText("Providers");
+  await expect(page.getByRole("heading", { name: "Cloud and local models", level: 2 })).toBeVisible();
 
-  // The matrix lives behind a `<details>`; its summary is the disclosure.
-  await page.locator("summary", { hasText: "Compare what each method can do" }).click();
-  const matrix = page.locator(".capability-table-wrap");
-  await expect(matrix).toBeVisible();
+  const form = page.locator("form.provider-setup-card--custom");
+  await form.getByLabel("Provider name", { exact: true }).fill("Capability Names");
+  await form.getByLabel("API base URL · HTTPS", { exact: true }).fill("https://capabilities.e2e.example/v1/");
+  await form.getByLabel("API key · page memory only", { exact: true }).fill("sk-capability-names-e2e");
+  await form.getByRole("checkbox", { name: /I understand this tab sends the key directly/u }).check();
+  await form.getByRole("button", { name: "Connect custom endpoint" }).click();
 
-  // Four capability rows, three columns of marks: sign-in eligible, key
-  // eligible, and what the active method actually grants.
-  const marks = matrix.getByRole("img");
-  await expect(marks).toHaveCount(12);
-  // Sign-in and key are eligible for all four capabilities; with no connection
-  // held, the active-method column grants none of them.
-  await expect(matrix.getByRole("img", { name: "Available", exact: true })).toHaveCount(8);
-  await expect(matrix.getByRole("img", { name: "Unavailable", exact: true })).toHaveCount(4);
+  const connection = page.getByRole("group", { name: "Connected inference providers" })
+    .locator("article.provider-connection")
+    .filter({ hasText: "Capability Names" });
+  await expect(connection.getByRole("heading", { name: "Capability Names", level: 3 })).toBeVisible();
 
-  // The glyph is decoration and must not be reachable as a name.
-  await expect(matrix.getByRole("img", { name: "✓" })).toHaveCount(0);
-  await expect(matrix.getByRole("img", { name: "—" })).toHaveCount(0);
+  const modelControl = connection.getByRole("button", {
+    name: "Capability Names model for a new pinned conversation",
+  });
+  await modelControl.click();
+  const option = page.getByRole("listbox", {
+    name: "Capability Names model for a new pinned conversation",
+  }).getByRole("option", { name: "named-capabilities-e2e", exact: true });
+  await expect(option).toHaveAccessibleDescription(
+    "Provider catalog · availability unknown · Text input · Vision · Text output · Tools · Reasoning · Structured output",
+  );
+  await option.click();
 
-  // Each mark's name is its own, not inherited from the row: the row header
-  // still carries the capability word beside it.
-  await expect(matrix.getByRole("rowheader", { name: /Identity/u })).toBeVisible();
+  const capabilities = connection.getByRole("group", {
+    name: "Capabilities reported for the selected model",
+  });
+  const expectedNames = ["Text input", "Vision", "Text output", "Tools", "Reasoning", "Structured output"];
+  await expect(capabilities.locator(":scope > span")).toHaveCount(expectedNames.length);
+  for (const name of expectedNames) {
+    await expect(capabilities.getByText(name, { exact: true })).toBeVisible();
+  }
+
+  await expect(capabilities.getByRole("img")).toHaveCount(0);
+  await expect(capabilities).not.toContainText(/✓|—/u);
+  await expect(page.locator(".capability-table-wrap")).toHaveCount(0);
 });
+
+async function cors(route: Route, status: number, body: string, contentType = "text/plain"): Promise<void> {
+  await route.fulfill({
+    status,
+    body,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "authorization,content-type",
+      "Access-Control-Allow-Methods": "GET,OPTIONS",
+      "Content-Type": contentType,
+    },
+  });
+}

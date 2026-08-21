@@ -175,7 +175,7 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
   const menu = page.getByRole("listbox", { name: "Conversation approval policy" });
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("option", { name: "Ask First", exact: true })).toContainText("Prompt before effectful actions.");
-  await expect(menu.getByRole("option", { name: "Auto Approve", exact: true })).toContainText("Ask the active model to review each effect; prompt when uncertain.");
+  await expect(menu.getByRole("option", { name: "Auto Approve", exact: true })).toContainText("Allow registered writes; ask before execute, network, or identity effects. No review inference.");
   await expect(menu.getByRole("option", { name: "Full Access", exact: true })).toContainText("Allow every effect without prompting, including requests to any HTTPS origin.");
   const disclosed = await readComposerGeometry(page);
   expectNear(disclosed.composer.height, multiline.composer.height, "open policy disclosure: composer height");
@@ -236,7 +236,7 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
  * pixel under each option's centre belongs to that option (nothing is covering
  * it, and it is somewhere a thumb can land), and a tap changes the policy. The
  * label is measured too — below 380px it used to shed to a 1×1px clip, leaving
- * a bare coloured dot as the only statement of the agent's write posture.
+ * a bare coloured dot as the only visible approval-policy value.
  */
 test("the approval policy opens inside the phone viewport, reads whole, and takes a tap", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone geometry contract");
@@ -271,26 +271,34 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
     // here.
     await expect(page.getByLabel("Attach image"), `${at}: attach control still names itself`).toHaveCount(1);
     /*
-     * The credential posture used to be measured here as the third occupant of
-     * this row, on the reasoning that it is a caveat and a caveat may not be
-     * shed. It is still a caveat and it is still unshed — it is just not in the
-     * box a person types their message into any more. "Key in memory" beside a
-     * caret is a standing warning attached to the reader's own words, on the
-     * one control on a phone with least room for anything.
-     *
-     * So the assertion inverts: the row may not hold it, and the runtime chip's
-     * sheet must. That second half is what stops this being a deletion — the
-     * two carriers this claim has already been wrongly given were a caption
-     * that computed to 0×0px on a phone and this row.
+     * The composer row is reserved for message actions and the approval policy.
+     * Provider setup remains explicit in the topbar: a disconnected session has
+     * one visible, keyboard-operable action that opens the neutral Providers
+     * surface, where cloud credential storage and the local no-account path are
+     * stated in full.
      */
-    await expect(page.locator(".composer-posture"), `${at}: the input row does not carry the credential caveat`).toHaveCount(0);
-    await page.locator(".topbar-posture-chip").click();
+    const connectModel = page.getByRole("button", { name: "Connect a model", exact: true });
+    await expect(connectModel, `${at}: provider setup action`).toBeVisible();
+    const connectBox = await connectModel.boundingBox();
+    expect(connectBox, `${at}: provider setup action is laid out`).not.toBeNull();
+    expect(connectBox!.height, `${at}: provider setup touch target`).toBeGreaterThanOrEqual(44);
     await expect(
-      page.locator(".trust-sheet").getByText("No provider credential is held.", { exact: false }),
-      `${at}: the credential posture is stated in the runtime chip's sheet`,
-    ).toBeVisible();
-    await page.locator(".trust-sheet").getByRole("button", { name: "Close" }).first().click();
-    await expect(page.locator(".trust-sheet")).toHaveCount(0);
+      page.getByRole("region", { name: "About this conversation" }),
+      `${at}: the disconnected conversation explains its model state`,
+    ).toContainText("Chat needs a model provider; this composer is a deterministic demo.");
+
+    await connectModel.focus();
+    await connectModel.press("Enter");
+    await expect(page).toHaveURL(/#connection$/u);
+    await expect(page.getByRole("heading", { name: "Cloud and local models", level: 2 })).toBeVisible();
+    await expect(page.locator(".provider-fabric__empty")).toHaveText("No provider is connected. Add any cloud or local provider below.");
+    await expect(page.locator(".provider-setup-card--custom .provider-custom-lifetime")).toContainText(
+      "Endpoint settings and credentials last for this page only.",
+    );
+    await expect(page.getByRole("heading", { name: "Local model servers", level: 3 })).toBeVisible();
+    await expect(page.getByLabel("Endpoint · loopback allowlist only").first()).toBeVisible();
+    await page.goBack();
+    await expect(trigger).toBeVisible();
 
     await trigger.click();
     const geometry = await page.evaluate(() => {
@@ -320,8 +328,8 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
             name: option.querySelector(".menu-select-option-copy strong")?.textContent?.trim() ?? "",
             height: bounds.height,
             inside: bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth,
-            // The proof that "open" means reachable rather than merely laid
-            // out: the compositor hands this pixel to this option.
+            // "Open" also has to mean reachable: the compositor hands this
+            // pixel to this option.
             hittable: centre instanceof Element && centre.closest(".menu-select-option") === option,
           };
         }),
@@ -343,7 +351,7 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
      * proves the accessible name the browser computes for the same option
      * equals it exactly — so the description sentence stays out of the name
      * (it is announced via `aria-describedby`), and a reader hears "Auto
-     * Approve", not "Auto Approve Ask the active model to review each effect".
+     * Approve", not "Auto Approve Allow registered writes; ask before execute".
      * An `aria-label` read could never have caught that regression, because
      * folding the sentence into the contents leaves the attribute untouched.
      */
@@ -359,7 +367,7 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
       expect(option.height, `${at}: "${option.name}" touch target`).toBeGreaterThanOrEqual(44);
     }
 
-    // Reachability is only a claim until the tap lands and the policy changes.
+    // Complete the reachability check by landing a tap and changing the policy.
     await page.getByRole("option", { name: "Full Access", exact: true }).click();
     await expect(trigger, `${at}: the selected policy`).toContainText("Full Access");
     await expect(page.getByRole("listbox", { name: "Conversation approval policy" })).toHaveCount(0);
@@ -472,7 +480,7 @@ test("the soft keyboard shortens the shell and keeps the last card on a floor th
   test.skip(testInfo.project.name !== "mobile-chromium", "phone soft-keyboard contract");
   await installMovableVisualViewport(page);
   await page.goto("/#chat");
-  await page.getByRole("combobox", { name: "Message Airship" }).fill("Explain the runtime posture in one sentence.");
+  await page.getByRole("combobox", { name: "Message Airship" }).fill("Explain the active local runtime in one sentence.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator("[data-transcript-card]").last()).toBeVisible({ timeout: 30_000 });
 

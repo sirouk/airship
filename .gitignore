@@ -48,6 +48,7 @@ next-env.d.ts
 /outputs/
 /work/
 /.airship-lab/
+/public/extension/releases/
 
 # Disposable, read-only upstream study checkouts. The tracked catalog and
 # clean-room rules live in /references.
@@ -73,10 +74,16 @@ next-env.d.ts
 # human receives. Same rule: the report is the artifact, not the harness.
 /.sweep-tmp*.mjs
 
-# Editor tooling that is not a repository-level decision.
+# Editor and agent working state that is not a repository-level decision.
 /.kilo/
 /.playwright-mcp/
+/graphify-out/
+/docs/_work/
 
 # Sweep captures are evidence for a review, not source. They live in the
 # scratchpad beside the rest of the campaign's screenshots.
 shots/
+
+# A measuring copy of the release gate, written by hand while re-taking
+# readings. It is not the authority and must never be tracked beside it.
+scripts/.gate-instrument.mjs

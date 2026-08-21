@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalContextSelection, verifyContextSelection } from "../core/context-selection";
 import { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { MemoryWorkspace } from "../workspace/memory";
 import { isWorkspaceControlPlanePath } from "../workspace/contracts";
 import { EncryptedObjectWorkspace } from "./encrypted-workspace";

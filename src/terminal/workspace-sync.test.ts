@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileSystemTree } from "@webcontainer/api";
 import { MemoryWorkspace } from "../workspace/memory";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes } from "../workspace/content-codec";
-import { mountTerminalWorkspace, reconcileTerminalWorkspace, syncTerminalWorkspace } from "./workspace-sync";
+import { ATTACHED_FOLDER_REFUSAL, mountTerminalWorkspace, reconcileTerminalWorkspace, syncTerminalWorkspace } from "./workspace-sync";
 
 describe("terminal workspace synchronization", () => {
   it("mounts bounded user files, excludes control state, and adopts revision-fenced changes", async () => {
@@ -151,6 +151,53 @@ describe("terminal workspace synchronization", () => {
     mountedBytes[2] = 9;
     await syncTerminalWorkspace(host, workspace, baseline);
     expect([...decodeWorkspaceBytes((await workspace.read("asset.bin"))!.content)]).toEqual([0, 255, 9, 2, 128, 64]);
+  });
+
+  /*
+   * F4. The Terminal copies the workspace into a WebContainer and writes the
+   * result back through `workspace.write` — outside the approval broker. When
+   * a folder from this device is composed into `/workspace/local`, that copy
+   * was the person's own directory going into a Node sandbox, and the write
+   * back was shell output landing on their real files with nothing to approve.
+   */
+  it("never mounts the folder attached from this device, and refuses shell output addressed to it", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("README.md", "before\n", { expectedRevision: null });
+    await workspace.write("local/airship/secrets.env", "OPENAI_API_KEY=real\n", { expectedRevision: null });
+    let mounted: FileSystemTree = {};
+    let exported: FileSystemTree = {};
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { mounted = {}; } },
+      async mount(tree: FileSystemTree, _options: { mountPoint: string }) { mounted = structuredClone(tree); },
+      async export(_path: string, _options: { format: "json"; excludes: string[] }) { return structuredClone(exported); },
+    };
+
+    const baseline = await mountTerminalWorkspace(host, workspace);
+    // The real folder is not copied into the sandbox at all.
+    expect(mounted).toHaveProperty("README.md");
+    expect(mounted).not.toHaveProperty("local");
+    expect([...baseline.files.keys()]).toEqual(["README.md"]);
+
+    // And a command that writes into it is refused rather than applied.
+    exported = { ...mounted, local: { directory: { "airship": { directory: { "secrets.env": { file: { contents: "OPENAI_API_KEY=stolen\n" } } } } } } };
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/does not carry the folder you attached from this device/u);
+    /*
+     * The sentence has to be true of the path it sends a person to. A workbench
+     * save writes straight through the workspace port with no broker — the same
+     * port the Terminal writes through — so "every write to it is reviewed" was
+     * false. What that path does have is a person choosing each file and
+     * pressing Save, and an agent write that is reviewed in every approval mode.
+     */
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/where you save it yourself and every agent write to it is reviewed/u);
+    expect(ATTACHED_FOLDER_REFUSAL).not.toContain("where every write to it is reviewed");
+    await expect(syncTerminalWorkspace(host, workspace, baseline))
+      .rejects.toThrow(/Refused: \/workspace\/local\/airship\/secrets\.env/u);
+    // The real file is untouched.
+    await expect(workspace.read("local/airship/secrets.env")).resolves.toMatchObject({
+      content: encodeWorkspaceBytes(new TextEncoder().encode("OPENAI_API_KEY=real\n")),
+    });
   });
 });
 

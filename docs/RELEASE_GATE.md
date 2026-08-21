@@ -1,196 +1,207 @@
 # Static release gate
 
-Airship's production artifact is a static client. `npm run build` therefore
-ends by running `scripts/release-gate.mjs` against `dist/`; there is no release
-server and no build-time credential exchange.
+Airship ships as a static client. `npm run build` therefore ends by validating
+`dist/` rather than preparing a server release.
 
-## Blocking checks
+## The release gate blocks on
 
-The gate fails the build when it finds:
+- source maps or stray source-map directives;
+- any trace of the host-composed loopback storage lab. The lab is composed in
+  by `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` and out of every other build, so a stock
+  release must contain no lab chunk, no S3 request signing, no baked loopback
+  endpoint or disposable keys, and no copy that names the destination;
+- credential-shaped payloads in shipped artifacts, including decompressed
+  Companion ZIP members. Vendor keys are matched on the literal each vendor
+  issues; a key that is bare hex or bare base64 has no shape to match, and no
+  credential belongs in a build input in the first place;
+- a Pyodide distribution that is not the pinned bytes: the five shipped files
+  are matched by SHA-256 and byte length, and no sixth file may sit beside
+  them;
+- a stylesheet no shipped script or document references;
+- any document the release did not review: `.html`, `.htm`, `.xhtml`, `.shtml`,
+  `.svg` and `.xml` ship only from an exact list, and `404.html` must be a byte
+  copy of the reviewed index;
+- missing reviewed public files or broken static-host assumptions;
+- missing security headers or service-worker boundary regressions;
+- asset budget overruns;
+- mismatches between optional static packs and their reviewed manifests;
+- documentation that no longer matches the executable: the budget table below
+  must mirror the ceilings `scripts/release-gate.mjs` exports, and
+  `docs/SESSION_LIBRARY.md` must still state the fork contract. A
+  documentation-only change can fail this gate.
 
-- a `.map` artifact or an inline/external `sourceMappingURL` directive;
-- a high-confidence Chutes, AWS, GitHub, npm, Slack, Stripe, JWT, PEM private
-  key, or long bearer-credential shape (the failure reports the class and file,
-  never the matching value);
-- a missing or changed reviewed public artifact: `_headers`, `sw.js`,
-  `manifest.webmanifest`, or `favicon.svg`;
-- a missing CSP/header boundary, immutable hashed-asset caching, or
-  service-worker/release-manifest revalidation or service-worker scope rule;
-- a service worker that loses its same-origin, GET-only, authorization/range
-  bypass, network-first navigation, static-asset scope, or `Set-Cookie`
-  exclusion invariant;
-- anything other than one same-origin hashed JavaScript entry and one
-  same-origin hashed stylesheet entry in `index.html`;
-- a web app manifest that escapes the same-origin root scope or loses its
-  reviewed install/icon contract;
-- a missing crypto WASM artifact;
-- an optional semantic pack that is partial, contains an unreviewed file, or
-  differs in byte length or SHA-256 from its pinned artifact manifest, including
-  a mismatch between the build's availability declaration and emitted files; or
-- an artifact budget overrun.
+The gate writes `release-manifest.json`, a deterministic inventory of the
+artifacts it measured, and prints that the manifest is explicitly unsigned. It
+is an inventory, not a signature, an attestation, or a provenance claim.
 
-The credential scanner deliberately permits documentation-shaped prefixes such
-as `cak_` and `cpk_`; it rejects only sufficiently long credential-shaped
-values. It is a last-line build check, not a substitute for secret scanning in
-source history or for rotating an exposed credential.
+## Two classes of ceiling
 
-## Enforced artifact budgets
+Every ceiling is in one of two classes, and each budget's comment says which
+one and why.
 
-All compressed measurements use deterministic level-9 gzip. Raw and compressed
-ceilings are both blocking.
+**Class 1 — what a person waits for before anything works.** The entry
+JavaScript, the entry stylesheet, the baseline JavaScript and workers including
+the chunks awaited before first render, and the service worker. These stay
+hard: the ceiling is the smallest whole-KiB step that clears the reading, one
+further step is available only against written `<n> KiB <role> would have left
+<m> B` arithmetic, and every reviewed build variant has to be recorded. Today
+that is about 163 KiB gzip of JavaScript and 25 KiB gzip of CSS, and it should
+stay there.
 
-| Class | Raw ceiling | Gzip ceiling |
-| --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 119 KiB |
-| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 191 KiB |
-| Deferred advanced capability bundle | 447 KiB | 133 KiB |
-| First-party and other non-vendor JS/workers | 2,440 KiB | 774 KiB |
-| Browser Git + Terminal vendor runtime aggregate | 682 KiB | 190 KiB |
-| Absolute installed JavaScript/worker backstop | 3,121 KiB | 964 KiB |
-| Service worker | 12 KiB | 4 KiB |
-| Optional execution broker / engine / support / tools | 32 / 56 / 10 / 49 KiB | 10 / 14 / 4 / 15 KiB |
-| Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
-| Optional Node/WebContainer pack | 41 KiB | 15 KiB |
-| Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
-| Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
-| Optional agent runtime / tool bundle | 54 / 132 KiB | 16 / 42 KiB |
-| Optional Workspace / Source Control / browser Git | 87 / 48 / 276 KiB | 29 / 14 / 83 KiB |
-| Optional Sessions / Memory / Memory support / Proof | 65 / 64 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
-| Optional Skills route / skill editor | 8 / 4 KiB | 4 / 2 KiB |
-| Optional Terminal | 425 KiB | 112 KiB |
-| Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
-| Optional inference/provider + Companion protocol packs | 165 KiB | 53 KiB |
-| Optional prime runtime pack | 209 KiB | 64 KiB |
-| Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
-| Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
-| HTML-referenced entry CSS | 185 KiB | 32 KiB |
-| General WASM excluding separately capped DCAP | 1,024 KiB each and aggregate | 350 KiB each and aggregate |
+**Class 2 — what a route or a feature costs when somebody opens it, plus the
+aggregates.** Nobody waits for these before the first screen. Their ceilings
+are set with deliberate headroom — the reading plus twice a stated headroom,
+rounded up — so ordinary honest work does not have to re-measure five builds to
+change a sentence. What replaces the tight step is stricter measurement rather
+than looser enforcement: every ceiling states a reading, every reading names
+the reviewed variant that reproduces it, a ceiling above three headrooms is
+refused, and a reading that grows by a quarter (or 16 KiB, whichever is
+smaller, never less than a kilobyte) has to be accompanied by a sentence naming
+what was added. Every budget records a previous reading as two numbers. The
+"nothing recorded before this pass" form is gone — it silenced the alarm for
+twenty-six of fifty-nine budgets, and one line of it silenced a 16,983 B jump —
+but the two numbers that replaced it are still a declaration this script cannot
+verify against anything. Retyping the previous reading to the new one silences
+any jump, measurably: `+20,000 B raw` on `optionalExecutionTools` is refused
+with the line left alone and accepted with it retyped. What reviews that line is
+the diff, not the gate.
 
-These values mirror the executable ceilings exported by
-`scripts/release-gate.mjs`, and `assertReleaseGateDocumentationMirrors` in that
-file now refuses a build where they do not. That check exists because this
-paragraph used to be the only thing holding them together, and six rows had
-stopped being true — entry JavaScript read 110 KiB against a 113 KiB ceiling,
-the installed backstop 2,152 / 643 against 2,746 / 846 — while two rows
-described gates the file does not contain. A reader who argued a raise against
-those numbers was arguing against a build that never existed. The table is now
-the only place a ceiling is written down in prose; the figures that used to be
-repeated in the paragraphs below were a second copy with nothing keeping it
-honest, and repeating a number is how a mirror cracks.
+## Reviewed build variants
 
-`PRODUCT_SPEC.md`'s compressed startup figure is an engineering target, not a
-gate; the entry and baseline rows above are the blocking ones. Lazy route and
-vendor packs do not count as startup bytes, but they remain subject to both
-their individual limits and the installed-JavaScript backstop. Raw limits also
-catch parse and memory regressions that compression can hide. Changing a ceiling
-requires an explicit code and documentation review, in the same change, or the
-gate above fails; a build must not silently learn a larger baseline.
+A reading nobody can rebuild is a number, not a measurement. These are the
+build shapes this release reviews; `scripts/release-gate.mjs` exports them as
+`REVIEWED_BUILD_VARIANTS` with the exact environment for each.
 
-Ceilings move with measurements, not with need. Each one in
-`scripts/release-gate.mjs` carries the reading that sets it, the budgets named in
-`MEASUREMENT_JUSTIFIED_BUDGETS` are required to, and
-`assertDocumentedMeasurementsMatchBuild` compares each reading's whole-KiB
-budget bucket against the artifacts the same run measures. Build-time public
-configuration may change minified strings or gzip output by a few bytes; drift
-inside the same bucket cannot justify a larger ceiling and is accepted. A reading
-in a higher bucket can buy an extra KiB for bytes no build shipped, so it still
-fails the gate and requires review.
+| Variant | Environment |
+| --- | --- |
+| canonical config-free | `npm run build:static` |
+| Docker defaults | `AIRSHIP_PUBLIC_BASE_PATH=/ VITE_AIRSHIP_PUBLIC_ORIGIN= VITE_GOOGLE_CLIENT_ID= VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral` |
+| Pages | `AIRSHIP_PUBLIC_BASE_PATH=/airship/ VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral` |
+| Google-Drive-configured | `VITE_GOOGLE_CLIENT_ID=<web client id> VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive` |
+| Pages Google-Drive-configured | `AIRSHIP_PUBLIC_BASE_PATH=/airship/ VITE_GOOGLE_CLIENT_ID=<web client id> VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive` |
 
-The shell and shared browser capability bundle are measured separately at the
-dynamic-import boundary already enforced by the app. The baseline class pays for
-startup, routing, and chat; the service worker has its own cap. The deferred
-class pays for advanced audit, S3, attestation, and route capabilities only
-after demand. The full-screen Workspace workbench, Worker/WASI/Python adapter,
-Node/WebContainer adapter, and pinned Pyodide distribution remain separate,
-blocking budget classes. A total-JavaScript ceiling prevents chunking from
-hiding aggregate growth. The gate rejects production HTML that module-preloads
-any of these packs and keeps the entry ceiling intact. WASIX is an unpromoted
-research candidate and therefore has a zero-byte production budget. Classifying
-a lazy pack separately never removes its own raw/gzip or total ceiling.
+The last row is the shape this repository's own Pages workflow publishes when
+the `VITE_GOOGLE_CLIENT_ID` repository variable is set, and until now no
+comment measured it. A base path is inlined beside every asset URL, so each of
+its characters costs about 9 raw bytes across the first-party aggregate, which
+makes it the largest of the five. `VITE_GOOGLE_CLIENT_ID` is listed even when
+empty because empty and absent are different builds: Vite inlines `""` for one
+and `undefined` for the other, and the first-party and installed aggregates
+measure 32 raw bytes more when it is absent. The Dockerfile's `ENV` line always
+defines it.
 
-## Deterministic manifest
+## Executable asset ceilings
 
-After all checks pass, the gate writes `dist/release-manifest.json`. It contains
-only a schema name, `sha256` algorithm identifier, `signed: false`, and a
-lexicographically sorted list of artifact paths, raw byte counts, and SHA-256
-digests. It has no timestamp, host path, environment value, or secret. The
-manifest excludes itself so it has no impossible self-hash.
+The gate measures raw and gzip bytes. The baseline includes the HTML entry and
+preloads plus every dynamic chunk awaited before first render, including the
+controlled-navigation boundary and the packs the shell mounts with.
 
-For identical output bytes, repeated gate runs produce byte-identical manifests.
-The manifest is an inventory, not an attestation: it is **not signed**, does not
-identify a builder, and does not prove a clean-room rebuild. A future provenance
-system must sign or transparently anchor the release manifest and build record
-under a separately trusted release key. Until then, the UI and documentation
-must not call this release verified or reproducible merely because the hashes
-exist.
+Raw and gzip are separate claims. The gate checks the largest recorded raw and
+gzip readings independently against the current build, in both directions: a
+comment that overstates the artifact loses the ceiling it bought, and a comment
+that understates it reports headroom the build does not have.
 
-## Browser product acceptance
+No gzip ceiling may sit within 512 bytes of the artifact it governs. Raw bytes
+are a byte count; gzip bytes are whatever this machine's deflate implementation
+produced, and compressing this build with Node 22.22.3's bundled compressor and
+with zlib 1.2.12 at the same level differs by up to 388 B on one artifact and
+431 B across the release. The tightest gzip margin used to be 35 B, so a
+colleague on a different Node could be handed a red gate for a tree nobody
+touched. Several gzip ceilings therefore take a further whole-KiB step with the
+arithmetic written beside them: that step is not slack, it is the width of the
+measuring instrument.
 
-`npm run check` deliberately keeps the long browser matrices separate. Before a
-browser release candidate is accepted, run the full product journey suite and
-each specialized boundary suite against the same tree:
+A few roles are declared absolute backstops rather than headroom claims — the
+pinned Pyodide distribution, which is a byte set verified against recorded
+SHA-256 digests, and the general WASM ceilings, which govern a class this build
+does not emit. They still record a reading and are still compared with the
+artifact. Entry and baseline raw bytes are *not* on that list: being called a
+backstop removed every shape rule, and a 377 KiB entry ceiling could be rewritten
+to 512 KiB with a green gate. Both raw roles take the same whole-KiB step rule as
+their gzip halves.
+
+| Class | Tier | Raw ceiling | Gzip ceiling |
+| --- | ---: | ---: | ---: |
+| HTML-referenced entry JavaScript | 1 | 378 KiB | 118 KiB |
+| Baseline JavaScript/workers, including pre-render chunks | 1 | 491 KiB | 160 KiB |
+| Deferred advanced capability bundle | 2 | 292 KiB | 87 KiB |
+| First-party and other non-vendor JS/workers | 2 | 2038 KiB | 683 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 2 | 749 KiB | 248 KiB |
+| Absolute installed JavaScript/worker backstop | 2 | 2723 KiB | 873 KiB |
+| Service worker | 1 | 12 KiB | 5 KiB |
+| Companion install-hub script | 2 | 8 KiB | 6 KiB |
+| Optional execution broker | 2 | 6 KiB | 5 KiB |
+| Optional execution engine | 2 | 5 KiB | 5 KiB |
+| Optional execution support | 2 | 12 KiB | 7 KiB |
+| Optional execution tools | 2 | 61 KiB | 18 KiB |
+| Optional pinned WASI Preview 1 Worker | 2 | 33 KiB | 11 KiB |
+| Optional Node/WebContainer pack | 2 | 52 KiB | 19 KiB |
+| Optional first-party `airship-sh` shell pack | 2 | 124 KiB | 37 KiB |
+| Optional browser-Git client | 2 | 22 KiB | 8 KiB |
+| Optional shared route primitives | 2 | 23 KiB | 12 KiB |
+| Optional request-failure vocabulary | 2 | 9 KiB | 6 KiB |
+| Optional slash commands | 2 | 19 KiB | 9 KiB |
+| Optional agent runtime | 2 | 74 KiB | 22 KiB |
+| Optional agent runtime status | 2 | 6 KiB | 5 KiB |
+| Optional multimodal parts | 2 | 5 KiB | 5 KiB |
+| Optional context policy | 2 | 8 KiB | 6 KiB |
+| Optional agent tool bundle | 2 | 162 KiB | 52 KiB |
+| Optional Workspace workbench | 2 | 112 KiB | 36 KiB |
+| Optional workspace binding | 2 | 5 KiB | 5 KiB |
+| Optional workspace codec | 2 | 5 KiB | 5 KiB |
+| Optional folder on this device | 2 | 20 KiB | 10 KiB |
+| Optional Source Control | 2 | 50 KiB | 17 KiB |
+| Optional source selection store | 2 | 2 KiB | 1 KiB |
+| Optional browser Git engine | 2 | 326 KiB | 103 KiB |
+| Optional Sessions route | 2 | 84 KiB | 25 KiB |
+| Optional post-paint session metadata | 2 | 10 KiB | 7 KiB |
+| Optional favorite ordering | 2 | 5 KiB | 5 KiB |
+| Optional session fork | 2 | 18 KiB | 9 KiB |
+| Optional Capabilities route | 2 | 17 KiB | 9 KiB |
+| Optional browser capabilities | 2 | 23 KiB | 10 KiB |
+| Optional Memory route | 2 | 82 KiB | 28 KiB |
+| Optional Memory support | 2 | 7 KiB | 6 KiB |
+| Optional move-work bundle pack | 2 | 25 KiB | 10 KiB |
+| Optional Skills route | 2 | 12 KiB | 7 KiB |
+| Optional skill editor | 2 | 8 KiB | 6 KiB |
+| Optional shared confirm dialog | 2 | 6 KiB | 5 KiB |
+| Optional keyboard shortcut sheet | 2 | 7 KiB | 6 KiB |
+| Optional shell overlays | 2 | 12 KiB | 7 KiB |
+| Optional palette actions | 2 | 5 KiB | 5 KiB |
+| Optional lost-work report | 2 | 10 KiB | 7 KiB |
+| Optional message parts | 2 | 18 KiB | 9 KiB |
+| Optional approval dock | 2 | 17 KiB | 9 KiB |
+| Optional Terminal | 2 | 488 KiB | 145 KiB |
+| Optional semantic worker | 2 | 13 KiB | 8 KiB |
+| Optional inference/provider + Companion protocol packs | 2 | 182 KiB | 53 KiB |
+| Optional prime runtime pack | 2 | 290 KiB | 86 KiB |
+| Optional Companion observation | 2 | 7 KiB | 6 KiB |
+| Optional Local Device Vault | 2 | 76 KiB | 22 KiB |
+| Pinned same-origin Pyodide distribution | 2 | 16384 KiB | 8192 KiB |
+| HTML-referenced entry CSS | 1 | 144 KiB | 26 KiB |
+| Each general WASM artifact, excluding separately capped engine WASM | 2 | 1024 KiB | 350 KiB |
+| All general WASM, excluding separately capped engine WASM | 2 | 1024 KiB | 350 KiB |
+
+## Main local commands
 
 ```sh
-npm run test:e2e
-npm run test:e2e:google-drive
-npm run test:e2e:portability
-npm run test:e2e:master
+npm run build
+npm run check:release
 npm run test:e2e:static-host
 ```
 
-The default suite covers the ordinary product journeys. The specialized runs
-exercise deterministic Google Drive composition, the cross-engine and
-constrained-device portability matrix, the master browser/WebContainer boundary,
-and the built artifact on a headerless static host at the same `/airship/`
-subpath used by the Pages build. The portability and static-host lanes explicitly
-build without the optional semantic pack and require its control to be unavailable
-without issuing a pack request; the opt-in semantic command in
-[Semantic embedding pack](SEMANTIC_EMBEDDING_PACK.md#verification) exercises the
-hash-pinned pack itself. They remain separate because their browser, network, and
-runtime requirements are materially longer and broader than the bounded offline
-check.
+Use `npm run check` for the broader local gate and `npm run test:e2e:master`
+for the heavier browser matrix.
 
-## Explicit live acceptance
+`npm test` runs the unit suite as a lab build, because that is the build whose
+S3 and lab paths the suite exercises. `npm run test:stock` re-runs the
+storage-choice suites with the lab composed out, so the picker, its comparison
+table and every refusal are asserted in both build modes. `npm run check` runs
+both, then builds and gates a stock artifact.
 
-`npm run check` remains credential-free and suitable for an offline checkout.
-The checks are deterministic against the artifact they inspect, but Rollup's
-chunk layout is not yet byte-for-byte deterministic across otherwise identical
-checkouts; both reviewed layouts must satisfy the same ceilings. The check does
-not imply that a paid external provider was reachable.
-Before a release that claims real Chutes interoperability, run the separate
-fail-closed gate with a disposable credential and explicit provider model IDs:
+## Why this matters
 
-```sh
-AIRSHIP_CHUTES_API_KEY='cpk_…' \
-AIRSHIP_CHUTES_TOOL_MODEL='provider/tool-capable-model' \
-AIRSHIP_CHUTES_VISION_MODEL='provider/vision-capable-model' \
-npm run check:release:live
-```
-
-This is a post-build gate: run `npm run check` first. Its browser stage serves
-the existing `dist/` artifact through Vite Preview on strict port 4188 rather
-than transforming application source at test time.
-
-The wrapper exits unsuccessfully before starting a child process when any of
-those three values is absent or malformed. It maps the credential into process
-memory for two real suites without putting it in command arguments or wrapper
-logs:
-
-1. Chutes model discovery, WASM E2EE streaming, journal/receipt auditing, and a
-   model-directed `write_file` plus `read_file` tool turn.
-2. A hermetic Chromium session on its own strict port that discovers the
-   configured vision model, submits an encrypted inline image, receives a real
-   response, and then exercises the endpoint-attestation evidence screen.
-
-The live Playwright configuration disables screenshots, traces, video, and HTML
-reports because a failed browser run must not retain the memory-only credential.
-Models are supplied by ID instead of inferred from a hard-coded provider model.
-
-## Hosting boundary
-
-The gate proves that the deployable directory contains the reviewed headers and
-service-worker policy. It cannot prove that a hosting provider actually applies
-`_headers`, serves the recorded bytes, or rolls back safely. Production release
-automation must probe response headers and artifact hashes from the deployed
-origin, preserve the manifest out-of-band, and add signed provenance, an SBOM,
-and rollback evidence before Airship clears the paid-production gate.
+Airship must stay an honest static product. The release gate exists to catch a
+build that quietly grows a hidden backend dependency, leaks sensitive material,
+or weakens the static browser security boundary — and to catch documentation
+that has stopped describing it.

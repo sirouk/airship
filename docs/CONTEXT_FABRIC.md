@@ -3,7 +3,7 @@
 ## Decision
 
 Airship treats the selected encrypted `ObjectStore`—Google Drive by default,
-S3-compatible storage as an advanced adapter, or page memory while
+a host-composed S3-compatible adapter, or page memory while
 Ephemeral—as the authoritative substrate for workspace context. The browser
 does not download a whole vector database and does not depend on a continuously
 running retrieval service. It holds a small decrypted routing mirror in memory,
@@ -278,7 +278,7 @@ No dependency is adopted solely because its benchmark is impressive. Airship rec
 ## Privacy boundary
 
 The private default uses opaque, encrypted page objects in the selected Vault.
-Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because
+Managed vector APIs, including S3 Vectors, are optional non-client-encrypted adapters because
 the service must see embeddings and filter metadata to search them.
 
 Encryption does not hide every access pattern. Google Drive or S3 can observe

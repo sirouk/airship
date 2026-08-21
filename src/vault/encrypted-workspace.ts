@@ -1,3 +1,5 @@
+import { requiredVaultString } from "./field";
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { stableStringify, sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
@@ -7,6 +9,7 @@ import {
   type WorkspaceEntry,
   type WorkspaceFile,
   type ClientEncryptedWorkspacePort,
+  type PortableSealPort,
   type WorkspacePort,
 } from "../workspace/contracts";
 import { workspaceContentByteLength } from "../workspace/content-codec";
@@ -26,6 +29,8 @@ const FILE_NAMESPACE = "airship/workspace-file/v1";
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_FILES = 100_000;
 const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
+/** One logical name for every caller-owned sealed artifact; see `sealPortable`. */
+const PORTABLE_SEAL_LOGICAL_ID = "portable";
 
 type WorkspaceManifestEntry = WorkspaceEntry & {
   cloudKey: string;
@@ -59,7 +64,7 @@ export interface WorkspaceSupersessionRecorder {
  * then one encrypted manifest is advanced with CAS. Lost CAS races leave only
  * opaque ciphertext orphans and never acknowledge the conflicting mutation.
  */
-export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedWorkspacePort {
+export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedWorkspacePort, PortableSealPort {
   readonly encryptionBoundary = "airship-client-envelope-v1" as const;
   private readonly prefix: string;
 
@@ -72,6 +77,39 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     private readonly reclamation?: WorkspaceSupersessionRecorder,
   ) {
     this.prefix = canonicalPrefix(prefix);
+  }
+
+  /**
+   * Seal bytes the caller owns, under this Vault's key, without exposing it.
+   *
+   * This is how a *sealed* work bundle leaves the device. It reuses exactly the
+   * envelope this workspace already writes its own files with — AES-256-GCM
+   * with an HKDF-derived per-object key — so nothing new is invented and
+   * nothing new has to be reviewed as cryptography. The revision is fresh per
+   * seal, which is what keeps the derived content key and the nonce unique.
+   *
+   * The consequence is stated wherever this is offered: only Airship, opened
+   * against this same Vault, can read the result back.
+   */
+  async sealPortable(namespace: string, plaintext: Uint8Array): Promise<Uint8Array> {
+    return encodeEnvelope(await sealEnvelope({
+      key: this.key,
+      namespace,
+      logicalId: PORTABLE_SEAL_LOGICAL_ID,
+      revision: this.id(),
+      contentType: "application/json",
+      plaintext,
+    }));
+  }
+
+  /** The inverse. A bundle sealed by another Vault fails here, by design. */
+  async openPortable(namespace: string, sealed: Uint8Array): Promise<Uint8Array> {
+    return openEnvelope({
+      key: this.key,
+      envelope: decodeEnvelope(sealed),
+      expectedNamespace: namespace,
+      expectedLogicalId: PORTABLE_SEAL_LOGICAL_ID,
+    });
   }
 
   async read(path: string): Promise<WorkspaceFile | undefined> {
@@ -389,7 +427,7 @@ function compareWorkspacePaths(left: string, right: string): number {
 
 function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
   if (!isRecord(value)) throw new Error("Encrypted workspace manifest entry is invalid.");
-  const path = normalizeWorkspacePath(requiredString(value.path, "workspace path", 4_096));
+  const path = normalizeWorkspacePath(requiredVaultString(value.path, "workspace path", 4_096));
   if (path === "/workspace") throw new Error("Encrypted workspace manifest contains the workspace root as a file.");
   const size = requiredInteger(value.size, "workspace file size", true);
   if (size > MAX_FILE_BYTES) throw new Error("Encrypted workspace manifest file exceeds the client limit.");
@@ -405,12 +443,12 @@ function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
   }
   return {
     path,
-    revision: requiredString(value.revision, "workspace revision", 512),
-    updatedAt: validTimestamp(requiredString(value.updatedAt, "workspace update time", 128), "workspace update time"),
+    revision: requiredVaultString(value.revision, "workspace revision", 512),
+    updatedAt: validTimestamp(requiredVaultString(value.updatedAt, "workspace update time", 128), "workspace update time"),
     size,
     ...(contentByteLength === undefined ? {} : { contentByteLength }),
-    cloudKey: requiredString(value.cloudKey, "workspace cloud key", 4_096),
-    etag: requiredString(value.etag, "workspace ETag", 4_096),
+    cloudKey: requiredVaultString(value.cloudKey, "workspace cloud key", 4_096),
+    etag: requiredVaultString(value.etag, "workspace ETag", 4_096),
   };
 }
 
@@ -458,14 +496,6 @@ function parseJson(bytes: Uint8Array, label: string): unknown {
   }
 }
 
-function requiredString(value: unknown, label: string, maxBytes: number): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    encoder.encode(value).byteLength > maxBytes
-  ) throw new Error(`${label} is invalid.`);
-  return value;
-}
 
 function requiredInteger(value: unknown, label: string, allowZero = false): number {
   if (!Number.isSafeInteger(value) || (allowZero ? Number(value) < 0 : Number(value) <= 0)) {
@@ -480,6 +510,3 @@ function validTimestamp(value: string, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

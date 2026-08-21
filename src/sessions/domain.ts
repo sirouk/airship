@@ -6,42 +6,23 @@ import type {
   SessionProfileBinding,
 } from "../core/contracts";
 import type { DurableEvent, SessionRecord } from "../core/journal";
+import {
+  assertValidSessionInferenceBinding,
+  canonicalSessionInferenceProviderId,
+  historicalInferenceBindingMayUpgrade,
+  inferenceBindingsMatch,
+  sessionInferenceProviderIdMatches,
+} from "../core/inference-binding";
 import { enforcedMemoryScope } from "../profiles/domain";
-import type {
-  ClaimKey,
-  ConversationReceipt,
-  ProofLevel,
-  ProofStatus,
-} from "../receipts/types";
+import type { ConversationReceipt } from "../core/conversation-receipt";
 
-const POSTURES = new Set<SecurityPosture>([
-  "local",
-  "plaintext-remote",
-  "encrypted-unattested",
-  "encrypted-attested",
-]);
-const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-confidential"]);
+const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-heavy"]);
+
+function isSecurityPosture(value: unknown): value is SecurityPosture {
+  return value === "local" || value === "plaintext-remote";
+}
 const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const TERMINAL_TURN_TYPES = new Set(["turn.completed", "turn.cancelled", "turn.failed"]);
-const RECEIPT_CLAIM_KEYS: readonly ClaimKey[] = Object.freeze([
-  "encryption",
-  "freshness",
-  "cpuTee",
-  "gpuTee",
-  "endpointKey",
-  "model",
-  "conversation",
-  "payment",
-]);
-const PROOF_LEVELS = new Set<ProofLevel>([
-  "local",
-  "encrypted",
-  "attested-endpoint",
-  "model-bound",
-  "conversation-bound",
-  "settled",
-]);
-const PROOF_STATUSES = new Set<ProofStatus>(["verified", "partial", "failed", "expired", "unavailable"]);
 const UNSAFE_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu;
 const HAS_UNSAFE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 
@@ -134,15 +115,13 @@ export type SessionPostureBinding = Readonly<{
  *
  * Separated from the pin's identity (`profileRevision`) and its presentation
  * (`themeId`/`themeDigest`) because only these decide what a resumed turn does:
- * which workspace it may touch, which memory it may read, whether it asks
- * before acting, and the evidence floor it refuses to run below. A v1 pin
- * predates the fields and carries none of them.
+ * which workspace it may touch, which memory it may read, and whether it asks
+ * before acting. A v1 pin predates the fields and carries none of them.
  */
 export type SessionProfileGovernance = Readonly<{
   workspaceBinding?: string;
   memoryScope?: string;
   approvalMode?: string;
-  minimumPosture?: SecurityPosture;
 }>;
 
 export type SessionPinnedProfile = Readonly<{
@@ -159,9 +138,19 @@ export type SessionPinnedProfile = Readonly<{
 
 export type SessionPins = Readonly<{
   protocolVersion: number;
+  /**
+   * Set when this device took the conversation in from a bundle file.
+   *
+   * Kept beside the pins rather than inside them because it is not a pin: it
+   * is where the pins came from, and no pin can answer that question — a file
+   * carries a digest chain that verifies its own bytes, never their author.
+   */
+  importedAt?: string;
   providerId: string;
   model: string;
   inferenceBinding?: SessionManifest["inferenceBinding"];
+  /** Raw provider-as-transport ID retained only to validate a v1→v2 bridge. */
+  legacyInferenceTransportId?: string;
   workspaceId: string;
   capabilityTier: SessionManifest["capabilityTier"];
   systemPromptDigest: string;
@@ -330,13 +319,12 @@ export function materializeSessionMessages(
     }
     if (event.type === CONVERSATION_NAMED_EVENT_TYPE) {
       /*
-       * The naming inference is a second billed provider request made *for*
-       * this conversation, so its receipt belongs in the same recovered chain
-       * as every turn receipt — a receipt that no surface can resolve proves
-       * nothing, and this is the only place receipts reach Proof from a
-       * reloaded journal. It contributes no transcript row because nobody said
-       * anything; it is counted as an ignored event for message purposes, and
-       * the transcript renders it as a marker instead.
+       * Naming writes its own local trace record beside the conversation, so
+       * its receipt belongs in the same recovered chain as turn receipts when
+       * the trace shape still matches this session and turn. It contributes no
+       * transcript row because nobody said anything; it is counted as an
+       * ignored event for message purposes, and the transcript renders it as a
+       * marker instead.
        */
       const receipt = boundedConversationReceipt(payload?.receipt, event);
       if (receipt) receiptCandidates.push(receipt);
@@ -472,96 +460,96 @@ function lifecycleForEvent(
  */
 function boundedConversationReceipt(value: unknown, event: DurableEvent): ConversationReceipt | undefined {
   const receipt = plainRecord(value);
-  if (!receipt || !boundedReceiptTree(receipt)) return undefined;
-  const claims = plainRecord(receipt?.claims);
-  const bindings = plainRecord(receipt?.bindings);
+  if (!receipt || receipt.version !== 1) return undefined;
+  // Historical v1 receipts predate explicit origin metadata. Treat their
+  // locally stored trace as local and never infer attestation.
+  const origin = receipt.origin === undefined ? "local" : receipt.origin;
+  const attestation = receipt.attestation === undefined ? "none" : receipt.attestation;
+  const receiptId = boundedText(receipt.receiptId, 2_048);
+  const sessionId = safeIdentifier(receipt.sessionId);
+  const turnId = safeIdentifier(receipt.turnId);
+  const createdAt = safeDate(receipt.createdAt) ? receipt.createdAt : undefined;
+  const provider = boundedText(receipt.provider, 256);
+  const model = receipt.model === undefined ? undefined : boundedText(receipt.model, 512);
+  const requestDigest = receipt.requestDigest === undefined
+    ? undefined
+    : DIGEST_PATTERN.test(String(receipt.requestDigest)) ? String(receipt.requestDigest) : undefined;
+  const responseDigest = receipt.responseDigest === undefined
+    ? undefined
+    : DIGEST_PATTERN.test(String(receipt.responseDigest)) ? String(receipt.responseDigest) : undefined;
+  const startedAt = receipt.startedAt === undefined
+    ? undefined
+    : safeDate(receipt.startedAt) ? receipt.startedAt : undefined;
+  const completedAt = receipt.completedAt === undefined
+    ? undefined
+    : safeDate(receipt.completedAt) ? receipt.completedAt : undefined;
+  const timings = receipt.timings === undefined ? undefined : boundedTraceTimings(receipt.timings);
+  const toolCalls = receipt.toolCalls === undefined ? undefined : boundedTraceToolCalls(receipt.toolCalls);
   if (
-    receipt.version !== 1 ||
-    !boundedText(receipt.receiptId, 2_048) ||
-    receipt.sessionId !== event.sessionId ||
-    receipt.turnId !== event.turnId ||
-    !safeDate(receipt.createdAt) ||
-    !PROOF_LEVELS.has(receipt.proofLevel as ProofLevel) ||
-    !POSTURES.has(receipt.posture as SecurityPosture) ||
-    !boundedText(receipt.provider, 256) ||
-    (receipt.instanceId !== undefined && !boundedText(receipt.instanceId, 2_048)) ||
-    (receipt.model !== undefined && !boundedText(receipt.model, 512)) ||
-    !claims ||
-    !RECEIPT_CLAIM_KEYS.every((key) => validReceiptClaim(claims[key])) ||
-    !bindings ||
-    bindings.algorithm !== "SHA-256" ||
-    !validOptionalReceiptText(bindings.endpointKeyDigest) ||
-    !validOptionalReceiptText(bindings.requestDigest) ||
-    !validOptionalReceiptText(bindings.responseDigest) ||
-    !validOptionalReceiptText(bindings.requestCiphertextDigest) ||
-    !validOptionalReceiptText(bindings.responseCiphertextDigest) ||
-    !validOptionalReceiptText(bindings.evidenceDigest) ||
-    !Array.isArray(receipt.verifications) ||
-    receipt.verifications.length > 512 ||
-    receipt.verifications.some((verification) => !validVerificationRecord(verification))
+    (origin !== "local" && origin !== "provider") ||
+    attestation !== "none" ||
+    !receiptId ||
+    !sessionId ||
+    !turnId ||
+    sessionId !== event.sessionId ||
+    turnId !== event.turnId ||
+    !createdAt ||
+    !provider ||
+    (receipt.model !== undefined && !model) ||
+    (receipt.requestDigest !== undefined && !requestDigest) ||
+    (receipt.responseDigest !== undefined && !responseDigest) ||
+    (receipt.startedAt !== undefined && !startedAt) ||
+    (receipt.completedAt !== undefined && !completedAt) ||
+    (receipt.timings !== undefined && !timings) ||
+    (receipt.toolCalls !== undefined && !toolCalls)
   ) return undefined;
-  return deepFreeze(structuredClone(receipt) as unknown as ConversationReceipt);
+  return deepFreeze({
+    version: 1,
+    origin,
+    attestation,
+    receiptId,
+    sessionId,
+    turnId,
+    createdAt,
+    provider,
+    ...(model ? { model } : {}),
+    ...(requestDigest ? { requestDigest } : {}),
+    ...(responseDigest ? { responseDigest } : {}),
+    ...(startedAt ? { startedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+    ...(timings ? { timings } : {}),
+    ...(toolCalls ? { toolCalls } : {}),
+  });
 }
 
-function validReceiptClaim(value: unknown): boolean {
-  const claim = plainRecord(value);
-  return Boolean(
-    claim &&
-    PROOF_STATUSES.has(claim.status as ProofStatus) &&
-    boundedText(claim.summary, 8_192) &&
-    validOptionalReceiptText(claim.verifier) &&
-    validOptionalReceiptText(claim.policyDigest) &&
-    (claim.checkedAt === undefined || safeDate(claim.checkedAt)),
-  );
-}
-
-function validVerificationRecord(value: unknown): boolean {
-  const verification = plainRecord(value);
-  return Boolean(
-    verification &&
-    boundedText(verification.verifier, 512) &&
-    boundedText(verification.version, 128) &&
-    safeDate(verification.checkedAt) &&
-    PROOF_STATUSES.has(verification.status as ProofStatus) &&
-    RECEIPT_CLAIM_KEYS.includes(verification.claim as ClaimKey) &&
-    validOptionalReceiptText(verification.policyDigest) &&
-    validOptionalReceiptText(verification.detail, 8_192),
-  );
-}
-
-function validOptionalReceiptText(value: unknown, maximum = 2_048): boolean {
-  return value === undefined || Boolean(boundedText(value, maximum));
-}
-
-function boundedReceiptTree(root: object): boolean {
-  const ancestors = new WeakSet<object>();
-  let nodes = 0;
-  let stringChars = 0;
-  const visit = (value: unknown, depth: number): boolean => {
-    nodes += 1;
-    if (nodes > 100_000 || depth > 64) return false;
-    if (value === null || typeof value === "boolean") return true;
-    if (typeof value === "number") return Number.isFinite(value);
-    if (typeof value === "string") {
-      stringChars += value.length;
-      return stringChars <= 2 * 1024 * 1024;
+function boundedTraceTimings(value: unknown): Readonly<Record<string, number>> | undefined {
+  const record = plainRecord(value);
+  if (!record) return undefined;
+  const entries = Object.entries(record);
+  if (entries.length > 128) return undefined;
+  const bounded: Record<string, number> = {};
+  for (const [key, metric] of entries) {
+    if (!boundedText(key, 128) || typeof metric !== "number" || !Number.isFinite(metric) || metric < 0) {
+      return undefined;
     }
-    if (!value || typeof value !== "object" || ancestors.has(value)) return false;
-    const prototype = Object.getPrototypeOf(value);
-    if (Array.isArray(value) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    ancestors.add(value);
-    for (const [key, descriptor] of Object.entries(descriptors)) {
-      if (Array.isArray(value) && key === "length") continue;
-      if ("get" in descriptor || "set" in descriptor || !visit(descriptor.value, depth + 1)) {
-        ancestors.delete(value);
-        return false;
-      }
-    }
-    ancestors.delete(value);
-    return true;
-  };
-  return visit(root, 0);
+    bounded[key] = metric;
+  }
+  return deepFreeze(bounded);
+}
+
+function boundedTraceToolCalls(
+  value: unknown,
+): readonly Readonly<{ id: string; name: string }>[] | undefined {
+  if (!Array.isArray(value) || value.length > 512) return undefined;
+  const bounded: Array<Readonly<{ id: string; name: string }>> = [];
+  for (const item of value) {
+    const record = plainRecord(item);
+    const id = boundedText(record?.id, 512);
+    const name = boundedText(record?.name, 512);
+    if (!record || !id || !name) return undefined;
+    bounded.push(deepFreeze({ id, name }));
+  }
+  return deepFreeze(bounded);
 }
 
 export function assessSessionHistory(
@@ -597,26 +585,41 @@ export function assessSessionHistory(
     !DIGEST_PATTERN.test(session.manifest.systemPromptDigest) ||
     !DIGEST_PATTERN.test(session.manifest.toolManifestDigest) ||
     !CAPABILITY_TIERS.has(String(session.manifest.capabilityTier)) ||
-    (session.manifest.securityPosture !== undefined && !POSTURES.has(session.manifest.securityPosture))
+    (session.manifest.securityPosture !== undefined && !isSecurityPosture(session.manifest.securityPosture))
   ) {
     add({ code: "MANIFEST_BINDING_INVALID", severity: "error", message: "The session manifest has an invalid bounded runtime binding." });
   }
   const inferenceBinding = session.manifest.inferenceBinding;
-  if (inferenceBinding && (
-    inferenceBinding.version !== 1 ||
+  let inferenceBindingShapeValid = true;
+  try {
+    assertValidSessionInferenceBinding(session.manifest);
+  } catch {
+    inferenceBindingShapeValid = false;
+  }
+  if (!inferenceBindingShapeValid || (inferenceBinding && (
+    (inferenceBinding.version !== 1 && inferenceBinding.version !== 2) ||
+    Object.keys(inferenceBinding).length !== (inferenceBinding.version === 2 ? 12 : 10) ||
+    (inferenceBinding.version === 2 && (
+      !boundedText(inferenceBinding.transportId, 256) ||
+      !["openai-responses", "openai-chat-completions", "anthropic-messages", "openai-compatible"].includes(inferenceBinding.protocol)
+    )) ||
     !boundedText(inferenceBinding.connectionId, 256) ||
     !Number.isSafeInteger(inferenceBinding.connectionGeneration) ||
     inferenceBinding.connectionGeneration <= 0 ||
     !boundedText(inferenceBinding.providerId, 256) ||
+    (inferenceBinding.version === 2 && inferenceBinding.providerId !== session.manifest.providerId) ||
     !boundedText(inferenceBinding.providerLabel, 256) ||
     !Number.isSafeInteger(inferenceBinding.providerRevision) ||
     inferenceBinding.providerRevision <= 0 ||
     !["oauth-pkce", "api-key", "local-none"].includes(inferenceBinding.authMethod) ||
-    !["e2ee-attestable", "provider-tls", "loopback-local"].includes(inferenceBinding.transportBoundary) ||
+    !(inferenceBinding.version === 1
+      ? ["e2ee-attestable", "provider-tls", "loopback-local"]
+      : ["provider-tls", "loopback-local"]
+    ).includes(inferenceBinding.transportBoundary) ||
     !boundedText(inferenceBinding.modelId, 512) ||
     inferenceBinding.modelId !== session.manifest.model ||
     !Number.isFinite(Date.parse(inferenceBinding.boundAt))
-  )) {
+  ))) {
     add({ code: "INFERENCE_BINDING_INVALID", severity: "error", message: "The session manifest has an invalid credential-free inference connection binding." });
   }
   const manifestProfile = session.manifest.profile;
@@ -626,8 +629,7 @@ export function assessSessionHistory(
     (workspaceBinding.kind === "active-workspace" ||
       (workspaceBinding.kind === "workspace-id" && boundedText(workspaceBinding.workspaceId, 512) !== undefined)) &&
     ["session", "profile", "workspace"].includes(manifestProfile.memoryScope) &&
-    ["ask-first", "auto-approve", "full-access"].includes(manifestProfile.approvalMode) &&
-    POSTURES.has(manifestProfile.minimumPosture);
+    ["ask-first", "auto-approve", "full-access"].includes(manifestProfile.approvalMode);
   if (manifestProfile && (
     (manifestProfile.version !== 1 && manifestProfile.version !== 2) ||
     (manifestProfile.version === 2 && !v2SiloValid) ||
@@ -757,15 +759,15 @@ export function assessSessionHistory(
     }
     if (event.type === "inference.started") {
       const posture = payload?.posture;
-      if (typeof posture !== "string" || !POSTURES.has(posture as SecurityPosture)) {
-        add({ ...location, code: "POSTURE_INVALID", severity: "error", message: "An inference event has no recognized security posture." });
+      if (!isSecurityPosture(posture)) {
+        add({ ...location, code: "POSTURE_INVALID", severity: "error", message: "An inference event has no recognized inference path." });
       } else {
-        postures.add(posture as SecurityPosture);
+        postures.add(posture);
         if (session.manifest.securityPosture && posture !== session.manifest.securityPosture) {
           add({ ...location, code: "POSTURE_PIN_MISMATCH", severity: "error", message: "Observed inference posture differs from the manifest pin." });
         }
       }
-      if (payload?.providerId !== session.manifest.providerId || payload.model !== effectiveModel) {
+      if (!sessionInferenceProviderIdMatches(session.manifest, payload?.providerId) || payload.model !== effectiveModel) {
         add({ ...location, code: "INFERENCE_BINDING_MISMATCH", severity: "error", message: "An inference event differs from the manifest provider or model." });
       }
     }
@@ -866,11 +868,11 @@ export function extractSessionPins(
   for (const event of events.slice(0, DEFAULT_SESSION_INSPECTION_LIMITS.maxEvents)) {
     if (event.type !== "inference.started") continue;
     const posture = plainRecord(event.payload)?.posture;
-    if (typeof posture === "string" && POSTURES.has(posture as SecurityPosture)) observed.add(posture as SecurityPosture);
+    if (isSecurityPosture(posture)) observed.add(posture);
   }
   const observedValues = [...observed].sort();
   const declared = session.manifest.securityPosture;
-  const posture: SessionPostureBinding = declared && POSTURES.has(declared)
+  const posture: SessionPostureBinding = declared && isSecurityPosture(declared)
     ? {
         basis: "manifest",
         value: declared,
@@ -889,8 +891,12 @@ export function extractSessionPins(
   const lineage = session.manifest.lineage;
   return deepFreeze({
     protocolVersion: session.manifest.protocolVersion,
-    providerId: boundedText(session.manifest.providerId, 256) ?? "[invalid provider]",
+    ...(session.importedAt ? { importedAt: boundedText(session.importedAt, 128) ?? "[invalid time]" } : {}),
+    providerId: boundedText(canonicalSessionInferenceProviderId(session.manifest), 256) ?? "[invalid provider]",
     model: boundedText(session.modelOverride ?? session.manifest.model, 512) ?? "[invalid model]",
+    ...(session.manifest.inferenceBinding?.version === 1
+      ? { legacyInferenceTransportId: session.manifest.providerId }
+      : {}),
     ...(session.manifest.inferenceBinding
       ? {
           // A same-thread `session.model-changed` event moves only the model
@@ -967,17 +973,28 @@ export function decideSessionResume(
       });
     }
   }
-  if (pins.providerId !== runtime.providerId) {
+  const historicalBinding = pins.inferenceBinding?.version === 1;
+  const historicalUpgrade = historicalInferenceBindingMayUpgrade({
+    ...pins,
+    providerId: pins.legacyInferenceTransportId ?? pins.providerId,
+  }, runtime.inferenceBinding);
+  const inferenceBindingMatches = historicalBinding
+    ? historicalUpgrade
+    : inferenceBindingsMatch(pins.inferenceBinding, runtime.inferenceBinding);
+  const providerMatches = historicalBinding
+    ? historicalUpgrade && pins.inferenceBinding?.providerId === runtime.providerId
+    : pins.providerId === runtime.providerId;
+  if (!providerMatches) {
     add({ code: "PROVIDER_MISMATCH", severity: "warning", message: `Pinned provider ${pins.providerId} differs from active provider ${runtime.providerId}.` });
   }
   if (pins.model !== runtime.model) {
     add({ code: "MODEL_MISMATCH", severity: "warning", message: `Pinned model ${pins.model} differs from active model ${runtime.model}.` });
   }
-  if (!inferenceBindingsEqual(pins.inferenceBinding, runtime.inferenceBinding)) {
+  if (!inferenceBindingMatches) {
     add({
       code: "INFERENCE_CONNECTION_MISMATCH",
       severity: "warning",
-      message: "The active inference account, credential generation, provider revision, trust boundary, or model binding differs from this session pin.",
+      message: "The active inference account, credential generation, provider revision, transport boundary, or model binding differs from this session pin.",
     });
   }
   if (pins.toolManifestDigest !== runtime.toolManifestDigest) {
@@ -987,7 +1004,7 @@ export function decideSessionResume(
     add({ code: "WORKSPACE_MISMATCH", severity: "warning", message: "The active workspace differs from the session pin." });
   }
   if (pins.posture.mixed) {
-    add({ code: "POSTURE_AMBIGUOUS", severity: "error", message: "The history does not establish one coherent security posture." });
+    add({ code: "POSTURE_AMBIGUOUS", severity: "error", message: "The history does not establish one coherent inference path." });
   } else if (pins.posture.value && pins.posture.value !== runtime.posture) {
     add({ code: "POSTURE_MISMATCH", severity: "warning", message: `Session posture ${pins.posture.value} differs from active posture ${runtime.posture}.` });
   } else if (pins.posture.basis === "not-recorded") {
@@ -997,6 +1014,14 @@ export function decideSessionResume(
   }
 
   compareProfiles(pins.profile, runtime.profile, add);
+  if (pins.importedAt) {
+    add({
+      code: "ARRIVED_IN_A_BUNDLE",
+      severity: "warning",
+      message: "This conversation arrived in a bundle file, so its pinned instructions, model and tool set were"
+        + " composed on another device. Read it here; fork it to continue.",
+    });
+  }
   const blocked = reasons.some((reason) => reason.severity === "error");
   // The requirement is the reasons, and nothing beside them. `status ===
   // "incomplete"` used to force a fork independently of whether any reason
@@ -1009,22 +1034,6 @@ export function decideSessionResume(
     label: action === "resume" ? "Ready to resume" : action === "fork-required" ? "Fork required" : "Resume blocked",
     reasons,
   });
-}
-
-function inferenceBindingsEqual(
-  left: SessionManifest["inferenceBinding"],
-  right: SessionManifest["inferenceBinding"],
-): boolean {
-  if (!left || !right) return left === right;
-  return left.version === right.version
-    && left.connectionId === right.connectionId
-    && left.connectionGeneration === right.connectionGeneration
-    && left.providerId === right.providerId
-    && left.providerLabel === right.providerLabel
-    && left.providerRevision === right.providerRevision
-    && left.authMethod === right.authMethod
-    && left.transportBoundary === right.transportBoundary
-    && left.modelId === right.modelId;
 }
 
 export function querySessionRecords(
@@ -1088,7 +1097,7 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
     session.headSequence < 0 ||
     typeof session.headDigest !== "string" ||
     (session.headSequence === 0 ? session.headDigest !== "genesis" : !DIGEST_PATTERN.test(session.headDigest)) ||
-    !safeIdentifier(session.manifest.providerId) ||
+    !safeIdentifier(canonicalSessionInferenceProviderId(session.manifest)) ||
     typeof session.manifest.model !== "string" ||
     session.manifest.model.length === 0 ||
     session.manifest.model.length > 512 ||
@@ -1096,7 +1105,7 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
     session.manifest.workspaceId.length === 0 ||
     session.manifest.workspaceId.length > 2_048 ||
     !CAPABILITY_TIERS.has(String(session.manifest.capabilityTier)) ||
-    (session.manifest.securityPosture !== undefined && !POSTURES.has(session.manifest.securityPosture)) ||
+    (session.manifest.securityPosture !== undefined && !isSecurityPosture(session.manifest.securityPosture)) ||
     (session.manifest.profile !== undefined && !safeIdentifier(session.manifest.profile.profileId)) ||
     // Lineage is validated as one commitment, on the same terms as
     // FORK_LINEAGE_INVALID in `inspectSession`: a fork boundary is a positive
@@ -1116,7 +1125,7 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
     updatedAt: session.updatedAt,
     headSequence: session.headSequence,
     headDigest: session.headDigest,
-    providerId: session.manifest.providerId,
+    providerId: canonicalSessionInferenceProviderId(session.manifest),
     // The pinned pin means "model this conversation routes to *now*" — via an
     // in-flight override the thread never asked to fork for, exactly like the
     // conversation's approval policy. The manifest seed remains the birth
@@ -1198,7 +1207,6 @@ const GOVERNING_BOUNDARIES = Object.freeze([
   ["workspaceBinding", "workspace boundary"],
   ["memoryScope", "memory scope"],
   ["approvalMode", "approval policy"],
-  ["minimumPosture", "minimum proof posture"],
 ] as const);
 
 /** The first governing boundary that differs, named as a person would say it. */
@@ -1252,7 +1260,6 @@ function profileGovernance(profile: SessionProfileBinding): SessionProfileGovern
       : "active-workspace",
     memoryScope: enforcedMemoryScope(profile.memoryScope),
     approvalMode: profile.approvalMode,
-    minimumPosture: profile.minimumPosture,
   };
 }
 

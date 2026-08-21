@@ -1,13 +1,13 @@
 import preact from "@preact/preset-vite";
+import { build as bundleWithEsbuild } from "esbuild";
 import { fileURLToPath } from "node:url";
 // The test block below is vitest config, not vite config; vitest extends the
 // vite type so both live in this object.
 import { defineConfig } from "vitest/config";
-import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
 import { airshipSemanticPackAssets, readVerifiedSemanticPack } from "./scripts/semantic-pack-assets";
 
-const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
+const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:prime|prime-runtime|prime-kernel|prime-harness|prime-subagents|prime-tools|prime-ai|prime-agent|transport-adapter|deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|client|request-state|terminal-view|terminal-dock-state|semantic\.worker|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab|local-folder|local-folder-panel|work-bundle)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
 /**
  * Vite may otherwise promote dependencies of dynamic imports into index.html.
  * Preserve its just-in-time JS-host preloads, but keep optional Airship packs
@@ -81,16 +81,205 @@ export const DEVELOPMENT_WATCH_IGNORES = Object.freeze([
  */
 export const DEVELOPMENT_OPTIMIZE_ENTRIES = Object.freeze(["index.html"]);
 
+/**
+ * The JavaScript REPL is the only Airship runtime that needs string-to-code
+ * evaluation. This policy is sent on its dedicated worker response only. The
+ * page policy deliberately remains free of `unsafe-eval`.
+ */
+export const PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY = "default-src 'none'; script-src 'unsafe-eval'; connect-src 'none'; worker-src 'none'";
+export const PRIME_KERNEL_WORKER_ASSET_SUFFIX = ".prime-kernel-worker.js";
+export const PRIME_KERNEL_WORKER_RESPONSE_HEADERS = Object.freeze({
+  "Content-Security-Policy": PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY,
+  "Cross-Origin-Embedder-Policy": "credentialless",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "X-Content-Type-Options": "nosniff",
+});
+
+/**
+ * Keep a stable suffix after Vite's content hash. `_headers` gets one greedy
+ * splat, so a suffix (rather than a name before the hash) can match both root
+ * and arbitrary-base deployments without widening the rule to other assets.
+ */
+export function resolveAirshipWorkerEntryFileName(chunk: Readonly<{ name: string }>): string {
+  return chunk.name === "prime-kernel-worker"
+    ? `assets/[hash]${PRIME_KERNEL_WORKER_ASSET_SUFFIX}`
+    : "assets/[name]-[hash].js";
+}
+
+export function isPrimeKernelWorkerRequest(value: string | undefined, basePath: string): boolean {
+  if (!value) return false;
+  const sentinel = "http://airship.invalid";
+  const request = new URL(value, sentinel);
+  if (request.origin !== sentinel || request.hash) return false;
+  const base = resolvePublicBasePath(basePath);
+  const builtPrefix = `${base}assets/`;
+  if (request.pathname.startsWith(builtPrefix) && request.search === "") {
+    const filename = request.pathname.slice(builtPrefix.length);
+    return /^[A-Za-z0-9_-]+\.prime-kernel-worker\.js$/u.test(filename);
+  }
+  const sourcePath = `${base}src/prime/kernel/prime-kernel-worker.ts`;
+  const sourceParameters = [...request.searchParams.entries()];
+  return request.pathname === sourcePath
+    && sourceParameters.length === 2
+    && sourceParameters[0]?.[0] === "worker_file"
+    && sourceParameters[0]?.[1] === ""
+    && sourceParameters[1]?.[0] === "type"
+    && sourceParameters[1]?.[1] === "module";
+}
+
+type MiddlewareServer = Readonly<{
+  middlewares: {
+    use(handler: (
+      request: Readonly<{ url?: string }>,
+      response: {
+        statusCode: number;
+        setHeader(name: string, value: string): void;
+        end(body?: string): void;
+      },
+      next: (error?: unknown) => void,
+    ) => void): void;
+  };
+  watcher?: { on(type: "change", listener: (path: string) => void): void };
+}>;
+
+const PRIME_KERNEL_WORKER_SOURCE_PATH = fileURLToPath(
+  new URL("./src/prime/kernel/prime-kernel-worker.ts", import.meta.url),
+);
+let developmentPrimeKernelWorkerBundle: Promise<string> | undefined;
+
+function isDevelopmentPrimeKernelWorkerRequest(value: string | undefined, basePath: string): boolean {
+  if (!isPrimeKernelWorkerRequest(value, basePath) || !value) return false;
+  const request = new URL(value, "http://airship.invalid");
+  return request.pathname === `${resolvePublicBasePath(basePath)}src/prime/kernel/prime-kernel-worker.ts`;
+}
+
+async function bundleDevelopmentPrimeKernelWorker(): Promise<string> {
+  const result = await bundleWithEsbuild({
+    absWorkingDir: fileURLToPath(new URL(".", import.meta.url)),
+    bundle: true,
+    entryPoints: [PRIME_KERNEL_WORKER_SOURCE_PATH],
+    format: "esm",
+    legalComments: "none",
+    logLevel: "silent",
+    platform: "browser",
+    sourcemap: false,
+    target: "es2022",
+    treeShaking: true,
+    write: false,
+  });
+  if (result.outputFiles.length !== 1) {
+    throw new Error("The Prime kernel development worker did not bundle to one external module.");
+  }
+  return result.outputFiles[0]!.text;
+}
+
+function installPrimeKernelWorkerResponseHeaders(
+  server: MiddlewareServer,
+  basePath: string,
+  bundleDevelopmentEntry: boolean,
+): void {
+  if (bundleDevelopmentEntry) {
+    server.watcher?.on("change", (path) => {
+      if (path.includes("/src/prime/kernel/")) developmentPrimeKernelWorkerBundle = undefined;
+    });
+  }
+  server.middlewares.use((request, response, next) => {
+    if (!isPrimeKernelWorkerRequest(request.url, basePath)) {
+      next();
+      return;
+    }
+    for (const [name, value] of Object.entries(PRIME_KERNEL_WORKER_RESPONSE_HEADERS)) {
+      response.setHeader(name, value);
+    }
+    if (!bundleDevelopmentEntry || !isDevelopmentPrimeKernelWorkerRequest(request.url, basePath)) {
+      next();
+      return;
+    }
+
+    // Vite's development worker endpoint normally keeps static imports. The
+    // reviewed worker CSP deliberately has no `self`, so serve the same entry
+    // as one external module in development as Vite does in a production build.
+    developmentPrimeKernelWorkerBundle ??= bundleDevelopmentPrimeKernelWorker();
+    void developmentPrimeKernelWorkerBundle.then(
+      (source) => {
+        response.statusCode = 200;
+        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+        response.end(source);
+      },
+      (error: unknown) => next(error),
+    );
+  });
+}
+
 const PUBLIC_BASE_PATH = resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH);
 const VERIFIED_SEMANTIC_PACK = process.env.AIRSHIP_DISABLE_SEMANTIC_PACK === "1"
   ? null
   : readVerifiedSemanticPack();
 const SEMANTIC_PACK_AVAILABLE = VERIFIED_SEMANTIC_PACK !== null;
+/*
+ * The loopback storage lab is host composition, not a product feature, so it is
+ * replaced with a literal rather than read at runtime: `"0" === "1"` folds, and
+ * a folded `false` takes the lab's modules, dynamic imports, copy and stylesheet
+ * out of the graph instead of shipping them behind a refusal. `.env.sample` and
+ * `scripts/local-lab.mjs` already speak the exact `1`; anything else is off.
+ */
+const LOCAL_LAB_ENABLED = process.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB === "1";
+
+/**
+ * The modules only a lab build may contain.
+ *
+ * Folding `LOCAL_LAB_BUILD` deletes every branch that *calls* these dynamic
+ * imports, but the bundler still walks a dynamic import it has parsed and emits
+ * a chunk for its target — four orphan files, 21 KiB of them, referenced by
+ * nothing and shipped anyway. Marking the specifiers external in a stock build
+ * removes the targets from the graph, so no chunk is created and the release
+ * gate's own inventory has nothing to classify.
+ *
+ * If a lab-only import ever escapes its branch, the artifact carries the literal
+ * below and `assertStockReleaseExcludesLocalLab` fails the release rather than
+ * shipping an import that resolves to nothing.
+ */
+export const LOCAL_LAB_ONLY_MODULES: readonly string[] = Object.freeze([
+  "/src/storage/s3-object-store.ts",
+  "/src/ui/local-lab-setup.tsx",
+  "/src/ui/local-lab-vault.ts",
+  "/src/vault/local-lab.ts",
+]);
+export const LOCAL_LAB_ABSENT_MODULE = "airship:local-lab-is-not-in-this-build";
+
+export function isLocalLabOnlyModule(resolvedId: string): boolean {
+  const path = resolvedId.split("?")[0].split("\\").join("/");
+  return LOCAL_LAB_ONLY_MODULES.some((suffix) => path.endsWith(suffix));
+}
+
+function airshipLocalLabComposition(enabled: boolean) {
+  return {
+    name: "airship-local-lab-composition",
+    apply: "build" as const,
+    // Ahead of `vite:resolve`, which would otherwise answer for these relative
+    // specifiers before this plugin is consulted at all.
+    enforce: "pre" as const,
+    async resolveId(source: string, importer: string | undefined, options: Record<string, unknown>) {
+      if (enabled || !importer || source.startsWith("\0")) return null;
+      const resolved = await (this as unknown as {
+        resolve: (
+          source: string,
+          importer: string,
+          options: Record<string, unknown>,
+        ) => Promise<{ id: string } | null>;
+      }).resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved || !isLocalLabOnlyModule(resolved.id)) return null;
+      return { id: LOCAL_LAB_ABSENT_MODULE, external: true };
+    },
+  };
+}
 
 export default defineConfig({
   base: PUBLIC_BASE_PATH,
   define: {
     "import.meta.env.VITE_AIRSHIP_SEMANTIC_PACK_AVAILABLE": JSON.stringify(SEMANTIC_PACK_AVAILABLE ? "true" : "false"),
+    "import.meta.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB": JSON.stringify(LOCAL_LAB_ENABLED ? "1" : "0"),
   },
   optimizeDeps: {
     entries: [...DEVELOPMENT_OPTIMIZE_ENTRIES],
@@ -107,7 +296,7 @@ export default defineConfig({
     preact(),
     airshipPyodideAssets(),
     airshipSemanticPackAssets(VERIFIED_SEMANTIC_PACK),
-    localChutesOAuthBridge(),
+    airshipLocalLabComposition(LOCAL_LAB_ENABLED),
     {
       name: "airship-local-development-csp",
       apply: "serve",
@@ -115,6 +304,15 @@ export default defineConfig({
         // The loopback origins are the disposable MinIO lab only. The source
         // and production response remain on the reviewed strict policy.
         return applyLocalDevelopmentPolicy(html);
+      },
+    },
+    {
+      name: "airship-prime-kernel-worker-csp",
+      configureServer(server) {
+        installPrimeKernelWorkerResponseHeaders(server, PUBLIC_BASE_PATH, true);
+      },
+      configurePreviewServer(server) {
+        installPrimeKernelWorkerResponseHeaders(server, PUBLIC_BASE_PATH, false);
       },
     },
     {
@@ -148,6 +346,27 @@ export default defineConfig({
          * the protocol shell or silently grow the optional-pack count.
          */
         manualChunks(id) {
+          /*
+           * Simplifying the old provider/trust surfaces removed the secondary
+           * importers that had made these startup modules shared chunks.
+           * Rolldown then folded them into the entry, even though total startup
+           * JavaScript fell. Keep the profile-storage boundary explicit so the
+           * entry stays a bounded coordinator and these stable persistence
+           * primitives retain their own cache unit. This chunk is still an
+           * eager dependency; it is not excluded from HTML module preloads.
+           *
+           * `src/vault/config.ts` used to be named here too, and naming it was
+           * what kept it in a stock artifact: the S3 configuration grammar is
+           * reachable from one destination only — the host-composed loopback lab
+           * — so once `configure()` refuses in a stock build nothing references
+           * it, and only this list was still pinning 4,969 raw bytes of it into
+           * an eager chunk. A lab build places it with the code that uses it.
+           */
+          if (
+            id.includes("/src/profiles/catalog.ts")
+            || id.includes("/src/profiles/persistence.ts")
+            || id.includes("/src/storage/encrypted-envelope.ts")
+          ) return "profile-storage-foundations";
           /*
            * `transcript-operations` is imported by `platform-shell.tsx`, which
            * is on the boot path, and by `message-parts-view.tsx`, which is
@@ -228,6 +447,13 @@ export default defineConfig({
            * can attribute to nobody, and one that would be indistinguishable
            * from `core/hash`. Named into the prime family it belongs to.
            */
+          /*
+           * Core's legacy execution tools now reuse the hardened Prime worker
+           * host. That second importer makes Rollup split the host from the
+           * lazy Prime runtime; keep the shared chunk in its exact Prime-kernel
+           * release family instead of emitting an unowned `kernel-host` stem.
+           */
+          if (id.includes("/src/prime/kernel/kernel-host")) return "prime-kernel-host";
           if (id.includes("/src/prime/ai/hash")) return "prime-ai-hash";
           /*
            * The tool surface has two importers now — the prime runtime chunk,
@@ -274,9 +500,9 @@ export default defineConfig({
           /*
            * `git/client.ts` moved off the startup path so a visitor who never
            * opens the Workspace does not pay for Git. Alone it emits a chunk
-           * named `client`, a shape the release gate's Proof-surface classifier
-           * already claims. Name it for what it is so the classifier stays
-           * exact rather than matching by accident.
+           * named `client`, a name several unrelated chunks also emit. Name it
+           * for what it is so the release gate's classifier stays exact rather
+           * than matching by accident.
            */
           /*
            * Any chunk made purely of Git modules that is not the adapter facade
@@ -315,5 +541,10 @@ export default defineConfig({
   },
   worker: {
     format: "es",
+    rollupOptions: {
+      output: {
+        entryFileNames: resolveAirshipWorkerEntryFileName,
+      },
+    },
   },
 });

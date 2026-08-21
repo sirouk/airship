@@ -15,6 +15,7 @@
  * — because the retry guidance differs.
  */
 
+import { isRecord } from "../../core/records";
 import {
   AUTO_REFINE_REVIEW_SYSTEM_PROMPT,
   AUTO_REFINE_REVIEW_TRAILER,
@@ -236,9 +237,6 @@ function extractJsonObject(text: string): unknown {
   throw new Error("Refiner did not return a JSON object");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * parseProposal: upstream's lenient acceptance — missing summary/rationale

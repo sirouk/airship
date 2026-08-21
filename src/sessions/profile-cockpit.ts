@@ -1,7 +1,12 @@
 import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
+import {
+  historicalInferenceBindingMayUpgrade,
+  inferenceBindingsMatch,
+} from "../core/inference-binding";
+export { inferenceBindingsMatch } from "../core/inference-binding";
 import { enforcedMemoryScope } from "../profiles/domain";
-import { JournalConflictError, type DurableEvent, type EventJournal, type SessionRecord } from "../core/journal";
+import { JournalConflictError, type DurableEvent, type EventJournal, type JournalHead, type SessionRecord } from "../core/journal";
 
 export const PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE = "profile.active-conversation.selected";
 
@@ -48,12 +53,31 @@ export function requireProfileOwnedSession(
   profileId: string,
   operation: "open" | "fork",
 ): SessionRecord {
-  if (!profileOwnsSession(session, profileId)) {
+  requireProfileOwnedManifest(session.manifest, profileId, operation);
+  return session;
+}
+
+/**
+ * The same fence, over the manifest the record only carries.
+ *
+ * A browser can hold a route authority with no conversation behind it — an
+ * address still opening, a Vault just adopted — and the profile binding this
+ * refuses on is a field of the manifest either way. One sentence, so a shell
+ * that has a manifest and a shell that has a record cannot come to refuse in
+ * two different vocabularies.
+ */
+export function requireProfileOwnedManifest(
+  manifest: SessionManifest,
+  profileId: string,
+  operation: "open" | "fork",
+): SessionManifest {
+  assertProfileId(profileId);
+  if (manifest.profile?.profileId !== profileId) {
     throw new Error(
       `The requested conversation belongs to another Profile. Switch Profiles before trying to ${operation} it.`,
     );
   }
-  return session;
+  return manifest;
 }
 
 export class ProfileActiveConversationConflictError extends Error {
@@ -117,7 +141,7 @@ export async function selectProfileActiveConversation(
   profileId: string,
   sessionId: string,
   options: Readonly<{
-    expectedTargetHead?: Readonly<{ sequence: number; digest: string }>;
+    expectedTargetHead?: JournalHead;
     signal?: AbortSignal;
   }> = {},
 ): Promise<SelectProfileActiveConversationResult> {
@@ -132,10 +156,12 @@ export async function selectProfileActiveConversation(
   const selectionHead = options.expectedTargetHead ?? {
     sequence: target.headSequence,
     digest: target.headDigest,
+    ...(target.headIncarnation ? { incarnation: target.headIncarnation } : {}),
   };
   if (
     target.headSequence !== selectionHead.sequence
     || target.headDigest !== selectionHead.digest
+    || (selectionHead.incarnation !== undefined && target.headIncarnation !== selectionHead.incarnation)
   ) {
     throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
   }
@@ -147,6 +173,7 @@ export async function selectProfileActiveConversation(
       !stableTarget
       || stableTarget.headSequence !== selectionHead.sequence
       || stableTarget.headDigest !== selectionHead.digest
+      || (selectionHead.incarnation !== undefined && stableTarget.headIncarnation !== selectionHead.incarnation)
     ) {
       throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
     }
@@ -233,28 +260,42 @@ export async function resumableProfileConversationCandidates(
   signal?: AbortSignal,
 ): Promise<readonly SessionRecord[]> {
   const pointer = await resolveProfileActiveConversation(journal, profileId, signal);
-  const sessions = (await journal.listSessions(signal)).filter((session) =>
+  const owned = (await journal.listSessions(signal)).filter((session) =>
     session.manifest.profile?.profileId === profileId
-    && resumableProfileManifestMatches(session.manifest, expectedManifest)
   );
   signal?.throwIfAborted();
-  const byRecency = sessions.sort((left, right) =>
-    Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
-  );
-  // The durable pointer, then the page-local hint, then recency — the same
-  // precedence the single-answer form has always applied, expressed as an
-  // order over the whole set rather than as three early returns.
-  const leadId = pointer.state === "selected"
+  /*
+   * A conversation that was asked for by name is answered about, never
+   * replaced.
+   *
+   * `preferredSessionId` used to be consulted *after* the compatibility filter
+   * below had already discarded it, so a request for one conversation returned
+   * a different one — and the caller then opened that other conversation under
+   * the requested conversation's own address. Measured on a return the next
+   * day: the address bar named the conversation the person asked for, an empty
+   * conversation was on screen, and nothing said the request had not been
+   * honoured. Whether the asked-for conversation can still run here is the
+   * caller's question to answer, at that conversation, in its own words.
+   */
+  const requested = preferredSessionId
+    ? owned.find((session) => session.id === preferredSessionId)
+    : undefined;
+  if (requested) return Object.freeze([requested]);
+  const byRecency = owned
+    .filter((session) => !importedConversation(session)
+      && resumableProfileManifestMatches(session.manifest, expectedManifest))
+    .sort((left, right) =>
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
+    );
+  // With nothing asked for by name, the durable pointer leads, then recency.
+  const lead = pointer.state === "selected"
       && pointer.session
+      && !importedConversation(pointer.session)
       && resumableProfileManifestMatches(pointer.session.manifest, expectedManifest)
-    ? pointer.session.id
-    : pointer.state === "no-selection" && preferredSessionId
-      && byRecency.some((session) => session.id === preferredSessionId)
-      ? preferredSessionId
-      : undefined;
-  const lead = leadId === pointer.session?.id ? pointer.session : byRecency.find((session) => session.id === leadId);
+    ? pointer.session
+    : undefined;
   return Object.freeze(lead
-    ? [lead, ...byRecency.filter((session) => session.id !== leadId)]
+    ? [lead, ...byRecency.filter((session) => session.id !== lead.id)]
     : byRecency);
 }
 
@@ -293,7 +334,7 @@ export function profileActiveConversationPointer(
  * They may change the composed prompt used for a *new* session without making
  * an existing conversation incompatible: an existing conversation continues
  * with its own immutable `systemPrompt`. Stable profile, tool, inference,
- * workspace, posture, and context-policy pins must still match exactly.
+ * workspace, security-posture, and context-policy pins must still match exactly.
  */
 export function resumableProfileManifestMatches(
   actual: SessionManifest,
@@ -302,13 +343,112 @@ export function resumableProfileManifestMatches(
   return profileManifestResumeMismatches(actual, expected).length === 0;
 }
 
+/**
+ * What a conversation that arrived in a bundle file is told instead.
+ *
+ * Deliberately *not* a manifest comparison. The prompt a resumed conversation
+ * sends is its own pinned one — that is the immutability the comparison above
+ * exists to preserve, and why it does not compare `systemPromptDigest`: live
+ * browser and provider observations legitimately move the composed prompt for
+ * a *new* session without making an existing one incompatible. That rule is
+ * safe exactly while every pinned prompt was composed here. A file's was not,
+ * and a verified digest chain cannot say otherwise, so the fence belongs on
+ * where the record came from rather than on what it says.
+ */
+export const IMPORTED_CONVERSATION_REFUSAL =
+  "This conversation arrived in a bundle file, so its pinned instructions were composed on another device and were"
+  + " never agreed to here. It cannot take another turn. Every message is readable."
+  + " Fork it to continue under this profile.";
+
+/** True for a record this device took in from a file rather than composed. */
+export function importedConversation(session: SessionRecord): boolean {
+  return typeof session.importedAt === "string";
+}
+
+/**
+ * A library fork may project only the journal-derived model and compression
+ * policy at its selected boundary. Every live route, Profile, tool, prompt,
+ * workspace, and protocol fact must still match the authority that requested
+ * activation. Lineage/creation time are necessarily new and are audited by
+ * the fork library itself.
+ */
+export function forkActivationManifestMatches(
+  fork: SessionManifest,
+  authority: SessionManifest,
+): boolean {
+  return fork.protocolVersion === authority.protocolVersion
+    && fork.providerId === authority.providerId
+    && fork.systemPromptDigest === authority.systemPromptDigest
+    && fork.toolManifestDigest === authority.toolManifestDigest
+    && fork.workspaceId === authority.workspaceId
+    && fork.capabilityTier === authority.capabilityTier
+    && fork.securityPosture === authority.securityPosture
+    && (fork.turnContext ?? "disabled") === (authority.turnContext ?? "disabled")
+    && profileBindingsMatch(fork.profile, authority.profile)
+    && inferenceRouteExceptModelMatches(fork.inferenceBinding, authority.inferenceBinding)
+    && (fork.inferenceBinding?.modelId ?? fork.model) === fork.model;
+}
+
+function inferenceRouteExceptModelMatches(
+  actual: SessionManifest["inferenceBinding"],
+  expected: SessionManifest["inferenceBinding"],
+): boolean {
+  if (!actual || !expected) return actual === expected;
+  if (
+    actual.version !== expected.version
+    || actual.connectionId !== expected.connectionId
+    || actual.connectionGeneration !== expected.connectionGeneration
+    || actual.providerId !== expected.providerId
+    || actual.providerLabel !== expected.providerLabel
+    || actual.providerRevision !== expected.providerRevision
+    || actual.authMethod !== expected.authMethod
+    || actual.transportBoundary !== expected.transportBoundary
+    || actual.boundAt !== expected.boundAt
+  ) return false;
+  return actual.version === 1 || (
+    expected.version === 2
+    && actual.transportId === expected.transportId
+    && actual.protocol === expected.protocol
+  );
+}
+
+/**
+ * Why a saved conversation cannot continue on the route in front of it, in the
+ * same frame the route resolved.
+ *
+ * The codes below are pure and synchronous, so this answer always was. The
+ * resume path used to wait for a deferred describer chunk to say it — measured
+ * at eight seconds on a cold return, during which the address bar named one
+ * conversation, another was on screen, and the live region reported an audited
+ * session resumed. Reading is not continuing: this sentence states that the
+ * history is intact and readable, names the pins that moved, and offers the one
+ * remedy that can work.
+ */
+export function profileManifestResumeRefusal(
+  actual: SessionManifest,
+  expected: SessionManifest,
+): string {
+  const mismatches = profileManifestResumeMismatches(actual, expected);
+  return "You are reading a saved conversation. It cannot continue on this route."
+    + (mismatches.length ? ` What no longer matches: ${mismatches.join(", ").replace(/-/gu, " ")}.` : "")
+    + " Fork it to continue.";
+}
+
 /** Credential-free mismatch codes suitable for diagnostics and tests. */
 export function profileManifestResumeMismatches(
   actual: SessionManifest,
   expected: SessionManifest,
 ): readonly string[] {
   const mismatches: string[] = [];
-  if (actual.providerId !== expected.providerId) mismatches.push("provider");
+  const historicalBinding = actual.inferenceBinding?.version === 1;
+  const historicalUpgrade = historicalInferenceBindingMayUpgrade(actual, expected.inferenceBinding);
+  const inferenceBindingMatches = historicalBinding
+    ? historicalUpgrade
+    : inferenceBindingsMatch(actual.inferenceBinding, expected.inferenceBinding);
+  const providerMatches = historicalBinding
+    ? historicalUpgrade && actual.inferenceBinding?.providerId === expected.providerId
+    : actual.providerId === expected.providerId;
+  if (!providerMatches) mismatches.push("provider");
   if (actual.model !== expected.model) mismatches.push("model");
   if (actual.workspaceId !== expected.workspaceId) mismatches.push("workspace");
   if (!browserCapabilityTiersMatch(actual.capabilityTier, expected.capabilityTier)) mismatches.push("capability-tier");
@@ -316,7 +456,7 @@ export function profileManifestResumeMismatches(
   if ((actual.turnContext ?? "disabled") !== (expected.turnContext ?? "disabled")) mismatches.push("turn-context");
   if (!contextPoliciesMatch(actual.contextPolicy, expected.contextPolicy)) mismatches.push("context-policy");
   if (actual.toolManifestDigest !== expected.toolManifestDigest) mismatches.push("tool-manifest");
-  if (!inferenceBindingsMatch(actual.inferenceBinding, expected.inferenceBinding)) mismatches.push("inference-binding");
+  if (!inferenceBindingMatches) mismatches.push("inference-binding");
   if (!profileBindingsMatch(actual.profile, expected.profile)) mismatches.push("profile-binding");
   return Object.freeze(mismatches);
 }
@@ -358,8 +498,7 @@ function profileBindingsMatch(
      * pins that enforce the same boundary are the same boundary.
      */
     && enforcedMemoryScope(actual.memoryScope) === enforcedMemoryScope(expected.memoryScope)
-    && actual.approvalMode === expected.approvalMode
-    && actual.minimumPosture === expected.minimumPosture;
+    && actual.approvalMode === expected.approvalMode;
 }
 
 function browserCapabilityTiersMatch(
@@ -370,31 +509,6 @@ function browserCapabilityTiersMatch(
   const actualIsBrowser = actual === "web-baseline" || actual === "web-enhanced";
   const expectedIsBrowser = expected === "web-baseline" || expected === "web-enhanced";
   return actualIsBrowser && expectedIsBrowser;
-}
-
-/**
- * Whether two manifests name the same inference authority, field by field.
- *
- * Exported because `app.tsx` had carried a verbatim nine-field copy of this to
- * gate its external-inference preflight. Nine fields compared in two places is
- * nine chances for the preflight to consider a binding "the same" that this
- * resume check considers different — the failure mode being a conversation the
- * cockpit refuses to resume and the composer happily sends on.
- */
-export function inferenceBindingsMatch(
-  actual: SessionManifest["inferenceBinding"],
-  expected: SessionManifest["inferenceBinding"],
-): boolean {
-  if (!actual || !expected) return actual === expected;
-  return actual.version === expected.version
-    && actual.connectionId === expected.connectionId
-    && actual.connectionGeneration === expected.connectionGeneration
-    && actual.providerId === expected.providerId
-    && actual.providerLabel === expected.providerLabel
-    && actual.providerRevision === expected.providerRevision
-    && actual.authMethod === expected.authMethod
-    && actual.transportBoundary === expected.transportBoundary
-    && actual.modelId === expected.modelId;
 }
 
 function contextPoliciesMatch(

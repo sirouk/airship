@@ -56,7 +56,7 @@ export async function runTerminalGitCommand(args: Readonly<{
   const command = words.shift() ?? "help";
   const repositories = await args.client.listRepositories(signal);
 
-  if (command === "help" || command === "--help") return result(help(), false);
+  if (command === "help" || command === "--help") return result(help());
   if (command === "clone") return clone(args.client, repositories, words, args.review, signal);
 
   const selected = selectRepository(repositories, cwd);
@@ -67,7 +67,7 @@ export async function runTerminalGitCommand(args: Readonly<{
 
   switch (command) {
     case "status":
-      return result(formatStatus(await args.client.status(target(repository, worktree), signal)), false);
+      return result(formatStatus(await args.client.status(target(repository, worktree), signal)));
     case "diff":
       return diff(args.client, repository, worktree, words, signal);
     case "add":
@@ -110,7 +110,7 @@ export async function runTerminalGitCommand(args: Readonly<{
     case "remote":
       return remote(args.client, repository, words, args.review, signal);
     case "rev-parse":
-      return result(revParse(repository, worktree, words), false);
+      return result(revParse(repository, worktree, words));
     case "worktree":
       return worktreeCommand(args.client, repository, words, cwd, args.review, signal);
     default:
@@ -132,7 +132,7 @@ async function diff(
   const paths = args.length
     ? args
     : live.status.filter((entry) => staged ? entry.index : entry.worktree).map((entry) => entry.path);
-  if (!paths.length) return result("No differences.", false);
+  if (!paths.length) return result("No differences.");
   const selected = paths.slice(0, MAX_DIFF_PATHS);
   const patches = await Promise.all(selected.map((path) => client.diff({
     ...target(repository, live),
@@ -140,7 +140,7 @@ async function diff(
     scope: staged ? "staged" : "worktree",
   }, signal)));
   const suffix = paths.length > selected.length ? `\nDiff limited to ${MAX_DIFF_PATHS} paths; ${paths.length - selected.length} omitted.` : "";
-  return result(`${patches.map((item) => item.patch || `${item.path}: no difference\n`).join("")}${suffix}`, false);
+  return result(`${patches.map((item) => item.patch || `${item.path}: no difference\n`).join("")}${suffix}`);
 }
 
 async function stage(
@@ -161,8 +161,8 @@ async function stage(
   const paths = args.length && !args.includes("-A") && !args.includes("--all") && !args.includes(".")
     ? stripSeparator(args)
     : live.status.filter((entry) => entry.worktree).map((entry) => entry.path);
-  if (!paths.length) return result("No unstaged paths to add.", false);
-  const operation: GitOperation = { kind: "stage", request: { ...target(repository, live), paths, force, expectedWorktreeVersion: live.version } };
+  if (!paths.length) return result("No unstaged paths to add.");
+  const operation: GitOperation = { kind: "stage", request: { ...target(repository, live), paths, force, ...worktreeVersion(live) } };
   await approve(operation, review);
   const changed = await client.stage(operation.request, signal);
   return result(`Staged ${changed.changedPaths.length} path${changed.changedPaths.length === 1 ? "" : "s"}.`, true);
@@ -187,8 +187,8 @@ async function unstage(
   const live = await client.status(target(repository, current), signal);
   const requested = stripSeparator(args).filter((word) => word !== "HEAD");
   const paths = requested.length ? requested : live.status.filter((entry) => entry.index).map((entry) => entry.path);
-  if (!paths.length) return result("No staged paths to restore.", false);
-  const operation: GitOperation = { kind: "unstage", request: { ...target(repository, live), paths, expectedWorktreeVersion: live.version } };
+  if (!paths.length) return result("No staged paths to restore.");
+  const operation: GitOperation = { kind: "unstage", request: { ...target(repository, live), paths, ...worktreeVersion(live) } };
   await approve(operation, review);
   const changed = await client.unstage(operation.request, signal);
   return result(`Unstaged ${changed.changedPaths.length} path${changed.changedPaths.length === 1 ? "" : "s"}.`, true);
@@ -213,7 +213,7 @@ async function commit(
       ...target(repository, live),
       message,
       author: author ?? DEFAULT_AUTHOR,
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
     },
   };
   await approve(operation, review);
@@ -229,10 +229,10 @@ async function branch(
   review: TerminalGitReview | undefined,
   signal: AbortSignal,
 ): Promise<TerminalGitResult> {
-  if (!args.length) return result(repository.branches.map((item) => `${item.current ? "*" : " "} ${item.name}`).join("\n"), false);
+  if (!args.length) return result(repository.branches.map((item) => `${item.current ? "*" : " "} ${item.name}`).join("\n"));
   if (args.length !== 1) throw new Error("Use `git branch` or `git branch <name>` in the browser bridge.");
   const live = await client.status(target(repository, current), signal);
-  const operation: GitOperation = { kind: "branch-create", request: { ...target(repository, live), name: args[0]!, checkout: false, expectedWorktreeVersion: live.version } };
+  const operation: GitOperation = { kind: "branch-create", request: { ...target(repository, live), name: args[0]!, checkout: false, ...worktreeVersion(live) } };
   await approve(operation, review);
   await client.createBranch(operation.request, signal);
   return result(`Created branch ${args[0]}.`, true);
@@ -251,8 +251,8 @@ async function switchBranch(
   if (args.length !== 1) throw new Error("Use `git switch <branch>` or `git switch -c <branch>` in the browser bridge.");
   const live = await client.status(target(repository, current), signal);
   const operation: GitOperation = create
-    ? { kind: "branch-create", request: { ...target(repository, live), name: args[0]!, checkout: true, expectedWorktreeVersion: live.version } }
-    : { kind: "branch-switch", request: { ...target(repository, live), name: args[0]!, expectedWorktreeVersion: live.version } };
+    ? { kind: "branch-create", request: { ...target(repository, live), name: args[0]!, checkout: true, ...worktreeVersion(live) } }
+    : { kind: "branch-switch", request: { ...target(repository, live), name: args[0]!, ...worktreeVersion(live) } };
   await approve(operation, review);
   if (operation.kind === "branch-create") await client.createBranch(operation.request, signal);
   else await client.switchBranch(operation.request, signal);
@@ -271,7 +271,7 @@ async function fetchRemote(
   if (!remote) throw new Error("This repository has no configured remote.");
   const latest = await client.getRepository(repository.id, signal);
   if (!latest) throw new Error("The repository disappeared before fetch.");
-  const operation: GitOperation = { kind: "fetch", request: { repositoryId: repository.id, remote, expectedRepositoryVersion: latest.version, prune: true } };
+  const operation: GitOperation = { kind: "fetch", request: { repositoryId: repository.id, remote, ...repositoryVersion(latest), prune: true } };
   await approve(operation, review);
   await client.fetch(operation.request, signal);
   return result(`Fetched ${remote} directly with browser Git Smart HTTP.`, true);
@@ -302,7 +302,7 @@ async function pushRemote(
       worktreeId: live.id,
       remote,
       branch,
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
       force: false,
     },
   };
@@ -339,8 +339,8 @@ async function log(
     ...(words[0] ? { ref: words[0] } : {}),
     ...(paths[0] ? { path: paths[0], follow: true } : {}),
   }, signal);
-  if (!commits.length) return result("No commits.", false);
-  return result(commits.map((commit) => formatCommit(commit, oneline)).join(oneline ? "\n" : "\n\n"), false);
+  if (!commits.length) return result("No commits.");
+  return result(commits.map((commit) => formatCommit(commit, oneline)).join(oneline ? "\n" : "\n\n"));
 }
 
 async function show(
@@ -358,7 +358,7 @@ async function show(
   }, signal);
   const patches = detail.files.map((file) => file.patch || `${file.path}: ${file.kind}\n`).join("");
   const suffix = detail.truncated ? "\n… more paths in this commit than the browser bridge renders …" : "";
-  return result(`${formatCommit(detail.commit, false)}\n\n${patches}${suffix}`, false);
+  return result(`${formatCommit(detail.commit, false)}\n\n${patches}${suffix}`);
 }
 
 async function tag(
@@ -372,25 +372,19 @@ async function tag(
   requireFeature(client, "tag", "Tagging");
   if (!args.length || args[0] === "-l" || args[0] === "--list") {
     const tags = await client.listTags(repository.id, signal);
-    return result(tags.length ? tags.map((item) => `${item.name}${item.annotated ? "\t(annotated)" : ""}`).join("\n") : "No tags.", false);
+    return result(tags.length ? tags.map((item) => `${item.name}${item.annotated ? "\t(annotated)" : ""}`).join("\n") : "No tags.");
   }
   const latest = await requireLatest(client, repository, signal);
   if (args[0] === "-d" || args[0] === "--delete") {
     if (args.length !== 2) throw new Error("Use `git tag -d <name>` in the browser bridge.");
-    const operation: GitOperation = { kind: "tag-delete", request: { repositoryId: repository.id, name: args[1]!, expectedRepositoryVersion: latest.version } };
+    const operation: GitOperation = { kind: "tag-delete", request: { repositoryId: repository.id, name: args[1]!, ...repositoryVersion(latest) } };
     await approve(operation, review);
     await client.deleteTag(operation.request, signal);
     return result(`Deleted tag ${args[1]}.`, true);
   }
   const words = [...args];
   const annotated = takeFlag(words, "-a") || takeFlag(words, "--annotate");
-  const messageIndex = words.findIndex((word) => word === "-m" || word === "--message");
-  let message: string | undefined;
-  if (messageIndex >= 0) {
-    message = words[messageIndex + 1];
-    if (!message) throw new Error("Use `git tag -a <name> -m \"message\"` in the browser bridge.");
-    words.splice(messageIndex, 2);
-  }
+  const message = takeMessage(words, "Use `git tag -a <name> -m \"message\"` in the browser bridge.");
   if (annotated && message === undefined) throw new Error("An annotated tag needs `-m \"message\"` in the browser bridge.");
   if (!words.length || words.length > 2) throw new Error("Use `git tag <name> [<revision>]` in the browser bridge.");
   const operation: GitOperation = {
@@ -400,7 +394,7 @@ async function tag(
       name: words[0]!,
       ...(words[1] ? { ref: words[1] } : {}),
       ...(message === undefined ? {} : { message, author: author ?? DEFAULT_AUTHOR }),
-      expectedRepositoryVersion: latest.version,
+      ...repositoryVersion(latest),
     },
   };
   await approve(operation, review);
@@ -422,18 +416,12 @@ async function stash(
   const verb = words[0] && !words[0].startsWith("-") ? words.shift()! : "push";
   if (verb === "list") {
     const entries = await client.listStash(target(repository, current), signal);
-    return result(entries.length ? entries.map((entry) => `stash@{${entry.index}}: ${entry.message}`).join("\n") : "No stash entries.", false);
+    return result(entries.length ? entries.map((entry) => `stash@{${entry.index}}: ${entry.message}`).join("\n") : "No stash entries.");
   }
   if (verb !== "push" && verb !== "pop" && verb !== "apply" && verb !== "drop" && verb !== "clear") {
     throw new Error("The browser bridge supports `git stash [push|pop|apply|drop|clear|list]`.");
   }
-  let message: string | undefined;
-  const messageIndex = words.findIndex((word) => word === "-m" || word === "--message");
-  if (messageIndex >= 0) {
-    message = words[messageIndex + 1];
-    if (!message) throw new Error("Use `git stash push -m \"message\"` in the browser bridge.");
-    words.splice(messageIndex, 2);
-  }
+  const message = takeMessage(words, "Use `git stash push -m \"message\"` in the browser bridge.");
   const index = words.length ? stashIndex(words[0]!) : 0;
   if (words.length > 1) throw new Error("Use `git stash <verb> [stash@{n}]` in the browser bridge.");
   const live = await client.status(target(repository, current), signal);
@@ -445,7 +433,7 @@ async function stash(
       ...(message === undefined ? {} : { message }),
       index,
       author: author ?? DEFAULT_AUTHOR,
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
     },
   };
   await approve(operation, review);
@@ -465,13 +453,7 @@ async function merge(
   requireFeature(client, "merge", "Merging");
   const words = [...args];
   const fastForwardOnly = takeFlag(words, "--ff-only");
-  const messageIndex = words.findIndex((word) => word === "-m" || word === "--message");
-  let message: string | undefined;
-  if (messageIndex >= 0) {
-    message = words[messageIndex + 1];
-    if (!message) throw new Error("Use `git merge <branch> -m \"message\"` in the browser bridge.");
-    words.splice(messageIndex, 2);
-  }
+  const message = takeMessage(words, "Use `git merge <branch> -m \"message\"` in the browser bridge.");
   if (words.length !== 1) throw new Error("Use `git merge [--ff-only] <branch>` in the browser bridge.");
   const live = await client.status(target(repository, current), signal);
   const operation: GitOperation = {
@@ -482,7 +464,7 @@ async function merge(
       fastForwardOnly,
       ...(message === undefined ? {} : { message }),
       author: author ?? DEFAULT_AUTHOR,
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
     },
   };
   await approve(operation, review);
@@ -520,7 +502,7 @@ async function restore(
       ...target(repository, live),
       paths,
       source: fromHead ? "head" : "stage",
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
     },
   };
   await approve(operation, review);
@@ -548,7 +530,7 @@ async function reset(
       ...target(repository, live),
       mode,
       ref: words[0] ?? "HEAD",
-      expectedWorktreeVersion: live.version,
+      ...worktreeVersion(live),
     },
   };
   await approve(operation, review);
@@ -566,8 +548,8 @@ async function remote(
   if (!args.length || args[0] === "-v") {
     const verbose = args[0] === "-v";
     if (args.length > 1) throw new Error("Use `git remote` or `git remote -v` to inspect remotes.");
-    if (!repository.remotes.length) return result("No remotes configured.", false);
-    return result(repository.remotes.map((item) => verbose ? `${item.name}\t${item.url} (fetch)` : item.name).join("\n"), false);
+    if (!repository.remotes.length) return result("No remotes configured.");
+    return result(repository.remotes.map((item) => verbose ? `${item.name}\t${item.url} (fetch)` : item.name).join("\n"));
   }
   requireFeature(client, "remote-config", "Remote configuration");
   const verb = args[0];
@@ -576,7 +558,7 @@ async function remote(
   const latest = await requireLatest(client, repository, signal);
   if (verb === "remove" || verb === "rm") {
     if (args.length !== 2) throw new Error("Use `git remote remove <name>` in the browser bridge.");
-    const operation: GitOperation = { kind: "remote-remove", request: { repositoryId: repository.id, name, expectedRepositoryVersion: latest.version } };
+    const operation: GitOperation = { kind: "remote-remove", request: { repositoryId: repository.id, name, ...repositoryVersion(latest) } };
     await approve(operation, review);
     await client.removeRemote(operation.request, signal);
     return result(`Removed remote ${name}.`, true);
@@ -585,13 +567,13 @@ async function remote(
     throw new Error("The browser bridge supports `git remote [-v]`, `git remote add|set-url <name> <url>`, and `git remote remove <name>`.");
   }
   if (args.length !== 3) throw new Error(`Use \`git remote ${verb} <name> <https-url>\` in the browser bridge.`);
-  const request = { repositoryId: repository.id, name, url: args[2]!, expectedRepositoryVersion: latest.version };
+  const request = { repositoryId: repository.id, name, url: args[2]!, ...repositoryVersion(latest) };
   await approve(verb === "add" ? { kind: "remote-add", request } : { kind: "remote-set-url", request }, review);
   if (verb === "add") await client.addRemote(request, signal);
   else await client.setRemoteUrl(request, signal);
   const reachable = client.capabilities.remote.permittedOrigins.includes(new URL(args[2]!).origin);
   return result(
-    `${verb === "add" ? "Added" : "Repointed"} remote ${name} -> ${args[2]}.${reachable ? "" : " This build's Content-Security-Policy cannot reach that origin, so fetch and push against it will fail before any request is sent."}`,
+    `${verb === "add" ? "Added" : "Repointed"} remote ${name} -> ${args[2]}.${reachable ? "" : " This build's Git remote policy does not permit that origin, so fetch and push will fail before any request is sent."}`,
     true,
   );
 }
@@ -611,7 +593,7 @@ async function worktreeCommand(
     if (args.length > 1) throw new Error("Use `git worktree list` in the browser bridge.");
     return result(repository.worktrees
       .map((item) => `${item.path}  ${item.head.slice(0, 7)} [${item.branch}]${item.path === repository.worktrees[0]!.path ? "  (primary)" : ""}`)
-      .join("\n"), false);
+      .join("\n"));
   }
   if (verb === "add") {
     if (args.some((word) => word === "-b" || word === "--detach")) {
@@ -627,7 +609,7 @@ async function worktreeCommand(
         worktreeId: uniqueIdentifier(path.split("/").filter(Boolean).at(-1) ?? "worktree", latest.worktrees.map((item) => item.id)),
         path,
         branch: args[2]!,
-        expectedRepositoryVersion: latest.version,
+        ...repositoryVersion(latest),
       },
     };
     await approve(operation, review);
@@ -642,7 +624,7 @@ async function worktreeCommand(
     if (!found) throw new Error(`No linked worktree is registered at ${path}.`);
     const operation: GitOperation = {
       kind: "worktree-remove",
-      request: { repositoryId: repository.id, worktreeId: found.id, expectedRepositoryVersion: latest.version },
+      request: { repositoryId: repository.id, worktreeId: found.id, ...repositoryVersion(latest) },
     };
     await approve(operation, review);
     await client.removeWorktree(operation.request, signal);
@@ -714,6 +696,15 @@ function takeFlag(words: string[], flag: string): boolean {
   return true;
 }
 
+function takeMessage(words: string[], error: string): string | undefined {
+  const index = words.findIndex((word) => word === "-m" || word === "--message");
+  if (index < 0) return undefined;
+  const message = words[index + 1];
+  if (!message) throw new Error(error);
+  words.splice(index, 2);
+  return message;
+}
+
 function stashIndex(value: string): number {
   const parsed = /^(?:stash@\{(\d+)\}|(\d+))$/u.exec(value);
   if (!parsed) throw new Error("Reference a stash entry as `stash@{n}` or `n`.");
@@ -747,6 +738,14 @@ function selectRepository(repositories: readonly GitRepositorySnapshot[], cwd: s
 
 function target(repository: GitRepositorySnapshot, worktree: GitWorktreeSnapshot) {
   return { repositoryId: repository.id, worktreeId: worktree.id };
+}
+
+function worktreeVersion(worktree: GitWorktreeSnapshot) {
+  return { expectedWorktreeVersion: worktree.version };
+}
+
+function repositoryVersion(repository: GitRepositorySnapshot) {
+  return { expectedRepositoryVersion: repository.version };
 }
 
 function formatStatus(worktree: GitWorktreeSnapshot): string {
@@ -836,11 +835,11 @@ function help(): string {
     "  git clone <https-url> [workspace-destination]",
     "  git rev-parse HEAD|--show-toplevel|--is-inside-work-tree",
     "Not implemented here: rebase, cherry-pick, revert, blame, bisect, submodules, notes.",
-    "Remote traffic is direct Smart HTTP with no proxy or Airship backend. This build's own Content-Security-Policy also decides which origins the page may reach; `git_inspect capabilities` lists them.",
+    "Remote traffic is direct Smart HTTP with no proxy or Airship backend. A separate Git remote policy decides which origins may be contacted; `git_inspect capabilities` lists them.",
   ].join("\n");
 }
 
-function result(output: string, changed: boolean): TerminalGitResult {
+function result(output: string, changed = false): TerminalGitResult {
   const bounded = output.length > MAX_OUTPUT_CHARS ? `${output.slice(0, MAX_OUTPUT_CHARS)}\n… output truncated …` : output;
   return Object.freeze({ output: bounded.replace(/\n?$/u, "\n"), changed });
 }

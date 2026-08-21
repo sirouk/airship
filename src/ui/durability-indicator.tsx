@@ -1,4 +1,4 @@
-import { Seal, type SealState } from "./seal";
+import { StatusMark, type StatusMarkState } from "./status-mark";
 
 /**
  * Where a journal lives, and whether its sync is running.
@@ -19,23 +19,23 @@ export type DurabilityState = (typeof DURABILITY_STATES)[number];
  * Where this journal lives, in the one status vocabulary.
  *
  * The bespoke dashed pill with its own 8px dot is retired: durability is a
- * claim like any other, so it renders as a `<Seal>` chip. The wrapper survives
+ * claim like any other, so it renders as a `<StatusMark>` chip. The wrapper survives
  * only to carry `role="status"` — adopting a vault is a state change a user
- * needs announced, and the seal itself is a `role="img"` by contract. It also
+ * needs announced, and the status mark itself is a `role="img"` by contract. It also
  * keeps `title`, which is what the shipped mobile-header assertion reads; the
- * seal now additionally folds the same detail into its accessible name, so the
+ * status mark now additionally folds the same detail into its accessible name, so the
  * sentence stops being hover-only for the first time.
  */
 export function DurabilityIndicator({ state, detail }: { state: DurabilityState; detail?: string }) {
   return (
     <span class={`durability-indicator ${state}`} role="status" title={detail}>
-      <Seal state={durabilitySeal(state)} label={durabilityLabel(state)} detail={detail} />
+      <StatusMark state={durabilityStatusMark(state)} label={durabilityLabel(state)} detail={detail} />
     </span>
   );
 }
 
 /**
- * The one durability→seal mapping, for every surface that renders the claim.
+ * The one durability→status mark mapping, for every surface that renders the claim.
  *
  * Page memory is `attention`. It shipped as `none` — "nothing has gone wrong,
  * no durability evidence has been requested" — and the Journey Atlas measured
@@ -52,10 +52,10 @@ export function DurabilityIndicator({ state, detail }: { state: DurabilityState;
  * A local device journal is verified evidence of encryption at rest; a synced
  * one is the same claim with the round-trip completed. A sync that is *running*
  * is `checking`; a sync that has stopped is `attention`, because it is a state
- * that needs the reader to do something — the same rung the vault trust axis
+ * that needs the reader to do something — the same rung the Vault status
  * gives an unreachable adopted vault.
  */
-export function durabilitySeal(state: DurabilityState): SealState {
+export function durabilityStatusMark(state: DurabilityState): StatusMarkState {
   if (state === "ephemeral") return "attention";
   if (state === "syncing") return "checking";
   return state === "sync-paused" ? "attention" : "verified";

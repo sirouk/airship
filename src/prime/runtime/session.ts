@@ -1,8 +1,8 @@
 /**
  * The prime session authority: one ported prime-agent loop bound to one
  * airship session journal, translating the prime loop's runtime events into
- * the byte-exact airship turn protocol (journal vocabulary, receipts, and
- * guardrails from `src/core/agent.ts`), with prime-only facts kept in the
+ * the byte-exact airship turn protocol (journal vocabulary and guardrails
+ * from `src/core/agent.ts`), with prime-only facts kept in the
  * `prime.*` evidence namespace beside — never inside — the canonical
  * transcript.
  *
@@ -24,11 +24,9 @@
 
 import { Agent } from "../agent";
 import type { AgentEvent, AgentMessage, AgentTool, StreamFn } from "../agent";
-import { streamSimple as registryStreamSimple } from "../ai/stream";
 import {
   createInferenceTransportForPrimeStream,
   createTransportForPrimeModel,
-  type PrimeModelStreamFunction,
 } from "../transport-adapter";
 import type {
   Api,
@@ -51,6 +49,8 @@ import type {
   InferenceTransport,
   JsonValue,
   SessionContextPolicy,
+  SessionInferenceBinding,
+  SessionInferenceProtocol,
   SessionManifest,
   TaskPlanEntry,
   Tool,
@@ -76,6 +76,12 @@ import { contextCompressionOptionsFromPolicy } from "../../core/context-policy";
 import { sha256, stableStringify, toolArgumentsDigest } from "../../core/hash";
 import { randomUuid } from "../../core/id";
 import { withInferenceRetry } from "../../core/inference-retry";
+import {
+  assertPinnedInferenceTransport,
+  assertValidSessionInferenceBinding,
+  canonicalSessionInferenceProviderId,
+  currentInferenceBinding,
+} from "../../core/inference-binding";
 import { effectiveSessionContextPolicy, effectiveSessionModel } from "../../core/journal";
 import type { DurableEvent, EventDraft, EventJournal } from "../../core/journal";
 import { admitPrimeForkContext, type PrimeForkAdmission } from "./fork-admission";
@@ -86,15 +92,15 @@ import {
   verifyLiveEnvironmentSnapshot,
   type LiveEnvironmentSnapshot,
 } from "../../core/live-environment";
-import { canonicalImageInputs } from "../../core/multimodal";
-import { createLocalReceipt, finalizeProviderReceipt } from "../../receipts/types";
-import type { ConversationReceipt } from "../../receipts/types";
+import { canonicalImageInputs } from "../../core/multimodal-contract";
 import type { ToolRegistry } from "../../tools/registry";
 import type { KernelBudgets, KernelJobEvent, KernelJobResult } from "../kernel/kernel-contract";
 import type { KernelBridgePort, KernelWorkerLike } from "../kernel/kernel-host";
 import { PrimeKernelHost } from "../kernel/kernel-host";
 import { KernelToolBridge } from "../kernel/tool-bridge";
 import { noticeDraft, PRIME_EVENT_TYPES } from "./prime-events";
+import type { ConversationReceipt } from "../../core/conversation-receipt";
+import { createLocalReceipt, finalizeProviderReceipt } from "../../core/conversation-receipt";
 
 /** Mirrors core/agent.ts MAX_TOOL_CALLS_PER_STEP; one capped batch per assistant step. */
 export const PRIME_MAX_TOOL_CALLS_PER_STEP = 64;
@@ -134,7 +140,7 @@ export type PrimeTurnResult = Readonly<{
   error?: string;
   /** Cancellation reason when cancelled. */
   reason?: string;
-  /** Receipt chained to the final step's request digest when completed. */
+  /** Receipt finalized against the exact request/response digests. */
   receipt?: ConversationReceipt;
   /** Full journal read after the turn settled. */
   events: DurableEvent[];
@@ -148,12 +154,14 @@ export type PrimeSessionOptions = Readonly<{
   registry: ToolRegistry;
   approvalPolicy: ApprovalPolicy;
   model: Model<Api>;
-  /** Override; absent means an adapter-bridge transport, else the prime ai registry stream. */
+  /** Durable model projection supplied by the runtime; defaults to the birth manifest model. */
+  expectedModelId?: string;
+  /** Explicit test/embed seam. Stock product sessions supply transport instead. */
   streamFn?: StreamFn;
   /** Airship-side inference transport, adapted through ../transport-adapter when supplied. */
   transport?: InferenceTransport;
-  /** Adapter out-channel hook for provider receipts. */
-  onReceipt?: (receipt: ConversationReceipt) => void;
+  /** Exact live route authority used only for one-way v1 binding upgrades. */
+  activeInferenceBinding?: SessionInferenceBinding;
   /** Text-delta/status/tool-output fan-out using airship's AgentSignal vocabulary. */
   onSignal?: (signal: AgentSignal) => void;
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
@@ -195,7 +203,7 @@ type ActiveTurn = {
    * certificate; a person who switched models mid-conversation wrote a
    * `session.model-changed` record, and every model-pinning form this turn
    * produces — the request digest, `inference.started`, usage, the
-   * summarizer, the receipt — has to name the model the request was actually
+   * summarizer — has to name the model the request was actually
    * addressed to. Compression lives or dies by its window, and "the person
    * switched models" is exactly when the window moves.
    */
@@ -244,12 +252,62 @@ type ActiveTurn = {
   reviewedIds: Set<string>;
   callRecords: Map<string, Readonly<{ name: string; arguments: JsonValue }>>;
   execCaptures: Map<string, ExecutionCapture>;
+  providerReceipt?: ConversationReceipt;
   finalAssistantText?: string;
-  finalReceipt?: ConversationReceipt;
   terminalError?: string;
   cancelReason?: string;
   terminalKind?: PrimeTurnOutcome;
 };
+
+function primeApiForBindingProtocol(protocol: SessionInferenceProtocol): Api {
+  if (protocol === "openai-responses") return "openai-responses";
+  if (protocol === "anthropic-messages") return "anthropic-messages";
+  return "openai-completions";
+}
+
+export function assertPrimeSessionInferenceWiring(options: Readonly<{
+  manifest: SessionManifest;
+  model: Model<Api>;
+  expectedModelId?: string;
+  streamFn?: StreamFn;
+  transport?: InferenceTransport;
+  activeInferenceBinding?: SessionInferenceBinding;
+}>): void {
+  assertValidSessionInferenceBinding(options.manifest);
+  const expectedModelId = options.expectedModelId ?? options.manifest.model;
+  const binding = currentInferenceBinding(
+    options.manifest,
+    options.activeInferenceBinding,
+    expectedModelId,
+  );
+  if (!options.transport && !options.streamFn) {
+    throw new Error("A Prime session requires an admitted inference transport or an explicit streamFn.");
+  }
+  if (binding && !options.transport) {
+    throw new Error("A bound Prime session requires its exact inference transport.");
+  }
+  if (options.streamFn && options.transport) {
+    throw new Error("A Prime session cannot override an admitted inference transport with streamFn.");
+  }
+  if (options.model.id !== expectedModelId) {
+    throw new Error(`Prime model ${options.model.id} does not match the durable model pin ${expectedModelId}.`);
+  }
+  const expectedProvider = binding?.providerId ?? canonicalSessionInferenceProviderId(options.manifest);
+  if (options.model.provider !== expectedProvider) {
+    throw new Error(`Prime model provider ${options.model.provider} does not match ${expectedProvider}.`);
+  }
+  if (binding && options.model.api !== primeApiForBindingProtocol(binding.protocol)) {
+    throw new Error(`Prime model API ${options.model.api} does not match the pinned ${binding.protocol} protocol.`);
+  }
+  if (options.transport) {
+    assertPinnedInferenceTransport(
+      options.manifest,
+      options.transport.id,
+      options.activeInferenceBinding,
+      expectedModelId,
+    );
+  }
+}
 
 export class PrimeAgentSession {
   private readonly options: PrimeSessionOptions;
@@ -262,6 +320,8 @@ export class PrimeAgentSession {
    * provider receives names the same model the journal's digest does.
    */
   private readonly liveModel: Model<Api>;
+  /** Context window carried by the caller model before any durable override is applied. */
+  private readonly callerContextWindow: number;
   private readonly kernelHostValue: PrimeKernelHost;
   private readonly idleKernelBridge: KernelToolBridge;
   private activeKernelBridge?: KernelToolBridge;
@@ -272,6 +332,8 @@ export class PrimeAgentSession {
   private readonly reservedOperationIds = new Set<string>();
   private usageTotal: Usage = primeZeroUsage();
 
+  /** Candidate fenced by preflight but not visible as an active turn until its request commits. */
+  private preflightTurn?: ActiveTurn;
   private turn?: ActiveTurn;
   private lastPromptSystemPrompt?: string;
   private readonly steerQueue: QueuedTurnEntry[] = [];
@@ -305,12 +367,9 @@ export class PrimeAgentSession {
     ) {
       throw new Error("The session manifest uses an unsupported protocol or turn-context policy.");
     }
-    if (options.transport && options.transport.id !== options.manifest.providerId) {
-      throw new Error(
-        `Session provider is pinned to ${options.manifest.providerId}; fork the session to use ${options.transport.id}.`,
-      );
-    }
+    assertPrimeSessionInferenceWiring(options);
     this.liveModel = { ...options.model };
+    this.callerContextWindow = this.liveModel.contextWindow;
     this.agentLoop = new Agent({
       initialState: { model: this.liveModel, systemPrompt: "" },
       sessionId: options.sessionId,
@@ -430,8 +489,14 @@ export class PrimeAgentSession {
           : "A queued turn is still draining in this session. Wait for it to settle, or steer/follow-up as next turn.",
       ));
     }
+    // Snapshot caller-owned image objects before prompt() yields to storage or
+    // prompt preflight. The queued entry is the exact payload later admitted.
+    const canonicalImages = canonicalImageInputs(images);
+    if (!canonicalImages) {
+      return Promise.reject(new TypeError("Turn images do not satisfy the canonical multimodal contract."));
+    }
     return new Promise<PrimeTurnResult>((resolve, reject) => {
-      this.promptQueue.push({ kind: "prompt", content, images, resolve, reject });
+      this.promptQueue.push({ kind: "prompt", content, images: canonicalImages, resolve, reject });
       void this.drain();
     });
   }
@@ -444,21 +509,35 @@ export class PrimeAgentSession {
    */
   async abortTurn(reason?: string): Promise<void> {
     const turn = this.turn;
+    const preflightTurn = this.preflightTurn;
     const text = reason ?? "The turn was cancelled by the host.";
     // A stop means stop: queued next-turn work is discarded, not deferred.
     this.dropQueued(this.steerQueue);
     this.dropQueued(this.followUpQueue);
+    const target = turn ?? preflightTurn;
+    if (!target) return;
+    target.cancelReason = text;
+    target.controller.abort(text);
+    // Preflight cancellation stops admission but cannot abort or expose an
+    // agent/kernel run that does not yet exist.
     if (!turn) return;
-    turn.cancelReason = text;
-    turn.controller.abort(text);
     this.agentLoop.abort();
-    for (const jobId of this.activeKernelJobs) {
+    /*
+     * The backstop belongs to the jobs this stop was aimed at, not to whatever
+     * is running when it fires. `activeKernelJobs` is session-scoped, so a
+     * timer armed for turn A and left to check only "is anything active" tore
+     * down the kernel under turn B's job — publishing it as crashed and
+     * journalling a namespace-reset notice that quoted turn A's stop text.
+     */
+    const cancelled = new Set(this.activeKernelJobs);
+    for (const jobId of cancelled) {
       this.kernelHostValue.cancel(jobId, text);
     }
-    if (this.activeKernelJobs.size > 0 && this.kernelTerminateTimer === undefined) {
+    if (cancelled.size > 0 && this.kernelTerminateTimer === undefined) {
       this.kernelTerminateTimer = setTimeout(() => {
         this.kernelTerminateTimer = undefined;
-        if (this.activeKernelJobs.size > 0) {
+        const stillRunning = [...cancelled].some((jobId) => this.activeKernelJobs.has(jobId));
+        if (stillRunning) {
           void this.kernelHostValue.terminate(text).catch(() => undefined);
         }
       }, PRIME_TERMINATE_GRACE_MS);
@@ -546,9 +625,68 @@ export class PrimeAgentSession {
   private async runTurn(entry: QueuedTurnEntry): Promise<PrimeTurnResult> {
     const manifest = this.options.manifest;
     if (this.disposed) throw new Error(`Prime session ${this.options.sessionId} is disposed.`);
+
+    /*
+     * Validate the attachment before bootstrap is allowed to write Prime
+     * custody. This is not the turn snapshot: a model change may still win
+     * while bootstrap runs, and the exact record is therefore read again
+     * immediately below.
+     */
+    const attached = await this.options.journal.getSession(this.options.sessionId);
+    if (!attached) throw new Error(`Unknown session: ${this.options.sessionId}`);
+    if (stableStringify(attached.manifest as unknown as JsonValue) !== stableStringify(manifest as unknown as JsonValue)) {
+      throw new Error("The attached manifest differs from the durable session authority; fork before continuing.");
+    }
+    assertValidSessionInferenceBinding(manifest);
+    if (this.options.transport) {
+      assertPinnedInferenceTransport(
+        manifest,
+        this.options.transport.id,
+        this.options.activeInferenceBinding,
+        effectiveSessionModel(attached),
+      );
+    }
+
+    /*
+     * Bootstrap may write the one-time Prime custody notice, so it must settle
+     * before the turn snapshots a head. Otherwise the session would fence its
+     * own request against the head from before its own initialization write.
+     */
     await this.bootstrap();
+
+    /*
+     * This record is the caller's turn-admission snapshot. Its head, effective
+     * model, and effective context policy stay together for the whole preflight:
+     * no later read may silently rebase one of them over a concurrent session
+     * change. The exact-head append below is the only operation allowed to turn
+     * this snapshot into a durable turn.
+     */
     const session = await this.options.journal.getSession(this.options.sessionId);
     if (!session) throw new Error(`Unknown session: ${this.options.sessionId}`);
+    if (stableStringify(session.manifest as unknown as JsonValue) !== stableStringify(manifest as unknown as JsonValue)) {
+      throw new Error("The attached manifest differs from the durable session authority; fork before continuing.");
+    }
+    assertValidSessionInferenceBinding(manifest);
+    const durableHead = Object.freeze({
+      sequence: session.headSequence,
+      digest: session.headDigest,
+      ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
+    });
+    const durableModelId = effectiveSessionModel(session);
+    const durableContextPolicy = effectiveSessionContextPolicy(session);
+    const turnContextPolicy = durableContextPolicy === undefined
+      ? undefined
+      : structuredClone(durableContextPolicy);
+    if (this.options.transport) {
+      assertPinnedInferenceTransport(
+        manifest,
+        this.options.transport.id,
+        this.options.activeInferenceBinding,
+        durableModelId,
+      );
+    }
+
+    await this.refreshEvents();
     const currentToolDigest = await sha256(
       stableStringify(this.options.registry.definitions() as unknown as JsonValue),
     );
@@ -564,27 +702,23 @@ export class PrimeAgentSession {
     // baseline materialize options, lineage sessions only on a verified seed
     // (the v1 replay-only gate and core's exact refusal sentences live in
     // src/prime/runtime/fork-admission.ts).
-    const admission = await admitPrimeForkContext({
+    const forkAdmission = await admitPrimeForkContext({
       sessionId: this.options.sessionId,
       events: this.eventsCache,
       manifest,
     });
-    if (!admission.ok) throw new Error(admission.reason);
-    this.forkAdmission = admission;
+    if (!forkAdmission.ok) throw new Error(forkAdmission.reason);
     const images = canonicalImageInputs(entry.images);
     if (!images) throw new TypeError("Turn images do not satisfy the canonical multimodal contract.");
 
+    const existingEvents = [...this.eventsCache];
     const controller = new AbortController();
     const turnId = randomUuid();
-    // The record, not the manifest: `setSessionModel` writes the choice as a
-    // durable `session.model-changed` record and projects it onto the record's
-    // overrides, which is the only place a mid-session switch exists.
-    const effectiveContextPolicy = effectiveSessionContextPolicy(session);
     const turn: ActiveTurn = {
       turnId,
       controller,
-      effectiveModel: effectiveSessionModel(session),
-      ...(effectiveContextPolicy !== undefined ? { effectiveContextPolicy } : {}),
+      effectiveModel: durableModelId,
+      ...(turnContextPolicy !== undefined ? { effectiveContextPolicy: turnContextPolicy } : {}),
       step: 0,
       stepEventCount: 0,
       canonical: [],
@@ -596,53 +730,70 @@ export class PrimeAgentSession {
       reviewedIds: new Set(),
       callRecords: new Map(),
       execCaptures: new Map(),
+      providerReceipt: undefined,
     };
-    this.turn = turn;
+    this.preflightTurn = turn;
     if (this.options.signal?.aborted) {
       turn.cancelReason = hostAbortReason(this.options.signal);
       controller.abort(turn.cancelReason);
     }
-    this.activeKernelBridge = this.createKernelBridge(controller.signal);
 
+    let admitted = false;
     try {
-      const systemPrompt = await this.resolveSystemPrompt();
-      this.agentLoop.state.systemPrompt = systemPrompt;
-      this.agentLoop.state.tools = this.mapRegistryTools();
       /*
-       * Per-turn, beside the other per-turn loop state: a runtime authority
-       * outlives many turns, so the model the request is addressed to has to
-       * be refreshed the same way the prompt and the tool list are. Mutating
-       * the shared object rather than replacing it is what reaches the
-       * transport adapter, which captured this model at construction.
+       * Resolve every asynchronous fact needed to open the turn before the
+       * durable admission boundary. In particular, getSystemPrompt and the
+       * live-environment provider may yield to another tab. None of their
+       * results reaches the loop or journal unless the original head still
+       * wins the compare-and-set below.
        */
+      const systemPrompt = await this.resolveSystemPrompt();
+      const tools = this.mapRegistryTools();
+      const liveEnvironment = await this.prepareLiveEnvironment(turn);
+      const requested: EventDraft = {
+        type: "turn.requested",
+        turnId,
+        payload: {
+          content: entry.content,
+          ...(images.length ? { images: images as unknown as JsonValue } : {}),
+          ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
+        },
+      };
+      const admission = await this.options.journal.appendAtHead(
+        this.options.sessionId,
+        durableHead,
+        [requested],
+        turn.controller.signal,
+      );
+      admitted = true;
+      if (this.preflightTurn === turn) this.preflightTurn = undefined;
+
+      /*
+       * Only an admitted turn may mutate active or provider-facing state. Do
+       * the whole transition before notifying observers, so kernelBridge can
+       * never expose the session-long idle bridge under a durable turn id.
+       * The shared model object is what the transport adapter captured, so
+       * every request, digest, usage record, and receipt now reads the same
+       * durable model/context snapshot the audit took at turn.requested.
+       */
+      this.turn = turn;
+      this.forkAdmission = forkAdmission;
+      this.agentLoop.state.systemPrompt = systemPrompt;
+      this.agentLoop.state.tools = tools;
       this.liveModel.id = turn.effectiveModel;
       this.liveModel.name = turn.effectiveModel;
-      if (turn.effectiveContextPolicy) {
-        this.liveModel.contextWindow = turn.effectiveContextPolicy.contextWindowTokens;
-      }
+      this.liveModel.contextWindow = turn.effectiveContextPolicy?.contextWindowTokens
+        ?? this.callerContextWindow;
+      this.activeKernelBridge = this.createKernelBridge(controller.signal);
+      this.eventsCache.push(...admission.events);
+      this.notifySignal({ type: "durable", events: admission.events });
 
       /*
-       * The boundary block mirrors core/agent.ts runTurn in order: the live
-       * environment is sealed before the request record it rides inside,
-       * turn.requested lands first, the verified selection follows as its own
-       * event, and compression plus the plan restatement land before the
-       * first inference.started of the turn. existingEvents is the journal as
-       * the turn opened it — calibration and planning must not see this
-       * turn's own drafts, exactly like core's existingEvents read.
+       * After admission, turn-context selection and compression are ordinary
+       * journaled turn work. existingEvents is the exact pre-request history:
+       * calibration and planning must not see this turn's own drafts, exactly
+       * like core/agent.ts.
        */
-      const existingEvents = [...this.eventsCache];
-      const liveEnvironment = await this.prepareLiveEnvironment(turn);
-      await this.appendTurnDrafts(turn, [
-        {
-          type: "turn.requested",
-          turnId,
-          payload: {
-            content: entry.content,
-            ...(images.length ? { images: images as unknown as JsonValue } : {}),
-            ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
-          },
-        },
-      ]);
       const contextSelection = await this.prepareTurnContext(turn, entry.content);
       if (contextSelection) {
         await this.appendTurnDrafts(turn, [
@@ -662,10 +813,16 @@ export class PrimeAgentSession {
 
       return await this.settleTurn(turn);
     } catch (error) {
-      // The settle path owns terminals, but a turn that never reached the
-      // loop (open checks, run failure outside the handlers) still needs one.
+      /*
+       * A refused exact-head admission is not a turn and must not grow a
+       * terminal record behind the concurrent writer. Once turn.requested is
+       * durable, however, the settle path still owns the exactly-one-terminal
+       * audit guarantee for every later failure.
+       */
+      if (!admitted) throw error;
       return await this.settleTurn(turn, error);
     } finally {
+      if (this.preflightTurn === turn) this.preflightTurn = undefined;
       if (this.turn === turn) {
         this.turn = undefined;
         this.activeKernelBridge = undefined;
@@ -771,38 +928,32 @@ export class PrimeAgentSession {
    * streamFn per step, so the instrumented streamFn is that exact boundary.
    */
   private createInstrumentedStreamFn(): StreamFn {
-    let adapted: PrimeModelStreamFunction | undefined;
+    let adapted: StreamFn | undefined;
     const session = this;
     if (this.options.transport) {
       /*
        * The adapter is built once and used for every turn, so the request
        * identity it stamps has to be read live, not captured. Handing it
-       * nothing let it fall back to a fresh uuid per call: the provider then
-       * minted receipts against a turn that does not exist, and auditSession
-       * reported RECEIPT_IDENTITY_MISMATCH for every genuine transport-backed
-       * prime turn — while a retried step sent a brand-new idempotency key,
-       * so provider-side dedup could not suppress the second charge. The
-       * accessors are read inside the adapter's per-call closure, and its
-       * `??` fallbacks still keep it total between turns.
+       * nothing let it fall back to a fresh uuid per call: a retried step
+       * then sent a brand-new idempotency key, so provider-side dedup could
+       * not suppress the second charge. The accessors are read inside the
+       * adapter's per-call closure, and its `??` fallbacks still keep it
+       * total between turns.
        */
       adapted = createTransportForPrimeModel(this.liveModel, this.options.transport, {
-        onReceipt: this.options.onReceipt,
         get turnId() { return session.turn?.turnId; },
         get idempotencyKey() { return session.turn?.idempotencyKey; },
+        onReceipt(receipt) { if (session.turn) session.turn.providerReceipt = receipt; },
       });
     }
-    const underlying: StreamFn = this.options.streamFn ?? adapted ?? registryStreamSimple;
-    const instrumented: StreamFn = Object.assign(
-      async (model: Model<Api>, context: Parameters<StreamFn>[1], options?: Parameters<StreamFn>[2]) => {
-        await session.prepareStepRequest();
-        return underlying(model, context, options);
-      },
-      {
-        // The adapter's receipt out-channel survives instrumentation so the
-        // turn-settle path can finalize the provider receipt it chains.
-        getLastReceipt: () => adapted?.getLastReceipt(),
-      },
-    );
+    const underlying = this.options.streamFn ?? adapted;
+    if (!underlying) {
+      throw new Error("Prime inference wiring was lost after admission.");
+    }
+    const instrumented: StreamFn = async (model: Model<Api>, context: Parameters<StreamFn>[1], options?: Parameters<StreamFn>[2]) => {
+      await session.prepareStepRequest();
+      return underlying(model, context, options);
+    };
     return instrumented;
   }
 
@@ -814,6 +965,10 @@ export class PrimeAgentSession {
       // core/agent.ts's step loop falls off its end.
       throw new Error(`Agent exceeded the ${this.maxStepsLimit}-step turn limit.`);
     }
+    // Each provider call owns only its own completion receipt; a tool-call
+    // step's trace must not leak into the next step when that later call
+    // returns no receipt of its own.
+    turn.providerReceipt = undefined;
     const requestId = randomUuid();
     if (this.reservedOperationIds.has(requestId)) {
       throw new Error("Generated inference operation ID was already used.");
@@ -836,7 +991,7 @@ export class PrimeAgentSession {
         operationId: requestId,
         payload: {
           step: turn.step,
-          providerId: manifest.providerId,
+          providerId: canonicalSessionInferenceProviderId(manifest),
           model: turn.effectiveModel,
           posture: this.inferencePosture(),
           requestDigest,
@@ -881,10 +1036,9 @@ export class PrimeAgentSession {
   private async prepareTurnContext(turn: ActiveTurn, content: string): Promise<CanonicalContextSelection | undefined> {
     const provider = this.options.registry.getTurnContextProvider();
     const manifest = this.options.manifest;
-    // Historical protocol-v1 manifests omitted the pin; core preserves the
-    // provider-if-present behavior there. Prime never admits v1 (the
-    // constructor gate), so the fallback pattern still mirrors core exactly.
-    const mode = manifest.turnContext ?? (provider ? "required" : "disabled");
+    // Construction refuses protocol v1, so admitted turns use only their exact
+    // protocol-v2 policy instead of reviving an unreachable compatibility rule.
+    const mode = manifest.turnContext;
     if (mode === "disabled") return undefined;
     if (!provider) {
       throw new Error("This session requires turn-context retrieval, but no provider is attached.");
@@ -928,6 +1082,7 @@ export class PrimeAgentSession {
     const snapshot = await sealLiveEnvironmentSnapshot({
       sessionId: this.options.sessionId,
       manifest: this.options.manifest,
+      model: turn.effectiveModel,
       toolDefinitions: this.options.registry.definitions(),
       transportPosture: this.inferencePosture(),
       observation,
@@ -935,7 +1090,7 @@ export class PrimeAgentSession {
     if (!await verifyLiveEnvironmentSnapshot(snapshot)) {
       throw new Error("The sealed live-environment snapshot did not verify.");
     }
-    if (!liveEnvironmentScopeMatches(snapshot, this.options.sessionId, this.options.manifest)) {
+    if (!liveEnvironmentScopeMatches(snapshot, this.options.sessionId, this.options.manifest, turn.effectiveModel)) {
       throw new Error("The live-environment snapshot is outside this session's pinned scope.");
     }
     return snapshot;
@@ -989,6 +1144,7 @@ export class PrimeAgentSession {
       ...(summarizerPolicy.mode === "inference-transport" ? {
         summarizer: createInferenceTransportContextSummarizer({
           transport: this.compressionTransport(),
+          providerId: canonicalSessionInferenceProviderId(manifest),
           model: turn.effectiveModel,
           sessionId: this.options.sessionId,
         }),
@@ -1031,13 +1187,18 @@ export class PrimeAgentSession {
    * canonical InferenceTransport vocabulary core's seal verifies.
    */
   private compressionTransport(): InferenceTransport {
-    const streamFn = (this.options.streamFn ?? registryStreamSimple) as StreamFunction;
-    const transport = this.options.transport ?? createInferenceTransportForPrimeStream(
+    if (this.options.transport) {
+      return withInferenceRetry(this.options.transport);
+    }
+    const streamFn = this.options.streamFn as StreamFunction | undefined;
+    if (!streamFn) {
+      throw new Error("Prime inference wiring was lost after admission.");
+    }
+    return withInferenceRetry(createInferenceTransportForPrimeStream(
       streamFn,
-      this.options.manifest.providerId,
+      canonicalSessionInferenceProviderId(this.options.manifest),
       this.inferencePosture(),
-    );
-    return withInferenceRetry(transport);
+    ));
   }
 
   /** Every registry definition becomes a prime tool whose execute is the airship ticket path. */
@@ -1363,7 +1524,7 @@ export class PrimeAgentSession {
         operationId: turn.requestId,
         payload: {
           type: "usage",
-          providerId: this.options.manifest.providerId,
+          providerId: canonicalSessionInferenceProviderId(this.options.manifest),
           model: turn.effectiveModel,
           inputTokens: usage.input,
           outputTokens: usage.output,
@@ -1502,27 +1663,25 @@ export class PrimeAgentSession {
   }
 
   private async completeAssistantTurn(turn: ActiveTurn, _assistant: AssistantMessage, text: string): Promise<void> {
-    const manifest = this.options.manifest;
     const responseDigest = await sha256(text);
-    const requestDigest = turn.requestDigest ?? "";
-    /*
-     * The receipt chains to the digest of the request that produced the
-     * final answer — the current step's inference.started. The audit's
-     * RECEIPT_BINDING_MISMATCH check reproduces this rule exactly.
-     */
-    const providerReceipt = (this.agentLoop.streamFn as unknown as { getLastReceipt?: () => ConversationReceipt | undefined })
-      .getLastReceipt?.();
-    const receipt = providerReceipt
-      ? finalizeProviderReceipt(providerReceipt, manifest.providerId, requestDigest, responseDigest)
-      : createLocalReceipt({
-        sessionId: this.options.sessionId,
-        turnId: turn.turnId,
-        provider: manifest.providerId,
-        model: turn.effectiveModel,
-        requestDigest,
-        responseDigest,
-      });
     const assistantMessage: CanonicalMessage = { role: "assistant", content: text };
+    const receipt = turn.providerReceipt
+      ? finalizeProviderReceipt(turn.providerReceipt, {
+          sessionId: this.options.sessionId,
+          turnId: turn.turnId,
+          provider: canonicalSessionInferenceProviderId(this.options.manifest),
+          model: turn.effectiveModel,
+          requestDigest: turn.requestDigest,
+          responseDigest,
+        })
+      : createLocalReceipt({
+          sessionId: this.options.sessionId,
+          turnId: turn.turnId,
+          provider: canonicalSessionInferenceProviderId(this.options.manifest),
+          model: turn.effectiveModel,
+          requestDigest: turn.requestDigest,
+          responseDigest,
+        });
     await this.appendTurnDrafts(turn, [
       {
         type: "assistant.completed",
@@ -1541,8 +1700,8 @@ export class PrimeAgentSession {
         payload: { responseDigest, receiptId: receipt.receiptId },
       },
     ]);
+    turn.providerReceipt = receipt;
     turn.finalAssistantText = text;
-    turn.finalReceipt = receipt;
     turn.terminalKind = "completed";
     this.notifySignal({ type: "status", turnId: turn.turnId, status: "complete" });
   }
@@ -1622,7 +1781,7 @@ export class PrimeAgentSession {
         turnId: turn.turnId,
         outcome: "completed",
         text: turn.finalAssistantText ?? "",
-        receipt: turn.finalReceipt,
+        receipt: turn.providerReceipt,
         events: eventsNow,
       };
     }

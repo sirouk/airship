@@ -6,12 +6,13 @@ below are reproducible from this worktree.
 
 ## What is here (all landed, all green)
 
-- `src/prime/ai/` — streaming core + provider families + no-dep parsers (SSE,
-  partial-JSON), usage/cache cost accounting, api registry with lazy chunk
-  wiring, faux scripted provider (conformance suite)
+- `src/prime/ai/` — streaming core, usage/cache cost accounting, an API
+  registry keyed by wire protocol, and schema-lite validation. The built-in
+  provider families and the SSE / partial-JSON parsers that only they used were
+  deleted; the deterministic faux stream stays as `faux.test-support.ts`
 - `src/prime/agent/` — prime-agent loop with upstream event-order guarantee
   (78 tests, golden event-sequence assertions)
-- `src/prime/kernel/` — persistent worker REPL (javascript + pyodide engines),
+- `src/prime/kernel/` — job-scoped JavaScript, with persistent Pyodide research quarantined and unavailable,
   host lifecycle, tool bridge with prime.kernel.tool.* evidence namespace,
   worker runtime sources, capability description
 - `src/prime/subagents/` — admission/registry/router with nuclear-family
@@ -36,10 +37,12 @@ below are reproducible from this worktree.
 
 ## Acceptance evidence
 
-- `npm test` (the whole tree): the green baseline includes ~382+ airship
-  suites and ~4300+ assertions, with prime suites included; see run logs in
-  `/root/pa-audit/airship-npm-test-*.log`.
-- `npx vitest run src/prime` — 32 files green (552 + 13 gated-pyodide-lane skips.
+- `npm test` (the whole tree) runs the airship suites with the prime suites
+  included. The run logs this report was written against were on the porting
+  machine and are not in this repository; re-run the command to get your own.
+- `npx vitest run src/prime` — run it; this report does not pin a file or
+  assertion count, because a count written down here goes stale on the next
+  commit and the command is the evidence.
 - `npx tsc --noEmit` — clean across the repo.
 - Production build: `npm run build:static` → lazy prime runtime chunk
   (72 KB) emitted and **no eager modulepreload for it** (the deferred-chunk
@@ -52,9 +55,11 @@ below are reproducible from this worktree.
   100k events/step); one-terminal per turn signal-neutrally committed.
 - Kernel bridge pauses: operation identity `prime-kernel:<jobId>:<seq>`
   provenance captioned with truth; cap checks (64 calls/step, cash, 4 MiB).
-- Benches: Pyodide cold boot ≈2 s; repo shoulder per-job vs ≈1 ms
-  persistent; SSE 131 MB/s isolated / 58.9 MB/s contended; stream-json
-  30k/cps isolated / 11.7k/cps contended (`scripts/bench/`).
+- Historical benches: quarantined Pyodide cold boot ≈2 s and ≈1 ms warm persistent
+  round-trips (performance evidence only, not an available engine) —
+  `scripts/bench/pyodide-boot.mjs`. The SSE and stream-json figures this line
+  used to quote were taken against parsers that have since been deleted, and
+  cannot be re-taken here.
 - static security frontiers stay aligned (airship's own guards unaffected.)
 
 ## Deferred by design (named, not dropped) — from docs/PRIME-MILESTONES.md

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { CiphertextCachingObjectStore } from "../storage/caching-object-store";
 import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "../storage/client-ciphertext-cache";

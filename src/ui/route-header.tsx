@@ -14,16 +14,16 @@ import { Popover } from "./popover";
  *     title="Editor"
  *     eyebrow="Device-executed · page workspace"
  *     description="Files, version-fenced editing, and browser-native source control share one workspace."
- *     status={<Seal state="none" density="chip" label="Ephemeral · this page only" />}
+ *     status={<StatusMark state="none" density="chip" label="Ephemeral · this page only" />}
  *     actions={<button class="small-button" type="button" onClick={…}>New terminal</button>}
  *   />
  *
- * A *document* route (Proof, Vault, Account, Sessions) keeps its sentence on
+ * A *document* route (Vault, Providers, Sessions) keeps its sentence on
  * screen — pass nothing, because `density` defaults to `"document"`:
  *
- *   <RouteHeader routeId="proof" title="Proof"
- *     eyebrow="Inspectable, portable evidence"
- *     description="Endpoint attestation and conversation receipts are different claims. Airship never presents one as the other."
+ *   <RouteHeader routeId="vault" title="Vault"
+ *     eyebrow="Storage"
+ *     description="Choose where encrypted workspace and session objects are stored."
  *   />
  *
  * Rules a caller must know:
@@ -39,7 +39,7 @@ import { Popover } from "./popover";
  * - `notes` is for facts a route states nowhere else (Terminal's thread id,
  *   its process-lifetime caveats). They render inside the ⓘ, and their
  *   presence is announced by the ⓘ's accessible name.
- * - `status` takes <Seal density="chip"> chips; `actions` takes buttons.
+ * - `status` takes <StatusMark density="chip"> chips; `actions` takes buttons.
  */
 
 /**
@@ -114,7 +114,7 @@ export type RouteHeaderProps = Readonly<{
   density?: RouteHeaderDensity;
   /** Clip the heading to the accessible tree; only where a tab already says it. */
   titleVisible?: boolean;
-  /** Route-level status, as `<Seal density="chip">` chips. */
+  /** Route-level status, as `<StatusMark density="chip">` chips. */
   status?: ComponentChildren;
   /** Route-level actions, as buttons. */
   actions?: ComponentChildren;

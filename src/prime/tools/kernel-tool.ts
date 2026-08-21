@@ -1,11 +1,11 @@
 /**
  * The prime `execute_code` tool: the model-facing door into the
- * persistent prime kernel (src/prime/kernel/*).
+ * job-scoped Prime JavaScript kernel (src/prime/kernel/*).
  *
  * Why the envelope looks the way it does:
- *   - the kernel is a *persistent* REPL worker (namespace survives across
- *     calls, resets are crash-reported), not a disposable executor — so
- *     this tool mints one job per call, forwards stream frames to the
+ *   - the JavaScript kernel is deliberately disposable: one fresh worker and
+ *     namespace per call, terminated after the result. This tool mints one
+ *     job per call, forwards stream frames to the
  *     live output observer, and shapes the outcome from the captured,
  *     budgeted job result. The final bounded result is the durable
  *     authority; the live frames are page-memory presentation
@@ -15,11 +15,10 @@
  *   - abort is honored as cancellation: ToolContext.signal cancels the
  *     kernel job (cooperative first; the kernel's own kill timer is the
  *     hard boundary);
- *   - the tool must not await a job beyond the job's own budget: a
- *     watchdog at timeout + grace cancels the job (crucially, a job
- *     *queued behind* another job is cancelled before it ever runs), and
- *     a final settle grace synthesizes an explicitly-named
- *     watchdog-timeout result rather than hanging the turn;
+ *   - a watchdog at timeout + grace cancels a job that is still queued
+ *     behind another call, before that stale work can run. It never
+ *     synthesizes an early result for active work: the host withholds every
+ *     terminal outcome until admitted bridge effects have settled;
  *   - the job id is derived from the approval-bound operationId, so
  *     journal records from the kernel bridge
  *     (`prime.kernel.tool.*`, kernelOperationId = prime-kernel:&lt;jobId&gt;:&lt;seq&gt;)
@@ -41,15 +40,12 @@ const MAX_EXEC_CODE_CHARS = 256 * 1_024;
 const MAX_JOB_TIMEOUT_MS = 5 * 60 * 1_000;
 const MIN_JOB_TIMEOUT_MS = 100;
 /**
- * Time after the job budget at which the tool stops waiting on the
- * kernel. The kernel resolves every job on its own kill timer, so this
- * grace plus a settle window exists for two real cases: a job queued
- * behind another (the watchdog cancels it before it ever runs) and a
- * wedged worker that never learned it died.
+ * A queued job has not started its host wall clock. This backstop cancels it
+ * after its requested budget plus a short scheduling grace. It never races a
+ * synthetic result against the kernel: admitted bridge effects must drain
+ * before execute_code can publish any terminal outcome.
  */
 const WATCHDOG_GRACE_MS = 5_000;
-/** Final settle window after the watchdog cancels; a job that outlives it is reported as a named watchdog timeout. */
-const WATCHDOG_SETTLE_MS = 2_000;
 /** Per-frame live-output slice, matching airship's host-side onOutput slice (execution-tools.ts). */
 const LIVE_CHUNK_CHARS = 4_097;
 /** Presentation bounds for the durable result; the registry's 1 MiB ceiling is never in reach. */
@@ -145,7 +141,7 @@ export function createPrimeExecuteCodeTool(
     definition: {
       name: "execute_code",
       description:
-        "Run JavaScript in the persistent prime kernel worker (namespace survives across calls until a crash resets it). " +
+        "Run JavaScript in a fresh job-scoped prime kernel worker (the namespace does not survive this call). " +
         "No ambient network/storage/DOM; workspace and host effects go through the reviewed tool bridge (pat.call). " +
         `Bounded to ${String(MAX_EXEC_CODE_CHARS)} source chars, ${String(MAX_JOB_TIMEOUT_MS / 1_000)} s per job, and a bounded result.`,
       effect: "execute",
@@ -186,41 +182,16 @@ export function createPrimeExecuteCodeTool(
       context.signal.addEventListener("abort", onAbort, { once: true });
       if (context.signal.aborted) onAbort();
 
-      /*
-       * The watchdog is the tool's promise not to await a job longer than
-       * the job's own budget (plus the named grace/settle windows). The
-       * common case it resolves is a job *queued* behind another: cancel
-       * removes it from the queue and the promise settles immediately.
-       */
-      let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
-      let settleTimer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-      const watchdog = new Promise<Readonly<{ watchdog: true }>>((resolve) => {
-        watchdogTimer = setTimeout(() => {
-          kernel.cancel(jobId, `execute_code watchdog fired after ${String(jobTimeoutMs + WATCHDOG_GRACE_MS)} ms; the kernel job was cancelled.`);
-          settleTimer = setTimeout(() => resolve(Object.freeze({ watchdog: true as const })), WATCHDOG_SETTLE_MS);
-        }, jobTimeoutMs + WATCHDOG_GRACE_MS);
-      });
-
-      const finished = jobPromise.then((result) => Object.freeze({ job: result }));
-      const race = await Promise.race([finished, watchdog]);
-      if (watchdogTimer) clearTimeout(watchdogTimer);
-      if (settleTimer) clearTimeout(settleTimer);
-      context.signal.removeEventListener("abort", onAbort);
-      settled = true;
-      void settled;
-
-      if ("watchdog" in race) {
-        return {
-          content:
-            `execute_code stopped waiting for kernel job ${jobId} after ${String(jobTimeoutMs + WATCHDOG_GRACE_MS + WATCHDOG_SETTLE_MS)} ms and cancelled it. ` +
-            "The kernel did not confirm the job's end inside the budget plus the watchdog windows; the namespace may have been reset by the cancellation.",
-          isError: true,
-          metadata: { jobId, engine: "javascript", outcome: "cancelled", watchdogTimeout: true, jobTimeoutMs },
-        };
+      const watchdogTimer = setTimeout(() => {
+        kernel.cancel(jobId, `execute_code watchdog fired after ${String(jobTimeoutMs + WATCHDOG_GRACE_MS)} ms; the kernel job was cancelled.`);
+      }, jobTimeoutMs + WATCHDOG_GRACE_MS);
+      let result: KernelJobResult;
+      try {
+        result = await jobPromise;
+      } finally {
+        clearTimeout(watchdogTimer);
+        context.signal.removeEventListener("abort", onAbort);
       }
-
-      const result = race.job;
       const rendered = renderJobContent(result);
       return {
         content: rendered.content,

@@ -9,7 +9,7 @@ import { setProfilePresentationDensity } from "./support/density";
  * open Profiles, choose a different interface theme, "Save new revision",
  * "Switch to this profile". The theme reaches nothing a turn is run by — not
  * the instructions, not the skills, not the workspace, memory, approval or
- * proof boundaries — and yet:
+ * provider boundaries — and yet:
  *
  *   - the finished conversation's primary action became a gold "Fork to
  *     continue", with its Resume button reading "Fork required", disabled;
@@ -23,9 +23,9 @@ import { setProfilePresentationDensity } from "./support/density";
  * The cause was that resumability was decided by digest equality with whatever
  * revision happened to be selected — `profileRevision`, `themeDigest`,
  * `resolutionDigest` — all of which move for an edit that changes nothing a
- * turn is governed by. `docs/HUMAN_REVIEW_2026-07-25.md` ("Fork to continue")
- * asks for one computed resumability value, rendered identically, with "Fork
- * required" reserved for pins that genuinely no longer resolve.
+ * turn is governed by. `src/sessions/profile-cockpit.test.ts` holds the same
+ * computed resumability boundary: "Fork required" is reserved for pins that
+ * genuinely no longer resolve.
  *
  * This spec drives the person's journey, not the digests: change a setting,
  * come back, click the conversation, keep talking in it. The guard that must
@@ -41,11 +41,13 @@ async function sendOneTurn(page: Page, prompt: string): Promise<void> {
   await composer.fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 20_000 });
-  // The turn is over at its footer, not when the composer clears or the first
-  // token lands — see `resume-not-reopen.spec.ts` for what each earlier signal
-  // costs.
-  await expect(page.locator(".part-footer").filter({ hasText: /Turn completed/u }).last())
-    .toBeVisible({ timeout: 40_000 });
+  // The turn is over when its finalized local run record reaches the answer,
+  // not when the composer clears or the first token lands. The raw completion
+  // footer is instrumented-only; Balanced exposes this neutral trace row.
+  const answer = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  const run = answer.getByRole("button", { name: /^Run details\./u });
+  await expect(run).toBeVisible({ timeout: 40_000 });
+  await expect(run).toHaveText(/^Run · .+ · [0-9a-f]{8}$/u);
 }
 
 /**
@@ -105,9 +107,9 @@ test.describe("a conversation you finished yesterday", () => {
     await completeLocalDeviceCeremony(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await expectVaultAdopted(page);
-    /* The turn footer is proof chrome: at the house default — minimal — it
-       unmounts. This whole journey waits on that exact row, so it runs one
-       rung up where the row exists. */
+    /* Finalized Run details are telemetry: the house default — minimal —
+       unmounts them. This journey waits on that local completion record, so it
+       runs one rung up where the record exists. */
     await setProfilePresentationDensity(page, "Balanced");
     await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
@@ -138,9 +140,10 @@ test.describe("a conversation you finished yesterday", () => {
     const actions = page.locator(".session-library-actions");
     await expect(actions.getByRole("button", { name: "Resume conversation" })).toBeEnabled({ timeout: 20_000 });
     await expect(actions.getByRole("button", { name: "Fork to continue" })).toHaveCount(0);
-    await expect(page.locator(".session-integrity__row")).toContainText("Ready to resume");
+    const integrity = page.getByRole("button", { name: /^Session integrity\./u });
+    await expect(integrity).toHaveAccessibleName(/Ready to resume/u);
     // And the same conversation is not simultaneously called unfinished.
-    await expect(page.locator(".session-integrity__row")).not.toContainText("Fork required");
+    await expect(integrity).not.toHaveAccessibleName(/Fork required/u);
 
     // The journey: one press on the row's own opener puts you back in it.
     await page.locator(".session-library-row").filter({ hasText: "Draft the Q3 pricing memo" })
@@ -194,7 +197,7 @@ test.describe("a conversation you finished yesterday", () => {
     await expect(actions.getByRole("button", { name: "Fork to continue" })).toBeVisible({ timeout: 20_000 });
     await expect(actions.getByRole("button", { name: "Resume conversation" })).toHaveCount(0);
     // And it says which boundary, rather than asserting the history is broken.
-    await page.locator(".session-integrity__row").first().click();
+    await page.getByRole("button", { name: /^Session integrity\./u }).click();
     const body = page.locator(".session-integrity__body").first();
     await expect(body).toContainText(/approval policy/u);
     await expect(body).not.toContainText(/ended mid-turn/u);

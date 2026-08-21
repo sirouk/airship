@@ -4,7 +4,7 @@ import { canonicalContextSelection, verifyContextSelection } from "../core/conte
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { EncryptedObjectWorkspace } from "../vault/encrypted-workspace";
 import { VaultContextFabricPort } from "../vault/context-fabric-port";
 import {

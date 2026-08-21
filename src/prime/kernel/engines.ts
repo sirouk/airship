@@ -1,20 +1,12 @@
 /**
- * Engine selection for the prime kernel (port-manifest §3.1: two engines,
- * one kernel authority). createKernelEngine is the single place a session
- * picks its interpreter:
+ * Production-safe engine selection for the Prime kernel.
  *
- *   - "javascript": PrimeKernelHost — the baseline persistent REPL worker.
- *     Returned through the same interface; zero edits to its code paths,
- *     so its behavior stays byte-identical to what its tests lock.
- *   - "pyodide": PyodideKernelEngine — the IPython analog: persistent
- *     CPython with a persistent namespace, pinned pack, hard honesty
- *     vocabulary via describe().
- *
- * The shared interface below is the least common honest surface both
- * engines already expose (kernel-worker lifecycle, serialized dispatch,
- * bridge-port egress, the KernelEngineDescription capability record). It
- * exists so the session/host layer depends on one shape, not on a class
- * name; both classes satisfy it structurally.
+ * "javascript" constructs the stock job-scoped PrimeKernelHost. "pyodide"
+ * remains in the persisted KernelEngine vocabulary, but activation fails
+ * closed here. A prior Python cell can leave an asyncio task alive, and the
+ * shared `pat` module cannot prove that a later bridge call came from the
+ * current cell. The dormant direct research class is deliberately not
+ * imported into this production selector.
  */
 
 import type {
@@ -27,16 +19,23 @@ import type {
 } from "./kernel-contract";
 import type { KernelHostPorts } from "./kernel-host";
 import { PrimeKernelHost } from "./kernel-host";
-import { PyodideKernelEngine } from "./pyodide-engine";
 
-/** Options understood by either engine; the pyodide-only extras are named, never silently widened. */
+/** Stable fail-closed reason for the dormant persistent interpreter lane. */
+export const PYODIDE_ENGINE_QUARANTINE_MESSAGE =
+  "The persistent Pyodide kernel is quarantined: cross-cell asyncio task provenance cannot be proven, so createKernelEngine cannot activate it.";
+
+export class PyodideEngineQuarantinedError extends Error {
+  override readonly name = "PyodideEngineQuarantinedError";
+
+  constructor() {
+    super(PYODIDE_ENGINE_QUARANTINE_MESSAGE);
+  }
+}
+
+/** Production factory options. Pyodide research uses its direct class options instead. */
 export type CreateKernelEngineOptions = Readonly<{
   budgets?: Partial<KernelBudgets>;
-  ports: KernelHostPorts &
-    Readonly<{
-      /** Pyodide-only: pinned pack location ending in "/". Ignored by the javascript engine. */
-      assetBase?: string;
-    }>;
+  ports: KernelHostPorts;
   label?: string;
 }>;
 
@@ -57,7 +56,7 @@ export function createKernelEngine(kind: KernelEngine, options: CreateKernelEngi
     case "javascript":
       return new PrimeKernelHost(options);
     case "pyodide":
-      return new PyodideKernelEngine(options);
+      throw new PyodideEngineQuarantinedError();
     default: {
       // Exhaustiveness: a new KernelEngine kind must fail here at compile
       // time, not silently boot the wrong interpreter at runtime.

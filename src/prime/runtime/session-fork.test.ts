@@ -11,16 +11,14 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { streamSimple } from "../ai/stream";
 import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux";
+} from "../ai/faux.test-support";
 import type { Model } from "../ai/types";
-import {
-  createSessionManifest,
-  runTurn,
-} from "../../core/agent";
+import { createSessionManifest, runTurn } from "../../core/agent";
 import type {
   InferenceEvent,
   InferenceRequest,
@@ -42,7 +40,7 @@ class SourceTransport implements InferenceTransport {
   private next = 0;
   constructor(
     private readonly responses: readonly string[],
-    readonly id = "fork-session-source",
+    readonly id = "faux",
   ) {}
   async *stream(request: InferenceRequest): AsyncIterable<InferenceEvent> {
     void request;
@@ -62,7 +60,7 @@ async function makeLineage(): Promise<Readonly<{
   const sourceManifest = await createSessionManifest({
     systemPrompt: "Preserve the audited conversation context.",
     providerId: transport.id,
-    model: "fork-session-model",
+    model: "faux-1",
     tools: tools.definitions(),
     workspaceId: "memory://fork-session",
     turnContext: "disabled",
@@ -103,6 +101,7 @@ function attachForkSession(args: Readonly<{
     registry: new ToolRegistry(),
     approvalPolicy: allowAllForTests,
     model,
+    streamFn: streamSimple,
   });
 }
 
@@ -160,6 +159,7 @@ describe("PrimeAgentSession fork-context integration", () => {
       registry: tools,
       approvalPolicy: allowAllForTests,
       model,
+      streamFn: streamSimple,
     });
     const result = await session.prompt("hi");
     expect(result.outcome).toBe("completed");

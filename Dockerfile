@@ -20,25 +20,17 @@ COPY . .
 # Where the app is served from. `/` for a domain root; a subpath needs the
 # trailing slash (`/airship/`) or the manifest and service worker resolve wrong.
 ARG AIRSHIP_PUBLIC_BASE_PATH=/
-# The origin the app tells providers to return to. OAuth redirects are compared
-# against this exactly, so it must match the domain Caddy answers on.
-ARG VITE_AIRSHIP_PUBLIC_ORIGIN=
 # Optional provider registrations. Absent is a supported configuration: Vite
 # strips the Drive connect branch entirely when the Google client ID is empty,
 # which is why the default vault provider below moves with it.
+#
+# There is no origin argument. Google Identity Services authorizes the page's
+# own origin, so the deployment origin is whatever the browser is on; an origin
+# baked in here would only be a second copy of it, free to disagree. Register
+# the real origin under the client ID's Authorized JavaScript origins instead.
 ARG VITE_GOOGLE_CLIENT_ID=
-ARG VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=
-# Where the companion extension is published. Empty falls back to the copy this
-# build ships at `<base>extension/index.html`, which is right for a deployment
-# that serves its own; a store listing needs to say so here, because the value
-# is inlined and cannot be supplied at `docker run`.
-ARG VITE_AIRSHIP_EXTENSION_INSTALL_URL=
-
 ENV AIRSHIP_PUBLIC_BASE_PATH=${AIRSHIP_PUBLIC_BASE_PATH} \
-    VITE_AIRSHIP_PUBLIC_ORIGIN=${VITE_AIRSHIP_PUBLIC_ORIGIN} \
-    VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID} \
-    VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID=${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID} \
-    VITE_AIRSHIP_EXTENSION_INSTALL_URL=${VITE_AIRSHIP_EXTENSION_INSTALL_URL}
+    VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 # Fail closed on an unconfigured deployment: start in explicit page-memory mode
 # rather than silently creating durable storage the person did not choose.
@@ -52,6 +44,8 @@ RUN if [ -n "$VITE_GOOGLE_CLIENT_ID" ]; then \
 # The app is hash-routed, but a deep link or a refresh can still arrive at a
 # path the bundle does not emit. Same fallback the Pages workflow uses.
 RUN cp dist/index.html dist/404.html
+# The fallback changes the release inventory, so regenerate and validate it.
+RUN npm run check:release
 
 
 FROM caddy:2-alpine AS runtime

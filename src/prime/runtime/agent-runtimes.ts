@@ -3,25 +3,22 @@
  *
  * Two surfaces must never disagree about which engine owns a session: the
  * turn gate in `src/load-agent-runtime.ts`, which routes each turn onto an
- * engine, and whatever is rendered beside a conversation's title. The gate's
- * rule is durable evidence — any `prime.*` record pins the session to prime,
- * airship turn-protocol records pin it to airship-core, and a journal with
- * neither is unclaimed land that runs whichever engine the gate's unpinned
- * branch currently selects. This module is the
- * read-side of that same rule: it imports the gate's `sessionRuntimeKind`
- * rather than restating it, narrows *which* prime evidence pinned (the
- * first-turn seal versus later prime records), and states what a person can
- * do about a pin they did not choose — fork, because an engine flip
- * mid-history forks the evidence chain, so the remedy is a new session
- * carrying the history, never a switch inside this one.
+ * engine, and whatever is rendered beside a conversation's title. Any
+ * `prime.*` record pins the session to Prime, Airship turn-protocol records
+ * pin it to airship-core, and a journal with neither is unclaimed land that
+ * runs the gate's unpinned selection. This module reads that same rule rather
+ * than restating it. It also reports which record class carried the pin and
+ * keeps the engine-switch remedy unchanged: fork to a new session, never
+ * switch engines inside this history.
  */
 
 import { sessionRuntimeKind } from "../../load-agent-runtime";
+import { PRIME_EVENT_TYPES } from "./prime-events";
 
 /**
  * The engine a session's journal has durably pinned it to. `null` where the
- * journal carries no engine evidence: the default engine runs, but nothing
- * is pinned until the first engine-producing record lands.
+ * journal carries no engine-selection record: the default engine runs, but
+ * nothing is pinned until the first engine-producing record lands.
  */
 export type PinnedAgentEngine = "prime" | "airship-core";
 
@@ -35,36 +32,34 @@ export type AgentRuntimeStatusLedger = Readonly<{
   events: readonly Readonly<{ type: string }>[];
   /**
    * Present in the shape for the view, which already holds the session
-   * record; the derivation is deliberately journal-evidence only, mirroring
+   * record; the derivation deliberately uses journal records only, mirroring
    * the gate.
    */
   manifest?: unknown;
 }>;
 
 /**
- * Which record class carried the pin, strongest first. `"seal"` and
- * `"prime-events"` both pin prime; the seal is the first turn's durable
- * statement of the decision and is the one the Proof view reads, so it is
- * named when present. `"empty"` covers every journal with no engine
- * evidence — including a fresh one holding just its creation record.
+ * Which record class carried the pin, strongest first. The current selection
+ * marker is reported separately from the historical marker so callers can
+ * handle old journals without presenting either marker as a trust claim.
  */
-export type AgentRuntimeStatusEvidence = "seal" | "prime-events" | "airship-history" | "empty";
+export type AgentRuntimeStatusRecord =
+  | "selection-marker"
+  | "legacy-selection-marker"
+  | "prime-records"
+  | "airship-history"
+  | "empty";
 
 export type AgentRuntimeStatus = Readonly<{
-  /** The engine journal evidence pins, or `null` while nothing is pinned. */
+  /** The engine journal records pin, or `null` while nothing is pinned. */
   pinnedEngine: PinnedAgentEngine | null;
   /**
-   * What actually runs when nothing is pinned. Not a preference — the gate's
-   * answer, read off `src/load-agent-runtime.ts`: an unpinned journal takes
-   * the airship-core lane whenever a transport is attached, and `transport`
-   * is a required field of `RunTurnOptions`, so every unpinned session the
-   * shipped app starts routes there. It flips back to prime when
-   * `runPrimeTurn` is taught to forward the vendor stream and its key getter
-   * and that branch goes away; carried as a value so renderers keep reading
-   * the gate instead of hardcoding an engine name.
+   * What actually runs when nothing is pinned. This is the gate's current
+   * answer, not a user preference. It is carried as a value so renderers do
+   * not hardcode a different default.
    */
   defaultEngine: PinnedAgentEngine;
-  evidenceType: AgentRuntimeStatusEvidence;
+  recordType: AgentRuntimeStatusRecord;
   /**
    * Whether switching engines is possible at all for this session. Pinned:
    * yes, exactly one way — fork. Unpinned: no; there is no other engine to
@@ -75,13 +70,11 @@ export type AgentRuntimeStatus = Readonly<{
   forkRemedy?: string;
 }>;
 
-/**
- * The record `runPrimeTurn` lands before anything else on a session's first
- * prime turn (`src/prime/runtime/runtime.ts`). The writer owns the payload;
- * this module owns the read. The literal is pinned by the colocated test so
- * the two cannot drift apart silently.
- */
-export const AGENT_RUNTIME_SEAL_EVENT_TYPE = "prime.session.runtime.seal";
+/** The marker `runPrimeTurn` writes before a fresh journal's first Prime turn. */
+export const AGENT_RUNTIME_SELECTION_EVENT_TYPE = PRIME_EVENT_TYPES.sessionRuntimeSelected;
+
+/* Read-only compatibility. No writer imports or exports this historical name. */
+const LEGACY_AGENT_RUNTIME_SELECTION_EVENT_TYPE = "prime.session.runtime.seal";
 
 export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRuntimeStatus {
   const kind = sessionRuntimeKind(ledger.events);
@@ -89,17 +82,25 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
     return Object.freeze({
       pinnedEngine: null,
       defaultEngine: "prime",
-      evidenceType: "empty",
+      recordType: "empty",
       canForkSwitch: false,
     });
   }
-  const sealed = kind === "prime"
-    && ledger.events.some((event) => event.type === AGENT_RUNTIME_SEAL_EVENT_TYPE);
+  const hasCurrentSelectionMarker = kind === "prime"
+    && ledger.events.some((event) => event.type === AGENT_RUNTIME_SELECTION_EVENT_TYPE);
+  const hasLegacySelectionMarker = kind === "prime"
+    && ledger.events.some((event) => event.type === LEGACY_AGENT_RUNTIME_SELECTION_EVENT_TYPE);
   const other: PinnedAgentEngine = kind === "prime" ? "airship-core" : "prime";
   return Object.freeze({
     pinnedEngine: kind,
     defaultEngine: "prime",
-    evidenceType: sealed ? "seal" : kind === "prime" ? "prime-events" : "airship-history",
+    recordType: hasCurrentSelectionMarker
+      ? "selection-marker"
+      : hasLegacySelectionMarker
+        ? "legacy-selection-marker"
+        : kind === "prime"
+          ? "prime-records"
+          : "airship-history",
     canForkSwitch: true,
     // Verbatim remedy vocabulary of the gate's refusals, so the status and
     // the refusal a person meets after ignoring it read as one system.
@@ -107,11 +108,8 @@ export function getAgentRuntimeStatus(ledger: AgentRuntimeStatusLedger): AgentRu
   });
 }
 
-/**
- * The one-line honest statement of who owns this session's engine, for the
- * tag beside a conversation's title.
- */
+/** The one-line engine selection shown beside a conversation title. */
 export function formatAgentRuntimeStatusLine(status: AgentRuntimeStatus): string {
   if (status.pinnedEngine === null) return `engine: ${status.defaultEngine} (default)`;
-  return `engine: ${status.pinnedEngine} (pinned by journal evidence — fork the session to switch)`;
+  return `engine: ${status.pinnedEngine} (recorded selection — fork the session to switch)`;
 }

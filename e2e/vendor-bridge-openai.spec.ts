@@ -21,14 +21,9 @@ async function mockOpenAiBridge(page: Page): Promise<void> {
   let call = 0;
   await page.route("https://api.openai.com/v1/responses", (route) => {
     call += 1;
-    // 1 activation probe; 2 conversation naming; 3 the tool-offering turn;
-    // 4 the continuation after the approved write.
-    const frames = call <= 2
-      ? [
-        'data: {"type":"response.output_text.delta","delta":"Mint Tea Memory"}\n\n',
-        'data: {"type":"response.completed"}\n\n',
-      ]
-      : call === 3
+    // Activation and naming are local. The first provider call offers the tool;
+    // the second is the continuation after the approved write.
+    const frames = call === 1
       ? [
         "data: " + JSON.stringify({
           type: "response.output_item.done",
@@ -54,7 +49,7 @@ async function mockOpenAiBridge(page: Page): Promise<void> {
 test("openai responses lane: tool call docks for approval before the memory write", async ({ page }) => {
   await mockOpenAiBridge(page);
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "Cloud and local models", exact: true, level: 2 })).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press("Escape");
   const setup = page.locator("#provider-setup-openai");
   await setup.scrollIntoViewIfNeeded();
@@ -86,7 +81,7 @@ test("openai responses lane: tool call docks for approval before the memory writ
   // final text lands in the transcript the user owns.
   await expect(page.getByText(FINAL_TEXT).first()).toBeVisible({ timeout: 30_000 });
 
-  // Proof beyond the happy path: the approved write is a real memory record.
+  // Confirm the side effect beyond the happy path: the approved write is a real memory record.
   await page.goto("/#memory");
   /*
    * The profile record list is a disclosure, and it starts closed on a phone —
@@ -94,7 +89,7 @@ test("openai responses lane: tool call docks for approval before the memory writ
    * a count rather than a corpus dump on the screen with the least room. A
    * closed `<details>` gives its children no box, so the record was in the DOM
    * and correctly reported hidden, and this assertion could only ever pass on
-   * desktop. That is one tap, not concealment: the proof takes the tap a reader
+   * desktop. That is one tap, not concealment: the check takes the tap a reader
    * takes and then asserts the record itself. `memory-dedup` already opens it
    * this way; the guard makes it a no-op where the section is open already.
    */

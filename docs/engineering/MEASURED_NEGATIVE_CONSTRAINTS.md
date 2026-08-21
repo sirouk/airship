@@ -155,53 +155,53 @@ against is `profileCatalogDigest` (`src/profiles/persistence.ts:215`), compared 
 anywhere in `src/`**. The refuse-on-mismatch mechanism is unchanged, so the
 measurement still describes what would happen.
 
-*The original entry named the emitting function `profilePayload`. No symbol by
-that name exists in the tree at `03af2c5`; the constraint is about the digested
-catalog payload generally, and `profileCatalogDigest` is the function that would
-observe the change.*
+The current implementation has an explicit versioned `profilePayload` seam in
+`src/profiles/domain.ts`. Stored v1/v2 preimages are verified byte-for-byte,
+while new fieldless revisions use v3. Any future payload field needs the same
+schema-version boundary; adding it unconditionally would strand old catalogs.
 
 ---
 
-## 6. Do not import from `src/indexing/` at runtime into `src/ui/access-view.tsx`
+## 6. Keep deferred route code out of the entry chunk unless the release classifier is updated
 
-**Measured:** Rollup then emits a shared chunk **the release gate refuses to
-classify**. This is why any picker copy must use a literal fenced by a test rather
-than importing the constant.
+**Original measurement:** importing a runtime value from `src/indexing/` into the
+former `src/ui/access-view.tsx` produced a shared Rollup chunk that the release
+gate could not classify.
 
-**Mechanism (VERIFIED, current):** `scripts/release-gate.mjs:1393`,
-`assertExclusiveArtifactClassifications` — it collects `unclassified` paths at
-`:1402-1405` and `multiplyClassified` at `:1396-1401`, and **throws** at `:1408-1413`:
+**Mechanism (VERIFIED, current):**
+`scripts/release-gate.mjs:1135-1155`,
+`assertExclusiveArtifactClassifications`, collects unclassified and
+multiply-classified JavaScript artifacts and throws when either set is non-empty.
+The exact classifier table and line numbers have moved, but the fail-closed rule
+remains.
 
-```
-throw new Error(`JavaScript artifact classification failed:\n- ${failures.join("\n- ")}`);
-```
-
-**Status: LIVE, and currently respected.** `src/ui/access-view.tsx:52` imports
-`ChutesEmbeddingModel` from `../indexing/chutes-embedding-catalog` — but as
-`import type`, which is erased at compile time and emits no chunk. That is the
-correct shape and the one this constraint permits. The original entry named
-`CHUTES_EMBEDDING_MODEL`, a value export; **no symbol by that name exists in `src/`
-at `03af2c5`**, so the specific import it warned against cannot currently be
-written. The constraint generalises unchanged to any runtime import across that
-boundary.
+**Status: RETIRED AS WRITTEN; GENERAL RULE LIVE.** `src/ui/access-view.tsx`, the
+legacy remote-embedding catalog, and `LegacyRemoteEmbeddingModel` were deleted.
+There is no Access-view/indexing boundary left to preserve. The current provider
+route is `src/ui/provider-connections-view.tsx`; `src/ui/app.tsx` loads it through
+`import("./provider-connections-view")`. New runtime imports across that boundary
+must be measured against the release classifier and startup budgets rather than
+justified by this obsolete file-specific exception.
 
 ---
 
-## 7. Do not use `safeProviderErrorMessage` in `access-view.tsx`
+## 7. Do not pull provider-route error formatting into the entry chunk
 
-**Measured:** it is exported from `src/ui/provider-connections-view.tsx:575`, an
-asset `app.tsx` loads **dynamically on purpose** (`void import(...)`). A static
-import from `access-view.tsx` drags the deferred asset back onto the boot path.
+**Original measurement:** `safeProviderErrorMessage` belongs to the deferred
+provider route. Importing it into entry-route code also imports the route module
+and moves its bytes onto startup.
 
-**Constraint:** use `mapUnknownRequestFailure(caught, online).message`, already
-used in that file.
+**Constraint:** entry code uses the small provider-neutral
+`mapUnknownRequestFailure` seam from `src/ui/request-state.ts`. Route-only code
+may use `safeProviderErrorMessage` inside its own deferred module.
 
-**Status: LIVE, and currently respected (VERIFIED).** `safeProviderErrorMessage`
-is still declared at `src/ui/provider-connections-view.tsx:575` and is referenced
-outside that module only by its own test. `access-view.tsx` imports
-`mapUnknownRequestFailure` from `./request-state` at `:32` and uses it at
-`:697, :834, :912, :952, :981, :997` — **six sites**, not the five recorded when
-the constraint was written.
+**Status: LIVE, and currently respected (VERIFIED).** The old
+`access-view.tsx` consumer no longer exists. `safeProviderErrorMessage` is at
+`src/ui/provider-connections-view.tsx:1059` and its production use stays inside
+that module. `src/ui/app.tsx:3683` still dynamically imports the provider route;
+its request recovery path loads `mapUnknownRequestFailure` separately. A static
+entry import from `provider-connections-view.tsx` would need fresh shipped-byte
+measurement and release-budget review.
 
 ---
 
@@ -297,7 +297,7 @@ when the model most needs to know the read was partial.
 | its call site | — | `src/core/agent.ts:588` |
 | tool message built from `content` alone | `agent.ts:936-938` | `src/core/agent.ts:1226` |
 
-`src/core/agent.ts:1226` is the proof of the second half:
+`src/core/agent.ts:1226` is the evidence of the second half:
 
 ```
 messages.push({ role: "tool", toolCallId: payload.callId, content: payload.content });
@@ -376,7 +376,7 @@ NUL.
 
 ## Cross-references
 
-The register that recovered these — `docs/audit/RECOVERED_WORK_REGISTER_2026-08-04.md`
+The register that recovered these — `docs/archive/audit/RECOVERED_WORK_REGISTER_2026-08-04.md`
 §3.19 — cites the load-bearing ones inline against specific findings: #1/#2 for
 flake latching, #4/#5 for the retrieval-mode digest, #6 for shared-chunk
 classification, #7 for the dynamic-import boundary, #8 for the undeletable

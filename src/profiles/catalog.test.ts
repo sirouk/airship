@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { BrowserGitClient } from "../git";
-import { MemoryGitAdapter } from "../git/memory-adapter";
+import { MemoryGitAdapter } from "../git/memory-adapter.test-support";
 import { createAirshipToolRegistry } from "../tools/airship-tools";
 import { MemoryWorkspace } from "../workspace/memory";
 import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions } from "./catalog";

@@ -7,34 +7,32 @@
  * session's slow abort cannot reorder another's teardown.
  */
 
-import type { ApprovalPolicy, CanonicalImageInput, JsonValue, SecurityPosture, SessionContextPolicy, SessionManifest, ToolDefinition } from "../../core/contracts";
-import type { RunTurnOptions, TurnResult } from "../../core/agent";
+import type { ApprovalPolicy, CanonicalImageInput, JsonValue, SecurityPosture, SessionContextPolicy, SessionInferenceBinding, SessionManifest, ToolDefinition } from "../../core/contracts";
 import { createSessionManifest } from "../../core/session-manifest";
-import type { EventJournal, SessionRecord } from "../../core/journal";
+import { effectiveSessionModel, JournalConflictError, type EventJournal, type SessionRecord } from "../../core/journal";
 import type { ToolRegistry } from "../../tools/registry";
 import type { Api, Model } from "../ai/types";
 import type { KernelBudgets } from "../kernel/kernel-contract";
 import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";
-import type { AgentSignal } from "../../core/agent";
-import { randomUuid } from "../../core/id";
 import { sha256, stableStringify } from "../../core/hash";
 import { withInferenceRetry } from "../../core/inference-retry";
-import { sessionRuntimeKind } from "../../load-agent-runtime";
 import {
-  PRIME_DEFAULT_SESSION_TITLE,
-  primeConversationNamingDrafts,
-  primeConversationTitleFromModel,
-  primeConversationTitleFromPrompt,
-} from "./naming";
-import { PrimeAgentSession } from "./session";
+  assertPinnedInferenceTransport,
+  assertValidSessionInferenceBinding,
+  currentInferenceBinding,
+} from "../../core/inference-binding";
+import { sessionRuntimeKind } from "../../load-agent-runtime";
+import { conversationTitleFromPrompt } from "../../core/conversation-title";
+import { PrimeAgentSession, assertPrimeSessionInferenceWiring } from "./session";
 import { attachPrimeAgentRegistry, attachPrimeKernelTool, createPrimeToolSurface } from "./tool-surface";
 import { primeHarnessStore } from "./harness-store";
 import { buildPrimeSystemPrompt, primeToolInventoryFrom } from "../system-prompt";
 import { primeHeartbeatStore } from "./heartbeat-store";
 import { createPrimeSubagentRegistry } from "./subagent-registry";
+import { PRIME_EVENT_TYPES } from "./prime-events";
 import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
-import type { ConversationReceipt } from "../../receipts/types";
+import type { AgentSignal, RunTurnOptions, TurnResult } from "../../core/agent";
 
 export type PrimeRuntimeOptions = Readonly<{
   journal: EventJournal;
@@ -62,7 +60,8 @@ export type PrimeSessionWiring = Readonly<{
   model: Model<Api>;
   streamFn?: StreamFn;
   transport?: InferenceTransport;
-  onReceipt?: (receipt: ConversationReceipt) => void;
+  /** Exact live route authority used only for one-way v1 binding upgrades. */
+  activeInferenceBinding?: SessionInferenceBinding;
   onSignal?: (signal: AgentSignal) => void;
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   getSystemPrompt?: () => string | Promise<string>;
@@ -79,15 +78,13 @@ export type PrimeCreateSessionOptions = PrimeSessionWiring & Readonly<{
 
 export type PrimeAttachSessionOptions = PrimeSessionWiring & Readonly<{
   sessionId: string;
-  /** Supplying a manifest skips the journal read; omit to attach from the durable record. */
-  manifest?: SessionManifest;
 }>;
 
 // App-minted default: a record still wearing this exact string has never
 // seen its first prompt, which is what makes the title on the journal record
 // itself the naming gate (mirrors app.tsx isAppMintedConversationTitle's role
 // for airship's minted titles).
-const DEFAULT_SESSION_TITLE = PRIME_DEFAULT_SESSION_TITLE;
+const DEFAULT_SESSION_TITLE = "Prime conversation";
 
 export class PrimeRuntime {
   private readonly options: PrimeRuntimeOptions;
@@ -107,17 +104,28 @@ export class PrimeRuntime {
   async createSession(options: PrimeCreateSessionOptions): Promise<PrimeAgentSession> {
     this.assertLive();
     const tools = [...(options.manifest.tools ?? this.options.registry.definitions())];
+    if (options.activeInferenceBinding && options.activeInferenceBinding.version !== 2) {
+      throw new TypeError("New Prime sessions require a current v2 inference binding.");
+    }
     const manifest = await createSessionManifest({
       systemPrompt: options.manifest.systemPrompt,
       providerId: options.manifest.providerId,
       model: options.manifest.model,
       tools,
       workspaceId: options.manifest.workspaceId,
+      ...(options.activeInferenceBinding ? { inferenceBinding: options.activeInferenceBinding } : {}),
       ...(options.manifest.capabilityTier !== undefined ? { capabilityTier: options.manifest.capabilityTier } : {}),
       ...(options.manifest.securityPosture !== undefined ? { securityPosture: options.manifest.securityPosture } : {}),
       ...(options.manifest.contextPolicy !== undefined ? { contextPolicy: options.manifest.contextPolicy } : {}),
       ...(options.manifest.turnContext !== undefined ? { turnContext: options.manifest.turnContext } : {}),
       ...(options.manifest.now !== undefined ? { now: options.manifest.now } : {}),
+    });
+    assertPrimeSessionInferenceWiring({
+      manifest,
+      model: options.model,
+      ...(options.streamFn ? { streamFn: options.streamFn } : {}),
+      ...(options.transport ? { transport: options.transport } : {}),
+      ...(options.activeInferenceBinding ? { activeInferenceBinding: options.activeInferenceBinding } : {}),
     });
     const record = await this.options.journal.createSession(
       options.title ?? DEFAULT_SESSION_TITLE,
@@ -132,23 +140,19 @@ export class PrimeRuntime {
     return session;
   }
 
-  /**
-   * Rebind a session authority to an existing journal session. The manifest
-   * is the durable record's (the journal is the authority), unless the host
-   * re-pins it explicitly.
-   */
+  /** Rebind only to the manifest held by the durable journal authority. */
   async attachSession(options: PrimeAttachSessionOptions): Promise<PrimeAgentSession> {
     this.assertLive();
     if (this.sessions.has(options.sessionId)) {
       throw new Error(`Session ${options.sessionId} is already attached to this runtime.`);
     }
-    let manifest = options.manifest;
-    if (!manifest) {
-      const record = await this.options.journal.getSession(options.sessionId);
-      if (!record) throw new Error(`Unknown session: ${options.sessionId}`);
-      manifest = record.manifest;
-    }
-    const session = this.buildSession({ ...options, manifest });
+    const record = await this.options.journal.getSession(options.sessionId);
+    if (!record) throw new Error(`Unknown session: ${options.sessionId}`);
+    const session = this.buildSession({
+      ...options,
+      manifest: record.manifest,
+      expectedModelId: effectiveSessionModel(record),
+    });
     this.sessions.set(options.sessionId, session);
     return session;
   }
@@ -165,83 +169,29 @@ export class PrimeRuntime {
 
   async prompt(sessionId: string, content: string, images?: readonly CanonicalImageInput[]): Promise<PrimeTurnResult> {
     const session = this.requireSession(sessionId);
-    const naming = await this.prepareConversationNaming(sessionId, content);
     const result = await session.prompt(content, images);
-    /*
-     * The model-naming request runs strictly off the turn's critical path:
-     * it fires after the turn completed and its promise is never awaited,
-     * matching app.tsx verbatim. A failed or unusable answer changes
-     * nothing about the result — the request that was made is journaled
-     * either way, because it was requested and billed.
-     */
-    if (naming && result.outcome === "completed") {
-      void this.applyConversationNaming(sessionId, content, naming.transport, naming.model);
-    }
+    // Naming is presentation only. Apply it after turn admission so a stale or
+    // mismatched inference authority cannot mutate the journal before refusal.
+    await this.prepareConversationTitle(sessionId, content);
     return result;
   }
 
   /**
-   * Naming gate, mirroring app.tsx exactly: heuristic title first so the
-   * thread is never nameless; the flag is the journal-record title itself
-   * (a default-title record has never met a prompt). Best-effort by
-   * construction — titling is presentational and must never fail a turn.
-   *
-   * The once-only latch is the `namingWiring.delete` below and nothing else:
-   * dropping the wiring before the request is issued makes "at most one paid
-   * naming request per attached session" a synchronous fact. Nothing tracks
-   * or cancels the request after that, by design — a presentational request
-   * must not hold up `waitForIdle` or teardown.
+   * Replace only the runtime-minted default with a bounded local title.
+   * Naming is presentation. It never contacts the provider or spends quota.
    */
-  private async prepareConversationNaming(
-    sessionId: string,
-    content: string,
-  ): Promise<{ transport: InferenceTransport; model: string } | undefined> {
-    const wiring = this.namingWiring.get(sessionId);
-    if (!wiring) return undefined;
+  private async prepareConversationTitle(sessionId: string, content: string): Promise<void> {
     let record;
     try {
       record = await this.options.journal.getSession(sessionId);
     } catch {
-      return undefined;
+      return;
     }
-    if (!record || record.title !== DEFAULT_SESSION_TITLE) return undefined;
-    this.namingWiring.delete(sessionId);
+    if (!record || record.title !== DEFAULT_SESSION_TITLE) return;
     try {
-      await this.options.journal.renameSession(sessionId, primeConversationTitleFromPrompt(content));
+      await this.options.journal.renameSession(sessionId, conversationTitleFromPrompt(content));
     } catch {
       // A storage race on a presentation detail must not prevent the turn.
-    }
-    return wiring;
-  }
-
-  /** The paid model-naming request and its journaling; never throws outward. */
-  private async applyConversationNaming(
-    sessionId: string,
-    content: string,
-    transport: InferenceTransport,
-    model: string,
-  ): Promise<void> {
-    try {
-      const identity = {
-        sessionId,
-        turnId: `naming-${randomUuid()}`,
-        operationId: `naming-request-${randomUuid()}`,
-      };
-      const named = await primeConversationTitleFromModel({ transport, model, content, identity });
-      if (!named) return;
-      await this.options.journal.append(
-        sessionId,
-        primeConversationNamingDrafts(named, {
-          model,
-          turnId: identity.turnId,
-          operationId: identity.operationId,
-        }),
-      );
-      if (named.title) {
-        await this.options.journal.renameSession(sessionId, named.title);
-      }
-    } catch (error) {
-      // The conversation is already titled heuristically; a naming failure is a no-op.
     }
   }
 
@@ -268,13 +218,15 @@ export class PrimeRuntime {
     return session;
   }
 
-  /** Transport pinned for the side-channel naming request, keyed by session. */
-  private readonly namingWiring = new Map<string, { transport: InferenceTransport; model: string }>();
-
   private buildSession(
-    options: PrimeSessionWiring & Readonly<{ sessionId: string; manifest: SessionManifest }>,
+    options: PrimeSessionWiring & Readonly<{
+      sessionId: string;
+      manifest: SessionManifest;
+      expectedModelId?: string;
+      title?: string;
+    }>,
   ): PrimeAgentSession {
-    const { title: _title, manifest: _manifest, sessionId, ...wiring } = options as PrimeCreateSessionOptions & { sessionId: string };
+    const { title: _title, manifest: _manifest, sessionId, ...wiring } = options;
     void _title;
     void _manifest;
     const sessionOptions: PrimeSessionOptions = {
@@ -285,11 +237,6 @@ export class PrimeRuntime {
       approvalPolicy: this.options.approvalPolicy,
       ...wiring,
     };
-    if (options.transport) {
-      this.namingWiring.set(options.sessionId, { transport: options.transport, model: options.manifest.model });
-    } else {
-      this.namingWiring.delete(options.sessionId);
-    }
     return this.options.factory?.(sessionOptions) ?? new PrimeAgentSession(sessionOptions);
   }
 
@@ -302,41 +249,54 @@ export class PrimeRuntime {
 
 // ---------------------------------------------------------------------------
 // The runtime gate (docs/PRIME-RUNTIME-GATE.md): explicit, fail-closed
-// selection between airship-core and prime engines, enforced by journal
-// evidence instead of flags so the pin is itself durable evidence.
+// selection between airship-core and Prime engines, enforced by journal
+// records instead of flags so the selection survives process restarts.
 // ---------------------------------------------------------------------------
 
 export type PrimeRuntimeKind = "airship-core" | "prime";
 
 /*
- * The evidence rule is the gate's, re-exported rather than restated. The local
+ * The journal rule is the gate's, re-exported rather than restated. The local
  * two-valued copy that used to live here called an empty journal
  * "airship-core", which docs/PRIME-RUNTIME-GATE.md says is "unpinned" — and
  * that one word decided everything below: a fresh session's `selection` came
- * out "airship-core", so the seal the Proof view reads was never written for
- * any session the gate actually routes here. Importing the eager gate module
- * from this lazy chunk is acyclic (`load-agent-runtime.ts` only `import
- * type`s from here and reaches the engines through `import()`), which is the
- * same move `agent-runtimes.ts` already makes for the read side.
+ * out "airship-core", so its runtime-selection marker was never written.
+ * Importing the eager gate module from this lazy chunk is acyclic
+ * (`load-agent-runtime.ts` only `import type`s from here and reaches the
+ * engines through `import()`), which is the same move `agent-runtimes.ts`
+ * already makes for the read side.
  */
 export { sessionRuntimeKind };
 
-const apiFromTransportId = new Map<string, string>([
-  ["openai-responses-v1", "openai-responses"],
-  ["xai-responses-v1", "openai-responses"],
-  ["anthropic-messages-v1", "anthropic-messages"],
-  ["chutes-e2ee-v1", "openai-completions"],
-  ["ollama-openai-local-v1", "openai-completions"],
-  ["lm-studio-openai-local-v1", "openai-completions"],
-  ["local-demo", "openai-completions"],
-]);
+function primeApiFromManifest(
+  manifest: SessionManifest,
+  activeBinding?: SessionInferenceBinding,
+  effectiveModelId: string = manifest.model,
+): Api {
+  const binding = currentInferenceBinding(manifest, activeBinding, effectiveModelId);
+  if (binding) {
+    if (binding.protocol === "openai-responses") return "openai-responses";
+    if (binding.protocol === "anthropic-messages") return "anthropic-messages";
+    return "openai-completions";
+  }
+  // Historical v1 manifests did not record protocol. Without an equivalent
+  // active v2 route, retain their legacy provider-as-transport fallback.
+  if (manifest.providerId === "openai" || manifest.providerId === "xai") return "openai-responses";
+  if (manifest.providerId === "anthropic") return "anthropic-messages";
+  return "openai-completions";
+}
 
-export function primeModelFromManifest(manifest: SessionManifest): Model<Api> {
-  const providerId = manifest.providerId;
-  const api = apiFromTransportId.get(providerId) ?? "openai-completions";
+export function primeModelFromManifest(
+  manifest: SessionManifest,
+  activeBinding?: SessionInferenceBinding,
+  effectiveModelId: string = manifest.model,
+): Model<Api> {
+  const binding = currentInferenceBinding(manifest, activeBinding, effectiveModelId);
+  const providerId = binding?.providerId ?? manifest.providerId;
+  const api = primeApiFromManifest(manifest, activeBinding, effectiveModelId);
   return {
-    id: manifest.model,
-    name: manifest.model,
+    id: effectiveModelId,
+    name: effectiveModelId,
     api,
     provider: providerId,
     baseUrl: `https://gateway/${encodeURIComponent(providerId)}`,
@@ -350,43 +310,103 @@ export function primeModelFromManifest(manifest: SessionManifest): Model<Api> {
 }
 
 export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRuntimeKind }): Promise<TurnResult> {
+  // Runtime selection is caller authority. Own it before the first journal
+  // await so a caller cannot change which engine this invocation claims while
+  // its durable history is being read.
+  const callerRuntime = options.runtime;
+  const classifiedSession = await options.journal.getSession(options.sessionId);
+  if (!classifiedSession) throw new Error(`session ${options.sessionId} does not exist in this journal`);
   const events = await options.journal.readEvents(options.sessionId);
   const history = sessionRuntimeKind(events);
+  const lastClassifiedEvent = events.at(-1);
+  // This is the exact head the classification above describes. Derive it from
+  // the classified event set, not from a later session read: a Core admission
+  // can land between those reads, and using that newer record would rebase a
+  // stale Prime decision behind Core's winning turn.requested.
+  const classifiedHead = {
+    ...(lastClassifiedEvent
+      ? { sequence: lastClassifiedEvent.sequence, digest: lastClassifiedEvent.digest }
+      : { sequence: 0, digest: "genesis" }),
+    ...(classifiedSession.headIncarnation ? { incarnation: classifiedSession.headIncarnation } : {}),
+  };
   // Unpinned journals admit prime (PRIME-RUNTIME-GATE.md item 2); only durable
   // airship turn history refuses it. The old `events.length > 0` proxy for
   // "has history" counted the session.created record every real journal
   // carries, so an explicit `runtime: "prime"` on a fresh session was refused
   // as if it were airship-pinned.
-  const selection = options.runtime ?? (history === "airship-core" ? "airship-core" : "prime");
+  //
+  // Reaching this function IS the request to run Prime — it has no other
+  // engine to dispatch to. Reading "airship-core" out of the journal here and
+  // calling that the selection made both guards below vacuous, so an omitted
+  // `runtime` on an airship-pinned session ran the Prime engine anyway and
+  // flipped the session's durable runtime kind: the one outcome
+  // docs/PRIME-RUNTIME-GATE.md says cannot happen. The caller's word or Prime;
+  // a conflicting journal is refused two lines below, not accommodated.
+  const selection = callerRuntime ?? "prime";
 
-  if (selection === "prime" && history === "airship-core") {
-    throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
-  }
   if (selection === "airship-core" && history === "prime") {
     throw new Error(`runtime selection mismatch: this session is prime-pinned; fork the session to use the airship-core runtime.`);
   }
-
-  // Seal-on-first-prime-run evidence pin: a session whose journal's first
-  // prime turn lands the seal first, so every later engine decision
-  // about this session reads the same durable evidence the Proof view reads.
-  if (selection === "prime" && !events.some(
-    (event) => event.type.startsWith("prime."),
-  )) {
-    await options.journal.append(options.sessionId, [
-      {
-        type: "prime.session.runtime.seal",
-        payload: { runtime: "prime", pinnedBy: "prime", at: new Date().toISOString() },
-      },
-    ]);
+  // The mirror of the default above: an explicit `runtime: "airship-core"` on
+  // an unpinned or airship-pinned journal used to fall through both guards and
+  // run Prime anyway, pinning the session to the engine the caller declined.
+  if (selection !== "prime") {
+    throw new Error(`runtime selection mismatch: this entry point runs the PRIME runtime; call the airship-core runtime directly.`);
+  }
+  if (history === "airship-core") {
+    throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
   }
 
-  const manifest = (await options.journal.getSession(options.sessionId))?.manifest;
-  if (!manifest) throw new Error(`session ${options.sessionId} does not exist in this journal`);
-  if (manifest.providerId && options.transport?.id && manifest.providerId !== options.transport.id) {
-    throw new Error(`provider pin mismatch: manifest providerId ${manifest.providerId} !== transport.id ${options.transport.id}; fork the session.`);
+  const sessionRecord = await options.journal.getSession(options.sessionId);
+  if (!sessionRecord) throw new Error(`session ${options.sessionId} does not exist in this journal`);
+  const manifest = sessionRecord.manifest;
+  const effectiveModelId = effectiveSessionModel(sessionRecord);
+  assertValidSessionInferenceBinding(manifest);
+  assertPinnedInferenceTransport(
+    manifest,
+    options.transport.id,
+    options.activeInferenceBinding,
+    effectiveModelId,
+  );
+  const currentBinding = currentInferenceBinding(manifest, options.activeInferenceBinding, effectiveModelId);
+  const model = primeModelFromManifest(manifest, options.activeInferenceBinding, effectiveModelId);
+  assertPrimeSessionInferenceWiring({
+    manifest,
+    model,
+    expectedModelId: effectiveModelId,
+    transport: options.transport,
+    ...(options.activeInferenceBinding ? { activeInferenceBinding: options.activeInferenceBinding } : {}),
+  });
+
+  // Validate inference authority before writing the runtime-selection marker.
+  // A refused route must not mutate an otherwise unpinned conversation. The
+  // marker is the Prime engine's first-turn admission, so it must claim the
+  // same exact head classified above. It may never rebase behind a Core
+  // turn.requested written by another journal instance.
+  if (selection === "prime" && history === "unpinned") {
+    try {
+      await options.journal.appendAtHead(options.sessionId, classifiedHead, [
+        {
+          type: PRIME_EVENT_TYPES.sessionRuntimeSelected,
+          payload: { runtime: "prime", selectedBy: "runtime-gate", at: new Date().toISOString() },
+        },
+      ]);
+    } catch (error) {
+      if (!(error instanceof JournalConflictError)) throw error;
+      // The compare-and-set loser does not interpret its stale classification.
+      // Reread durable authority. Another Prime claimant is compatible and has
+      // already made the marker durable; a Core claimant wins with the same
+      // exact fork refusal used by the pre-claim gate.
+      const currentHistory = sessionRuntimeKind(
+        await options.journal.readEvents(options.sessionId),
+      );
+      if (currentHistory === "airship-core") {
+        throw new Error("runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.");
+      }
+      if (currentHistory !== "prime") throw error;
+    }
   }
 
-  const model = primeModelFromManifest(manifest);
   /*
    * The surface this turn runs on.
    *
@@ -425,7 +445,8 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
         workspace: options.workspace,
         airshipTools: options.tools,
         transport: options.transport,
-        providerId: manifest.providerId,
+        providerId: currentBinding?.providerId ?? manifest.providerId,
+        ...(currentBinding ? { inferenceBinding: currentBinding } : {}),
         workspaceId: manifest.workspaceId,
         sessionId: options.sessionId,
         model,
@@ -481,7 +502,7 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
      *
      * `composePrimeSystemPrompt` was wired only into the child factory, so a
      * subagent spawned by `rlm()` knew its working directory, the date, its
-     * security posture, its real tool inventory, the harness notes and the
+     * inference path, its real tool inventory, the harness notes and the
      * live environment — and the conversation that spawned it knew none of
      * that. It got the Agent Profile prompt alone and re-derived its own
      * situation from scratch every turn, which reads exactly like an agent
@@ -512,15 +533,14 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
 
     const session = await runtime.attachSession({
       sessionId: options.sessionId,
-      manifest,
       getSystemPrompt: () => briefing.prompt,
       model,
       /*
        * The credential bridge (W1), and the reason no `getApiKey` accompanies
        * it.
        *
-       * Every vendor transport this product carries — Chutes E2EE, anthropic,
-       * openai, ollama, lm-studio — arrives at this gate with its credential
+       * Every vendor transport this product carries — anthropic, openai, xai,
+       * ollama, lm-studio — arrives at this gate with its credential
        * plumbing already bound to it: a vault-backed key, a connection-pinned
        * generation, an extension OAuth bridge. Forwarding the transport means
        * the prime lane's provider calls go back out over the caller's own
@@ -541,6 +561,9 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
        * there: a caller passing `maxAttempts: 1` opts both engines out alike.
        */
       transport: withInferenceRetry(options.transport, options.retry),
+      ...(options.activeInferenceBinding
+        ? { activeInferenceBinding: options.activeInferenceBinding }
+        : {}),
       onSignal: options.onSignal,
       maxSteps: options.maxSteps,
       signal: options.signal,
@@ -558,8 +581,11 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
         result.outcome === "cancelled" ? `prime turn cancelled: ${result.reason}` : `prime turn failed: ${result.error}`,
       );
     }
-    if (result.text === undefined || result.receipt === undefined) {
-      throw new Error("prime turn result was malformed: completed without text or receipt.");
+    if (result.text === undefined) {
+      throw new Error("prime turn result was malformed: completed without text.");
+    }
+    if (!result.receipt) {
+      throw new Error("prime turn result was malformed: completed without receipt.");
     }
     return {
       turnId: result.turnId,

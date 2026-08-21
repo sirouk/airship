@@ -8,7 +8,8 @@ import type {
   LocalProviderOptions,
 } from "./contracts";
 import { LocalProviderError, directFetchDiagnostic, providerDiagnostic, resolveLocalEndpoint } from "./endpoint-policy";
-import { boundedInteger, boundedJson, boundedOptions, isRecord, LOCAL_GENERATION_BUDGET_MS } from "./http";
+import { isRecord } from "../../core/records";
+import { boundedInteger, boundedJson, boundedOptions, LOCAL_GENERATION_BUDGET_MS } from "./http";
 import { LocalOpenAiTransport } from "./openai-transport";
 
 export const OLLAMA_DEFAULT_ENDPOINT = "http://127.0.0.1:11434";

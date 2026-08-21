@@ -21,9 +21,20 @@
   margin: 0;
 }
 
+/*
+ * A column, not two named rows.
+ *
+ * `grid-template-rows: auto minmax(0, 1fr)` meant the second child took the
+ * flexible row and anything after it fell into an implicit one. When the folder
+ * tier arrived above the workbench, the workbench became that third child and
+ * was squeezed to nothing on a short viewport — measured on an iPhone-class
+ * WebKit viewport, where the file tree resolved but reported hidden. A column
+ * says what this route actually is: chrome above, one surface that takes the
+ * rest, however many rows of chrome there turn out to be.
+ */
 .editor-route {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -50,6 +61,7 @@
 .editor-route__panel {
   position: relative;
   display: grid;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -145,4 +157,211 @@
   .editor-route__loading {
     margin: var(--sp-4);
   }
+}
+
+/*
+ * The folder tier, stated on the route it changes.
+ *
+ * It sits between the route header and the workbench because it is a storage
+ * decision, not a file operation: a person reading "Ephemeral" or "Local
+ * Device" on #vault needs the same six answers here, in the same order, before
+ * they hand a real directory to an agent.
+ *
+ * Nothing in it folds. The tier used to be a `<details>` that opened for
+ * nobody — see the render comment in `local-folder-panel.tsx` — so the panel is
+ * a plain block now and the height is bought back by the state machine instead:
+ * at rest it is one row and one sentence, and the terms are printed by the
+ * press that asks for a folder.
+ */
+.local-folder {
+  margin: 0 var(--sp-6);
+  padding: 0 var(--sp-4) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.local-folder__title {
+  margin: 0;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+/* One row: the title truncates before the control it introduces wraps. */
+.local-folder__head {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--touch-target);
+}
+
+.local-folder__head > .local-folder__title,
+.local-folder__head > .local-folder__state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-folder__state {
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
+
+.local-folder__note,
+.local-folder__status,
+.local-folder__notice {
+  margin: var(--sp-2) 0 0;
+  max-width: 68ch;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.local-folder__note { color: var(--ink-muted); }
+.local-folder__status { color: var(--ink); }
+.local-folder__notice { color: var(--danger); }
+
+.local-folder__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: 0;
+  margin-inline-start: auto;
+}
+
+/*
+ * The floor is stated here rather than inherited, for the reason
+ * `workspace-view.css` records for the empty workbench: a route's own selector
+ * outranks the product-wide coarse-pointer rule in `tokens.css`, so a control
+ * that looks floored can still render 40px unless its own route says so.
+ */
+.local-folder__actions button {
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-3);
+}
+
+/* The two buttons that end a decision sit under the terms they are a decision
+   about, not pushed to the far edge of the row above them. */
+.local-folder__decide {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: var(--sp-2) 0 0;
+}
+
+.local-folder__decide button {
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-3);
+}
+
+/*
+ * A phone gives this route about 287px before the workbench stops being the
+ * point of it, and the route header already spends 98. The tier keeps its own
+ * 44px row and its coarse-pointer floor; what it gives up is the padding of a
+ * panel it is no longer pretending to be.
+ */
+/*
+ * `order` is not available here: flex items paint in order-modified document
+ * order, and moving the tier below the workbench put the terminal dock over the
+ * Explorer's own menu — measured, three runs out of three. So the tier keeps its
+ * place and gives up everything that is not the row itself.
+ */
+@media (max-width: 640px) {
+  .local-folder {
+    margin: 0 var(--sp-3);
+    padding: 0 0 var(--sp-2);
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  /*
+   * Two rows rather than a column of buttons beside a clipped title.
+   * "Open a different folder…" and "Forget folder" measure 291px together on a
+   * 358px row, so they fit side by side once they stop competing with the
+   * heading for the same line — and the heading stops rendering as
+   * "Folder on…".
+   */
+  .local-folder__head { flex-wrap: wrap; }
+
+  .local-folder__head > .local-folder__actions {
+    flex-basis: 100%;
+    margin-inline-start: 0;
+  }
+}
+
+/*
+ * The band the terms live in. See the render comment in
+ * `local-folder-panel.tsx`: the route is a fixed frame, so on a phone this
+ * takes a fifth of the viewport and scrolls inside itself rather than
+ * subtracting the workbench down to zero. Desktop has the room and takes none
+ * of this.
+ */
+@media (max-width: 640px) {
+  .local-folder__terms {
+    max-height: 20vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* The band ends somewhere, and a rule says so rather than a sentence that
+       stops mid-word being the only signal that it scrolls. */
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* While a person is deciding, the terms are what the route is for and the
+     workbench is not. That state ends on the next press either way, and the
+     decision's own buttons are what say it is open — the panel does not carry a
+     second attribute to say the same thing. */
+  .local-folder:has(.local-folder__decide) .local-folder__terms { max-height: 34vh; }
+
+}
+
+.local-folder__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--sp-1) var(--sp-4);
+  margin: var(--sp-3) 0 0;
+}
+
+.local-folder__fact {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-micro);
+}
+
+.local-folder__fact dt { color: var(--ink-faint); }
+.local-folder__fact dd { margin: 0; color: var(--ink-muted); text-align: right; }
+
+/*
+ * On a phone the six answers scroll sideways instead of stacking.
+ *
+ * Six full-width rows cost 150px of a surface whose whole argument is that the
+ * workbench below it is the point. The strip costs one row and keeps every
+ * answer rendered, which is the trade `chat.css` already makes for the session
+ * bar's instruments: a reading you have to scroll to is still a reading, and a
+ * reading behind a disclosure is not.
+ */
+@media (max-width: 640px) {
+  .local-folder__facts {
+    display: flex;
+    gap: var(--sp-3);
+    overflow-x: auto;
+    padding-bottom: var(--sp-1);
+  }
+
+  .local-folder__fact {
+    flex: 0 0 14rem;
+    display: block;
+  }
+
+  .local-folder__fact dd { text-align: left; }
+}
+
+@media (max-width: 760px) {
+  .local-folder { margin: var(--sp-3) var(--sp-4) 0; }
 }

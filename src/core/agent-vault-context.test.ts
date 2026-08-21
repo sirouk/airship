@@ -5,7 +5,7 @@ import { createSessionManifest, runTurn } from "./agent";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "./contracts";
 import { canonicalContextSelection, verifyContextSelection } from "./context-selection";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import { allowAllForTests } from "../tools/registry";
 import { createVaultBackedAirshipToolRegistry } from "../tools/airship-tools";
 import { EncryptedObjectWorkspace } from "../vault/encrypted-workspace";

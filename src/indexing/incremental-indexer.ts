@@ -1,5 +1,5 @@
 import { sha256 } from "../core/hash";
-import { isWorkspaceControlPlanePath } from "../workspace/contracts";
+import { isLocalFolderMountPath, isWorkspaceControlPlanePath } from "../workspace/contracts";
 import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import type {
   ClientIndex,
@@ -71,7 +71,17 @@ export class IncrementalWorkspaceIndexer {
 
   async discover(): Promise<IndexCandidate[]> {
     const entries = await this.workspace.list("/workspace");
-    return entries.filter((entry) => !isWorkspaceControlPlanePath(entry.path)).map((entry) => {
+    /*
+     * The same two exclusions the engine's snapshot normalization applies, and
+     * they have to agree: a chunk this discovery produced for a path the
+     * snapshot excluded is rejected later as a stale revision. Control-plane
+     * records are Airship's own; an attached folder is the person's own, and
+     * the tier that opened it promises it is copied nowhere — including into a
+     * derived index that "Publish context" can upload.
+     */
+    return entries
+      .filter((entry) => !isWorkspaceControlPlanePath(entry.path) && !isLocalFolderMountPath(entry.path))
+      .map((entry) => {
       // The suffix table labels a content type; it is not the text/binary
       // decision. That decision is made on the actual bytes in indexCandidate,
       // so an unknown suffix — .cpp, .rb, .sh, Dockerfile — proceeds as plain

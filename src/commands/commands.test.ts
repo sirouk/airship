@@ -285,6 +285,16 @@ describe("browser-native slash commands", () => {
     expect(completeSlashCommand("/write --path notes/a --c", registry).map((item) => item.insertText)).toEqual([
       "--content",
     ]);
+
+    /*
+     * An option is offered while one is being typed, not whenever there is
+     * nothing else to say. Offering every unused option at an empty fragment
+     * meant Enter on `/ls` accepted `--path` and sent a command with an option
+     * and no value, and on `/read` it built `--path --offset` and never sent
+     * anything at all.
+     */
+    expect(completeSlashCommand("/write ", registry)).toEqual([]);
+    expect(completeSlashCommand("/write --path notes/a ", registry)).toEqual([]);
   });
 
   it("keeps the built-in commands visible when the tool namespace outnumbers the menu", () => {

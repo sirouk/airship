@@ -14,6 +14,11 @@ import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { getClientExecutionRuntime } from "./execution-tools";
 import type { ExecutionCapability } from "../execution/runtime-registry";
 
+const PROVIDER_DIRECTORY_ID = "provider-directory";
+const PROVIDER_DIRECTORY_LABEL = "Inference provider directory";
+const STORAGE_AUTHORITY_ID = "storage-authority";
+const STORAGE_AUTHORITY_LABEL = "Durability authority";
+
 export type LiveEnvironmentSupplement = Readonly<{
   providers?: readonly LiveEnvironmentEntry[];
   storage?: readonly LiveEnvironmentEntry[];
@@ -91,13 +96,13 @@ async function captureSupplement(
   if (!source) {
     return Object.freeze({
       providers: Object.freeze([notObservedEntry(
-        "provider-directory",
-        "Inference provider directory",
+        PROVIDER_DIRECTORY_ID,
+        PROVIDER_DIRECTORY_LABEL,
         "No live provider-directory source is attached. The pinned provider and model remain authoritative for this session.",
       )]),
       storage: Object.freeze([notObservedEntry(
-        "storage-authority",
-        "Durability authority",
+        STORAGE_AUTHORITY_ID,
+        STORAGE_AUTHORITY_LABEL,
         "No live storage-authority source is attached. Do not infer page, Local Device, Drive, or S3 adoption from the session pin.",
       )]),
       extension: Object.freeze([notObservedEntry(
@@ -119,10 +124,10 @@ async function captureSupplement(
     if (supplement.extension === undefined) unobserved.push("extension bridge");
     return Object.freeze({
       providers: Object.freeze(supplement.providers === undefined
-        ? [notObservedEntry("provider-directory", "Inference provider directory", "The App source did not observe provider-directory state for this turn.")]
+        ? [notObservedEntry(PROVIDER_DIRECTORY_ID, PROVIDER_DIRECTORY_LABEL, "The App source did not observe provider-directory state for this turn.")]
         : [...supplement.providers]),
       storage: Object.freeze(supplement.storage === undefined
-        ? [notObservedEntry("storage-authority", "Durability authority", "The App source did not observe storage-authority state for this turn.")]
+        ? [notObservedEntry(STORAGE_AUTHORITY_ID, STORAGE_AUTHORITY_LABEL, "The App source did not observe storage-authority state for this turn.")]
         : [...supplement.storage]),
       extension: Object.freeze(supplement.extension === undefined
         ? [notObservedEntry("extension-bridge", "Browser extension", "The App source did not observe extension-bridge state for this turn.")]
@@ -136,8 +141,8 @@ async function captureSupplement(
     request.signal.throwIfAborted();
     const detail = `The application live-authority source failed: ${errorMessage(error)}`;
     return Object.freeze({
-      providers: Object.freeze([failedEntry("provider-directory", "Inference provider directory", detail)]),
-      storage: Object.freeze([failedEntry("storage-authority", "Durability authority", detail)]),
+      providers: Object.freeze([failedEntry(PROVIDER_DIRECTORY_ID, PROVIDER_DIRECTORY_LABEL, detail)]),
+      storage: Object.freeze([failedEntry(STORAGE_AUTHORITY_ID, STORAGE_AUTHORITY_LABEL, detail)]),
       extension: Object.freeze([failedEntry("extension-bridge", "Browser extension", detail)]),
       limitations: Object.freeze([
         "Provider, storage, and extension state could not be observed for this turn; only pinned inference identity and core browser/runtime observations are reliable.",

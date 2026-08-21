@@ -10,6 +10,7 @@
  * table, an exact protocol version, ordered sequence numbers, and exactly one
  * terminator. Anything else is unsolicited and is dropped without effect.
  */
+import { isRecord } from "../../core/records";
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
@@ -71,16 +72,6 @@ export const ANTHROPIC_OAUTH_INFERENCE_HEADERS: Readonly<Record<string, string>>
   "x-app": "cli",
   "anthropic-beta": "oauth-2025-04-20",
 });
-
-/*
- * The opposite fingerprint belongs to the OAuth package, not here: Anthropic's
- * token endpoint answers `Mozilla/5.0` with 429 and `axios/1.7.9` with 400
- * (i.e. it reaches code validation), so token *exchange* must NOT look like
- * Claude Code. That value lives once, in
- * `ANTHROPIC_OAUTH.tokenRequestHeaders` (src/auth/provider-oauth/registrations.ts).
- * All this module owes it is a `user-agent` slot in the header allowlist above,
- * which oauth-transport.test.ts asserts against the registration itself.
- */
 
 export type BridgeLimits = Readonly<{
   /** No reply inside this window means no extension. */
@@ -473,6 +464,3 @@ function boundedText(value: unknown, maximum: number): string | undefined {
   return clean ? clean.slice(0, maximum) : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}

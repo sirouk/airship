@@ -9,7 +9,7 @@ describe("composer attachments", () => {
     expect(attachments).toHaveLength(COMPOSER_ATTACHMENT_LIMIT);
     const parts = userMessageParts("inspect", attachments);
     expect(attachments[0]?.file).toBe(files[0]);
-    expect(parts[1]).toMatchObject({ kind: "attachment", status: "available", summary: expect.stringContaining("encrypted inference") });
+    expect(parts[1]).toMatchObject({ kind: "attachment", status: "available", summary: expect.stringContaining("with this inference request") });
   });
 
   it("declares no byte ceiling of its own, because it enforces none", () => {
@@ -18,9 +18,9 @@ describe("composer attachments", () => {
      * nothing: `composerAttachments` and the composer's own file handler filter
      * on media type and on the count, never on size. The number a person is
      * actually refused at is `MAX_CANONICAL_IMAGE_BYTES` — 10 MiB per image, in
-     * `core/multimodal.ts`, checked when the turn is prepared. Two ceilings, one
+     * `core/multimodal-contract.ts`, checked when the turn is prepared. Two ceilings, one
      * of them inert and wrong, is how the composer came to promise a 14 MB photo
-     * was "ready for inline encrypted vision inference".
+     * was "ready for inline vision inference".
      */
     const source = readFileSync(new URL("./composer-state.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/export const COMPOSER_ATTACHMENT_BYTE_LIMIT/u);

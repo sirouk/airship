@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runObjectStoreConformance } from "./conformance";
-import { MemoryObjectStore } from "./memory-object-store";
+import { MemoryObjectStore } from "./memory-object-store.test-support";
 
 describe("object-store conformance", () => {
   it("proves exact range, read-after-write, listing, and single-winner CAS", async () => {

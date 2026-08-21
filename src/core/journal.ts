@@ -29,6 +29,23 @@ export type SessionRecord = {
   headSequence: number;
   headDigest: string;
   /**
+   * Opaque storage incarnation fence. It is authority metadata, not portable
+   * conversation content, and must be carried back on fenced mutations.
+   */
+  headIncarnation?: string;
+  /**
+   * When this device took the conversation in from a bundle file.
+   *
+   * Set by the import, never by the file: `REFUSED_BUNDLE_PINS` in
+   * `src/sessions/work-bundle.ts` rejects a bundle that states it, so a file
+   * can neither claim to be native nor forge a date. It is what separates a
+   * conversation this browser composed from one whose whole manifest —
+   * including the `systemPrompt` sent to the provider on every turn — was
+   * written somewhere else. Such a conversation is readable in full and
+   * continues by Fork, which is the same rule a Vault adoption already states.
+   */
+  importedAt?: string;
+  /**
    * The conversation's own approval policy, carried beside the pinned manifest
    * like title is. The manifest names the policy the conversation was created
    * under; this is what the person asked for in-flight, on the same thread,
@@ -53,10 +70,40 @@ export type SessionRecord = {
   contextPolicyOverride?: SessionContextPolicy | null;
 };
 
+export type JournalHead = Readonly<{
+  sequence: number;
+  digest: string;
+  /**
+   * Optional for legacy/non-reusable backends. A backend that can restore an
+   * exact deleted ID must return and require an opaque incarnation fence so a
+   * repeated sequence/digest cannot become an ABA mutation capability.
+   */
+  incarnation?: string;
+}>;
+
 export type JournalAppendCommit = Readonly<{
   events: DurableEvent[];
   session: SessionRecord;
 }>;
+
+/**
+ * How an append relates to the record it lands on.
+ *
+ * `replay` says these events are a copy of a history that was already
+ * projected somewhere else, so the record they land under is the one
+ * `createSession` received rather than one re-derived from the events. It
+ * exists because a device-granted pin is projected out of a session event
+ * (`projectedSessionPins`), and replaying a history therefore *re-grants*
+ * every pin in it. That is right for a Vault move, where the record copied in
+ * already carries those pins verbatim, and wrong for a bundle file, whose
+ * record may carry none of them: measured, a file whose record declared no
+ * pins landed a conversation in `full-access` with a model override, because
+ * `session.approval-policy-changed` and `session.model-changed` rode in as
+ * events and the projection believed them. A file is not authority, so a
+ * replay projects the conversation's own facts — its title and its recency —
+ * and grants nothing.
+ */
+export type JournalAppendOptions = Readonly<{ replay?: boolean }>;
 
 export interface JournalBackend {
   createSession(session: SessionRecord, signal?: AbortSignal): Promise<void>;
@@ -65,7 +112,7 @@ export interface JournalBackend {
   readEvents(sessionId: string, afterSequence?: number, signal?: AbortSignal): Promise<DurableEvent[]>;
   append(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     events: DurableEvent[],
     /**
      * Cancellation is admissible only before the backend enters its atomic
@@ -74,6 +121,7 @@ export interface JournalBackend {
      * relabelling a durable write as an abort.
      */
     signal?: AbortSignal,
+    options?: JournalAppendOptions,
   ): Promise<SessionRecord>;
   /**
    * Remove a conversation and its events. Absent for a very long time.
@@ -97,10 +145,22 @@ export interface JournalBackend {
    */
   deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void>;
 }
+
+/**
+ * The read side of a journal, as a migration needs it.
+ *
+ * `migrateJournalState` only ever reads three things from its source, and
+ * typing the parameter as the whole `EventJournal` class made that class the
+ * only possible source — its private fields make it nominal. A bundle read
+ * from a file is a legitimate source of exactly these three reads and of
+ * nothing else, so the contract is named for what it is. Types only: nothing
+ * is added to any chunk.
+ */
+export type JournalStateSource = Pick<EventJournal, "listSessions" | "readEvents" | "getSession">;
 
 export class JournalConflictError extends Error {
   constructor(message = "The session head changed while appending events.") {
@@ -119,7 +179,7 @@ export class EventJournal {
    * `JournalConflictError`. Refusing the loser is *correct* between clients —
    * it is how a stale tab is stopped from forking a history — but inside one
    * page both writers are ours, and the refusal surfaced to the user as a
-   * failed turn when model auto-naming appended `session.renamed` beside the
+   * failed turn when an in-page rename appended `session.renamed` beside a
    * turn still streaming into the same session.
    *
    * Chaining makes the second in-page writer wait for the first head instead
@@ -150,11 +210,15 @@ export class EventJournal {
       session: Readonly<SessionRecord>,
     ) => readonly EventDraft[] | Promise<readonly EventDraft[]>,
   ): Promise<SessionRecord> {
+    // Own the caller's manifest before the first await. The backend record and
+    // `session.created` must describe one snapshot even if the caller mutates
+    // its manifest while creation is in flight.
+    const manifestSnapshot = structuredClone(manifest);
     const createdAt = this.now();
     const session: SessionRecord = {
       id: this.id(),
       title,
-      manifest,
+      manifest: manifestSnapshot,
       createdAt,
       updatedAt: createdAt,
       headSequence: 0,
@@ -162,17 +226,21 @@ export class EventJournal {
     };
     // Resolve destination-bound initial records before the first backend
     // mutation, then commit creation and initialization in one append batch.
-    const initialized = initialize ? [...await initialize(structuredClone(session))] : [];
+    const initialized = initialize
+      ? snapshotEventDrafts(await initialize(structuredClone(session)))
+      : [];
     if (initialized.some((event) => event.type === "session.created")) {
       throw new TypeError("Session initialization cannot provide a second creation event.");
     }
-    await this.backend.createSession(session);
+    // A backend is an asynchronous port. Give it its own copy so it cannot
+    // mutate the journal-owned manifest later used by session.created.
+    await this.backend.createSession(structuredClone(session));
     await this.append(session.id, [
       {
         type: "session.created",
         payload: {
           title,
-          manifest: manifest as unknown as JsonValue,
+          manifest: manifestSnapshot as unknown as JsonValue,
         },
       },
       ...initialized,
@@ -182,6 +250,20 @@ export class EventJournal {
 
   getSession(sessionId: string, signal?: AbortSignal) {
     return this.backend.getSession(sessionId, signal);
+  }
+
+  /**
+   * The backend this journal commits through.
+   *
+   * A migration writes events that are already sealed — same ids, sequences,
+   * `recordedAt` stamps and digests — so it cannot go through `append`, which
+   * mints new ones. `migrateJournalState` therefore takes a `JournalBackend`,
+   * and this is how a caller holding only the journal names the same one. It
+   * is not a general escape hatch: every ordinary write must keep using the
+   * append queue above, which is what makes two in-page writers orderable.
+   */
+  get storage(): JournalBackend {
+    return this.backend;
   }
 
   /**
@@ -195,19 +277,23 @@ export class EventJournal {
    */
   async deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void> {
+    const head = snapshotJournalHead(expectedHead);
     const previous = this.appendQueue.get(sessionId) ?? Promise.resolve();
     const link = previous
       .catch(() => undefined)
-      .then(() => this.backend.deleteSession(sessionId, expectedHead, signal));
-    this.appendQueue.set(sessionId, link.catch(() => undefined));
+      .then(() => this.backend.deleteSession(sessionId, head, signal));
+    const tail = link.catch(() => undefined);
+    this.appendQueue.set(sessionId, tail);
     try {
       await link;
     } finally {
-      // The session is gone; its queue slot would otherwise outlive it.
-      if (this.appendQueue.get(sessionId) !== undefined) this.appendQueue.delete(sessionId);
+      // An append can chain behind this delete while its promise is settling.
+      // Clear only this exact tail or that later append becomes untracked and a
+      // following writer can enter the backend beside it on the same stale head.
+      if (this.appendQueue.get(sessionId) === tail) this.appendQueue.delete(sessionId);
     }
   }
 
@@ -296,10 +382,14 @@ export class EventJournal {
 
   append(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
     if (!drafts.length) return Promise.resolve([]);
+    // Snapshot before even looking at the queue. A queued write can wait across
+    // arbitrary caller work, so retaining its drafts would let later mutation
+    // change what is hashed and committed after `append` has already returned.
+    const snapshots = snapshotEventDrafts(drafts);
     const pending = this.appendQueue.get(sessionId);
     const result = pending
-      ? this.commitAfter(pending, sessionId, drafts, signal)
-      : this.commit(sessionId, drafts, signal);
+      ? this.commitAfter(pending, sessionId, snapshots, signal)
+      : this.commit(sessionId, snapshots, signal);
     return this.trackAppend(sessionId, pending, result);
   }
 
@@ -317,17 +407,22 @@ export class EventJournal {
    */
   appendAtHead(
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     signal?: AbortSignal,
   ): Promise<JournalAppendCommit> {
     if (!drafts.length) {
       return Promise.reject(new TypeError("A fenced append requires at least one event."));
     }
+    // Own both caller-controlled inputs before a predecessor can make this
+    // operation wait. In particular, the head used to seal the digest must be
+    // the same head later handed to the backend compare-and-set.
+    const head = snapshotJournalHead(expectedHead);
+    const snapshots = snapshotEventDrafts(drafts);
     const pending = this.appendQueue.get(sessionId);
     const result = pending
-      ? this.commitAtHeadAfter(pending, sessionId, expectedHead, drafts, signal)
-      : this.commitAtHead(sessionId, expectedHead, drafts, signal, signal);
+      ? this.commitAtHeadAfter(pending, sessionId, head, snapshots, signal)
+      : this.commitAtHead(sessionId, head, snapshots, signal, signal);
     return this.trackAppend(sessionId, pending, result);
   }
 
@@ -376,7 +471,7 @@ export class EventJournal {
   private async commitAtHeadAfter(
     pending: Promise<unknown>,
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     signal?: AbortSignal,
   ): Promise<JournalAppendCommit> {
@@ -391,7 +486,11 @@ export class EventJournal {
 
     return (await this.commitAtHead(
       sessionId,
-      { sequence: session.headSequence, digest: session.headDigest },
+      {
+        sequence: session.headSequence,
+        digest: session.headDigest,
+        ...(session.headIncarnation ? { incarnation: session.headIncarnation } : {}),
+      },
       drafts,
       undefined,
       signal,
@@ -400,18 +499,26 @@ export class EventJournal {
 
   private async commitAtHead(
     sessionId: string,
-    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    expectedHead: JournalHead,
     drafts: EventDraft[],
     preAdmissionSignal?: AbortSignal,
     backendSignal?: AbortSignal,
   ): Promise<JournalAppendCommit> {
     preAdmissionSignal?.throwIfAborted();
 
-    let sequence = expectedHead.sequence;
-    let previousDigest = expectedHead.digest;
+    const head = snapshotJournalHead(expectedHead);
+    let sequence = head.sequence;
+    let previousDigest = head.digest;
     const events: DurableEvent[] = [];
 
     for (const draft of drafts) {
+      // These are plain, journal-owned snapshots. Keep the exact same values in
+      // the digest preimage and the durable event instead of spreading and
+      // rereading a caller object after SHA-256 yields.
+      const type = draft.type;
+      const turnId = draft.turnId;
+      const operationId = draft.operationId;
+      const payload = draft.payload;
       sequence += 1;
       const eventId = this.id();
       const recordedAt = this.now();
@@ -422,14 +529,17 @@ export class EventJournal {
         sequence,
         recordedAt,
         previousDigest,
-        type: draft.type,
-        turnId: draft.turnId ?? null,
-        operationId: draft.operationId ?? null,
-        payload: draft.payload,
+        type,
+        turnId: turnId ?? null,
+        operationId: operationId ?? null,
+        payload,
       };
       const digest = await sha256(stableStringify(digestInput));
       events.push({
-        ...draft,
+        type,
+        ...(turnId !== undefined ? { turnId } : {}),
+        ...(operationId !== undefined ? { operationId } : {}),
+        payload,
         version: 1,
         eventId,
         sessionId,
@@ -444,12 +554,89 @@ export class EventJournal {
     preAdmissionSignal?.throwIfAborted();
     const session = await this.backend.append(
       sessionId,
-      expectedHead,
+      head,
       events,
       backendSignal,
     );
     return { events, session };
   }
+}
+
+/** Capture a compare-and-set boundary without retaining caller accessors. */
+function snapshotJournalHead(
+  head: JournalHead,
+): JournalHead {
+  const sequence = head.sequence;
+  const digest = head.digest;
+  const incarnation = head.incarnation;
+  return { sequence, digest, ...(incarnation ? { incarnation } : {}) };
+}
+
+/**
+ * Turn caller-owned drafts into plain journal-owned values synchronously.
+ *
+ * Each top-level field is read exactly once. `structuredClone` owns the whole
+ * payload graph at that instant, and the JSON check keeps values that cannot be
+ * represented by the digest format (cycles, undefined, bigint, non-finite
+ * numbers, and non-JSON containers) out of the durable chain.
+ */
+function snapshotEventDrafts(drafts: readonly EventDraft[]): EventDraft[] {
+  return drafts.map((draft) => {
+    const type = draft.type;
+    const turnId = draft.turnId;
+    const operationId = draft.operationId;
+    const callerPayload: unknown = draft.payload;
+    let payload: unknown;
+    try {
+      payload = structuredClone(callerPayload);
+    } catch {
+      throw new TypeError("Journal event payload must be a valid JSON value.");
+    }
+    if (!isJsonValue(payload)) {
+      throw new TypeError("Journal event payload must be a valid JSON value.");
+    }
+    return {
+      type,
+      ...(turnId !== undefined ? { turnId } : {}),
+      ...(operationId !== undefined ? { operationId } : {}),
+      payload,
+    };
+  });
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  type Visit = Readonly<{ value: unknown; exit?: object }>;
+  const pending: Visit[] = [{ value }];
+  const ancestors = new WeakSet<object>();
+  while (pending.length > 0) {
+    const visit = pending.pop()!;
+    if (visit.exit) {
+      ancestors.delete(visit.exit);
+      continue;
+    }
+    const candidate = visit.value;
+    if (
+      candidate === null
+      || typeof candidate === "string"
+      || typeof candidate === "boolean"
+    ) continue;
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) return false;
+      continue;
+    }
+    if (!candidate || typeof candidate !== "object" || ancestors.has(candidate)) return false;
+    const prototype = Object.getPrototypeOf(candidate);
+    if (!Array.isArray(candidate) && prototype !== Object.prototype && prototype !== null) return false;
+    ancestors.add(candidate);
+    pending.push({ value: null, exit: candidate });
+    const children: unknown[] = Array.isArray(candidate)
+      ? [...candidate]
+      : Object.values(candidate);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      pending.push({ value: children[index] });
+    }
+  }
+  return true;
 }
 
 /**
@@ -505,7 +692,7 @@ function raceAbort(pending: Promise<unknown>, signal: AbortSignal): Promise<void
  * reading, three times in a row, directly above the composer.
  *
  * They remain fully journaled, digest-chained and auditable: the head still
- * advances, `session-audit.ts` still names the type, and the Proof route still
+ * advances, `session-audit.ts` still names the type, and local session inspection still
  * lists every one of them. This changes where they are read, never whether
  * they were recorded.
  */
@@ -645,6 +832,30 @@ export function projectedSessionContextPolicy(
  * the reason title lives here: a lost projection was what previously stranded
  * these decisions as page-memory-only.
  */
+/**
+ * Every device-granted pin an append projects, in one place.
+ *
+ * Both backends used to inline the same three "compute it, test it, compute it
+ * again" spreads. Naming the set is what lets a replay decline all of them at
+ * once (`JournalAppendOptions`) instead of each backend remembering which
+ * fields are grants and which are the conversation's own facts.
+ */
+export function projectedSessionPins(
+  events: readonly DurableEvent[],
+  current: Readonly<Pick<SessionRecord, "approvalModeOverride" | "modelOverride" | "contextPolicyOverride">>,
+): Partial<SessionRecord> {
+  const approvalModeOverride = projectedSessionApprovalMode(events, current.approvalModeOverride);
+  const modelOverride = projectedSessionModel(events, current.modelOverride);
+  const contextPolicyOverride = projectedSessionContextPolicy(events, current.contextPolicyOverride);
+  return {
+    // stableStringify cannot carry an explicit undefined key, so an override is
+    // never minted absent — the pinned manifest is what an absent override means.
+    ...(approvalModeOverride !== undefined ? { approvalModeOverride } : {}),
+    ...(modelOverride !== undefined ? { modelOverride } : {}),
+    ...(contextPolicyOverride !== undefined ? { contextPolicyOverride } : {}),
+  };
+}
+
 export function projectedSessionApprovalMode(
   events: readonly DurableEvent[],
   fallback: ApprovalProvenance["mode"] | undefined,

@@ -905,18 +905,6 @@
   min-width: 0;
   padding: var(--sp-3);
 }
-
-/*
- * The four counts as one row of cells rather than four 105px cards.
- *
- * Same three slots the shared <MetricStrip> defines — mono uppercase label,
- * tabular figure, provenance caption — applied to the shipped `.metric`
- * elements. The component itself cannot be imported here: it is also imported
- * by `billing-view`, which lives in the deferred-capabilities chunk, and the
- * two importers would merge `memory-graph/kind-visual` into a shared chunk the
- * release gate requires by name. Adopting the component is a one-line change
- * for whoever owns that chunk map.
- */
 .memory-view .memory-metrics {
   display: grid;
   grid-auto-columns: minmax(0, 1fr);
@@ -1528,18 +1516,4 @@
   font-size: var(--fs-micro);
 }
 
-.memory-rename-hidden { display: none; }
-
 .memory-duplicates__cluster[data-busy="true"] { opacity: 0.6; }
-
-.history-rename-input,
-.session-rename-input,
-.memory-rename-input {
-  font: inherit;
-  color: inherit;
-  background: color-mix(in srgb, var(--surface, #141a22) 90%, black);
-  border: 1px solid color-mix(in srgb, var(--accent, #7fb069) 55%, transparent);
-  border-radius: 8px;
-  padding: 2px 8px;
-  max-width: 100%;
-}

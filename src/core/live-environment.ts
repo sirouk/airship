@@ -6,7 +6,12 @@ import type {
   ToolDefinition,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
+import {
+  canonicalSessionInferenceProviderId,
+  sessionInferenceProviderIdMatches,
+} from "./inference-binding";
 import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
+import { isRecord } from "./records";
 
 const MAX_ENTRIES_PER_GROUP = 48;
 const MAX_ENTRY_DETAIL_CHARS = 512;
@@ -160,6 +165,7 @@ export type LiveEnvironmentSnapshot = Readonly<{
 export async function sealLiveEnvironmentSnapshot(args: Readonly<{
   sessionId: string;
   manifest: SessionManifest;
+  model: string;
   toolDefinitions: readonly ToolDefinition[];
   transportPosture: SecurityPosture;
   observation: LiveEnvironmentObservation;
@@ -187,8 +193,8 @@ export async function sealLiveEnvironmentSnapshot(args: Readonly<{
       installed: toolDefinitions.map(({ name, effect }) => ({ name, effect })),
     },
     inference: {
-      providerId: args.manifest.providerId,
-      model: args.manifest.model,
+      providerId: canonicalSessionInferenceProviderId(args.manifest),
+      model: args.model,
       posture: args.transportPosture,
       ...(args.manifest.inferenceBinding ? {
         connectionId: args.manifest.inferenceBinding.connectionId,
@@ -237,6 +243,7 @@ export function liveEnvironmentScopeMatches(
   snapshot: LiveEnvironmentSnapshot,
   sessionId: string,
   manifest: SessionManifest,
+  model: string,
 ): boolean {
   const installed = [...manifest.tools]
     .sort((left, right) => left.name.localeCompare(right.name))
@@ -248,8 +255,8 @@ export function liveEnvironmentScopeMatches(
     snapshot.tools.manifestDigest === manifest.toolManifestDigest &&
     stableStringify(snapshot.tools.installed as unknown as JsonValue) ===
       stableStringify(installed as unknown as JsonValue) &&
-    snapshot.inference.providerId === manifest.providerId &&
-    snapshot.inference.model === manifest.model &&
+    sessionInferenceProviderIdMatches(manifest, snapshot.inference.providerId) &&
+    snapshot.inference.model === model &&
     snapshot.profile?.profileId === manifest.profile?.profileId &&
     snapshot.profile?.profileRevision === manifest.profile?.profileRevision &&
     snapshot.profile?.approvalMode === (manifest.profile?.version === 2 ? manifest.profile.approvalMode : undefined) &&
@@ -340,10 +347,10 @@ function canonicalTools(value: unknown): LiveEnvironmentSnapshot["tools"] | unde
 }
 
 function canonicalInference(value: unknown): LiveEnvironmentSnapshot["inference"] | undefined {
-  if (!isRecord(value) || !boundedToken(value.providerId, 256) || !boundedToken(value.model, 512) || !["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"].includes(String(value.posture))) return undefined;
+  if (!isRecord(value) || !boundedToken(value.providerId, 256) || !boundedToken(value.model, 512) || !["local", "plaintext-remote"].includes(String(value.posture))) return undefined;
   if (value.connectionId !== undefined && !boundedToken(value.connectionId, 256)) return undefined;
   if (value.connectionGeneration !== undefined && (!Number.isSafeInteger(value.connectionGeneration) || (value.connectionGeneration as number) < 1)) return undefined;
-  if (value.transportBoundary !== undefined && !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(value.transportBoundary))) return undefined;
+  if (value.transportBoundary !== undefined && !["provider-tls", "loopback-local"].includes(String(value.transportBoundary))) return undefined;
   return deepFreeze({
     providerId: value.providerId as string,
     model: value.model as string,
@@ -447,6 +454,3 @@ function cleanText(value: unknown, max: number): string | undefined {
   return cleaned && cleaned.length <= max ? cleaned : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

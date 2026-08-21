@@ -93,10 +93,7 @@ test("high-value controls remain usable without credentials on every device clas
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   page.on("console", (message) => {
-    if (message.type() !== "error") return;
-    const expectedSignInReadinessResponse = message.location().url.endsWith("/__airship/chutes/oauth/token")
-      && /status of 503/u.test(message.text());
-    if (!expectedSignInReadinessResponse) runtimeErrors.push(message.text());
+    if (message.type() === "error") runtimeErrors.push(message.text());
   });
 
   await page.goto("/#chat");
@@ -141,31 +138,29 @@ test("high-value controls remain usable without credentials on every device clas
   await provider.click();
   const providers = page.getByRole("listbox", { name: "Vault storage provider" });
   await expect(providers).toBeVisible();
-  await expect(providers.getByRole("option", { name: /Google Drive/ })).toBeVisible();
-  await expect(providers.getByRole("option", { name: /S3-compatible \/ MinIO/ })).toBeVisible();
-  await expect(providers.getByRole("option", { name: /^Ephemeral/ })).toBeVisible();
+  // The master lane owns a valid synthetic Google registration. Drive joins
+  // the two stock local choices only in that configured build; adapter names
+  // such as S3/MinIO and Walrus are not product destinations.
+  await expect(providers.getByRole("option")).toHaveCount(3);
+  await expect(providers.getByRole("option", { name: "Ephemeral", exact: true })).toBeVisible();
+  await expect(providers.getByRole("option", { name: "Local Device", exact: true })).toBeVisible();
+  await expect(providers.getByRole("option", { name: "Google Drive", exact: true })).toBeVisible();
+  await expect(providers.getByRole("option", { name: /S3|MinIO|Walrus/u })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expectContainedLayout(page);
 
-  await page.goto("/#proof");
-  await expect(page.locator(".trust-hub-tabs")).toHaveCount(0);
-  await page.getByRole("tab", { name: "Attestation evidence" }).click();
-  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
-  await expectContainedLayout(page);
-
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
-  const chutes = page.locator('.connect-lane[data-lane="chutes"]');
-  if ((await chutes.getAttribute("data-open")) !== "true") {
-    await chutes.getByRole("button", { name: /Chutes/u }).first().click();
+  await expect(page).toHaveURL(/#connection$/u);
+  await expect(page.locator(".topbar-destination")).toHaveText("Providers");
+  await expect(page.getByRole("heading", { name: "Cloud and local models", level: 2 })).toBeVisible();
+  await expect(page.getByText(/Keep multiple providers in page memory\./u)).toBeVisible();
+  for (const name of ["OpenAI", "Anthropic", "xAI", "Chutes"] as const) {
+    const card = page.locator(`#provider-setup-${name === "xAI" ? "xai" : name.toLowerCase()}`);
+    await expect(card.getByRole("heading", { name, exact: true, level: 4 })).toBeVisible();
+    await expect(card.getByLabel(`${name} API key · page memory only`, { exact: true })).toBeVisible();
   }
-  // This acceptance build does not configure Chutes OAuth. It must lead with
-  // the functional API-key path instead of rendering a broken sign-in action.
-  await expect(chutes.getByRole("button", { name: "Sign in to Chutes", exact: true })).toHaveCount(0);
-  await expect(chutes.getByRole("tab", { name: /^API key/u })).toHaveAttribute("aria-selected", "true");
-  await expect(chutes.getByRole("textbox", { name: "Chutes API key", exact: true })).toBeVisible();
-  await expect(chutes.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
-  await expect(chutes.getByRole("button", { name: "Discover models with key" })).toBeVisible();
+  await expect(page.locator("form.provider-setup-card--custom")).toBeVisible();
+  await expect(page.getByRole("main").getByRole("tablist")).toHaveCount(0);
   await expect(page.getByRole("dialog", { name: "Choose a model" })).toHaveCount(0);
   await expectContainedLayout(page);
 
@@ -176,8 +171,7 @@ test("high-value controls remain usable without credentials on every device clas
   });
 });
 
-test("the desktop browser terminal executes Node and reconciles a real file into Editor and SCM", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative live browser process");
+test("the browser terminal executes Node and reconciles a real file into Editor and SCM", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));

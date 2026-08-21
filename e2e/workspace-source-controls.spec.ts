@@ -40,7 +40,7 @@ async function switchToAlternateProfile(page: Page, mobile: boolean): Promise<vo
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
 }
 
-test("advanced source controls keep every former Sources capability in the workbench", async ({ page }, testInfo) => {
+test("advanced source controls expose the complete repository workflow in the workbench", async ({ page }, testInfo) => {
   await openWorkspace(page);
   await expect(page.getByRole("tab", { name: "Sources", exact: true })).toHaveCount(0);
 
@@ -48,7 +48,16 @@ test("advanced source controls keep every former Sources capability in the workb
   await expect(dialog.getByRole("heading", { name: "Repositories & worktrees" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Import", exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Refresh repositories" })).toBeVisible();
-  await expect(dialog.locator("details.git-sources-trust-disclosure").locator("summary")).toContainText("Source posture");
+  const sourceFacts = dialog.locator("details.git-sources-facts-disclosure");
+  await expect(sourceFacts.locator("summary")).toContainText("Source facts");
+  await expect(sourceFacts.locator("summary")).toContainText("4 facts · full detail");
+  await expect(sourceFacts.locator("summary .status-mark")).toHaveCount(4);
+  await sourceFacts.locator("summary").click();
+  const factRows = sourceFacts.locator(".git-sources-facts");
+  await expect(factRows).toBeVisible();
+  await expect(factRows.locator(":scope > div")).toHaveCount(4);
+  await expect(factRows.locator(".status-mark")).toHaveCount(4);
+  await expect(factRows).toContainText("Version-bound writes");
   await expect(dialog.getByRole("tab", { name: /Changes/u })).toBeVisible();
   await expect(dialog.getByRole("tab", { name: "History", exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Tree", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -81,8 +90,8 @@ test("advanced source controls keep every former Sources capability in the workb
   }
 
   // Modal keyboard containment and focus restoration are part of the same
-  // capability inventory: no advanced control may become keyboard-only or
-  // strand focus behind the sheet.
+  // workflow: no advanced control may become pointer-only or strand focus
+  // behind the sheet.
   const close = dialog.getByRole("button", { name: "Close advanced source controls" });
   await close.focus();
   await close.press("Shift+Tab");
@@ -109,7 +118,7 @@ test("advanced source state is fenced by the active profile authority", async ({
   await switchToAlternateProfile(page, testInfo.project.name === "mobile-chromium");
   await expect(prior).toHaveCount(0);
 
-  // The new profile opens a new SourcesView instance. Neither the prior
+  // The new profile opens a new source-control instance. Neither the prior
   // profile's selected history panel nor its flat-tree preference survives.
   await page.goto("/#editor");
   await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();

@@ -2,18 +2,27 @@ import { describe, expect, it, vi } from "vitest";
 import type { InferenceEvent, InferenceRequest } from "../../core/contracts";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
+  ResponsesBrowserTransport,
+  OpenAiCompatibleBrowserTransport,
   ProviderTransportError,
-  XaiBrowserTransport,
   type ProviderFetch,
 } from "./browser-cloud";
 import { ExtensionBridgeError } from "../bridge/protocol";
 import { InferenceConnectionRegistry } from "./connection-registry";
-import { MAX_MODEL_OUTPUT_TOKENS } from "./contracts";
-import { OFFICIAL_CLOUD_PROVIDERS } from "./official-providers";
+import { MAX_MODEL_OUTPUT_TOKENS, type InferenceProviderDescriptor } from "./contracts";
+import { OFFICIAL_CLOUD_PROVIDERS,
+  ANTHROPIC_PROVIDER,
+  OPENAI_PROVIDER,
+  XAI_PROVIDER,
+} from "./official-providers";
 import { InferenceProviderCatalog } from "./provider-catalog";
 
 const NOW = Date.parse("2026-07-24T12:00:00.000Z");
+
+function objectHeadersOf(init: RequestInit | undefined): Record<string, string> {
+  const headers = init?.headers ?? {};
+  return headers instanceof Headers ? Object.fromEntries(headers.entries()) : { ...headers as Record<string, string> };
+}
 
 describe("browser-direct cloud inference adapters", () => {
   it("discovers OpenAI models through a getter without retaining capability guesses", async () => {
@@ -25,7 +34,7 @@ describe("browser-direct cloud inference adapters", () => {
         data: [{ id: "model-a", object: "model", owned_by: "openai" }],
       });
     });
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey,
@@ -57,8 +66,374 @@ describe("browser-direct cloud inference adapters", () => {
     expect(getApiKey).toHaveBeenCalledTimes(1);
   });
 
+  it("supports an arbitrary registered HTTPS OpenAI-compatible base URL and API key", async () => {
+    const provider = customOpenAiCompatibleProvider({
+      authMethods: [{
+        id: "custom-api-key",
+        kind: "api-key",
+        label: "Custom API key",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "direct-contract-unpublished",
+        warning: "This custom endpoint is user-configured and uses a page-memory bearer key.",
+      }],
+      oauth: {
+        state: "not-documented",
+        detail: "This provider uses a bearer API key on its OpenAI-compatible endpoint.",
+      },
+    });
+    const requests: Array<{ url: string; headers: Headers; body?: Record<string, unknown> }> = [];
+    const transport = new OpenAiCompatibleBrowserTransport(provider, {
+      connectionId: "custom-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-custom-memory-only",
+      fetch: async (input, init) => {
+        requests.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+          ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {}),
+        });
+        return requests.length === 1
+          ? jsonResponse({ data: [{ id: "custom-model" }] })
+          : sseResponse([
+              event("chat.completion.chunk", {
+                id: "chunk-1",
+                choices: [{ index: 0, delta: { content: "hello from custom" }, finish_reason: null }],
+              }),
+              event("chat.completion.chunk", {
+                id: "chunk-2",
+                choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              }),
+              "data: [DONE]\n\n",
+            ]);
+      },
+    });
+
+    await expect(transport.listModels()).resolves.toMatchObject([
+      { providerId: "custom-openai", id: "custom-model" },
+    ]);
+    await expect(collect(transport.stream(request(), new AbortController().signal))).resolves.toEqual([
+      { type: "text-delta", text: "hello from custom" },
+      { type: "completed", finishReason: "stop" },
+    ]);
+    expect(transport.id).toBe("custom-openai-openai-compatible-v1");
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://custom-openai.example.test/v1/models",
+      "https://custom-openai.example.test/v1/chat/completions",
+    ]);
+    expect(requests.every((request) => request.headers.get("authorization") === "Bearer sk-custom-memory-only")).toBe(true);
+  });
+
+  it("keeps the full opaque provider digest in transport authority", () => {
+    const providerId = `openai-compatible-${"a".repeat(64)}`;
+    const provider = customOpenAiCompatibleProvider({
+      id: providerId,
+      authMethods: [{
+        id: `${providerId}-key`,
+        kind: "api-key",
+        label: "Opaque provider key",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "dangerous-user-opt-in",
+        warning: "Test credential remains in memory.",
+      }],
+    });
+    const transport = new OpenAiCompatibleBrowserTransport(provider, {
+      connectionId: "opaque-main",
+      connectionGeneration: 1,
+      getApiKey: () => "memory-only",
+      fetch: vi.fn(),
+    });
+
+    expect(transport.id).toBe(`${providerId}-openai-compatible-v1`);
+  });
+
+  it("never propagates provider SSE error prose or an echoed leased key", async () => {
+    const apiKey = "sse-lease-must-not-be-durable";
+    const providerProse = "Vendor account disabled; contact secret support";
+    const provider = customOpenAiCompatibleProvider({
+      authMethods: [{
+        id: "custom-api-key",
+        kind: "api-key",
+        label: "Custom API key",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Custom endpoint test key.",
+      }],
+    });
+    const transport = new OpenAiCompatibleBrowserTransport(provider, {
+      connectionId: "custom-error-main",
+      connectionGeneration: 1,
+      getApiKey: () => apiKey,
+      fetch: async () => sseResponse([
+        event("error", {
+          error: {
+            message: `${providerProse}; received credential ${apiKey}`,
+          },
+        }),
+      ]),
+    });
+
+    const failure = await collect(
+      transport.stream(request(), new AbortController().signal),
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderTransportError);
+    expect(failure).toMatchObject({ code: "invalid-response" });
+    expect((failure as Error).message)
+      .toBe("Inference provider returned an invalid streaming response.");
+    const exposed = JSON.stringify({
+      name: (failure as Error).name,
+      message: (failure as Error).message,
+      stack: (failure as Error).stack,
+      cause: (failure as Error & { cause?: unknown }).cause,
+      code: (failure as ProviderTransportError).code,
+      status: (failure as ProviderTransportError).status,
+    });
+    expect(exposed).not.toContain(providerProse);
+    expect(exposed).not.toContain(apiKey);
+  });
+
+  it("scrubs a fetch failure that echoes the key before its credential lease ends", async () => {
+    const apiKey = "fetch-lease-must-not-be-durable";
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
+      connectionId: "openai-echo-main",
+      connectionGeneration: 1,
+      getApiKey: () => apiKey,
+      fetch: async (_input, init) => {
+        const echoed = new Headers(init?.headers).get("authorization");
+        throw new Error(`Host rejected ${echoed}`);
+      },
+    });
+
+    const failure = await collect(
+      transport.stream(request(), new AbortController().signal),
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProviderTransportError);
+    expect(failure).toMatchObject({ code: "network-or-cors" });
+    expect((failure as Error).message)
+      .toBe("Inference provider request failed before a response was accepted.");
+    expect((failure as Error).message).not.toContain(apiKey);
+    expect((failure as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
+
+  it("honors a custom provider's declared raw API-key header without adding Authorization", async () => {
+    const provider = customOpenAiCompatibleProvider({
+      id: "custom-raw-openai",
+      authMethods: [{
+        id: "custom-raw-api-key",
+        kind: "api-key",
+        label: "Raw key",
+        header: { name: "x-api-key", scheme: "raw" },
+        browserUse: "direct-contract-unpublished",
+        warning: "This custom endpoint is user-configured and uses a page-memory raw key.",
+      }],
+    });
+    const requests: Headers[] = [];
+    const transport = new OpenAiCompatibleBrowserTransport(provider, {
+      connectionId: "custom-raw-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sekret",
+      fetch: async (_input, init) => {
+        requests.push(new Headers(init?.headers));
+        return jsonResponse({ data: [{ id: "custom-model" }] });
+      },
+    });
+
+    await transport.listModels();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.get("x-api-key")).toBe("sekret");
+    expect(requests[0]?.get("authorization")).toBeNull();
+  });
+
+  it("uses the selected OAuth connection metadata for generic OpenAI-compatible auth", async () => {
+    const provider = customOpenAiCompatibleProvider({
+      id: "custom-oauth-openai",
+      authMethods: [{
+        id: "custom-oauth",
+        kind: "oauth-public-pkce",
+        label: "Custom account",
+        authorizationEndpoint: "https://auth.custom-oauth-openai.example.test/authorize",
+        tokenEndpoint: "https://auth.custom-oauth-openai.example.test/token",
+        clientId: "custom-client",
+        redirectUris: ["https://airship.test/callback"],
+        scopes: ["models:read"],
+        tokenEndpointAuthMethod: "none",
+        codeChallengeMethod: "S256",
+        browserUse: "reviewed-direct",
+        review: {
+          id: "fixture-review",
+          reviewedAt: "2026-07-24T12:00:00.000Z",
+          sourceUrl: "https://airship.test/review",
+        },
+      }, {
+        id: "custom-api-key",
+        kind: "api-key",
+        label: "Custom key",
+        header: { name: "x-api-key", scheme: "raw" },
+        browserUse: "direct-contract-unpublished",
+        warning: "This custom endpoint is user-configured and uses a page-memory raw key.",
+      }],
+      oauth: {
+        state: "configured-public-pkce",
+        authMethodId: "custom-oauth",
+        detail: "The custom provider publishes reviewed page-safe OAuth metadata.",
+      },
+    });
+    const providers = new InferenceProviderCatalog([provider]);
+    const connections = new InferenceConnectionRegistry(providers, () => NOW);
+    connections.connectOAuth({
+      id: "custom-oauth-main",
+      providerId: provider.id,
+      authMethodId: "custom-oauth",
+      label: "Custom OAuth",
+      accessToken: "oauth-token-123",
+      expiresAt: new Date(NOW + 3_600_000).toISOString(),
+      scopes: ["models:read"],
+      connectedAt: new Date(NOW).toISOString(),
+    });
+    const requests: Headers[] = [];
+    const transport = new OpenAiCompatibleBrowserTransport(provider, {
+      connectionId: "custom-oauth-main",
+      connectionGeneration: 1,
+      connections,
+      fetch: async (_input, init) => {
+        requests.push(new Headers(init?.headers));
+        return jsonResponse({ data: [{ id: "custom-model" }] });
+      },
+    });
+
+    await transport.listModels();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.get("authorization")).toBe("Bearer oauth-token-123");
+    expect(requests[0]?.get("x-api-key")).toBeNull();
+  });
+
+  it("rejects getApiKey() when custom metadata has no unique API-key method", async () => {
+    const missingProvider = customOpenAiCompatibleProvider({
+      id: "custom-oauth-only",
+      authMethods: [{
+        id: "custom-oauth",
+        kind: "oauth-public-pkce",
+        label: "Custom account",
+        authorizationEndpoint: "https://auth.custom-oauth-only.example.test/authorize",
+        tokenEndpoint: "https://auth.custom-oauth-only.example.test/token",
+        clientId: "custom-client",
+        redirectUris: ["https://airship.test/callback"],
+        scopes: ["models:read"],
+        tokenEndpointAuthMethod: "none",
+        codeChallengeMethod: "S256",
+        browserUse: "reviewed-direct",
+        review: {
+          id: "fixture-review",
+          reviewedAt: "2026-07-24T12:00:00.000Z",
+          sourceUrl: "https://airship.test/review",
+        },
+      }],
+      oauth: {
+        state: "configured-public-pkce",
+        authMethodId: "custom-oauth",
+        detail: "This provider exposes only reviewed OAuth metadata.",
+      },
+    });
+    const ambiguousProvider = customOpenAiCompatibleProvider({
+      id: "custom-ambiguous-openai",
+      authMethods: [{
+        id: "custom-api-key-a",
+        kind: "api-key",
+        label: "Header A",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Custom provider header A.",
+      }, {
+        id: "custom-api-key-b",
+        kind: "api-key",
+        label: "Header B",
+        header: { name: "x-api-key", scheme: "raw" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Custom provider header B.",
+      }],
+    });
+
+    await expect(new OpenAiCompatibleBrowserTransport(missingProvider, {
+      connectionId: "custom-oauth-only-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sekret",
+      fetch: async () => jsonResponse({ data: [] }),
+    }).listModels()).rejects.toThrow(/exactly one registered API-key auth method/u);
+    await expect(new OpenAiCompatibleBrowserTransport(ambiguousProvider, {
+      connectionId: "custom-ambiguous-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sekret",
+      fetch: async () => jsonResponse({ data: [] }),
+    }).listModels()).rejects.toThrow(/exactly one registered API-key auth method/u);
+  });
+
+  it("rejects incompatible selected connection metadata instead of assuming bearer auth", async () => {
+    const registryProvider = customOpenAiCompatibleProvider({
+      id: "custom-metadata-openai",
+      authMethods: [{
+        id: "custom-oauth",
+        kind: "oauth-public-pkce",
+        label: "Custom account",
+        authorizationEndpoint: "https://auth.custom-metadata-openai.example.test/authorize",
+        tokenEndpoint: "https://auth.custom-metadata-openai.example.test/token",
+        clientId: "custom-client",
+        redirectUris: ["https://airship.test/callback"],
+        scopes: ["models:read"],
+        tokenEndpointAuthMethod: "none",
+        codeChallengeMethod: "S256",
+        browserUse: "reviewed-direct",
+        review: {
+          id: "fixture-review",
+          reviewedAt: "2026-07-24T12:00:00.000Z",
+          sourceUrl: "https://airship.test/review",
+        },
+      }],
+      oauth: {
+        state: "configured-public-pkce",
+        authMethodId: "custom-oauth",
+        detail: "This provider exposes reviewed OAuth metadata.",
+      },
+    });
+    const connections = new InferenceConnectionRegistry(
+      new InferenceProviderCatalog([registryProvider]),
+      () => NOW,
+    );
+    connections.connectOAuth({
+      id: "custom-metadata-main",
+      providerId: registryProvider.id,
+      authMethodId: "custom-oauth",
+      label: "Custom OAuth",
+      accessToken: "oauth-token-123",
+      expiresAt: new Date(NOW + 3_600_000).toISOString(),
+      scopes: ["models:read"],
+      connectedAt: new Date(NOW).toISOString(),
+    });
+    const transport = new OpenAiCompatibleBrowserTransport(
+      customOpenAiCompatibleProvider({
+        id: registryProvider.id,
+        authMethods: [{
+          id: "custom-api-key",
+          kind: "api-key",
+          label: "Custom key",
+          header: { name: "Authorization", scheme: "bearer" },
+          browserUse: "direct-contract-unpublished",
+          warning: "This provider was re-registered without the old OAuth metadata.",
+        }],
+      }),
+      {
+        connectionId: "custom-metadata-main",
+        connectionGeneration: 1,
+        connections,
+        fetch: async () => jsonResponse({ data: [] }),
+      },
+    );
+
+    await expect(transport.listModels()).rejects.toThrow(/unavailable authentication method/u);
+  });
+
   it("uses only xAI-declared modalities and leaves undeclared tools unknown", async () => {
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -83,9 +458,148 @@ describe("browser-direct cloud inference adapters", () => {
     expect(model?.capabilities["tool-calling"]).toBeUndefined();
   });
 
+  /*
+   * The seam used to `switch (provider.id)` over openai/anthropic/xai, so a
+   * descriptor that declared one of these wires and was accepted by
+   * `normalizeProvider` was then refused with "has no browser-cloud transport".
+   * A provider is now whatever its descriptor says it is.
+   */
+  it("serves any descriptor that declares a reviewed wire, reading its own endpoints", async () => {
+    const requested: string[] = [];
+    const responses = new ResponsesBrowserTransport({
+      version: 1,
+      id: "acme-responses",
+      label: "Acme Responses",
+      protocol: "openai-responses",
+      transportBoundary: "provider-tls",
+      baseUrl: "https://api.acme.test/v2/",
+      modelsUrl: "https://api.acme.test/v2/language-models",
+      oauth: { state: "not-documented", detail: "No public-PKCE registration." },
+      authMethods: [{
+        id: "acme-api-key",
+        kind: "api-key",
+        label: "Acme key",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Browser-direct key.",
+      }],
+      capabilities: ["invoke", "models:list"],
+      documentationUrl: "https://acme.test/docs",
+    }, {
+      connectionId: "acme-main",
+      connectionGeneration: 1,
+      getApiKey: () => "acme-memory-only",
+      now: () => NOW,
+      fetch: async (input) => {
+        requested.push(String(input));
+        return jsonResponse({ models: [{ id: "acme-large" }] });
+      },
+    });
+
+    expect(responses.id).toBe("acme-responses-responses-v1");
+    const [model] = await responses.listModels();
+    expect(model?.id).toBe("acme-large");
+    expect(model?.providerId).toBe("acme-responses");
+    expect(requested).toEqual(["https://api.acme.test/v2/language-models"]);
+
+    // The reviewed first-party providers keep the exact transport identities
+    // their sessions are pinned to.
+    expect(new ResponsesBrowserTransport(OPENAI_PROVIDER, {
+      connectionId: "openai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-memory-only",
+    }).id).toBe("openai-responses-v1");
+    expect(new ResponsesBrowserTransport(XAI_PROVIDER, {
+      connectionId: "xai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "xai-memory-only",
+    }).id).toBe("xai-responses-v1");
+    expect(new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "anthropic-memory-only",
+    }).id).toBe("anthropic-messages-v1");
+
+    // A turn goes to the descriptor's own inference host, not to whatever host
+    // its catalog happens to live on.
+    const posted: string[] = [];
+    const split = new ResponsesBrowserTransport({
+      version: 1,
+      id: "split-host",
+      label: "Split Host",
+      protocol: "openai-responses",
+      transportBoundary: "provider-tls",
+      baseUrl: "https://inference.acme.test/v3/",
+      modelsUrl: "https://catalog.acme.test/v9/models",
+      oauth: { state: "not-documented", detail: "No public-PKCE registration." },
+      authMethods: [{
+        id: "split-key",
+        kind: "api-key",
+        label: "Split key",
+        header: { name: "x-acme-key", scheme: "raw" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Browser-direct key.",
+      }],
+      capabilities: ["invoke", "models:list"],
+      documentationUrl: "https://acme.test/docs",
+    }, {
+      connectionId: "split-main",
+      connectionGeneration: 1,
+      getApiKey: () => "split-secret",
+      now: () => NOW,
+      fetch: async (input, init) => {
+        posted.push(String(input));
+        // The declared header carries the key; `authorization` is not assumed.
+        expect(objectHeadersOf(init)).toMatchObject({ "x-acme-key": "split-secret" });
+        expect(objectHeadersOf(init).authorization).toBeUndefined();
+        return sseResponse([event("response.completed", { type: "response.completed", response: {} })]);
+      },
+    });
+    await collect(split.stream(request(), new AbortController().signal));
+    expect(posted).toEqual(["https://inference.acme.test/v3/responses"]);
+
+    /*
+     * A transport ID is an identity. Folding unexpected characters to `-` let
+     * `openai:` mint `openai-responses-v1`, the identity a legacy session pin
+     * carrying only a transport ID would accept.
+     */
+    for (const hostile of ["openai:", "openai/", "OPENAI ", "-openai"]) {
+      expect(() => new ResponsesBrowserTransport({
+        version: 1,
+        id: hostile,
+        label: "Impostor",
+        protocol: "openai-responses",
+        transportBoundary: "provider-tls",
+        baseUrl: "https://collector.attacker.example/v1/",
+        oauth: { state: "not-documented", detail: "None." },
+        authMethods: [{
+          id: "impostor-key",
+          kind: "api-key",
+          label: "Impostor key",
+          header: { name: "Authorization", scheme: "bearer" },
+          browserUse: "direct-contract-unpublished",
+          warning: "Browser-direct key.",
+        }],
+        capabilities: ["invoke", "models:list"],
+        documentationUrl: "https://attacker.example",
+      }, {
+        connectionId: "impostor",
+        connectionGeneration: 1,
+        getApiKey: () => "impostor",
+      }), hostile).toThrow(/is not a transport identifier/u);
+    }
+
+    // A wire nobody reviewed is still refused.
+    expect(() => new ResponsesBrowserTransport(ANTHROPIC_PROVIDER, {
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "anthropic-memory-only",
+    })).toThrow(/does not use the openai-responses wire/u);
+  });
+
   it("streams OpenAI Responses text, usage, and bounded function calls", async () => {
     let requestBody: Record<string, unknown> | undefined;
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -131,7 +645,7 @@ describe("browser-direct cloud inference adapters", () => {
 
 
   it("streams OpenAI Responses reasoning as its own event beside the answer", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -154,7 +668,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("streams Anthropic thinking deltas once as progress and every time as reasoning", async () => {
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -177,7 +691,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("adapts Anthropic Messages streaming and direct-browser headers", async () => {
     const requests: Array<{ url: string; headers: Headers; body?: Record<string, unknown> }> = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -237,13 +751,13 @@ describe("browser-direct cloud inference adapters", () => {
         event("response.completed", { type: "response.completed", response: {} }),
       ]);
     };
-    const openai = new OpenAiBrowserTransport({
+    const openai = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
       fetch: capture,
     });
-    const xai = new XaiBrowserTransport({
+    const xai = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -264,7 +778,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("omits Anthropic tool_choice when the connection probe carries no tools", async () => {
     let body: Record<string, unknown> | undefined;
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -283,7 +797,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("prefers a declared per-model output ceiling over the connection default", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -314,7 +828,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("refuses an out-of-range declared output ceiling instead of falling back", async () => {
     const fetch = vi.fn<ProviderFetch>();
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -330,7 +844,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("accepts a declaration exactly at the shared catalog ceiling and refuses one above it", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -363,7 +877,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("adopts the output ceiling Anthropic states in a refusal and re-sends exactly once", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -385,7 +899,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("raises a 400 that names no ceiling instead of guessing a smaller one", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -407,7 +921,8 @@ describe("browser-direct cloud inference adapters", () => {
     expect(error).toMatchObject({ code: "http", status: 400 });
     // No retry, and the vendor's prose never reaches the caller.
     expect(bodies).toHaveLength(1);
-    expect((error as Error).message).toBe("Anthropic rejected the request with HTTP 400.");
+    expect((error as Error).message)
+      .toBe("Inference provider rejected the request with HTTP 400.");
   });
 
   it("adopts a ceiling only from a refusal that matches the whole published shape", async () => {
@@ -428,7 +943,7 @@ describe("browser-direct cloud inference adapters", () => {
 
     for (const message of nearMisses) {
       const bodies: Record<string, unknown>[] = [];
-      const transport = new AnthropicBrowserTransport({
+      const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
         connectionId: "anthropic-main",
         connectionGeneration: 1,
         getApiKey: () => "sk-ant-memory-only",
@@ -450,7 +965,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("stops after one corrected re-send when the stated ceiling is refused again", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -469,7 +984,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("does not re-send a refused operator declaration behind the operator's back", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -488,7 +1003,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("reports browser reachability honestly without asserting CORS as fact", async () => {
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -500,7 +1015,8 @@ describe("browser-direct cloud inference adapters", () => {
     const error = await transport.listModels().catch((caught) => caught);
     expect(error).toBeInstanceOf(ProviderTransportError);
     expect(error).toMatchObject({ code: "network-or-cors" });
-    expect((error as Error).message).toMatch(/may be network reachability, provider availability, or CORS/u);
+    expect((error as Error).message)
+      .toBe("Inference provider request failed before a response was accepted.");
   });
 
   /*
@@ -512,7 +1028,7 @@ describe("browser-direct cloud inference adapters", () => {
    * saying which provider broke.
    */
   it("names the provider when a bridged catalog body fails mid-read", async () => {
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -534,7 +1050,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("rejects oversized model directories before parsing provider data", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -556,7 +1072,7 @@ describe("browser-direct cloud inference adapters", () => {
       apiKey: "sk-registry-only",
     });
     let requestInit: RequestInit | undefined;
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       connections,
@@ -587,7 +1103,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("accepts a conventional terminal [DONE] marker only as stream framing", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -605,6 +1121,30 @@ describe("browser-direct cloud inference adapters", () => {
     ]);
   });
 });
+
+function customOpenAiCompatibleProvider(options: Readonly<{
+  id?: string;
+  label?: string;
+  authMethods: InferenceProviderDescriptor["authMethods"];
+  oauth?: InferenceProviderDescriptor["oauth"];
+}>): InferenceProviderDescriptor {
+  const id = options.id ?? "custom-openai";
+  return {
+    version: 1,
+    id,
+    label: options.label ?? "Custom OpenAI-compatible",
+    protocol: "openai-compatible",
+    transportBoundary: "provider-tls",
+    baseUrl: `https://${id}.example.test/v1`,
+    oauth: options.oauth ?? {
+      state: "not-documented",
+      detail: "This provider uses a direct OpenAI-compatible API route.",
+    },
+    authMethods: options.authMethods,
+    capabilities: ["invoke", "models:list"],
+    documentationUrl: `https://${id}.example.test/docs`,
+  };
+}
 
 function request(): InferenceRequest {
   return {
@@ -624,7 +1164,7 @@ function request(): InferenceRequest {
   };
 }
 
-/** Mirrors the fabric's mandatory activation probe, which declares no tools. */
+/** Mirrors the fabric's mandatory toolless request, which declares no tools. */
 function toollessRequest(): InferenceRequest {
   return { ...request(), tools: [] };
 }

@@ -4,7 +4,7 @@ import { canonicalContextSelection, verifyContextSelection } from "../core/conte
 import { HashEmbeddingProvider, tokenize } from "../indexing/hash-embeddings";
 import type { EmbeddedChunk } from "../indexing/contracts";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import { MemoryObjectStore } from "../storage/memory-object-store";
+import { MemoryObjectStore } from "../storage/memory-object-store.test-support";
 import type { ObjectStore } from "../storage/object-store";
 import { ContextFabricDriver } from "./context-driver";
 import type { ContextStreamEvent } from "./contracts";

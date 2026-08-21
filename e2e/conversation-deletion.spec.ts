@@ -63,7 +63,7 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
   await expect(page.getByText("encrypted Local Device Vault is active")).toBeVisible({ timeout: 30_000 });
   /* The turn footer this journey fences on retires at minimal, so the
      delete-fence waits are taken one rung up where the row exists. */
-  await setProfilePresentationDensity(page, "Balanced");
+  await setProfilePresentationDensity(page, "Instrumented");
   await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
   await page.getByRole("combobox", { name: "Message Airship" }).fill("delete this line");
   await page.getByRole("button", { name: "Send message" }).click();

@@ -18,9 +18,8 @@
   z-index: 90;
   right: max(1rem, env(safe-area-inset-right));
   bottom: calc(var(--approval-deferred-floor, 0px) + max(1rem, env(safe-area-inset-bottom)));
-  display: flex;
-  gap: var(--sp-3);
-  align-items: center;
+  display: grid;
+  gap: var(--sp-2);
   max-width: min(30rem, calc(100vw - 2rem));
   padding: var(--sp-3);
   border: 1px solid var(--v-caution);
@@ -29,9 +28,34 @@
   box-shadow: var(--shadow);
 }
 
-.approval-deferred span {
-  display: block;
-  min-width: 0;
+/* One row per waiting decision. The count above says how many there are, and
+   every one of them owns the name, the clock and the control that answers it —
+   a second request used to have none of the three until the first was
+   answered, while its own five minutes ran out. */
+.approval-deferred ul {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * The row wraps rather than squeezing either half.
+ *
+ * Measured at 390px with two decisions waiting: the control names its
+ * conversation, an unnamed conversation now carries its short id, and a
+ * non-shrinking button beside a shrinking line drove the tool/expiry text to
+ * one character per line and grew the bar over the whole screen. Both halves
+ * are allowed to take the width they need, and the button drops to its own line
+ * when it cannot sit beside them.
+ */
+.approval-deferred li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
+  justify-content: space-between;
 }
 
 .approval-deferred strong {
@@ -40,16 +64,35 @@
 
 .approval-deferred small {
   display: block;
-  margin-top: var(--sp-1);
+  flex: 1 1 10rem;
+  min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink-muted);
   font-size: var(--fs-micro);
 }
 
 .approval-deferred button {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-width: 100%;
   min-height: var(--density-control);
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
   cursor: pointer;
+}
+
+/*
+ * The last identity cell takes the whole row when there is no cell beside it.
+ *
+ * The write grid is two columns and it lost a row: "Size delta" is drawn only
+ * when the arguments carry both sides, because a delta from a value this panel
+ * never reads is not a fact. That leaves an odd number of cells and an empty
+ * bordered half-row under "New size". Kept here rather than in `routes.css`
+ * because it is a rule about a state only this pack can produce, and the entry
+ * stylesheet is a first-paint budget.
+ */
+.approval-write-facts > div:nth-child(odd):nth-last-child(-n + 2):not(.approval-diff) {
+  grid-column: 1 / -1;
 }
 
 /* The dialog's own footnote for the same change: a person who presses Escape

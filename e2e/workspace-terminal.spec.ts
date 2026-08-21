@@ -127,15 +127,14 @@ test("mobile terminal keeps process controls and horizontal tabs usable", async 
   await expect(newHereGlyph).toBeVisible();
   await expect(newHereGlyph).toHaveText("＋");
   expect((await newHereGlyph.boundingBox())?.width ?? 0).toBeGreaterThan(0);
-  // And the word is what the rule is allowed to take.
-  await expect(newHere.locator('span:not([aria-hidden="true"])')).toBeHidden();
-  // The same rule governs the whole bar. `useInnerText` is the point: rendered
-  // text is what a phone user has, and `textContent` would happily report the
-  // very word the rule just hid.
+  // Full Terminal has room for the label; only the height-locked Workspace
+  // dock sheds words when it must preserve the editor floor.
+  await expect(newHere.locator('span:not([aria-hidden="true"])')).toHaveText("New here");
+  // The same full-route rule keeps the Close label beside its glyph.
   const close = page.getByRole("button", { name: "Close terminal tab" });
   expect((await close.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   await expect(close).toContainText("×", { useInnerText: true });
-  await expect(close).not.toContainText("Close", { useInnerText: true });
+  await expect(close).toContainText("Close", { useInnerText: true });
   await expect(page.getByText(/Input history · \d+/)).toBeVisible();
   await expect(page.getByText(/Audit lineage · \d+/)).toBeVisible();
   await expect(page.locator(".terminal-panel")).toBeInViewport();
@@ -156,17 +155,24 @@ test("Workspace opens, resizes, collapses, and promotes one profile-scoped termi
   await page.getByRole("menuitem", { name: "Open terminal here" }).click();
 
   await expect(page).toHaveURL(/#workspace$/);
-  await expect(dock).toHaveAttribute("data-open", "true");
-  // The shell's own chrome leads with the path `pwd` prints, and names the
-  // workspace spelling beside it rather than printing a `/workspace` the
-  // WebContainer cannot resolve.
-  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
-  await expect(dock.locator(".terminal-panel__mirror")).toHaveText("= /workspace/docs");
-  await expect(dock.getByText("Profile General", { exact: true })).toBeVisible();
-  await expect(dock.getByText(/WebContainer · jsh · page-local, not Bash\/Linux/u)).toBeVisible();
+  if (testInfo.project.name === "mobile-chromium") {
+    // A phone cannot fit the dock and the editor's protected floor together.
+    // Keep the process alive and promote it through the explicit no-room row.
+    await expect(dock).toHaveAttribute("data-open", "false");
+    const noRoom = dock.locator('.workspace-terminal-dock__collapsed[data-reason="no-room"]');
+    await expect(noRoom).toContainText("No room for output — open full view");
+    await noRoom.getByRole("button", { name: /Terminal No room for output — open full view/u }).click();
+  } else {
+    await expect(dock).toHaveAttribute("data-open", "true");
+    // The shell's own chrome leads with the path `pwd` prints, and names the
+    // workspace spelling beside it rather than printing a `/workspace` the
+    // WebContainer cannot resolve.
+    await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
+    await expect(dock.locator(".terminal-panel__mirror")).toHaveText("= /workspace/docs");
+    await expect(dock.getByText("Profile General", { exact: true })).toBeVisible();
+    await expect(dock.getByText(/WebContainer · jsh · page-local, not Bash\/Linux/u)).toBeVisible();
 
-  const splitter = dock.getByRole("separator", { name: "Terminal dock height" });
-  if (testInfo.project.name === "desktop-chromium") {
+    const splitter = dock.getByRole("separator", { name: "Terminal dock height" });
     const beforeDrag = Number(await splitter.getAttribute("aria-valuenow"));
     const bounds = await splitter.boundingBox();
     if (!bounds) throw new Error("Terminal dock splitter has no pointer geometry.");
@@ -175,24 +181,24 @@ test("Workspace opens, resizes, collapses, and promotes one profile-scoped termi
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2 + 28);
     await page.mouse.up();
     await expect.poll(async () => Number(await splitter.getAttribute("aria-valuenow"))).toBeLessThan(beforeDrag);
+    const initialHeight = Number(await splitter.getAttribute("aria-valuenow"));
+    await splitter.focus();
+    await splitter.press("ArrowDown");
+    await expect(splitter).toHaveAttribute("aria-valuenow", String(Math.max(220, initialHeight - 24)));
+    await splitter.press("Home");
+    await expect(splitter).toHaveAttribute("aria-valuenow", "220");
+
+    const tabCount = await dock.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab").count();
+    await dock.getByRole("button", { name: "Collapse terminal dock" }).click();
+    await expect(dock).toHaveAttribute("data-open", "false");
+    await expect(dock.locator(".terminal-panel")).toHaveCount(0);
+    await dock.locator(".workspace-terminal-dock__collapsed button").first().click();
+    await expect(dock).toHaveAttribute("data-open", "true");
+    await expect(dock.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab")).toHaveCount(tabCount);
+    await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
+
+    await dock.getByRole("button", { name: "Open full Terminal view" }).click();
   }
-  const initialHeight = Number(await splitter.getAttribute("aria-valuenow"));
-  await splitter.focus();
-  await splitter.press("ArrowDown");
-  await expect(splitter).toHaveAttribute("aria-valuenow", String(Math.max(220, initialHeight - 24)));
-  await splitter.press("Home");
-  await expect(splitter).toHaveAttribute("aria-valuenow", "220");
-
-  const tabCount = await dock.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab").count();
-  await dock.getByRole("button", { name: "Collapse terminal dock" }).click();
-  await expect(dock).toHaveAttribute("data-open", "false");
-  await expect(dock.locator(".terminal-panel")).toHaveCount(0);
-  await dock.locator(".workspace-terminal-dock__collapsed button").first().click();
-  await expect(dock).toHaveAttribute("data-open", "true");
-  await expect(dock.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab")).toHaveCount(tabCount);
-  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
-
-  await dock.getByRole("button", { name: "Open full Terminal view" }).click();
   await expect(page).toHaveURL(/#terminal$/);
   await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
   await expect(page.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");

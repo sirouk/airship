@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionRecord } from "../core/journal";
-import { modelSwitchNeedsCompressionGate, planChutesModelSwitch } from "./model-switch-plan";
+import { modelSwitchNeedsCompressionGate, planModelSwitch } from "./model-switch-plan";
 
 function session(pin: { providerId: string; connectionId: string; model: string }, override?: string): SessionRecord {
   return {
@@ -26,7 +26,7 @@ function session(pin: { providerId: string; connectionId: string; model: string 
         providerLabel: pin.providerId,
         providerRevision: 1,
         authMethod: "api-key" as const,
-        transportBoundary: "e2ee-attestable" as const,
+        transportBoundary: "provider-tls" as const,
         modelId: pin.model,
         boundAt: "2026-08-06T00:00:00.000Z",
       }),
@@ -39,92 +39,49 @@ function session(pin: { providerId: string; connectionId: string; model: string 
   };
 }
 
-const chutesPin = { providerId: "chutes", connectionId: "conn-1", model: "model-a" };
+const pin = { providerId: "openai", connectionId: "conn-1", model: "model-a" };
 
-describe("planChutesModelSwitch", () => {
-  it("choosing the connection model with no override is a no-op", () => {
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
-      activeSession: session(chutesPin),
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
+describe("planModelSwitch", () => {
+  it("choosing the thread's current model with no override is a no-op", () => {
+    expect(planModelSwitch({
+      activeSession: session(pin),
       targetModelId: "model-a",
     })).toEqual({ kind: "noop" });
   });
 
-  it("choosing another model on a thread pinning this connection changes in place", () => {
-    const s = session(chutesPin);
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
+  it("choosing another model changes the visible thread in place — no fork arm exists", () => {
+    const s = session(pin);
+    expect(planModelSwitch({
       activeSession: s,
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
       targetModelId: "model-b",
     })).toEqual({ kind: "in-place", session: s });
   });
 
   it("re-selecting the active override is a no-op, even though it differs from the pin", () => {
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
-      activeSession: session(chutesPin, "model-b"),
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
+    expect(planModelSwitch({
+      activeSession: session(pin, "model-b"),
       targetModelId: "model-b",
     })).toEqual({ kind: "noop" });
   });
 
   it("choosing the pinned model while an override is active is a real change back", () => {
-    const s = session(chutesPin, "model-b");
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
+    const s = session(pin, "model-b");
+    expect(planModelSwitch({
       activeSession: s,
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
       targetModelId: "model-a",
     })).toEqual({ kind: "in-place", session: s });
   });
 
-  it("a thread pinned to a different connection still forks", () => {
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
-      activeSession: session({ ...chutesPin, connectionId: "conn-old" }),
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
-      targetModelId: "model-b",
-    })).toEqual({ kind: "fork" });
+  it("the plan is provider-neutral: any provider's thread earns the same in-place route", () => {
+    for (const providerId of ["chutes", "openai", "anthropic", "xai", "ollama", "lm-studio"]) {
+      const s = session({ providerId, connectionId: `conn-${providerId}`, model: "model-a" });
+      expect(planModelSwitch({ activeSession: s, targetModelId: "model-b" }))
+        .toEqual({ kind: "in-place", session: s });
+    }
   });
 
-  it("a reconnect request never takes the in-place route", () => {
-    expect(planChutesModelSwitch({
-      reconnectIntent: true,
-      activeSession: session(chutesPin),
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
-      targetModelId: "model-b",
-    })).toEqual({ kind: "fork" });
-  });
-
-  it("an external-provider thread never changes a Chutes connection in place", () => {
-    expect(planChutesModelSwitch({
-      reconnectIntent: false,
-      activeSession: session({ providerId: "openai", connectionId: "oa-1", model: "gpt-5" }),
-      connectionId: "conn-1",
-      connectionModel: "model-a",
-      activeConnection: true,
-      targetModelId: "model-b",
-    })).toEqual({ kind: "fork" });
-  });
-
-  it("with no visible thread, choosing the standby connection's model is a no-op and anything else forks", () => {
-    const base = { reconnectIntent: false, connectionId: "conn-1", connectionModel: "model-a", activeConnection: true } as const;
-    expect(planChutesModelSwitch({ ...base, targetModelId: "model-a" })).toEqual({ kind: "noop" });
-    expect(planChutesModelSwitch({ ...base, targetModelId: "model-b" })).toEqual({ kind: "fork" });
+  it("with no visible thread there is nothing to change", () => {
+    expect(planModelSwitch({ targetModelId: "model-b" })).toEqual({ kind: "noop" });
   });
 });
 

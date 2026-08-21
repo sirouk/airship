@@ -1,17 +1,20 @@
+import { isRecord } from "../core/records";
 import type { JsonValue, SessionManifest } from "../core/contracts";
 import { canonicalSessionContextPolicy } from "../core/context-policy";
+import { assertValidSessionInferenceBinding } from "../core/inference-binding";
 import {
   JournalConflictError,
-  projectedSessionApprovalMode,
-  projectedSessionContextPolicy,
-  projectedSessionModel,
+  projectedSessionPins,
   projectedSessionTitle,
   type DurableEvent,
+  type JournalAppendOptions,
   type JournalBackend,
+  type JournalHead,
   type SessionRecord,
   lastRecencyAdvancingEvent,
 } from "../core/journal";
 import { sha256, stableStringify } from "../core/hash";
+import { randomUuid } from "../core/id";
 import {
   WorkspaceRootKey,
   decodeEnvelope,
@@ -19,12 +22,19 @@ import {
   openEnvelope,
   sealEnvelope,
 } from "./encrypted-envelope";
-import { isReclaimableObjectStore, type ObjectRecord, type ObjectStore } from "./object-store";
+import {
+  isReclaimableObjectStore,
+  type ObjectReclamationReceipt,
+  type ObjectRecord,
+  type ObjectStore,
+} from "./object-store";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const ROOT_NAMESPACE = "airship/session-head/v1";
 const SEGMENT_NAMESPACE = "airship/session-events/v1";
+const HEAD_CONTENT_TYPE = "application/vnd.airship.session-head+json";
+const DELETION_CONTENT_TYPE = "application/vnd.airship.session-deletion+json";
 const MAX_SESSIONS = 10_000;
 const MAX_SEGMENTS_PER_SESSION = 100_000;
 const MAX_EVENTS_PER_SEGMENT = 4_096;
@@ -51,13 +61,47 @@ type SessionHead = {
   version: 1;
   session: SessionRecord;
   segments: SegmentReference[];
+  incarnationId: string;
+  /** Missing incarnation tokens remain compatible only before exact-ID reuse. */
+  incarnationFenceRequired: boolean;
 };
+
+type SessionDeletionMarker = {
+  version: 1;
+  sessionId: string;
+  headSequence: number;
+  headDigest: string;
+  headIncarnation: string;
+  /** Unique authority for one deleted incarnation of a reusable session ID. */
+  deletionId: string;
+  /** True only after every segment received a confirmed reclamation receipt. */
+  cleanupComplete: boolean;
+  segmentKeys: string[];
+};
+
+type OpenedHead =
+  | { status: "active"; head: SessionHead }
+  | { status: "deleted"; marker: SessionDeletionMarker };
+
+type LoadedHead = OpenedHead & { record: ObjectRecord };
 
 type EventSegment = {
   version: 1;
   sessionId: string;
   events: DurableEvent[];
 };
+
+/**
+ * The deletion tombstone committed, but one or more encrypted objects still
+ * need provider-confirmed reclamation. The tombstone remains addressable so a
+ * later idempotent delete can retry the cleanup.
+ */
+export class EncryptedJournalCleanupNeededError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "EncryptedJournalCleanupNeededError";
+  }
+}
 
 /**
  * Cloud-authoritative encrypted journal over a CAS-capable ObjectStore.
@@ -80,35 +124,81 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     if (session.headSequence !== 0 || session.headDigest !== "genesis") {
       throw new Error("A new encrypted session must start at the genesis head.");
     }
-    const cloudKey = await this.headCloudKey(session.id);
-    const bytes = await this.sealHead({ version: 1, session: structuredClone(session), segments: [] });
-    const result = await this.store.putIfAbsent(cloudKey, bytes);
-    if (!result.created) throw new Error(`Session already exists: ${session.id}`);
+    // Own caller data before opaque-key derivation yields. Direct backend users
+    // deserve the same snapshot boundary EventJournal provides.
+    const storedSession = structuredClone(session);
+    delete storedSession.headIncarnation;
+    const cloudKey = await this.headCloudKey(storedSession.id);
+    const initialHead: SessionHead = {
+      version: 1,
+      session: storedSession,
+      segments: [],
+      incarnationId: randomUuid(),
+      incarnationFenceRequired: false,
+    };
+    const bytes = await this.sealHead(initialHead);
+    const restoredBytes = await this.sealHead({
+      ...initialHead,
+      incarnationId: randomUuid(),
+      incarnationFenceRequired: true,
+    });
+    const initial = await this.store.putIfAbsent(cloudKey, bytes);
+    if (initial.created) return;
+
+    /*
+     * Migration and restore preserve exact durable IDs. A completed deletion
+     * therefore acts as a reusable, authenticated empty slot rather than making
+     * the ID unavailable forever. Pending cleanup is finished first so replacing
+     * its only retry record cannot strand old ciphertext. Both the retirement
+     * and this restoration are CAS operations on the marker ETag: a delayed
+     * cleanup from the prior incarnation can never act on the replacement head.
+     */
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const record = await this.store.get(cloudKey);
+      if (!record) {
+        // The ID was observed occupied earlier in this call. Even if a legacy
+        // cleanup removed its marker meanwhile, reinstalling is still reuse and
+        // must not regain first-incarnation compatibility with tokenless heads.
+        const retried = await this.store.putIfAbsent(cloudKey, restoredBytes);
+        if (retried.created) return;
+        continue;
+      }
+      const opened = await this.openHeadRecord(record, session.id);
+      if (opened.status === "active") throw new Error(`Session already exists: ${session.id}`);
+      if (!opened.marker.cleanupComplete) {
+        await this.finishDeletion(record, opened.marker);
+        continue;
+      }
+      const restored = await this.store.compareAndSwap(cloudKey, record.etag, restoredBytes);
+      if (restored.updated) return;
+    }
+    throw new JournalConflictError(`Session ${session.id} changed while its deleted ID was being restored.`);
   }
 
   async getSession(sessionId: string, signal?: AbortSignal): Promise<SessionRecord | undefined> {
     const loaded = await this.loadHead(sessionId, signal);
-    return loaded ? structuredClone(loaded.head.session) : undefined;
+    return loaded?.status === "active" ? publicSession(loaded.head) : undefined;
   }
 
   async listSessions(signal?: AbortSignal): Promise<SessionRecord[]> {
     const records = await this.store.list(`${this.prefix}/session-heads/`, signal);
     if (records.length > MAX_SESSIONS) throw new Error("Encrypted journal exceeds the client session limit.");
-    const sessions = await Promise.all(
+    const candidates = await Promise.all(
       records.map(async (summary) => {
         const record = await this.store.get(summary.key, signal);
-        if (!record) throw new Error("An encrypted session head disappeared during listing.");
-        const head = await this.openHeadRecord(record);
-        return structuredClone(head.session);
+        if (!record) return undefined; // A concurrent confirmed deletion won after list().
+        const opened = await this.openHeadRecord(record);
+        return opened.status === "active" ? publicSession(opened.head) : undefined;
       }),
     );
+    const sessions = candidates.filter((candidate): candidate is SessionRecord => candidate !== undefined);
     return sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async readEvents(sessionId: string, afterSequence = 0, signal?: AbortSignal): Promise<DurableEvent[]> {
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw new Error("Event cursor is invalid.");
     const loaded = await this.loadHead(sessionId, signal);
-    if (!loaded) return [];
+    if (!loaded || loaded.status === "deleted") return [];
     const relevant = loaded.head.segments.filter((segment) => segment.endSequence > afterSequence);
     const chunks: DurableEvent[][] = [];
     for (let offset = 0; offset < relevant.length; offset += 8) {
@@ -123,9 +213,10 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
 
   async append(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     events: DurableEvent[],
     signal?: AbortSignal,
+    options?: JournalAppendOptions,
   ): Promise<SessionRecord> {
     if (events.length === 0) {
       const session = await this.getSession(sessionId, signal);
@@ -134,9 +225,13 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     }
     if (events.length > MAX_EVENTS_PER_SEGMENT) throw new Error("Encrypted journal append exceeds the segment event limit.");
     const loaded = await this.loadHead(sessionId, signal);
-    if (!loaded) throw new Error(`Unknown session: ${sessionId}`);
+    if (!loaded || loaded.status === "deleted") throw new Error(`Unknown session: ${sessionId}`);
     const current = loaded.head.session;
-    if (current.headSequence !== expectedHead.sequence || current.headDigest !== expectedHead.digest) {
+    if (
+      current.headSequence !== expectedHead.sequence ||
+      current.headDigest !== expectedHead.digest ||
+      !matchesIncarnationFence(loaded.head, expectedHead)
+    ) {
       throw new JournalConflictError();
     }
     validateAppend(sessionId, expectedHead, events);
@@ -144,7 +239,10 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
 
     const first = events[0]!;
     const last = events.at(-1)!;
-    const segmentLogicalId = `session:${sessionId}:events:${first.sequence}-${last.sequence}:${last.digest}`;
+    // Each attempt owns its immutable object. Without an attempt nonce, two
+    // identical concurrent appends can share a segment key and the losing
+    // writer cannot reclaim "its" orphan without racing the winner's publish.
+    const segmentLogicalId = `session:${sessionId}:events:${first.sequence}-${last.sequence}:${last.digest}:${randomUuid()}`;
     const segmentCloudKey = `${this.prefix}/session-segments/${await this.key.opaqueObjectId(segmentLogicalId)}`;
     const segment: EventSegment = { version: 1, sessionId, events: structuredClone(events) };
     const sealedSegment = await sealEnvelope({
@@ -156,138 +254,251 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       plaintext: encodeJson(segment),
     });
     const segmentBytes = encodeEnvelope(sealedSegment);
-    signal?.throwIfAborted();
-    const created = await this.store.putIfAbsent(segmentCloudKey, segmentBytes, signal);
-    let segmentEtag: string;
-    if (!created.created) {
+    let published = false;
+    let putAttempted = false;
+    // Until putIfAbsent answers otherwise, a thrown response may still have
+    // stored this attempt-owned immutable object at the provider.
+    let mayOwnSegment = true;
+    try {
       signal?.throwIfAborted();
-      const existing = await this.store.get(segmentCloudKey, signal);
-      if (!existing) throw new Error("Encrypted event segment conflicted and then disappeared.");
-      segmentEtag = existing.etag;
-      const existingSegment = await this.openSegmentRecord(existing, segmentLogicalId);
-      await verifyEventDigests(existingSegment.events);
-      if (stableStringify(existingSegment as unknown as JsonValue) !== stableStringify(segment as unknown as JsonValue)) {
-        throw new Error("Encrypted event segment key collided with different content.");
+      putAttempted = true;
+      const created = await this.store.putIfAbsent(segmentCloudKey, segmentBytes, signal);
+      mayOwnSegment = created.created;
+      let segmentEtag: string;
+      if (!created.created) {
+        signal?.throwIfAborted();
+        const existing = await this.store.get(segmentCloudKey, signal);
+        if (!existing) throw new Error("Encrypted event segment conflicted and then disappeared.");
+        const existingSegment = await this.openSegmentRecord(existing, segmentLogicalId);
+        await verifyEventDigests(existingSegment.events);
+        if (stableStringify(existingSegment as unknown as JsonValue) !== stableStringify(segment as unknown as JsonValue)) {
+          throw new Error("Encrypted event segment key collided with different content.");
+        }
+        // Attempt IDs are single-owner. Never publish an object another append
+        // created, or its failed writer could safely classify it as an orphan
+        // just before this writer advances the head to reference it.
+        throw new Error("Encrypted event segment attempt ID already exists.");
+      } else {
+        segmentEtag = created.etag;
       }
-    } else {
-      segmentEtag = created.etag;
-    }
 
-    const updated: SessionRecord = {
-      ...current,
-      title: projectedSessionTitle(events, current.title),
-      // stableStringify cannot carry an explicit undefined key, so the
-      // override is never minted absent — the pinned manifest is what an
-      // absent override means.
-      ...(projectedSessionApprovalMode(events, current.approvalModeOverride) !== undefined
-        ? { approvalModeOverride: projectedSessionApprovalMode(events, current.approvalModeOverride) }
-        : {}),
-      ...(projectedSessionModel(events, current.modelOverride) !== undefined
-        ? { modelOverride: projectedSessionModel(events, current.modelOverride) }
-        : {}),
-      ...(projectedSessionContextPolicy(events, current.contextPolicyOverride) !== undefined
-        ? { contextPolicyOverride: projectedSessionContextPolicy(events, current.contextPolicyOverride) }
-        : {}),
-      /* Bookkeeping does not make a conversation recent; see
-         `SESSION_BOOKKEEPING_EVENT_TYPES`. This backend is the Vault lane and
-         was missed when the page-memory and IndexedDB lanes were fixed, so
-         clicking a thread still re-sorted the list for anyone on a Vault. */
-      updatedAt: lastRecencyAdvancingEvent(events)?.recordedAt ?? current.updatedAt,
-      headSequence: last.sequence,
-      headDigest: last.digest,
-    };
-    const reference: SegmentReference = {
-      cloudKey: segmentCloudKey,
-      logicalId: segmentLogicalId,
-      startSequence: first.sequence,
-      endSequence: last.sequence,
-      previousDigest: first.previousDigest,
-      headDigest: last.digest,
-      etag: segmentEtag,
-    };
-    const nextHead: SessionHead = {
-      version: 1,
-      session: updated,
-      segments: [...loaded.head.segments, reference],
-    };
-    if (nextHead.segments.length > MAX_SEGMENTS_PER_SESSION) {
-      throw new Error("Encrypted journal requires segment compaction before another append.");
+      const updated: SessionRecord = {
+        ...current,
+        title: projectedSessionTitle(events, current.title),
+        // A replay grants nothing; see `JournalAppendOptions`.
+        ...(options?.replay ? {} : projectedSessionPins(events, current)),
+        /* Bookkeeping does not make a conversation recent; see
+           `SESSION_BOOKKEEPING_EVENT_TYPES`. This backend is the Vault lane and
+           was missed when the page-memory and IndexedDB lanes were fixed, so
+           clicking a thread still re-sorted the list for anyone on a Vault. */
+        updatedAt: lastRecencyAdvancingEvent(events)?.recordedAt ?? current.updatedAt,
+        headSequence: last.sequence,
+        headDigest: last.digest,
+      };
+      const reference: SegmentReference = {
+        cloudKey: segmentCloudKey,
+        logicalId: segmentLogicalId,
+        startSequence: first.sequence,
+        endSequence: last.sequence,
+        previousDigest: first.previousDigest,
+        headDigest: last.digest,
+        etag: segmentEtag,
+      };
+      const nextHead: SessionHead = {
+        version: 1,
+        session: updated,
+        segments: [...loaded.head.segments, reference],
+        incarnationId: loaded.head.incarnationId,
+        incarnationFenceRequired: loaded.head.incarnationFenceRequired,
+      };
+      if (nextHead.segments.length > MAX_SEGMENTS_PER_SESSION) {
+        throw new Error("Encrypted journal requires segment compaction before another append.");
+      }
+      const rootBytes = await this.sealHead(nextHead);
+      /*
+       * This call is the append's linearization boundary. Cancellation remains
+       * live through every remote read and immutable-segment write above, then is
+       * sampled one final time before the atomic head CAS is admitted. Do not
+       * carry the signal into the CAS: a request aborted after the provider
+       * committed could otherwise reject as "cancelled" and make a safe retry
+       * append the same human choice twice.
+       */
+      signal?.throwIfAborted();
+      const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, rootBytes);
+      if (!swapped.updated) throw new JournalConflictError();
+      // No cleanup is admissible after the head has published the reference.
+      published = true;
+      return publicSession(nextHead);
+    } catch (error) {
+      /*
+       * A successful immutable put followed by a final abort, head-seal error,
+       * or failed CAS must not strand decryptable ciphertext. Reclamation stays
+       * best effort so it never hides the append's real result. The fresh-head
+       * check inside `reclaimUncommittedSegment` protects a CAS that committed
+       * before its provider response failed.
+       */
+      if (putAttempted && mayOwnSegment && !published) {
+        await this.reclaimUncommittedSegment(sessionId, segmentCloudKey, segmentBytes);
+      }
+      throw error;
     }
-    const rootBytes = await this.sealHead(nextHead);
-    /*
-     * This call is the append's linearization boundary. Cancellation remains
-     * live through every remote read and immutable-segment write above, then is
-     * sampled one final time before the atomic head CAS is admitted. Do not
-     * carry the signal into the CAS: a request aborted after the provider
-     * committed could otherwise reject as "cancelled" and make a safe retry
-     * append the same human choice twice.
-     */
-    signal?.throwIfAborted();
-    const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, rootBytes);
-    if (!swapped.updated) throw new JournalConflictError();
-    return structuredClone(updated);
   }
 
   /**
-   * Remove a conversation from the encrypted Vault, head first.
+   * Remove a conversation through an authenticated CAS tombstone.
    *
-   * `ObjectStore` is deliberately delete-free so a lost conditional write can
-   * never destroy data, and `ReclaimableObjectStore.trash` is the sanctioned
-   * exception for "objects a caller can prove are unreachable". A session's
-   * head is the only thing that makes its segments reachable — `listSessions`
-   * enumerates `session-heads/`, and `readEvents` can only find a segment
-   * through the head's reference list — so removing the head first is what
-   * turns the segments into exactly that provable case, and it is the order
-   * `object-store.ts` documents for the same reason: a crash between the two
-   * leaks an untracked body a later sweep recovers, while the reverse leaves an
-   * index entry whose `get()` hard-fails.
+   * A plain read-then-trash is not a conditional delete: another tab can CAS a
+   * newer head after the read and the stale trash then destroys that committed
+   * append. The tombstone CAS is the deletion's linearization point. If append
+   * won, it conflicts. If deletion won, every writer holding the old ETag
+   * conflicts and new readers treat the marker as absent.
    *
-   * A store with no `trash` cannot do this, and says so rather than reporting a
-   * deletion it did not perform. Silently leaving encrypted bodies behind while
-   * telling someone their conversation is gone is the worst available outcome
-   * for the one feature whose entire point is that it really went away.
+   * The marker keeps the segment keys so a retry can finish cleanup if the page
+   * closes after the CAS. After the segment sweep it is CAS-retired to a compact
+   * authenticated empty-slot authority. The reusable head key is never passed
+   * to unconditional provider `trash`, because a delayed call could otherwise
+   * remove a restored session with the same ID. A store with no reclamation
+   * capability is refused before the marker is written.
    */
   async deleteSession(
     sessionId: string,
-    expectedHead: { sequence: number; digest: string },
+    expectedHead: JournalHead,
     signal?: AbortSignal,
   ): Promise<void> {
     const loaded = await this.loadHead(sessionId, signal);
     if (!loaded) return;
-    const { session, segments } = loaded.head;
-    if (session.headSequence !== expectedHead.sequence || session.headDigest !== expectedHead.digest) {
-      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
-    }
     if (!isReclaimableObjectStore(this.store)) {
       throw new Error("This Vault cannot delete objects, so the conversation was not removed.");
     }
-    const headReceipt = await this.store.trash([loaded.record.key], signal);
-    if (!headReceipt.reclaimed.includes(loaded.record.key)) {
-      throw new Error("The Vault refused to remove the conversation; nothing was deleted.");
+    if (loaded.status === "deleted") {
+      await this.finishDeletion(loaded.record, loaded.marker);
+      return;
     }
-    // The head is gone, so the segments are unreachable whatever happens next.
-    // A refusal here leaks ciphertext nobody holds a reference to rather than
-    // stranding a readable conversation, which is why this does not throw — and
-    // a provider that throws instead of refusing (a key-count ceiling, an
-    // exhausted CAS budget, a cancelled request) must not be able to report the
-    // already-committed deletion as a failure the caller could retry either.
-    const segmentKeys = segments.map((segment) => segment.cloudKey);
-    for (let offset = 0; offset < segmentKeys.length; offset += MAX_SEGMENT_TRASH_BATCH) {
+
+    const { session, segments } = loaded.head;
+    if (
+      session.headSequence !== expectedHead.sequence ||
+      session.headDigest !== expectedHead.digest ||
+      !matchesIncarnationFence(loaded.head, expectedHead)
+    ) {
+      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
+    }
+    const marker: SessionDeletionMarker = {
+      version: 1,
+      sessionId,
+      headSequence: session.headSequence,
+      headDigest: session.headDigest,
+      headIncarnation: loaded.head.incarnationId,
+      deletionId: randomUuid(),
+      cleanupComplete: false,
+      segmentKeys: segments.map((segment) => segment.cloudKey),
+    };
+    const markerBytes = await this.sealDeletionMarker(marker);
+    signal?.throwIfAborted();
+    // Do not pass the signal across the CAS. A late abort must not turn a
+    // committed deletion into an ambiguous failure that a caller repeats.
+    const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, markerBytes);
+    if (!swapped.updated) {
+      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
+    }
+    await this.finishDeletion({ ...loaded.record, etag: swapped.etag, bytes: markerBytes }, marker);
+  }
+
+  private async finishDeletion(record: ObjectRecord, marker: SessionDeletionMarker): Promise<void> {
+    if (marker.cleanupComplete) return;
+    if (!isReclaimableObjectStore(this.store)) {
+      throw new EncryptedJournalCleanupNeededError(
+        "The conversation deletion committed, but this Vault cannot finish its cleanup.",
+      );
+    }
+
+    /*
+     * Keep the authenticated marker addressable until every ciphertext body has
+     * a provider-confirmed reclamation receipt. A thrown or partial batch can
+     * have removed an arbitrary prefix, so a retry deliberately submits the
+     * whole authenticated key list again; reclamation is idempotent.
+     */
+    for (let offset = 0; offset < marker.segmentKeys.length; offset += MAX_SEGMENT_TRASH_BATCH) {
+      const batch = marker.segmentKeys.slice(offset, offset + MAX_SEGMENT_TRASH_BATCH);
+      let receipt: ObjectReclamationReceipt;
       try {
-        await this.store.trash(segmentKeys.slice(offset, offset + MAX_SEGMENT_TRASH_BATCH), signal);
-      } catch {
-        // Whatever stopped this batch will stop the rest. What is left behind is
-        // an untracked body, which is the one leak a later sweep can recover.
-        break;
+        receipt = await this.store.trash(batch);
+      } catch (error) {
+        throw new EncryptedJournalCleanupNeededError(
+          "The conversation deletion committed, but encrypted segment cleanup is incomplete; retry deletion to finish cleanup.",
+          { cause: error },
+        );
       }
+      if (!hasConfirmedReclamation(receipt, batch)) {
+        throw new EncryptedJournalCleanupNeededError(
+          "The conversation deletion committed, but the Vault retained encrypted segments; retry deletion to finish cleanup.",
+        );
+      }
+    }
+
+    /*
+     * Retire the retry record last, but never issue an unconditional trash for
+     * the reusable head key. The compact completed marker is durable authority
+     * for the empty slot. Its CAS is bound to this deletion's marker ETag and
+     * deletionId. If an exact-ID restore (or a later incarnation) already won,
+     * the stale cleanup simply loses this CAS and cannot damage the new head.
+     */
+    const completed: SessionDeletionMarker = {
+      ...marker,
+      cleanupComplete: true,
+      segmentKeys: [],
+    };
+    const completedBytes = await this.sealDeletionMarker(completed);
+    let retired = false;
+    try {
+      retired = (await this.store.compareAndSwap(record.key, record.etag, completedBytes)).updated;
+    } catch (error) {
+      throw new EncryptedJournalCleanupNeededError(
+        "The conversation ciphertext was reclaimed, but its deletion marker still needs cleanup; retry deletion.",
+        { cause: error },
+      );
+    }
+    if (retired) return;
+
+    // A concurrent retry can retire the same marker, and an exact-ID restore can
+    // replace it immediately afterwards. Authenticate whatever won before
+    // classifying this stale retirement attempt as harmless.
+    const current = await this.store.get(record.key);
+    if (!current) return;
+    const opened = await this.openHeadRecord(current, marker.sessionId);
+    if (opened.status === "active") return;
+    if (opened.marker.deletionId === marker.deletionId && opened.marker.cleanupComplete) return;
+    // A different marker belongs to a later incarnation. Its own delete owns
+    // its segment list; this stale cleanup has no authority over it.
+  }
+
+  private async reclaimUncommittedSegment(
+    sessionId: string,
+    segmentKey: string,
+    expectedBytes: Uint8Array,
+  ): Promise<void> {
+    if (!isReclaimableObjectStore(this.store)) return;
+    try {
+      const current = await this.loadHead(sessionId);
+      if (current?.status === "active" && current.head.segments.some((segment) => segment.cloudKey === segmentKey)) {
+        return;
+      }
+      // A put response can fail after the provider stored the bytes. Verify the
+      // attempt-owned ciphertext before issuing the otherwise-unconditional
+      // reclamation verb, so even an impossible opaque-key collision is safe.
+      const candidate = await this.store.get(segmentKey);
+      if (!candidate || !equalBytes(candidate.bytes, expectedBytes)) return;
+      await this.store.trash([segmentKey]);
+    } catch {
+      // A provider sweep handles the same safe orphan class if immediate
+      // best-effort reclamation is unavailable.
     }
   }
 
-  private async loadHead(sessionId: string, signal?: AbortSignal): Promise<{ record: ObjectRecord; head: SessionHead } | undefined> {
+  private async loadHead(sessionId: string, signal?: AbortSignal): Promise<LoadedHead | undefined> {
     const record = await this.store.get(await this.headCloudKey(sessionId), signal);
     if (!record) return undefined;
-    const head = await this.openHeadRecord(record, sessionId);
-    return { record, head };
+    return { record, ...(await this.openHeadRecord(record, sessionId)) };
   }
 
   private async headCloudKey(sessionId: string): Promise<string> {
@@ -300,15 +511,30 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       key: this.key,
       namespace: ROOT_NAMESPACE,
       logicalId: headLogicalId(head.session.id),
-      revision: `${head.session.headSequence}:${head.session.headDigest}`,
-      contentType: "application/vnd.airship.session-head+json",
+      revision: `${head.session.headSequence}:${head.session.headDigest}:${head.incarnationId}`,
+      contentType: HEAD_CONTENT_TYPE,
       plaintext: encodeJson(head),
     });
     return encodeEnvelope(envelope);
   }
 
-  private async openHeadRecord(record: ObjectRecord, expectedSessionId?: string): Promise<SessionHead> {
+  private async sealDeletionMarker(marker: SessionDeletionMarker): Promise<Uint8Array> {
+    const envelope = await sealEnvelope({
+      key: this.key,
+      namespace: ROOT_NAMESPACE,
+      logicalId: headLogicalId(marker.sessionId),
+      revision: deletionMarkerRevision(marker),
+      contentType: DELETION_CONTENT_TYPE,
+      plaintext: encodeJson(marker),
+    });
+    return encodeEnvelope(envelope);
+  }
+
+  private async openHeadRecord(record: ObjectRecord, expectedSessionId?: string): Promise<OpenedHead> {
     const envelope = decodeEnvelope(record.bytes);
+    if (envelope.aad.contentType !== HEAD_CONTENT_TYPE && envelope.aad.contentType !== DELETION_CONTENT_TYPE) {
+      throw new Error("Encrypted session head content type is invalid.");
+    }
     const plaintext = await openEnvelope({
       key: this.key,
       envelope,
@@ -316,16 +542,29 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       expectedLogicalId: expectedSessionId ? headLogicalId(expectedSessionId) : undefined,
       maxPlaintextBytes: 32 * 1024 * 1024,
     });
-    const head = parseHead(plaintext);
-    if (expectedSessionId && head.session.id !== expectedSessionId) throw new Error("Encrypted session head ID does not match its key.");
-    if (record.key !== (await this.headCloudKey(head.session.id))) throw new Error("Encrypted session head is stored under the wrong opaque key.");
-    if (
-      envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}` ||
-      envelope.aad.contentType !== "application/vnd.airship.session-head+json"
-    ) {
-      throw new Error("Encrypted session head metadata does not match its contents.");
+    if (envelope.aad.contentType === HEAD_CONTENT_TYPE) {
+      const head = parseHead(plaintext);
+      if (expectedSessionId && head.session.id !== expectedSessionId) throw new Error("Encrypted session head ID does not match its key.");
+      if (record.key !== (await this.headCloudKey(head.session.id))) throw new Error("Encrypted session head is stored under the wrong opaque key.");
+      if (
+        envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}:${head.incarnationId}` &&
+        envelope.revision !== `${head.session.headSequence}:${head.session.headDigest}`
+      ) {
+        throw new Error("Encrypted session head metadata does not match its contents.");
+      }
+      return { status: "active", head };
     }
-    return head;
+
+    const marker = parseDeletionMarker(plaintext, this.prefix);
+    if (expectedSessionId && marker.sessionId !== expectedSessionId) throw new Error("Encrypted session deletion ID does not match its key.");
+    if (record.key !== (await this.headCloudKey(marker.sessionId))) throw new Error("Encrypted session deletion is stored under the wrong opaque key.");
+    if (
+      envelope.revision !== deletionMarkerRevision(marker) &&
+      envelope.revision !== `deleted:${marker.headSequence}:${marker.headDigest}`
+    ) {
+      throw new Error("Encrypted session deletion metadata does not match its contents.");
+    }
+    return { status: "deleted", marker };
   }
 
   private async loadSegment(sessionId: string, reference: SegmentReference, signal?: AbortSignal): Promise<DurableEvent[]> {
@@ -432,7 +671,55 @@ function parseHead(bytes: Uint8Array): SessionHead {
   if (value.session.headSequence !== sequence || value.session.headDigest !== digest) {
     throw new Error("Encrypted session head does not match its segment chain.");
   }
-  return { version: 1, session: structuredClone(value.session), segments };
+  const incarnationId = value.incarnationId === undefined
+    ? "legacy"
+    : requiredString(value.incarnationId, "session head incarnation ID");
+  const incarnationFenceRequired = value.incarnationFenceRequired === undefined
+    ? false
+    : value.incarnationFenceRequired;
+  if (typeof incarnationFenceRequired !== "boolean") {
+    throw new Error("Encrypted session head incarnation fence is invalid.");
+  }
+  const session = structuredClone(value.session);
+  delete session.headIncarnation;
+  return { version: 1, session, segments, incarnationId, incarnationFenceRequired };
+}
+
+function parseDeletionMarker(bytes: Uint8Array, prefix: string): SessionDeletionMarker {
+  const value = parseJson(bytes, "encrypted session deletion");
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.segmentKeys)) {
+    throw new Error("Encrypted session deletion marker is invalid.");
+  }
+  if (value.segmentKeys.length > MAX_SEGMENTS_PER_SESSION) {
+    throw new Error("Encrypted session deletion marker has too many segments.");
+  }
+  const expectedPrefix = `${prefix}/session-segments/`;
+  const segmentKeys = value.segmentKeys.map((key) => requiredString(key, "deleted segment key"));
+  if (segmentKeys.some((key) => !key.startsWith(expectedPrefix)) || new Set(segmentKeys).size !== segmentKeys.length) {
+    throw new Error("Encrypted session deletion marker contains an invalid segment key.");
+  }
+  const headSequence = requiredInteger(value.headSequence, "deleted session head sequence", true);
+  const headDigest = requiredString(value.headDigest, "deleted session head digest");
+  const headIncarnation = value.headIncarnation === undefined
+    ? "legacy"
+    : requiredString(value.headIncarnation, "deleted session head incarnation ID");
+  const deletionId = value.deletionId === undefined
+    ? `legacy:${headSequence}:${headDigest}`
+    : requiredString(value.deletionId, "session deletion incarnation ID");
+  const cleanupComplete = value.cleanupComplete === undefined ? false : value.cleanupComplete;
+  if (typeof cleanupComplete !== "boolean" || (cleanupComplete && segmentKeys.length !== 0)) {
+    throw new Error("Encrypted session deletion cleanup state is invalid.");
+  }
+  return {
+    version: 1,
+    sessionId: requiredString(value.sessionId, "deleted session ID"),
+    headSequence,
+    headDigest,
+    headIncarnation,
+    deletionId,
+    cleanupComplete,
+    segmentKeys,
+  };
 }
 
 function parseSegment(bytes: Uint8Array): EventSegment {
@@ -484,7 +771,7 @@ function validateManifest(value: Record<string, unknown>): asserts value is Sess
     "web-baseline",
     "web-enhanced",
     "native",
-    "remote-confidential",
+    "remote-heavy",
   ].includes(String(value.capabilityTier))) throw new Error("Encrypted session capability tier is invalid.");
   if (value.contextPolicy !== undefined && !canonicalSessionContextPolicy(value.contextPolicy)) {
     throw new Error("Encrypted session context policy is invalid.");
@@ -501,13 +788,25 @@ function validateManifest(value: Record<string, unknown>): asserts value is Sess
     requiredString(binding.transportBoundary, "manifest inference transport boundary");
     const modelId = requiredString(binding.modelId, "manifest inference model ID");
     requiredString(binding.boundAt, "manifest inference binding time");
+    if (binding.version === 2) {
+      requiredString(binding.transportId, "manifest inference transport ID");
+    }
     if (
-      binding.version !== 1 ||
+      (binding.version !== 1 && binding.version !== 2) ||
+      (binding.version === 2 && (
+        !["openai-responses", "openai-chat-completions", "anthropic-messages", "openai-compatible"]
+          .includes(String(binding.protocol)) ||
+        binding.providerId !== value.providerId
+      )) ||
       modelId !== value.model ||
       !["oauth-pkce", "api-key", "local-none"].includes(String(binding.authMethod)) ||
-      !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(binding.transportBoundary)) ||
+      !(binding.version === 1
+        ? ["e2ee-attestable", "provider-tls", "loopback-local"]
+        : ["provider-tls", "loopback-local"]
+      ).includes(String(binding.transportBoundary)) ||
       !Number.isFinite(Date.parse(String(binding.boundAt)))
     ) throw new Error("Encrypted session inference binding is invalid.");
+    assertValidSessionInferenceBinding(value as Pick<SessionManifest, "providerId" | "model" | "inferenceBinding">);
   }
 }
 
@@ -518,6 +817,49 @@ function validateEvent(value: unknown): asserts value is DurableEvent {
   }
   requiredInteger(value.sequence, "event sequence");
   if (!("payload" in value)) throw new Error("Encrypted journal event payload is missing.");
+}
+
+function hasConfirmedReclamation(
+  receipt: ObjectReclamationReceipt,
+  expectedKeys: readonly string[],
+): boolean {
+  if (
+    receipt.requested !== expectedKeys.length ||
+    receipt.reclaimed.length !== expectedKeys.length ||
+    receipt.retained.length !== 0 ||
+    receipt.outcomes.length !== expectedKeys.length
+  ) return false;
+  const reclaimed = new Set(receipt.reclaimed);
+  const outcomes = new Map(receipt.outcomes.map((outcome) => [outcome.key, outcome] as const));
+  return (
+    reclaimed.size === expectedKeys.length &&
+    outcomes.size === expectedKeys.length &&
+    expectedKeys.every((key) => reclaimed.has(key) && outcomes.get(key)?.reclaimed === true)
+  );
+}
+
+function publicSession(head: SessionHead): SessionRecord {
+  return {
+    ...structuredClone(head.session),
+    headIncarnation: head.incarnationId,
+  };
+}
+
+function matchesIncarnationFence(head: SessionHead, expected: JournalHead): boolean {
+  if (expected.incarnation !== undefined) return expected.incarnation === head.incarnationId;
+  return !head.incarnationFenceRequired;
+}
+
+function deletionMarkerRevision(marker: SessionDeletionMarker): string {
+  return `deleted:${marker.headSequence}:${marker.headDigest}:${marker.headIncarnation}:${marker.deletionId}:${marker.cleanupComplete ? "complete" : "pending"}`;
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function encodeJson(value: unknown): Uint8Array {
@@ -552,6 +894,3 @@ function requiredInteger(value: unknown, label: string, allowZero = false): numb
   return Number(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

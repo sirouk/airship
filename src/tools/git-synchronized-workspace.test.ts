@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BrowserGitClient } from "../git/client";
-import { MemoryGitAdapter } from "../git/memory-adapter";
+import { MemoryGitAdapter } from "../git/memory-adapter.test-support";
 import { MemoryWorkspace } from "../workspace/memory";
 import { GitSynchronizedWorkspace } from "./git-synchronized-workspace";
 

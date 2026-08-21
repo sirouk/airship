@@ -1,60 +1,53 @@
 /**
- * Engine-status derivation tests: the read-side must answer with the gate's
- * own rule (`src/load-agent-runtime.ts` `sessionRuntimeKind`), so these cases
- * pin both the evidence classes and the exact sentences the session view
- * renders.
+ * Engine-status derivation tests. The read side uses the gate's own
+ * `sessionRuntimeKind` rule, then reports the journal record class and the
+ * exact sentence rendered by the session view.
  */
 
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_RUNTIME_SEAL_EVENT_TYPE,
+  AGENT_RUNTIME_SELECTION_EVENT_TYPE,
   formatAgentRuntimeStatusLine,
   getAgentRuntimeStatus,
 } from "./agent-runtimes";
 
-const PINNED_AIRSHIP_LINE = "engine: airship-core (pinned by journal evidence — fork the session to switch)";
-const PINNED_PRIME_LINE = "engine: prime (pinned by journal evidence — fork the session to switch)";
-/*
- * The unpinned line names the engine the gate actually runs, not a
- * preference: `src/load-agent-runtime.ts` routes every unpinned journal with
- * a transport attached to airship-core, and `transport` is required of every
- * caller. The tag beside a title must not promise an engine no fresh session
- * reaches.
- */
+const RECORDED_AIRSHIP_LINE = "engine: airship-core (recorded selection — fork the session to switch)";
+const RECORDED_PRIME_LINE = "engine: prime (recorded selection — fork the session to switch)";
 const DEFAULT_LINE = "engine: prime (default)";
+const HISTORICAL_SELECTION_EVENT_TYPE = "prime.session.runtime.seal";
 
 describe("getAgentRuntimeStatus", () => {
-  it("leaves an empty journal unpinned, running the gate's unpinned default, with no fork question to answer", () => {
+  it("leaves an empty journal unpinned at the gate's default", () => {
     const status = getAgentRuntimeStatus({ sessionId: "s-empty", events: [] });
     expect(status.pinnedEngine).toBeNull();
     expect(status.defaultEngine).toBe("prime");
-    expect(status.evidenceType).toBe("empty");
+    expect(status.recordType).toBe("empty");
     expect(status.canForkSwitch).toBe(false);
     expect(status.forkRemedy).toBeUndefined();
     expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_LINE);
   });
 
-  it("reads a journal holding only bootstrapping records as the same unclaimed land", () => {
+  it("reads bootstrapping records as the same unclaimed history", () => {
     const status = getAgentRuntimeStatus({
       sessionId: "s-created",
       events: [{ type: "session.created" }, { type: "session.renamed" }],
     });
     expect(status.pinnedEngine).toBeNull();
-    expect(status.evidenceType).toBe("empty");
+    expect(status.recordType).toBe("empty");
     expect(status.canForkSwitch).toBe(false);
     expect(formatAgentRuntimeStatusLine(status)).toBe(DEFAULT_LINE);
   });
 
-  it("pins prime on any prime.* record, before the first turn's seal exists", () => {
+  it("pins Prime on any other prime.* record", () => {
     const status = getAgentRuntimeStatus({
       sessionId: "s-prime",
       events: [{ type: "session.created" }, { type: "prime.notice" }],
     });
     expect(status.pinnedEngine).toBe("prime");
-    expect(status.evidenceType).toBe("prime-events");
+    expect(status.recordType).toBe("prime-records");
     expect(status.canForkSwitch).toBe(true);
     expect(status.forkRemedy).toBe("fork the session to use the airship-core engine.");
-    expect(formatAgentRuntimeStatusLine(status)).toBe(PINNED_PRIME_LINE);
+    expect(formatAgentRuntimeStatusLine(status)).toBe(RECORDED_PRIME_LINE);
   });
 
   it("pins airship-core on turn-protocol records and names the fork remedy", () => {
@@ -63,10 +56,10 @@ describe("getAgentRuntimeStatus", () => {
       events: [{ type: "session.created" }, { type: "turn.requested" }, { type: "turn.completed" }],
     });
     expect(status.pinnedEngine).toBe("airship-core");
-    expect(status.evidenceType).toBe("airship-history");
+    expect(status.recordType).toBe("airship-history");
     expect(status.canForkSwitch).toBe(true);
     expect(status.forkRemedy).toBe("fork the session to use the prime engine.");
-    expect(formatAgentRuntimeStatusLine(status)).toBe(PINNED_AIRSHIP_LINE);
+    expect(formatAgentRuntimeStatusLine(status)).toBe(RECORDED_AIRSHIP_LINE);
   });
 
   it("pins airship-core on inference.* records the way the gate does", () => {
@@ -75,43 +68,52 @@ describe("getAgentRuntimeStatus", () => {
       events: [{ type: "inference.usage" }],
     });
     expect(status.pinnedEngine).toBe("airship-core");
-    expect(status.evidenceType).toBe("airship-history");
+    expect(status.recordType).toBe("airship-history");
   });
 
-  it("pins prime with seal evidence when the first prime turn landed the seal", () => {
+  it("distinguishes the current runtime-selection marker", () => {
     const status = getAgentRuntimeStatus({
-      sessionId: "s-sealed",
-      events: [{ type: "session.created" }, { type: AGENT_RUNTIME_SEAL_EVENT_TYPE }],
+      sessionId: "s-selected",
+      events: [{ type: "session.created" }, { type: AGENT_RUNTIME_SELECTION_EVENT_TYPE }],
     });
     expect(status.pinnedEngine).toBe("prime");
-    expect(status.evidenceType).toBe("seal");
+    expect(status.recordType).toBe("selection-marker");
     expect(status.canForkSwitch).toBe(true);
-    expect(formatAgentRuntimeStatusLine(status)).toBe(PINNED_PRIME_LINE);
+    expect(formatAgentRuntimeStatusLine(status)).toBe(RECORDED_PRIME_LINE);
   });
 
-  it("names the seal the pin's evidence even beside later prime records", () => {
+  it("retains bounded read compatibility for the historical marker", () => {
     const status = getAgentRuntimeStatus({
-      sessionId: "s-sealed-noticed",
+      sessionId: "s-historical",
+      events: [{ type: "session.created" }, { type: HISTORICAL_SELECTION_EVENT_TYPE }],
+    });
+    expect(status.pinnedEngine).toBe("prime");
+    expect(status.recordType).toBe("legacy-selection-marker");
+    expect(formatAgentRuntimeStatusLine(status)).toBe(RECORDED_PRIME_LINE);
+  });
+
+  it("prefers the current marker when a migrated journal contains both names", () => {
+    const status = getAgentRuntimeStatus({
+      sessionId: "s-both",
       events: [
-        { type: AGENT_RUNTIME_SEAL_EVENT_TYPE },
-        { type: "prime.kernel.job.started" },
+        { type: HISTORICAL_SELECTION_EVENT_TYPE },
+        { type: AGENT_RUNTIME_SELECTION_EVENT_TYPE },
       ],
     });
-    expect(status.evidenceType).toBe("seal");
+    expect(status.recordType).toBe("selection-marker");
   });
 
-  it("reads prime first when a journal somehow carries both engines' evidence", () => {
-    // The gate's own ordering — any `prime.*` record outranks airship
-    // turn-protocol history — and the status reports it rather than restating it.
+  it("reads Prime first when a journal carries both engines' records", () => {
     const status = getAgentRuntimeStatus({
       sessionId: "s-mixed",
-      events: [{ type: "turn.requested" }, { type: AGENT_RUNTIME_SEAL_EVENT_TYPE }],
+      events: [{ type: "turn.requested" }, { type: AGENT_RUNTIME_SELECTION_EVENT_TYPE }],
     });
     expect(status.pinnedEngine).toBe("prime");
-    expect(status.evidenceType).toBe("seal");
+    expect(status.recordType).toBe("selection-marker");
   });
 
-  it("pins the seal literal the writer emits, so read and write cannot drift silently", () => {
-    expect(AGENT_RUNTIME_SEAL_EVENT_TYPE).toBe("prime.session.runtime.seal");
+  it("exports only the current runtime-selection marker", () => {
+    expect(AGENT_RUNTIME_SELECTION_EVENT_TYPE).toBe("prime.session.runtime.selected");
+    expect(AGENT_RUNTIME_SELECTION_EVENT_TYPE).not.toBe(HISTORICAL_SELECTION_EVENT_TYPE);
   });
 });

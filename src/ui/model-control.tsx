@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import type { ActiveChutesConnection } from "../auth/connection";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 
@@ -25,7 +24,6 @@ export function ModelControl({
   active?: Readonly<{
     providerLabel: string;
     modelId: string;
-    boundaryLabel: string;
   }>;
   models: readonly ModelControlOption[];
   /**
@@ -157,18 +155,8 @@ export function ModelControl({
         />
       </label>
       )}
-      {/*
-        The posture pill is gone from this control, and only from this control.
-        It rendered `activeConnectionBoundaryLabel(connection)` — the identical
-        string the session status chip carries 140px away, whose popover shows
-        it in full with the same `→ Models` navigation into `#access`. Two click
-        targets for one fact, 140px apart, and the 185px it took was measured
-        against a 169px model field: the name this control exists to show was
-        ellipsised to `Qwen3-32B-T…` so a duplicate could be spelled out.
-
-        The transient stays. "Switching…" is a lifecycle state of *this* control
-        and is stated nowhere else, so it keeps its own live region.
-      */}
+      {/* "Switching…" is this control's own lifecycle state, so it keeps its
+          live region here. */}
       {activity.switching ? <span class="runtime-posture" role="status">Switching…</span> : null}
       {error ? <span class="session-runtime-error" role="alert">{error}</span> : null}
     </div>
@@ -239,25 +227,4 @@ export function safeModelControlErrorMessage(error: unknown): string {
     .trim();
   if (!redacted) return "The model could not be selected. The current conversation was not changed.";
   return redacted.length > 240 ? `${redacted.slice(0, 237)}…` : redacted;
-}
-
-/**
- * The one string every surface uses for a live connection's proof boundary.
- *
- * The topbar E2EE axis, the session status chip and this card's own
- * `boundaryLabel` all read it; `app.tsx` used to keep a second copy that still
- * said "E2EE · evidence recorded" for an ungated connection, which states a
- * *turn* outcome where the fact is a *policy* one.
- *
- * The `busy` parameter is gone with that duplication. It returned a
- * switching transient and had no caller outside its own test, so making this
- * the shared reader would have shipped a test-only branch into the entry chunk;
- * the transient it described is stated by this control's own live region above,
- * which is the surface that actually knows a switch is in flight.
- */
-export function activeConnectionProofLabel(connection: ActiveChutesConnection): string {
-  if (connection.posture !== "encrypted-attested") return "E2EE · no proof gate";
-  return connection.invokeAuthorization === "verified"
-    ? "E2EE · last turn proved"
-    : "E2EE · proof required";
 }
