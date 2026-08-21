@@ -195,10 +195,13 @@
 }
 
 .local-folder__disclosure > summary > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.local-folder__actions { flex: 0 0 auto; }
 
 /* Open, the explanation owns the row it needs; closed, it shares one with the
    control it explains. */
@@ -209,7 +212,8 @@
 
 .local-folder__disclosure > summary {
   display: flex;
-  flex-wrap: wrap;
+  /* One row: the title truncates before the control it introduces wraps. */
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--sp-2);
   min-height: var(--touch-target);
@@ -261,20 +265,22 @@
  * 44px row and its coarse-pointer floor; what it gives up is the padding of a
  * panel it is no longer pretending to be.
  */
+/*
+ * `order` is not available here: flex items paint in order-modified document
+ * order, and moving the tier below the workbench put the terminal dock over the
+ * Explorer's own menu — measured, three runs out of three. So the tier keeps its
+ * place and gives up everything that is not the row itself.
+ */
 @media (max-width: 640px) {
   .local-folder {
-    order: 2;
-    margin-inline: var(--sp-3);
-    padding-inline: 0;
+    margin: 0 var(--sp-3);
+    padding: 0;
     border: 0;
-    border-top: 1px solid var(--line);
     border-radius: 0;
     background: none;
   }
 
-  /* The workbench is what this route is for, so on a phone it keeps the top of
-     the route and the tier states itself at the foot of it. */
-  .editor-route__panel { order: 1; }
+  .local-folder__disclosure > summary { padding-block: 0; }
 }
 
 .local-folder__facts {
