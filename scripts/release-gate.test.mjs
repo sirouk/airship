@@ -467,15 +467,15 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "384,694 B raw / 119,113 B gzip",
-      "384,694 B raw / 117.68 KiB gzip",
+      "384,682 B raw / 119,114 B gzip",
+      "384,682 B raw / 117.68 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 384694, gzip: 119113 },
+      entryJavaScript: { raw: 384682, gzip: 119114 },
     })).toThrow(
-      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.32 KiB \(119113 B\), in a lower whole-KiB budget bucket/u,
+      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.32 KiB \(119114 B\), in a lower whole-KiB budget bucket/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
@@ -556,6 +556,39 @@ describe("release gate", () => {
       ["assets/request-state-A.js", "assets/turn-recovery.js"],
       required,
     )).toThrow(/Request failure chunks do not match the required stems/u);
+  });
+
+  it("accepts reviewed variants that straddle a whole-KiB line, and still refuses a shrunk build", () => {
+    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
+    const entry = parseDocumentedBudgets(source).find((budget) => budget.name === "allJavaScriptAndWorkers");
+    expect(entry).toBeDefined();
+    const asDocumented = Object.fromEntries(
+      MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
+        const budget = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
+        const largest = Object.fromEntries(["raw", "gzip"].map((role) => [
+          role,
+          budget.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
+        ]));
+        return [name, largest];
+      }),
+    );
+
+    // Each recorded variant is a legal build of this commit, including the ones
+    // below the whole-KiB line that the largest recorded variant sits above.
+    for (const variant of entry.measured) {
+      expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+        ...asDocumented,
+        allJavaScriptAndWorkers: { raw: variant.raw, gzip: variant.gzip },
+      })).not.toThrow();
+    }
+
+    // A build that matches no recorded variant and is a bucket below the
+    // largest one is the stale comment this guard exists for.
+    const smallest = entry.measured.reduce((least, pair) => Math.min(least, pair.gzip), Number.POSITIVE_INFINITY);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...asDocumented,
+      allJavaScriptAndWorkers: { raw: entry.measured[0].raw, gzip: smallest - 2048 },
+    })).toThrow(/allJavaScriptAndWorkers: its comment claims .* in a lower whole-KiB budget bucket/u);
   });
 
   it("charges every dynamic import awaited before first render to the baseline", () => {
