@@ -260,7 +260,7 @@ export class ApprovalBroker {
     entry.resolve(outcome === "expired" ? "deny" : outcome);
     this.emit();
     const settlement = Object.freeze({ request: entry.request, outcome });
-    for (const listener of this.settleListeners) listener(settlement);
+    for (const listener of this.settleListeners) notifyObserver(listener, settlement);
     return true;
   }
 
@@ -273,7 +273,20 @@ export class ApprovalBroker {
 
   private emit(): void {
     const snapshot = this.snapshot();
-    for (const listener of this.listeners) listener(snapshot);
+    for (const listener of this.listeners) notifyObserver(listener, snapshot);
+  }
+}
+
+/**
+ * A subscriber observes; it does not participate. Settlement already resolved
+ * before these loops run, so a throwing view could not unsettle a request — but
+ * it could stop every later subscriber from hearing about it.
+ */
+function notifyObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control approval settlement.
   }
 }
 

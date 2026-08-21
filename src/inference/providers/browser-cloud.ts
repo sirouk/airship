@@ -1673,11 +1673,20 @@ function directoryUrl(input: string): URL {
   return url;
 }
 
+/**
+ * A transport ID is an identity, so the token it is built from may not be a
+ * lossy rendering of one. Folding every unexpected character to `-` made
+ * `openai:` and `openai/` collapse onto `openai`, and a legacy session pin that
+ * carries only a transport ID would have accepted a descriptor pointing
+ * somewhere else entirely. A provider ID that is not already in this alphabet
+ * has no transport here.
+ */
 function transportToken(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/gu, "-")
-    .replace(/^-+|-+$/gu, "") || "provider";
+  const token = value.toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(token)) {
+    throw new TypeError(`Provider ID ${JSON.stringify(value)} is not a transport identifier.`);
+  }
+  return token;
 }
 
 function anthropicStatedOutputCeiling(body: string, requested: number): number | undefined {

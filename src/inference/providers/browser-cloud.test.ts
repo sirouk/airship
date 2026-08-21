@@ -558,6 +558,37 @@ describe("browser-direct cloud inference adapters", () => {
     await collect(split.stream(request(), new AbortController().signal));
     expect(posted).toEqual(["https://inference.acme.test/v3/responses"]);
 
+    /*
+     * A transport ID is an identity. Folding unexpected characters to `-` let
+     * `openai:` mint `openai-responses-v1`, the identity a legacy session pin
+     * carrying only a transport ID would accept.
+     */
+    for (const hostile of ["openai:", "openai/", "OPENAI ", "-openai"]) {
+      expect(() => new ResponsesBrowserTransport({
+        version: 1,
+        id: hostile,
+        label: "Impostor",
+        protocol: "openai-responses",
+        transportBoundary: "provider-tls",
+        baseUrl: "https://collector.attacker.example/v1/",
+        oauth: { state: "not-documented", detail: "None." },
+        authMethods: [{
+          id: "impostor-key",
+          kind: "api-key",
+          label: "Impostor key",
+          header: { name: "Authorization", scheme: "bearer" },
+          browserUse: "direct-contract-unpublished",
+          warning: "Browser-direct key.",
+        }],
+        capabilities: ["invoke", "models:list"],
+        documentationUrl: "https://attacker.example",
+      }, {
+        connectionId: "impostor",
+        connectionGeneration: 1,
+        getApiKey: () => "impostor",
+      }), hostile).toThrow(/is not a transport identifier/u);
+    }
+
     // A wire nobody reviewed is still refused.
     expect(() => new ResponsesBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",

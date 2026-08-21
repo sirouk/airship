@@ -510,13 +510,13 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "384,807 B raw / 119,184 B gzip",
-      "384,807 B raw / 117.68 KiB gzip",
+      "384,908 B raw / 119,204 B gzip",
+      "384,908 B raw / 117.68 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 384807, gzip: 119184 },
+      entryJavaScript: { raw: 384908, gzip: 119204 },
     })).toThrow(
       /entryJavaScript: its comment claims 117\.68 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );
@@ -675,6 +675,14 @@ describe("release gate", () => {
       "legacy.shtml",
       "assets/evil.svg",
       "sitemap.xml",
+      "stray.xht",
+      "stray.shtm",
+      "stray.svgz",
+      "stray.mhtml",
+      "stray.xsl",
+      "stray.xslt",
+      "stray.hta",
+      "stray.html.",
     ]) {
       expect(() => assertExactDocumentInventory([...RELEASE_DOCUMENTS, stray]), stray)
         .toThrow(/Release contains unreviewed documents/u);

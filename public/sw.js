@@ -200,7 +200,15 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          if (response.ok && response.type === "basic" && !response.headers.has("set-cookie")) {
+          // Only the app root may become the offline app root: every in-scope
+          // navigation was cached under that one key, so opening the install
+          // hub once made it the document served offline at the base path.
+          if (
+            requestUrl.pathname === BASE_PATH
+            && response.ok
+            && response.type === "basic"
+            && !response.headers.has("set-cookie")
+          ) {
             event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.put(BASE_PATH, response.clone())));
           }
           return isolatedNavigationResponse(response);
