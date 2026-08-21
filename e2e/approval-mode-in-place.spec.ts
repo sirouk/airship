@@ -16,6 +16,7 @@ test("switching the approval policy acts on the same thread, and only it", async
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".transcript")).toContainText("approval-check", { timeout: 20_000 });
   // Let the auto-rename land so nothing else writes to the head during the switch.
+  await expect(page.locator(".session-bar__title")).toContainText("approval-check", { timeout: 20_000 });
   await expect(page.locator(".transcript")).not.toHaveText(/new pinned conversation/u);
 
   const hashBefore = page.url();
