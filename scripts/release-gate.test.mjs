@@ -490,7 +490,7 @@ const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
       expect(variant.environment, variant.name).toContain("npm run build:static");
     }
     const droppedFromEntry = source.replace(
-      "// Reviewed reading (Pages Google-Drive-configured): 386,020 B raw / 119,769 B gzip.\n",
+      "// Reviewed reading (Pages Google-Drive-configured): 386,181 B raw / 119,814 B gzip.\n",
       "",
     );
     expect(droppedFromEntry).not.toBe(source);
@@ -519,11 +519,19 @@ const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
     expect(() => assertDocumentedBudgetMeasurements(raised))
       .toThrow(/entryJavaScript: the 119\.00 KiB gzip ceiling is above the smallest whole-KiB step/u);
 
-    // Remove the arithmetic that pays for the step this file does take.
-    const untripped = source.replace("117 KiB gzip would have left 39 B", "117 KiB gzip would have left 999 B");
+    /*
+     * Remove the arithmetic that pays for the step this file does take. The
+     * entry chunk used to be the example and stopped being one: its readings
+     * crossed the 117 KiB gzip line, so 118 KiB is now the smallest step that
+     * clears them and no further step is bought. The service worker still buys
+     * its gzip step this way — 4 KiB would have left 362 B, under the width of
+     * the compressor itself — and its comment states that arithmetic once, so
+     * removing the sentence really does remove the claim.
+     */
+    const untripped = source.replace("4 KiB gzip would have left 362 B", "4 KiB gzip would have left 999 B");
     expect(untripped).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(untripped))
-      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 39 B"/u);
+      .toThrow(/serviceWorker: .* record the matching tripwire arithmetic "4 KiB gzip would have left 362 B"/u);
 
     for (const [ceiling, expected] of [
       ["raw: 64 * 1024", /optionalApprovalDock: the 64\.00 KiB raw ceiling is outside the Class 2 headroom band/u],

@@ -8,6 +8,7 @@ import {
 } from "../inference/local";
 import type { InferenceModelDescriptor } from "../inference/providers";
 import {
+  capabilityStripPlaceholder,
   customProviderErrorRoute,
   modelOptionDescription,
   providerBoundaryLabel,
@@ -59,6 +60,37 @@ describe("provider connection presentation", () => {
     expect(supportedModelCapabilityLabels(model)).toEqual(["Vision", "Tools"]);
     expect(modelOptionDescription(model)).toBe(
       "Provider catalog · available · Vision · Tools",
+    );
+  });
+
+  /*
+   * One card, two sentences, and they contradicted each other in one gesture.
+   *
+   * Measured on the built tree at 3114a9b with a catalog that reports
+   * capabilities: the connected card opened saying "The model catalog did not
+   * report capabilities", and choosing a model in the picker directly above it
+   * — same card, no reload — printed "Text input", "Text output" and "Tools"
+   * from that same catalog. The card opens with no model selected, and the
+   * sentence blamed the catalog for it.
+   *
+   * The `aria-label` on the group already said "for the selected model", so a
+   * screen-reader user got the qualifier a sighted reader never saw. That is
+   * not a reason to keep the sentence; it is the reason the defect survived.
+   */
+  it("says which of the three empty states the capability strip is in", () => {
+    // Nothing chosen yet, on a connection whose catalog does list models.
+    expect(capabilityStripPlaceholder(4, false)).toBe("Choose a model to see its reported capabilities");
+    // A model is chosen and its catalog entry really did report nothing. The
+    // one state the original sentence was always true of keeps it verbatim.
+    expect(capabilityStripPlaceholder(4, true)).toBe("The model catalog did not report capabilities");
+    // Nothing to choose from at all: the picker is disabled in this state, so
+    // "choose a model" would be an instruction the card cannot honour.
+    expect(capabilityStripPlaceholder(0, false)).toBe("This connection reported no models");
+  });
+
+  it("asks the strip which state it is in rather than assuming the catalog failed", () => {
+    expect(source).toContain(
+      "<span>{capabilityStripPlaceholder(entry.models.length, selected !== undefined)}</span>",
     );
   });
 

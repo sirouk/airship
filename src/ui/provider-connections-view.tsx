@@ -504,7 +504,7 @@ function ConnectedProvider({
       <div class="provider-capabilities" role="group" aria-label="Capabilities reported for the selected model">
         {supported.length
           ? supported.slice(0, 6).map((capability) => <span key={capability}>{capability}</span>)
-          : <span>The model catalog did not report capabilities</span>}
+          : <span>{capabilityStripPlaceholder(entry.models.length, selected !== undefined)}</span>}
         {supported.length > 6 ? <span>+{supported.length - 6} more</span> : null}
       </div>
       {protectsReturn ? (
@@ -977,6 +977,28 @@ function LocalProviderCard({
 
 export function providerConnectionCountLabel(count: number): string {
   return `${count} connection${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What the capability strip says when it has nothing to list.
+ *
+ * One sentence used to answer three different states, and it was wrong in two
+ * of them. A card opens with no model selected, so "The model catalog did not
+ * report capabilities" was the first thing a person read after connecting —
+ * and choosing a model in the picker directly above it, with no reload, then
+ * printed Text input, Text output, Tools and Reasoning from the same catalog
+ * the sentence had just blamed. The screen contradicted itself in one gesture.
+ *
+ * So the strip says which of the three it is: nothing to choose from, nothing
+ * chosen yet, or a chosen model whose catalog entry really did report no
+ * capabilities. The third keeps its original wording, because that state is
+ * the one it was always true of.
+ */
+export function capabilityStripPlaceholder(catalogSize: number, modelChosen: boolean): string {
+  if (catalogSize === 0) return "This connection reported no models";
+  return modelChosen
+    ? "The model catalog did not report capabilities"
+    : "Choose a model to see its reported capabilities";
 }
 
 export function supportedModelCapabilityLabels(

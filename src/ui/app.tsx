@@ -971,6 +971,26 @@ const MARKER_MESSAGE_ESTIMATE = 56;
 const OPENING_ADDRESSED_CONVERSATION = "Opening this conversation";
 
 /**
+ * The shell's own two status sentences, in words a person who has just opened a
+ * link already has.
+ *
+ * They used to say "kernel": measured on a cold load of the built tree, the
+ * body text carried that word three times before anybody typed anything — the
+ * topbar runtime line, the phone band that mirrors it, and the boot heading —
+ * and "Local kernel ready" was also the only sentence the polite region ever
+ * announced, so it was the first thing a screen-reader user was told. There is
+ * no kernel in a newcomer's model of a chat page.
+ *
+ * These state exactly what the old strings stated — that Airship is starting or
+ * ready, and that it is this device doing it — with no word that has to be
+ * decoded first. Named rather than repeated because each is written at two
+ * call sites, and two spellings of one status is how a line starts disagreeing
+ * with its own mirror.
+ */
+const RUNTIME_STARTING_STATUS = "Starting Airship on this device";
+const RUNTIME_READY_STATUS = "Airship is ready on this device";
+
+/**
  * The materializer's per-turn metadata, in the shape the presentation checks it
  * against. Written out twice, identically, at the two call sites — which is one
  * copy more than a projection this mechanical can be trusted to keep in step.
@@ -1483,20 +1503,20 @@ export function App() {
   }
   const busy = sessionId !== undefined && busySessions.has(sessionId);
   const anyTurnRunning = busySessions.size > 0;
-  const [runtimeStatus, setRuntimeLine] = useState("Starting local kernel");
+  const [runtimeStatus, setRuntimeLine] = useState(RUNTIME_STARTING_STATUS);
   const [bootFailure, setBootFailure] = useState<string>();
   /**
    * The turn's own spoken channel, and the shell line's stand-down.
    *
    * The topbar runtime line is mirrored into a polite region, and at turn end
-   * it was setting "Local kernel ready" in the same animation frame the arrival
+   * it was setting `RUNTIME_READY_STATUS` in the same animation frame the arrival
    * sentence landed — two polite regions, one frame, and the reader hears
    * whichever the screen reader picks. The visible line is unchanged; while the
    * turn narrator is speaking, the *mirror* stands down, because a sentence
    * about the kernel is not news about the turn.
    */
   const turnNarration = useTurnNarration();
-  const [runtimeAnnouncement, setRuntimeAnnouncement] = useState("Starting local kernel");
+  const [runtimeAnnouncement, setRuntimeAnnouncement] = useState(RUNTIME_STARTING_STATUS);
   function setRuntimeStatus(next: string | ((current: string) => string)): void {
     setRuntimeLine(next);
     if (turnNarration.holdsChannel()) return;
@@ -3652,7 +3672,7 @@ export function App() {
            * that happens anywhere. The Atlas measured every consequence of that
            * category error at once: the sentence was inert text with no action
            * (J002), it collapsed to 0×0 on a phone (J003), the first turn's
-           * "Persisting turn intent" evicted it 0.6s in and "Local kernel ready"
+           * "Persisting turn intent" evicted it 0.6s in and the ready sentence
            * replaced it for the next three hours (J114), and on the way past it
            * overwrote the completion signal for a profile switch (J020).
            *
@@ -4410,12 +4430,12 @@ export function App() {
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       await refreshWorkspacePresentation(nextRuntime, profile.profileId);
-      setRuntimeStatus("Local kernel ready");
+      setRuntimeStatus(RUNTIME_READY_STATUS);
     })().catch((error) => {
       if (disposed) return;
       const detail = error instanceof Error ? error.message : String(error);
       setBootFailure(detail);
-      setRuntimeStatus("Airship could not finish starting the local kernel. Reload to try again; this tab never became ready.");
+      setRuntimeStatus("Airship could not finish starting on this device. Reload to try again; this tab never became ready.");
       setMessages([{ id: randomUuid(), role: "assistant", error: true, content: detail }]);
     });
     return () => {
@@ -6347,7 +6367,7 @@ export function App() {
       if (activeSessionIdentity.current === turnSessionId) {
         setRuntimeStatus(workspaceRefreshWarning
           ? `Turn complete · workspace refresh delayed: ${workspaceRefreshWarning}`
-          : "Local kernel ready");
+          : RUNTIME_READY_STATUS);
       }
     } catch (error) {
       // Same retirement as the settle path, and for the same reason: the
@@ -9166,7 +9186,7 @@ export function App() {
         ambient kernel sentence back for TURN_NARRATION_HOLD_MS so it cannot
         land on top of the narration about the answer. Announcing here bypassed
         that hold: measured on one phone turn, the narration said "Airship's
-        turn ended" at t=1608ms and this band said "Local kernel ready" at
+        turn ended" at t=1608ms and this band said the shell's ready sentence at
         t=1611ms. The mirror renders at every width, so removing the live
         semantics here loses no announcement.
       */}
@@ -11367,13 +11387,13 @@ function BootScreen({ status, failure, onReload }: Readonly<{
         class="boot-mark"
         state={failure ? "failed" : "checking"}
         acting={!failure}
-        label={failure ? "Local kernel did not start" : "Preparing Airship"}
+        label={failure ? "Airship did not start" : "Preparing Airship"}
         detail={status}
         size={32}
         compact
       />
       <span class="eyebrow">Airship edge runtime</span>
-      <h1>{failure ? "The local kernel did not start" : "Preparing the local kernel"}</h1>
+      <h1>{failure ? "Airship did not start on this device" : "Preparing Airship on this device"}</h1>
       <p role="status" aria-live="polite">{status}</p>
       {failure ? <>
         <button type="button" onClick={onReload}>Reload Airship</button>

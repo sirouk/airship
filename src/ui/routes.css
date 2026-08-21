@@ -3139,9 +3139,9 @@
    * exactly that: 667-932px of topbar to spend and 375-430px of height that the
    * transcript is competing for. Keeping the strip here spent 34px — 9% of a
    * 375px-tall screen — on a line the topbar could have carried for free, and
-   * it is not a line that goes away: `runtimeStatus` starts at "Starting local
-   * kernel", becomes "Local kernel ready", and is never set empty, so the band
-   * was permanent. The status stays visible; only the axis it is billed to
+   * it is not a line that goes away: `runtimeStatus` starts at "Starting
+   * Airship on this device", becomes "Airship is ready on this device", and is
+   * never set empty, so the band was permanent. The status stays visible; only the axis it is billed to
    * changes, which is the same reasoning that put it on the phone in the first
    * place.
    */

@@ -72,6 +72,66 @@ test("the first-run keep link lands on the destination that keeps it, with its c
   // Nothing has been enrolled by the navigation, and the route says so.
   await expect(route).toContainText("Nothing is enrolled until you save that key");
   await expect(route).toContainText("Not set up yet");
+
+  /*
+   * And the comparison a person needs in order to make this choice is open,
+   * on the screen they made it from.
+   *
+   * Measured on the built tree at 3114a9b, iPhone 13: this same click landed
+   * with `details.vault-provider-compare` reporting `open: false`, while the
+   * route's own "Choose a durable provider" button opened it and every desktop
+   * path opened it. The six answers were one tap away, on the one screen where
+   * a person is deciding where their work lives.
+   */
+  const compare = route.locator("details.vault-provider-compare");
+  await expect(compare).toHaveAttribute("open", "");
+  await expect(compare.getByRole("table")).toBeVisible();
+  for (const question of ["Survives closing the tab", "Works offline", "Reaches other devices", "You supply", "You keep", "What can lose it"]) {
+    await expect(compare.getByRole("rowheader", { name: question, exact: true })).toBeVisible();
+  }
+});
+
+/**
+ * What the first screen says this is, before anybody types.
+ *
+ * Measured on a cold load of the built tree at 3114a9b, desktop and phone:
+ * `document.body.innerText` matched neither /browser/i nor /no server/i, and
+ * matched /kernel/i three times. The only live region carrying any text
+ * announced "Local kernel ready", so that was the first sentence a
+ * screen-reader user was given, and the boot heading above it read "Preparing
+ * the local kernel". The paragraph that does explain the product arrived only
+ * after a message had been sent.
+ *
+ * Both halves are pinned here. Saying what Airship is must not cost the
+ * sentences that say what will not be kept and that the composer is a demo —
+ * those are the honest ones, and they are asserted in the same breath.
+ */
+test("the first screen says what Airship is, in words a newcomer already has", async ({ page }, testInfo) => {
+  const namespace = `what-is-this-${testInfo.project.name}-${Date.now().toString(36)}`;
+  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}`);
+  await waitForShellSettled(page, { timeout: 30_000 });
+
+  const about = page.getByRole("region", { name: "About this conversation" });
+  await expect(about).toContainText("Airship runs in your browser. There is no Airship server and no account to create.");
+  // Not at the cost of either sentence that was already true.
+  await expect(about).toContainText("This conversation is not being saved.");
+  await expect(about).toContainText("Chat needs a model provider; this composer is a deterministic demo.");
+
+  // And no screen the person has not asked for: this is one paragraph, before
+  // the two that were already there.
+  const order = await about.evaluate((node) => [...node.querySelectorAll("p")].map((p) => (p.textContent ?? "").trim().slice(0, 40)));
+  expect(order[0]).toContain("Airship runs in your browser");
+});
+
+test("the shell says starting and ready without the word kernel", async ({ page }, testInfo) => {
+  const namespace = `plain-status-${testInfo.project.name}-${Date.now().toString(36)}`;
+  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}`);
+  await waitForShellSettled(page, { timeout: 30_000 });
+
+  const spoken = page.locator('.sr-only[role="status"]').filter({ hasText: /Airship/u });
+  await expect(spoken.first()).toHaveText("Airship is ready on this device", { timeout: 20_000 });
+  await expect(page.locator(".runtime-line__text").first()).toHaveText("Airship is ready on this device");
+  expect(await page.evaluate(() => (document.body.textContent ?? "").match(/kernel/giu)?.length ?? 0)).toBe(0);
 });
 
 test("a conversation address that did not come from this tab reports the missing session", async ({ page }, testInfo) => {

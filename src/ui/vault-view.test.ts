@@ -387,6 +387,35 @@ describe("provider comparison", () => {
     expect(styles).toContain(".vault-view__attached li strong { color: var(--v-caution); overflow-wrap: anywhere; text-align: end; }");
   });
 
+  /*
+   * The comparison has to be open at the moment of choice, on the screen the
+   * choice is actually made on.
+   *
+   * Measured on the built tree at 3114a9b, iPhone 13, following the one link a
+   * first-time person is given for this decision — "Keep it on this device →"
+   * in the chat transcript: it landed on #vault with
+   * `details.vault-provider-compare` reporting `open: false`, while the same
+   * route's "Choose a durable provider" button opened it and every desktop path
+   * opened it. Six questions about where a person's work lives, folded away at
+   * the moment they choose, on the smaller screen where hunting costs most.
+   *
+   * The gate was a `matchMedia("(min-width: 681px)")` read taken once at mount.
+   * It is gone: the disclosure's `open` now depends only on whether there is a
+   * choice still to make. The stacked layout below 1023px is what makes that
+   * affordable, and it is asserted two tests above.
+   */
+  it("opens the comparison wherever the choice is made, not only on a wide screen", () => {
+    const source = readFileSync(new URL("./vault-view.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain(
+      '<details class="vault-provider-compare" ref={compare} open={snapshot.phase === "disconnected" && !localDeviceStatus}>',
+    );
+    // The viewport read is not merely unused — it is not in the file, so no
+    // later edit can re-attach the width to this decision by reviving it.
+    expect(source).not.toContain("min-width: 681px");
+    expect(source).not.toContain("compareDefault");
+  });
+
   it("states plainly that the ephemeral option keeps nothing", () => {
     const ephemeral = ALL_PROVIDER_PROFILES.find((profile) => profile.id === "ephemeral");
 

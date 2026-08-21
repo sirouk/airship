@@ -206,3 +206,62 @@ describe("local command runtime authority", () => {
     expect(current).not.toContain("runtime.current === authority.commandRuntime");
   });
 });
+
+describe("the shell's own status vocabulary", () => {
+  /*
+   * Three uses of one word, before a newcomer has typed anything.
+   *
+   * Measured on a cold load of the built tree at 3114a9b, both viewports:
+   * `document.body.textContent` contained "kernel" three times — the topbar
+   * runtime line, the phone band that mirrors it, and the boot heading
+   * "Preparing the local kernel" — and the only live region with any text in
+   * it announced "Local kernel ready", which is therefore the first sentence a
+   * screen-reader user is given. There is no kernel in a person's model of a
+   * chat page; there is a device, and there is a page that is starting.
+   *
+   * These strings still state exactly what they stated: that Airship is
+   * starting or ready, and that it is this device doing it. Nothing became
+   * vaguer, and the failure sentence keeps the fact a reader has to act on —
+   * that this tab never became ready.
+   */
+  const statusStrings = [
+    'const RUNTIME_STARTING_STATUS = "Starting Airship on this device";',
+    'const RUNTIME_READY_STATUS = "Airship is ready on this device";',
+    '"Airship could not finish starting on this device. Reload to try again; this tab never became ready."',
+    '<h1>{failure ? "Airship did not start on this device" : "Preparing Airship on this device"}</h1>',
+  ];
+
+  it("says starting and ready in words a first-time reader already has", () => {
+    for (const statement of statusStrings) expect(app, statement).toContain(statement);
+  });
+
+  it("keeps one spelling of each status, so the line and its mirror cannot disagree", () => {
+    // Each is written at two call sites — the state seed and the mirror, the
+    // boot path and the turn-settled path.
+    expect(app).toContain("useState(RUNTIME_STARTING_STATUS)");
+    expect(app).toContain("setRuntimeStatus(RUNTIME_READY_STATUS)");
+    expect(app.split('"Starting Airship on this device"')).toHaveLength(2);
+    expect(app.split('"Airship is ready on this device"')).toHaveLength(2);
+  });
+
+  it("keeps no rendered string that calls the runtime a kernel", () => {
+    /*
+     * Comments may still describe the history — this file's own paragraph
+     * above does — so the comments come out first and only the double-quoted
+     * strings that survive are read.
+     */
+    const code = app.replace(/\/\*[\s\S]*?\*\//gu, "").replace(/(^|[^:])\/\/[^\n]*/gu, "$1");
+    const spoken = [...code.matchAll(/"([^"\n]{4,})"/gu)]
+      .map((match) => match[1])
+      .filter((value) => /kernel/iu.test(value));
+    expect(spoken, "no rendered sentence calls it a kernel").toEqual([]);
+  });
+
+  it("still holds the ambient line out of the polite channel while a turn speaks", () => {
+    // The plainer sentence is set at the same instant a turn settles, so the
+    // stand-down that keeps two polite regions from mutating in one frame has
+    // to survive the rewording that made it readable.
+    expect(app).toContain("if (turnNarration.holdsChannel()) return;");
+    expect(app).toContain("const [runtimeAnnouncement, setRuntimeAnnouncement] = useState(RUNTIME_STARTING_STATUS);");
+  });
+});

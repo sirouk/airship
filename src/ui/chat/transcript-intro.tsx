@@ -28,6 +28,25 @@ export const TRANSCRIPT_INTRO_DEMO_LINE = "Chat needs a model provider; this com
 export const TRANSCRIPT_INTRO_RUNTIME_LINE = "The edge runtime is ready in this tab, with no account.";
 
 /**
+ * What Airship is, before a person types anything.
+ *
+ * Measured on the first screen of a cold load, both viewports: the body text
+ * contained no occurrence of "browser" and none of "no server". The whole
+ * self-description was the wordmark and the eyebrow "EDGE RUNTIME", and the
+ * paragraph that does explain the product only arrived after a message had
+ * been sent. Somebody who opens the link and reads was told what would not be
+ * saved and that the composer is a demo, and never told what they had opened.
+ *
+ * Three plain facts, in the words a newcomer already has, and each one is what
+ * the code does: the client is static and runs in the page, no Airship service
+ * is behind it, and nothing asks for an account. It renders in every density,
+ * beside the two sentences that already survive one, because "what is this" is
+ * the same class of answer as "what will persist".
+ */
+export const TRANSCRIPT_INTRO_WHAT_LINE =
+  "Airship runs in your browser. There is no Airship server and no account to create.";
+
+/**
  * The seed message's body, which the three lines above now say between them.
  *
  * Kept as a constant rather than a literal because it is also the suffix that
@@ -113,6 +132,14 @@ export function TranscriptIntro({
   return (
     <section class="transcript-intro" aria-label="About this conversation">
       <div class="transcript-intro__copy">
+        {/* First, because it is the question a newcomer asks first. Held to the
+            same two states that already decide whether this component says
+            anything at minimal density: nothing kept yet, or no provider yet.
+            Somebody who has chosen storage and connected a model has answered
+            it, and gets the quiet screen the density asks for. It reuses
+            `__lead` rather than earning a class of its own, so the entry
+            stylesheet does not move. */}
+        {unsaved || demo ? <p class="transcript-intro__lead">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}
         {note ? <p class="transcript-intro__note">{note}</p> : null}
         {unsaved ? (
           <p class="transcript-intro__unsaved">

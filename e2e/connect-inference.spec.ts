@@ -145,15 +145,28 @@ test("local provider discovery keeps the full provider setup surface available",
   await expect(page.locator("#provider-setup-openai")).toBeVisible();
   await expect(customProviderForm(page)).toBeVisible();
 
+  const capabilities = connected.getByRole("group", { name: "Capabilities reported for the selected model" });
+  /*
+   * The same card, one gesture apart, used to contradict itself.
+   *
+   * Measured on the built tree at 3114a9b against this exact catalog: the card
+   * opened reading "The model catalog did not report capabilities", and
+   * choosing a model in the picker directly above it — no reload — printed
+   * Text input, Text output and Tools from the catalog the sentence had just
+   * blamed. The card opens with nothing selected; that is what the sentence
+   * was describing, and it named the wrong cause for it.
+   */
+  await expect(capabilities).toHaveText("Choose a model to see its reported capabilities");
+
   const model = connected.getByRole("button", { name: "Ollama model for a new pinned conversation" });
   await model.click();
   await page.getByRole("listbox", { name: "Ollama model for a new pinned conversation" })
     .getByRole("option", { name: "gemma3:latest", exact: true })
     .click();
-  const capabilities = connected.getByRole("group", { name: "Capabilities reported for the selected model" });
   await expect(capabilities).toContainText("Text input");
   await expect(capabilities).toContainText("Text output");
   await expect(capabilities).toContainText("Tools");
+  await expect(capabilities).not.toContainText("did not report capabilities");
 });
 
 test("every cloud provider form is reachable by keyboard alone", async ({ page }) => {

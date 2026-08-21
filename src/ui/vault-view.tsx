@@ -320,11 +320,6 @@ export function VaultView({
   const compare = useRef<HTMLDetailsElement>(null);
   const providerControl = useRef<HTMLDivElement>(null);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
-  // Open the comparison at the moment of choice on wide screens. Its columns
-  // come from the same filtered profiles as the selector, so it advertises no
-  // provider the control itself omits.
-  const [compareDefault] = useState(() =>
-    typeof window === "undefined" || window.matchMedia("(min-width: 681px)").matches);
 
   const state = vaultState({
     phase: snapshot.phase,
@@ -516,7 +511,16 @@ export function VaultView({
         />
         {providerSwitching ? <span role="status">Moving the active runtime safely…</span> : null}
         {selectedProviderUnavailable ? <p class="vault-view__warning" role="alert">{selectedProviderUnavailable}</p> : null}
-        <details class="vault-provider-compare" ref={compare} open={compareDefault && snapshot.phase === "disconnected" && !localDeviceStatus}>
+        {/* Open at the moment of choice, on every screen. It used to open only
+            above 680px, so the one link a first-time person is given for this
+            decision — "Keep it on this device →" in the chat transcript —
+            landed on a phone with the six answers folded away, while "Choose a
+            durable provider" on the same route opened them. The table already
+            stacks into one card per question below 1023px, so opening it on a
+            phone costs a scroll, not a layout. Its columns come from the same
+            filtered profiles as the selector, so it advertises no provider the
+            control itself omits. */}
+        <details class="vault-provider-compare" ref={compare} open={snapshot.phase === "disconnected" && !localDeviceStatus}>
           <summary>Compare {providerProfiles.length} storage options — what survives a closed tab, offline reach, cross-device reach, what you supply, what you keep, and what can lose it</summary>
           <table>
             <caption>Every offered provider answers the same six questions, so the columns can be read across.</caption>

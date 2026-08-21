@@ -3,9 +3,12 @@ import { readFileSync } from "node:fs";
 import {
   TRANSCRIPT_INTRO_CAPABILITY_LINE,
   TRANSCRIPT_INTRO_DEMO_LINE,
+  TRANSCRIPT_INTRO_WHAT_LINE,
   TRANSCRIPT_SEED_BODY,
   transcriptIntroNote,
 } from "./transcript-intro";
+
+const transcriptIntroSource = readFileSync(new URL("./transcript-intro.tsx", import.meta.url), "utf8");
 
 describe("transcriptIntroNote", () => {
   it("keeps the per-conversation sentence a seed was prefixed with", () => {
@@ -61,7 +64,45 @@ describe("the guidance band's copy", () => {
   });
 });
 
-const transcriptIntroSource = readFileSync(new URL("./transcript-intro.tsx", import.meta.url), "utf8");
+describe("what the first screen says this is", () => {
+  /*
+   * Measured on a cold load of the built tree at 3114a9b, desktop and phone:
+   * `document.body.innerText` matched neither /browser/i nor /no server/i. The
+   * one paragraph that does explain the product is the seed body above, and it
+   * is stripped from the transcript by `transcriptIntroNote` — so a person who
+   * opened the link and read was told what would not be saved, and that the
+   * composer is a demo, and never told what they had opened.
+   */
+  it("answers what this is in the words a newcomer already has", () => {
+    expect(TRANSCRIPT_INTRO_WHAT_LINE).toContain("runs in your browser");
+    expect(TRANSCRIPT_INTRO_WHAT_LINE).toContain("no Airship server");
+    expect(TRANSCRIPT_INTRO_WHAT_LINE).toContain("no account");
+    // It says what is true of the artifact, and claims nothing beyond it: the
+    // Terminal fetches its runtime from a third party and a cloud provider is
+    // a remote service, so no sentence here may promise that nothing leaves
+    // the page.
+    expect(TRANSCRIPT_INTRO_WHAT_LINE).not.toMatch(/nothing (?:ever )?leaves|never leaves|no network/iu);
+  });
+
+  /*
+   * And it has to be on screen before anything is typed, at the density every
+   * newcomer gets. `DEFAULT_PRESENTATION_DENSITY` is "minimal", which retires
+   * the capability line, the runtime line and the tier chip — so a line placed
+   * inside the `full` branch would be exactly as absent as the paragraph it
+   * replaces. It hangs off the same two states the component already renders
+   * unconditionally: nothing kept yet, or no provider yet.
+   */
+  it("renders outside the density gate, on the two states a newcomer is in", () => {
+    expect(transcriptIntroSource)
+      .toContain('{unsaved || demo ? <p class="transcript-intro__lead">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}');
+    const copy = transcriptIntroSource.slice(
+      transcriptIntroSource.indexOf('<div class="transcript-intro__copy">'),
+      transcriptIntroSource.indexOf("{full ? ("),
+    );
+    expect(copy).toContain("TRANSCRIPT_INTRO_WHAT_LINE");
+  });
+});
+
 
 describe("TranscriptMarker", () => {
   it("keeps durable marker facts on screen with no extra action", () => {
