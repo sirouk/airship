@@ -522,13 +522,22 @@ export class PrimeAgentSession {
     // agent/kernel run that does not yet exist.
     if (!turn) return;
     this.agentLoop.abort();
-    for (const jobId of this.activeKernelJobs) {
+    /*
+     * The backstop belongs to the jobs this stop was aimed at, not to whatever
+     * is running when it fires. `activeKernelJobs` is session-scoped, so a
+     * timer armed for turn A and left to check only "is anything active" tore
+     * down the kernel under turn B's job — publishing it as crashed and
+     * journalling a namespace-reset notice that quoted turn A's stop text.
+     */
+    const cancelled = new Set(this.activeKernelJobs);
+    for (const jobId of cancelled) {
       this.kernelHostValue.cancel(jobId, text);
     }
-    if (this.activeKernelJobs.size > 0 && this.kernelTerminateTimer === undefined) {
+    if (cancelled.size > 0 && this.kernelTerminateTimer === undefined) {
       this.kernelTerminateTimer = setTimeout(() => {
         this.kernelTerminateTimer = undefined;
-        if (this.activeKernelJobs.size > 0) {
+        const stillRunning = [...cancelled].some((jobId) => this.activeKernelJobs.has(jobId));
+        if (stillRunning) {
           void this.kernelHostValue.terminate(text).catch(() => undefined);
         }
       }, PRIME_TERMINATE_GRACE_MS);

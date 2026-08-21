@@ -34,15 +34,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // inference-route admission and post-turn naming removed the last authority
   // races. After charging the pre-render navigation boundary to startup and
   // compacting duplicated UI policy, the canonical config-free artifact measures
-  // 384,908 B raw / 119,204 B gzip. The reviewed Docker-defaults variant measures
-  // 384,910 B raw / 119,206 B gzip, the reviewed Pages variant measures
-  // 384,926 B raw / 119,212 B gzip, and the reviewed Google-Drive-configured
-  // variant measures 385,134 B raw / 119,304 B gzip. A configured client ID is
+  // 384,908 B raw / 119,193 B gzip. The reviewed Docker-defaults variant measures
+  // 384,910 B raw / 119,209 B gzip, the reviewed Pages variant measures
+  // 384,926 B raw / 119,209 B gzip, and the reviewed Google-Drive-configured
+  // variant measures 385,134 B raw / 119,305 B gzip. A configured client ID is
   // a supported deployment of both Pages and Docker, and it is the largest of
   // the four, so it sets both maxima. 376 KiB raw is 110 B below that artifact,
   // so raw takes the tight 377 KiB step and leaves 914 B. 117 KiB gzip would
-  // have left 504 B, below the tripwire floor, so gzip keeps 118 KiB and leaves
-  // 1,528 B.
+  // have left 503 B, below the tripwire floor, so gzip keeps 118 KiB and leaves
+  // 1,527 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -50,12 +50,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Re-measured at 504,247 B raw / 163,264 B gzip after exact inference-route
   // admission and post-turn naming removed the last authority races. With the
   // pre-render controlled-navigation chunk now counted, the canonical config-free
-  // artifact measures 505,269 B raw / 163,929 B gzip. The reviewed Docker-defaults
-  // variant measures 505,271 B raw / 163,931 B gzip, the reviewed Pages variant
-  // measures 505,287 B raw / 163,939 B gzip, and the reviewed
-  // Google-Drive-configured variant measures 505,495 B raw / 164,027 B gzip and
+  // artifact measures 505,269 B raw / 163,905 B gzip. The reviewed Docker-defaults
+  // variant measures 505,271 B raw / 163,948 B gzip, the reviewed Pages variant
+  // measures 505,287 B raw / 163,943 B gzip, and the reviewed
+  // Google-Drive-configured variant measures 505,495 B raw / 164,033 B gzip and
   // sets both maxima. 493 KiB raw is 663 B below that artifact and 160 KiB gzip
-  // is 187 B below it. The tight 494/161 KiB steps leave 361 / 837 B.
+  // is 193 B below it. The tight 494/161 KiB steps leave 361 / 831 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -84,19 +84,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The strict shared execution worker and bridge-drain boundary later took the
   // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
   // unchanged. After charging the pre-render navigation chunk and compacting
-  // duplicated UI policy, the canonical config-free artifact measures 2,008,233 B
-  // raw / 626,887 B gzip. The reviewed Docker-defaults variant measures 2,008,232 B
-  // raw / 626,900 B gzip, the reviewed Pages variant measures 2,008,297 B raw /
-  // 626,939 B gzip, and the reviewed Google-Drive-configured variant measures
-  // 2,008,798 B raw / 627,175 B gzip.
+  // duplicated UI policy, the canonical config-free artifact measures 2,007,508 B
+  // raw / 626,684 B gzip. The reviewed Docker-defaults variant measures 2,007,507 B
+  // raw / 626,795 B gzip, the reviewed Pages variant measures 2,007,572 B raw /
+  // 626,792 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 2,008,073 B raw / 627,036 B gzip.
   //
   // That fourth variant is why raw reads 1962 KiB again. A configured client ID
   // is a supported deployment — GitHub Pages builds one when the repository
   // variable is set, and `./deploy.sh` builds one from `.env` — and it was never
   // measured, so 1961 KiB was a ceiling justified by three variants out of four
-  // and it refused an honest build of the fourth. 1961 KiB raw is 734 B below
-  // that artifact; the tight 1962 KiB step leaves 290 B. 612 KiB gzip is 487 B
-  // below it, so gzip keeps its tight 613 KiB step and leaves 537 B.
+  // and it refused an honest build of the fourth. 1961 KiB raw is 9 B below
+  // that artifact; the tight 1962 KiB step leaves 1,015 B. 612 KiB gzip is
+  // 348 B below it, so gzip keeps its tight 613 KiB step and leaves 676 B.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -140,18 +140,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
   // 1,717 / 1,194 B.
   // After charging the pre-render navigation chunk and compacting duplicated UI
-  // policy, the canonical config-free artifact measures 2,708,925 B raw /
-  // 821,678 B gzip. The reviewed Docker-defaults variant measures 2,708,924 B raw /
-  // 821,690 B gzip, the reviewed Pages variant measures 2,708,989 B raw /
-  // 821,734 B gzip, and the reviewed Google-Drive-configured variant measures
-  // 2,709,490 B raw / 821,968 B gzip and sets both maxima. Raw reads 2646 KiB
+  // policy, the canonical config-free artifact measures 2,708,200 B raw /
+  // 821,475 B gzip. The reviewed Docker-defaults variant measures 2,708,199 B raw /
+  // 821,590 B gzip, the reviewed Pages variant measures 2,708,264 B raw /
+  // 821,586 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 2,708,765 B raw / 821,831 B gzip and sets both maxima. Raw reads 2646 KiB
   // for the same reason as the first-party graph above: the configured-client-ID
   // deployment is supported, larger, and was never measured. 2645 KiB raw is
-  // 1,010 B below that artifact; the tight 2646 KiB step leaves 14 B — the
-  // smallest margin in this file, and a real one: the next byte that reaches
-  // this graph has to be justified or removed, not absorbed. 802 KiB gzip is
-  // 720 B below the artifact, so gzip keeps its tight 803 KiB step and leaves
-  // 304 B.
+  // 285 B below that artifact; the tight 2646 KiB step leaves 739 B. 802 KiB
+  // gzip is 583 B below the artifact, so gzip keeps its tight 803 KiB step and
+  // leaves 441 B.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
@@ -687,13 +685,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // identity from the descriptor they are given, which serves every provider
   // that declares those wires instead of three hard-coded names.
   //
+  // The dead browser-local descriptor pair also left this pack: nothing imported
+  // OFFICIAL_LOCAL_PROVIDERS, and it had already drifted from the endpoints the
+  // live loopback descriptor builds.
+  //
   // The canonical config-free artifact emits five classified packs and measures
-  // 144,107 B raw / 41,845 B gzip. The reviewed origin-inlined variant measures
-  // 144,107 B raw / 41,844 B gzip, and the reviewed Pages variant measures
-  // 144,107 B raw / 41,845 B gzip. 141 KiB raw would have left 277 B and 41 KiB
-  // gzip would have left 139 B, both below the tripwire floor. The tight
-  // 142/42 KiB steps leave 1,301 / 1,163 B.
-  optionalInferenceProviders: Object.freeze({ raw: 142 * 1024, gzip: 42 * 1024 }),
+  // 143,290 B raw / 41,653 B gzip. The reviewed Docker-defaults variant measures
+  // 143,290 B raw / 41,657 B gzip, the reviewed Pages variant measures
+  // 143,290 B raw / 41,656 B gzip, and the reviewed Google-Drive-configured
+  // variant measures 143,290 B raw / 41,654 B gzip. 140 KiB raw would have left
+  // 70 B and 41 KiB gzip would have left 327 B, both below the tripwire floor.
+  // The tight 141/42 KiB steps leave 1,094 / 1,351 B.
+  optionalInferenceProviders: Object.freeze({ raw: 141 * 1024, gzip: 42 * 1024 }),
   // The prime runtime port measured at 88,098 B raw / 26,594 B gzip — the
   // claim states the floor across both build modes, with the origin-inlined
   // Docker variant one raw byte and twenty-nine gzip bytes under the

@@ -473,6 +473,30 @@ describe("PrimeKernelHost (scripted worker)", () => {
     await host.terminate("throwing-subscriber test complete");
   });
 
+  /*
+   * Containment stops a subscriber throwing out of the dispatch frame; it does
+   * not stop one calling back in. A subscriber that terminated the host from
+   * inside `started` left dispatch arming a wall clock for a settled job and
+   * posting `exec` at a worker that no longer existed.
+   */
+  it("stops dispatching when a subscriber tears the host down mid-announcement", async () => {
+    const worker = makeScriptedWorker(false);
+    const { host } = makeHost(worker);
+    const boot = host.start();
+    worker.emit({ type: "ready", engine: "javascript" });
+    await boot;
+    host.onEvent((event) => {
+      if (event.type === "started") void host.terminate("subscriber tore the host down");
+    });
+
+    const result = await host.exec({ code: "true", jobId: "job-reentrant", timeoutMs: 1_000 });
+    expect(result.jobId).toBe("job-reentrant");
+    expect(result.outcome).not.toBe("completed");
+    // No exec frame reached the worker that was being torn down, and no stray
+    // wall clock survives to kill a later job with this one's reason.
+    expect(worker.posted.filter((message) => (message as { type?: string }).type === "exec")).toHaveLength(0);
+  });
+
   it("snapshots caller-owned job fields before asynchronous boot admission", async () => {
     const worker = makeScriptedWorker(false);
     const host = new PrimeKernelHost({

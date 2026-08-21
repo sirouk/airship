@@ -730,7 +730,12 @@ export class PyodideKernelEngine {
       stderr: [],
     };
     this.state = "busy";
+    const worker = this.worker;
     this.emit({ type: "started", jobId: queued.jobId, engine: "pyodide", label: queued.spec.label });
+    // The same re-entrancy fence the JavaScript host carries: a subscriber that
+    // cancels or terminates during this announcement leaves the job settled,
+    // and a wall clock armed afterwards belongs to nothing.
+    if (!worker || this.worker !== worker || this.job !== queued || this.activeProtocol?.job !== queued) return;
     const timeout = queued.spec.timeoutMs ?? this.budgets.maxJobWallMs;
     this.jobTimer = setTimeout(() => {
       const reason = `Kernel job ${queued.jobId} exceeded its wall-clock budget (${timeout} ms).`;

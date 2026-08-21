@@ -3,8 +3,6 @@ import type {
   InferenceProviderDescriptor,
 } from "./contracts";
 
-export type BuiltinLocalProviderId = "ollama" | "lm-studio";
-
 const BROWSER_DIRECT_API_KEY_WARNING = "This screen uses a browser-direct API key. It remains in this tab and is sent to the configured provider endpoint.";
 
 /**
@@ -118,58 +116,7 @@ export const OFFICIAL_CLOUD_PROVIDERS = deepFreeze([
   CHUTES_PROVIDER,
 ]) as readonly InferenceProviderDescriptor[];
 
-/**
- * Browser-local services are connection authorities, not Airship backends.
- * Their exact endpoint remains page-memory connection state; this descriptor
- * only declares the configured loopback protocol and authentication contract.
- */
-export const OFFICIAL_LOCAL_PROVIDERS = deepFreeze([
-  localProvider({
-    id: "ollama",
-    label: "Ollama",
-    baseUrl: "http://127.0.0.1:11434/",
-    modelsUrl: "http://127.0.0.1:11434/api/tags",
-    documentationUrl: "https://ollama.com/",
-  }),
-  localProvider({
-    id: "lm-studio",
-    label: "LM Studio",
-    baseUrl: "http://127.0.0.1:1234/",
-    modelsUrl: "http://127.0.0.1:1234/api/v1/models",
-    documentationUrl: "https://lmstudio.ai/docs/",
-  }),
-]) as readonly InferenceProviderDescriptor[];
-
 function provider(value: InferenceProviderDescriptor): InferenceProviderDescriptor {
   return deepFreeze(value) as InferenceProviderDescriptor;
 }
 
-function localProvider(input: Readonly<{
-  id: BuiltinLocalProviderId;
-  label: string;
-  baseUrl: string;
-  modelsUrl: string;
-  documentationUrl: string;
-}>): InferenceProviderDescriptor {
-  return provider({
-    version: 1,
-    id: input.id,
-    label: input.label,
-    protocol: "openai-compatible",
-    transportBoundary: "loopback-local",
-    baseUrl: input.baseUrl,
-    modelsUrl: input.modelsUrl,
-    oauth: {
-      state: "not-documented",
-      detail: "A browser-local model service uses no remote account or Airship backend.",
-    },
-    authMethods: [{
-      id: `${input.id}-loopback`,
-      kind: "local-none",
-      label: "This machine",
-      browserUse: "loopback-only",
-    }],
-    capabilities: ["invoke", "models:list"],
-    documentationUrl: input.documentationUrl,
-  });
-}

@@ -794,12 +794,23 @@ export class PrimeKernelHost {
       stderr: [],
     };
     this.state = "busy";
+    const worker = this.worker;
     this.emit({ type: "started", jobId: queued.jobId, engine: "javascript", label: queued.spec.label });
+    /*
+     * Containment stops a subscriber throwing out of this frame; it cannot stop
+     * one calling back in. A re-entrant cancel or terminate during the fan-out
+     * left this job settled and the worker gone, and the two lines below then
+     * armed a wall clock for a dead job — which later killed an unrelated one
+     * with the wrong reason — and posted `exec` at `this.worker!`, which was
+     * undefined. The authority read before the fan-out is the one this job runs
+     * on, and it has to still be the current one afterwards.
+     */
+    if (!worker || this.worker !== worker || this.job !== queued || this.activeProtocol?.job !== queued) return;
     const timeout = queued.spec.timeoutMs ?? this.budgets.maxJobWallMs;
     this.jobTimer = setTimeout(() => {
       void this.killWorker(`Kernel job ${queued.jobId} exceeded its wall-clock budget (${timeout} ms).`);
     }, timeout);
-    this.worker!.postMessage({ type: "exec", job: { jobId: queued.jobId, code: queued.spec.code, label: queued.spec.label } });
+    worker.postMessage({ type: "exec", job: { jobId: queued.jobId, code: queued.spec.code, label: queued.spec.label } });
   }
 
   private async onWorkerMessage(
@@ -1169,9 +1180,14 @@ export class PrimeKernelHost {
       bridgeCalls: active.nextBridgeSeq,
       wallMs: Math.max(0, this.now() - active.startedAt),
     };
+    // Ready before the fan-out, not after: a re-entrant exec() during the
+    // announcement used to set "booting" and have this line clobber it, so the
+    // next start() short-circuited and `exec` was posted before the ready
+    // handshake — the worker's completed frame was dropped and the job was
+    // published as a wall-clock crash.
+    this.state = "ready";
     job.resolve(result);
     this.emit({ type: "cancelled", jobId: job.jobId, result }, job.listeners);
-    this.state = "ready";
     if (this.queue.length > 0) {
       void this.start().then(() => this.dispatch()).catch(() => {
         // start() names the failure and settles every queued job.

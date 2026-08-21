@@ -53,7 +53,7 @@ ceiling.
 | Optional Skills route / skill editor | 8 KiB / 4 KiB | 4 KiB / 2 KiB |
 | Optional Terminal | 425 KiB | 112 KiB |
 | Optional semantic worker | 16 KiB | 6 KiB |
-| Optional inference/provider + Companion protocol packs | 142 KiB | 42 KiB |
+| Optional inference/provider + Companion protocol packs | 141 KiB | 42 KiB |
 | Optional prime runtime pack | 236 KiB | 72 KiB |
 | Pinned same-origin Pyodide distribution | 16384 KiB | 8192 KiB |
 | HTML-referenced entry CSS | 143 KiB | 26 KiB |
