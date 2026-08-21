@@ -25,6 +25,23 @@ const NOW = Date.parse("2026-07-24T12:00:00.000Z");
 const OBSERVED_AT = "2026-07-24T12:00:00.000Z";
 
 describe("browser inference fabric transactions", () => {
+  /*
+   * A subscriber observes; it does not participate. `#emit` ran bare inside
+   * `connectCloud`'s try, so a throwing UI listener landed in the catch and the
+   * rollback destroyed a connection that was already committed.
+   */
+  it("keeps a committed connection when a subscriber throws", async () => {
+    const fabric = testFabric();
+    fabric.subscribe(() => { throw new Error("hostile subscriber"); });
+
+    const connected = await fabric.connectCloud(cloudInput("openai", "sk-openai-memory-only"));
+    expect(connected.connection.providerId).toBe("openai");
+    expect(fabric.list().map((entry) => entry.connection.id)).toEqual([connected.connection.id]);
+
+    expect(fabric.disconnect(connected.connection.id)).toBe(true);
+    expect(fabric.list()).toEqual([]);
+  });
+
   it("keeps simultaneous cloud providers live without exposing either credential", async () => {
     const fabric = testFabric();
 

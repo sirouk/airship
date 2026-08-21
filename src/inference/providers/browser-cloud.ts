@@ -271,6 +271,9 @@ type CloudProviderDefinition = Readonly<{
   transportId: string;
   origin: string;
   catalogPath: string;
+  /** Where a turn is sent. Derived from `baseUrl`, which is not always the catalog host. */
+  invokeUrl: string;
+  authMethods: InferenceProviderDescriptor["authMethods"];
   /**
    * Set only where a page genuinely cannot reach the provider with an OAuth
    * token. `https://api.x.ai` sends no `access-control-allow-origin`, so the
@@ -280,10 +283,16 @@ type CloudProviderDefinition = Readonly<{
   oauthBridgeProvider?: BridgeProviderId;
 }>;
 
-/** One boundary check for all three browser-cloud wires. */
-function assertRemoteProvider(provider: InferenceProviderDescriptor): void {
+/**
+ * One admission check for all three browser-cloud wires: a remote boundary and
+ * the exact wire this transport speaks.
+ */
+function assertRemoteWire(provider: InferenceProviderDescriptor, wire: InferenceProviderDescriptor["protocol"][]): void {
   if (provider.transportBoundary !== "provider-tls") {
     throw new TypeError(`${provider.label} is not a remote browser-cloud provider.`);
+  }
+  if (!wire.includes(provider.protocol)) {
+    throw new TypeError(`${provider.label} does not use the ${wire[0]} wire.`);
   }
 }
 
@@ -304,11 +313,9 @@ function assertRemoteProvider(provider: InferenceProviderDescriptor): void {
 export function responsesDefinitionFromDescriptor(
   provider: InferenceProviderDescriptor,
 ): CloudProviderDefinition {
-  assertRemoteProvider(provider);
-  if (provider.protocol !== "openai-responses") {
-    throw new TypeError(`${provider.label} does not use the OpenAI Responses wire.`);
-  }
-  const catalog = new URL(provider.modelsUrl ?? new URL("models", directoryUrl(provider.baseUrl)).toString());
+  assertRemoteWire(provider, ["openai-responses"]);
+  const baseUrl = directoryUrl(provider.baseUrl);
+  const catalog = new URL(provider.modelsUrl ?? new URL("models", baseUrl).toString());
   const bridged = BRIDGE_PROVIDER_IDS.find((candidate: BridgeProviderId) => candidate === provider.id);
   return Object.freeze({
     providerId: provider.id,
@@ -316,6 +323,11 @@ export function responsesDefinitionFromDescriptor(
     transportId: `${transportToken(provider.id)}-responses-v1`,
     origin: catalog.origin,
     catalogPath: `${catalog.pathname}${catalog.search}`,
+    // A directory host and an inference host are two facts. Deriving the turn
+    // URL from the catalog origin sent a descriptor whose `baseUrl` differs
+    // from its `modelsUrl` to the wrong host entirely.
+    invokeUrl: new URL("responses", baseUrl).toString(),
+    authMethods: provider.authMethods,
     ...(bridged ? { oauthBridgeProvider: bridged } : {}),
   });
 }
@@ -392,10 +404,7 @@ export type ChatCompletionsProviderDefinition = Readonly<{
 function chatCompletionsDefinitionFromDescriptor(
   provider: InferenceProviderDescriptor,
 ): ChatCompletionsProviderDefinition {
-  assertRemoteProvider(provider);
-  if (provider.protocol !== "openai-compatible" && provider.protocol !== "openai-chat-completions") {
-    throw new TypeError(`${provider.label} does not use the OpenAI-compatible chat-completions wire.`);
-  }
+  assertRemoteWire(provider, ["openai-compatible", "openai-chat-completions"]);
   const baseUrl = directoryUrl(provider.baseUrl);
   return Object.freeze({
     providerId: provider.id,
@@ -412,7 +421,13 @@ function isApiKeyAuthMethod(method: InferenceAuthMethod): method is ApiKeyAuthMe
   return method.kind === "api-key";
 }
 
-function onlyApiKeyAuthMethod(provider: ChatCompletionsProviderDefinition): ApiKeyAuthMethod {
+/** Anything that declares how its provider takes an API key. */
+type ApiKeyDeclaringDefinition = Readonly<{
+  displayName: string;
+  authMethods: InferenceProviderDescriptor["authMethods"];
+}>;
+
+function onlyApiKeyAuthMethod(provider: ApiKeyDeclaringDefinition): ApiKeyAuthMethod {
   const methods = provider.authMethods.filter(isApiKeyAuthMethod);
   if (methods.length !== 1) {
     throw new TypeError(
@@ -523,7 +538,7 @@ export class OpenAiChatCompletionsBrowserTransport implements InferenceTransport
       const observedAt = new Date(this.options.now()).toISOString();
       const sourceUrl = this.provider.modelsUrl;
       return Object.freeze(
-        recordArray(payload, "data").slice(0, 2_048).flatMap((record) => {
+        catalogRecords(payload).slice(0, 2_048).flatMap((record) => {
           const id = boundedString(record.id, 512);
           if (!id) return [];
           return [
@@ -750,7 +765,7 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
     let completed = false;
     try {
       const response = await this.request(
-        `${this.provider.origin}/v1/responses`,
+        this.provider.invokeUrl,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -793,14 +808,19 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
   ): Promise<Response> {
     return this.options.withCredential(signal, async (credential) => {
       /*
-       * Both credential kinds present the same bearer header; only the route
-       * differs. An xAI OAuth token cannot travel the direct path at all — the
-       * browser discards a reply that carries no CORS grant — so it goes
-       * through the bridge or the request honestly fails as unavailable.
+       * An OAuth token is a bearer token by definition, and it cannot travel
+       * the direct path at all — the browser discards a reply that carries no
+       * CORS grant — so it goes through the bridge or the request honestly
+       * fails as unavailable. An API key is presented the way the descriptor
+       * says its provider takes one; this lane used to assume every provider
+       * on this wire wanted `authorization: Bearer`, which is true of the two
+       * that shipped and of nobody else by contract.
        */
       const headers = {
         ...objectHeaders(init.headers),
-        authorization: `Bearer ${credential.value}`,
+        ...(credential.kind === "oauth-access-token"
+          ? { authorization: `Bearer ${credential.value}` }
+          : apiKeyHeaders(onlyApiKeyAuthMethod(this.provider), credential.value)),
       };
       const response = await sendProviderRequest({
         options: this.options,
@@ -839,22 +859,24 @@ export type MessagesProviderDefinition = Readonly<{
   transportId: string;
   modelsUrl: string;
   messagesUrl: string;
+  authMethods: InferenceProviderDescriptor["authMethods"];
+  oauthBridgeProvider?: BridgeProviderId;
 }>;
 
 export function messagesDefinitionFromDescriptor(
   provider: InferenceProviderDescriptor,
 ): MessagesProviderDefinition {
-  assertRemoteProvider(provider);
-  if (provider.protocol !== "anthropic-messages") {
-    throw new TypeError(`${provider.label} does not use the Anthropic Messages wire.`);
-  }
+  assertRemoteWire(provider, ["anthropic-messages"]);
   const baseUrl = directoryUrl(provider.baseUrl);
+  const bridged = BRIDGE_PROVIDER_IDS.find((candidate: BridgeProviderId) => candidate === provider.id);
   return Object.freeze({
     providerId: provider.id,
     displayName: provider.label,
     transportId: `${transportToken(provider.id)}-messages-v1`,
     modelsUrl: provider.modelsUrl ?? new URL("models", baseUrl).toString(),
     messagesUrl: new URL("messages", baseUrl).toString(),
+    authMethods: provider.authMethods,
+    ...(bridged ? { oauthBridgeProvider: bridged } : {}),
   });
 }
 
@@ -895,7 +917,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
         if (afterId) url.searchParams.set("after_id", afterId);
         const response = await this.request(url.toString(), { method: "GET" }, lifetime.signal, {});
         const payload = await readJson(response, this.options.maxJsonBytes, "Anthropic");
-        const pageRecords = recordArray(payload, "data");
+        const pageRecords = catalogRecords(payload);
         records.push(...pageRecords);
         if (!isRecord(payload) || payload.has_more !== true) break;
         afterId = boundedString(payload.last_id, 512);
@@ -1076,7 +1098,9 @@ export class AnthropicBrowserTransport implements InferenceTransport {
           }
         : {
             ...objectHeaders(init.headers),
-            "x-api-key": credential.value,
+            // The header the descriptor declares, not the one this lane used to
+            // assume every Messages provider wanted.
+            ...apiKeyHeaders(onlyApiKeyAuthMethod(this.provider), credential.value),
             "anthropic-version": "2023-06-01",
             // Anthropic requires an explicit acknowledgement for direct browser
             // API use. Airship still treats this as a user-opted compatibility path.
@@ -1084,8 +1108,8 @@ export class AnthropicBrowserTransport implements InferenceTransport {
           };
       const response = await sendProviderRequest({
         options: this.options,
-        displayName: "Anthropic",
-        bridgeProvider: oauth ? "anthropic" : undefined,
+        displayName: this.provider.displayName,
+        bridgeProvider: oauth ? this.provider.oauthBridgeProvider : undefined,
         url,
         init,
         headers,
@@ -1473,12 +1497,6 @@ function anthropicImageSource(dataUrl: string): Record<string, unknown> {
     throw new ProviderTransportError("invalid-response", "Anthropic image input has an unsupported data URL.");
   }
   return { type: "base64", media_type: match[1], data: match[2] };
-}
-
-function openAiUnknownCapabilities(): Readonly<
-  Partial<Record<ModelCapability, ModelCapabilityEvidence>>
-> {
-  return Object.freeze({});
 }
 
 function modalityCapabilities(
@@ -2207,13 +2225,6 @@ function catalogRecords(payload: unknown): Record<string, unknown>[] {
     if (isRecord(payload) && Array.isArray(payload[field])) return payload[field].filter(isRecord);
   }
   throw new ProviderTransportError("invalid-response", "Model catalog has no data array.");
-}
-
-function recordArray(payload: unknown, field: string): Record<string, unknown>[] {
-  if (!isRecord(payload) || !Array.isArray(payload[field])) {
-    throw new ProviderTransportError("invalid-response", `Model catalog has no ${field} array.`);
-  }
-  return payload[field].filter(isRecord);
 }
 
 function parseToolCall(tool: { id: string; name: string; argumentsJson: string }): ToolCall {

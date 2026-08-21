@@ -56,6 +56,18 @@ export type BrowserCloudCatalogTransport = InferenceTransport & Readonly<{
   listModels(signal?: AbortSignal): Promise<readonly InferenceModelDescriptor[]>;
 }>;
 
+/**
+ * A subscriber observes; it does not participate. A bare fan-out lets one
+ * throwing view abort the transaction publishing the change.
+ */
+function notifyObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control the transaction that emitted this.
+  }
+}
+
 type Listener = () => void;
 
 export type BrowserInferenceFabricOptions = Readonly<{
@@ -697,7 +709,7 @@ export class BrowserInferenceFabric {
   }
 
   #emit(): void {
-    for (const listener of this.#listeners) listener();
+    for (const listener of this.#listeners) notifyObserver(listener, undefined);
   }
 }
 

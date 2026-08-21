@@ -19,6 +19,11 @@ import { InferenceProviderCatalog } from "./provider-catalog";
 
 const NOW = Date.parse("2026-07-24T12:00:00.000Z");
 
+function objectHeadersOf(init: RequestInit | undefined): Record<string, string> {
+  const headers = init?.headers ?? {};
+  return headers instanceof Headers ? Object.fromEntries(headers.entries()) : { ...headers as Record<string, string> };
+}
+
 describe("browser-direct cloud inference adapters", () => {
   it("discovers OpenAI models through a getter without retaining capability guesses", async () => {
     const getApiKey = vi.fn(() => "sk-memory-only");
@@ -515,12 +520,50 @@ describe("browser-direct cloud inference adapters", () => {
       getApiKey: () => "anthropic-memory-only",
     }).id).toBe("anthropic-messages-v1");
 
+    // A turn goes to the descriptor's own inference host, not to whatever host
+    // its catalog happens to live on.
+    const posted: string[] = [];
+    const split = new ResponsesBrowserTransport({
+      version: 1,
+      id: "split-host",
+      label: "Split Host",
+      protocol: "openai-responses",
+      transportBoundary: "provider-tls",
+      baseUrl: "https://inference.acme.test/v3/",
+      modelsUrl: "https://catalog.acme.test/v9/models",
+      oauth: { state: "not-documented", detail: "No public-PKCE registration." },
+      authMethods: [{
+        id: "split-key",
+        kind: "api-key",
+        label: "Split key",
+        header: { name: "x-acme-key", scheme: "raw" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Browser-direct key.",
+      }],
+      capabilities: ["invoke", "models:list"],
+      documentationUrl: "https://acme.test/docs",
+    }, {
+      connectionId: "split-main",
+      connectionGeneration: 1,
+      getApiKey: () => "split-secret",
+      now: () => NOW,
+      fetch: async (input, init) => {
+        posted.push(String(input));
+        // The declared header carries the key; `authorization` is not assumed.
+        expect(objectHeadersOf(init)).toMatchObject({ "x-acme-key": "split-secret" });
+        expect(objectHeadersOf(init).authorization).toBeUndefined();
+        return sseResponse([event("response.completed", { type: "response.completed", response: {} })]);
+      },
+    });
+    await collect(split.stream(request(), new AbortController().signal));
+    expect(posted).toEqual(["https://inference.acme.test/v3/responses"]);
+
     // A wire nobody reviewed is still refused.
     expect(() => new ResponsesBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "anthropic-memory-only",
-    })).toThrow(/does not use the OpenAI Responses wire/u);
+    })).toThrow(/does not use the openai-responses wire/u);
   });
 
   it("streams OpenAI Responses text, usage, and bounded function calls", async () => {

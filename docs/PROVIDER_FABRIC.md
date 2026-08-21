@@ -14,8 +14,11 @@ This document describes the fabric behind the **Providers** surface.
 5. No provider gets a privileged trust tier, and no transport is selected by
    provider identity. The wire a descriptor declares — OpenAI Responses,
    Anthropic Messages, or OpenAI-compatible chat completions — chooses the
-   transport, and that transport reads its origin, catalog endpoint and
-   authentication contract from the descriptor it was given.
+   transport, and that transport reads its catalog endpoint, inference
+   endpoint and API-key contract from the descriptor it was given. The
+   connection form in this build writes `openai-compatible` descriptors; the
+   other two wires are reachable by a registered descriptor, not yet by a
+   choice in the UI.
 6. Remote providers are `provider-tls`; exact local loopback providers are
    `loopback-local`.
 
@@ -29,7 +32,7 @@ This document describes the fabric behind the **Providers** surface.
 | Chutes | OpenAI-compatible | `https://llm.chutes.ai/v1` | `provider-tls` |
 | Ollama | OpenAI-compatible | `http://127.0.0.1:11434` | `loopback-local` |
 | LM Studio | OpenAI-compatible | `http://127.0.0.1:1234` | `loopback-local` |
-| Custom | OpenAI-compatible, OpenAI Responses, or Anthropic Messages | user supplied | `provider-tls` |
+| Custom | OpenAI-compatible | user supplied | `provider-tls` |
 
 ## Connection lifecycle
 

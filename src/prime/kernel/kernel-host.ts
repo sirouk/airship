@@ -1334,8 +1334,7 @@ export class PrimeKernelHost {
    * `ready`, and every later job hung behind it. A listener that threw only on
    * stdout turned a completed job into `crashed` with a worker-protocol
    * violation — a host-side observer bug journaled as a worker crash and a
-   * namespace reset. Every other fan-out in this repo already contains its
-   * listeners; this one is now the same.
+   * namespace reset.
    */
   private emit(event: KernelJobEvent, jobListeners?: ((event: KernelJobEvent) => void)[]): void {
     const notify = (listener: (event: KernelJobEvent) => void): void => {
