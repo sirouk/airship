@@ -283,8 +283,16 @@ jobs:
           fi
           [ -f dist/release-manifest.json ] && cp dist/release-manifest.json . || true
 
+      # Evidence records a verdict; it does not decide one. The upload API
+      # fails the whole job when the account's artifact storage quota is
+      # exhausted, which reported two red gates for a tree whose own tests had
+      # already been graded. A failure to file the record cannot be allowed to
+      # change the record, so this step reports its own failure and stops
+      # there. Shorter retention and maximum compression keep the store from
+      # filling in the first place; the gates above remain the verdict.
       - name: Upload evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ci-evidence-${{ matrix.gate }}-${{ github.run_id }}
@@ -304,4 +312,5 @@ jobs:
             artifact-checksums.txt
             release-manifest.json
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 7
+          compression-level: 9
