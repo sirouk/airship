@@ -3,11 +3,10 @@ import { canonicalSessionContextPolicy } from "../core/context-policy";
 import { assertValidSessionInferenceBinding } from "../core/inference-binding";
 import {
   JournalConflictError,
-  projectedSessionApprovalMode,
-  projectedSessionContextPolicy,
-  projectedSessionModel,
+  projectedSessionPins,
   projectedSessionTitle,
   type DurableEvent,
+  type JournalAppendOptions,
   type JournalBackend,
   type JournalHead,
   type SessionRecord,
@@ -216,6 +215,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     expectedHead: JournalHead,
     events: DurableEvent[],
     signal?: AbortSignal,
+    options?: JournalAppendOptions,
   ): Promise<SessionRecord> {
     if (events.length === 0) {
       const session = await this.getSession(sessionId, signal);
@@ -284,18 +284,8 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       const updated: SessionRecord = {
         ...current,
         title: projectedSessionTitle(events, current.title),
-        // stableStringify cannot carry an explicit undefined key, so the
-        // override is never minted absent — the pinned manifest is what an
-        // absent override means.
-        ...(projectedSessionApprovalMode(events, current.approvalModeOverride) !== undefined
-          ? { approvalModeOverride: projectedSessionApprovalMode(events, current.approvalModeOverride) }
-          : {}),
-        ...(projectedSessionModel(events, current.modelOverride) !== undefined
-          ? { modelOverride: projectedSessionModel(events, current.modelOverride) }
-          : {}),
-        ...(projectedSessionContextPolicy(events, current.contextPolicyOverride) !== undefined
-          ? { contextPolicyOverride: projectedSessionContextPolicy(events, current.contextPolicyOverride) }
-          : {}),
+        // A replay grants nothing; see `JournalAppendOptions`.
+        ...(options?.replay ? {} : projectedSessionPins(events, current)),
         /* Bookkeeping does not make a conversation recent; see
            `SESSION_BOOKKEEPING_EVENT_TYPES`. This backend is the Vault lane and
            was missed when the page-memory and IndexedDB lanes were fixed, so

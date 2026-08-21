@@ -197,7 +197,19 @@ export async function decideHumanIntent(options: Readonly<{
   argumentsValue: JsonValue;
   context: ToolContext;
 }>): Promise<HumanIntentReview> {
-  if (options.mode === "full-access") {
+  /*
+   * "Reviewed in every approval mode" was true of the model-proposed path and
+   * false here. Under Full Access this returned `allow` without asking anyone
+   * and journaled `fullAccessReason("write")` — "its workspace path
+   * confinement" — for a call naming a folder on the person's own disk, which
+   * is the one place that confinement does not hold. The mode still governs
+   * everything else; this one class of effect asks, exactly as
+   * `createApprovalModePolicy` above makes it ask.
+   */
+  const folderReview = options.mode === "full-access"
+    && options.tool.effect !== "read"
+    && namesAttachedFolder(options.argumentsValue);
+  if (options.mode === "full-access" && !folderReview) {
     return Object.freeze({
       decision: "allow" as const,
       provenance: Object.freeze({
@@ -213,14 +225,46 @@ export async function decideHumanIntent(options: Readonly<{
     decision,
     provenance: Object.freeze({
       mode: options.mode,
-      source: outcome === "unavailable" ? "unattended" as const : "human" as const,
+      // Never `human` for a mode that says it will not ask and then asked: that
+      // is the fallback vocabulary the mode policy already uses for this exact
+      // class of effect.
+      source: outcome === "unavailable"
+        ? "unattended" as const
+        : folderReview ? "human-fallback" as const : "human" as const,
       // The allow sentence stays its own: this is the one path where the person
       // proposed the effect as well as permitting it, and the record says so.
-      reason: outcome === "allow"
-        ? "Allowed once by the user, who proposed the action."
-        : approvalOutcomeReason(outcome),
+      reason: folderReview
+        ? `${ATTACHED_FOLDER_REVIEW_REASON} ${approvalOutcomeReason(outcome)}`
+        : outcome === "allow"
+          ? "Allowed once by the user, who proposed the action."
+          : approvalOutcomeReason(outcome),
     }),
   });
+}
+
+/**
+ * The approval mode the conversation on screen puts the page into.
+ *
+ * The shell reads this from whichever conversation is displayed, held or not,
+ * and every human-proposed effect — a Git commit and push, a GitHub import,
+ * the vault probe — is decided under it. A conversation that arrived in a
+ * bundle file therefore grants authority just by being opened, which is what
+ * the product tells a person to do with one: measured, a file landed
+ * `full-access` on the record and the composer read "Full Access". Its record
+ * and its pinned manifest were both written on another device, so a held
+ * import contributes no mode at all and this device's own preference governs.
+ */
+export function displayedSessionApprovalMode(
+  session: Readonly<{
+    importedAt?: string;
+    approvalModeOverride?: ApprovalMode;
+    manifest: Readonly<{ profile?: Readonly<{ version: number; approvalMode?: ApprovalMode }> }>;
+  }> | undefined,
+  preference: ApprovalMode,
+): ApprovalMode {
+  if (!session || session.importedAt !== undefined) return preference;
+  return session.approvalModeOverride
+    ?? (session.manifest.profile?.version === 2 ? session.manifest.profile.approvalMode ?? preference : preference);
 }
 
 /**

@@ -86,6 +86,25 @@ export type JournalAppendCommit = Readonly<{
   session: SessionRecord;
 }>;
 
+/**
+ * How an append relates to the record it lands on.
+ *
+ * `replay` says these events are a copy of a history that was already
+ * projected somewhere else, so the record they land under is the one
+ * `createSession` received rather than one re-derived from the events. It
+ * exists because a device-granted pin is projected out of a session event
+ * (`projectedSessionPins`), and replaying a history therefore *re-grants*
+ * every pin in it. That is right for a Vault move, where the record copied in
+ * already carries those pins verbatim, and wrong for a bundle file, whose
+ * record may carry none of them: measured, a file whose record declared no
+ * pins landed a conversation in `full-access` with a model override, because
+ * `session.approval-policy-changed` and `session.model-changed` rode in as
+ * events and the projection believed them. A file is not authority, so a
+ * replay projects the conversation's own facts — its title and its recency —
+ * and grants nothing.
+ */
+export type JournalAppendOptions = Readonly<{ replay?: boolean }>;
+
 export interface JournalBackend {
   createSession(session: SessionRecord, signal?: AbortSignal): Promise<void>;
   getSession(sessionId: string, signal?: AbortSignal): Promise<SessionRecord | undefined>;
@@ -102,6 +121,7 @@ export interface JournalBackend {
      * relabelling a durable write as an abort.
      */
     signal?: AbortSignal,
+    options?: JournalAppendOptions,
   ): Promise<SessionRecord>;
   /**
    * Remove a conversation and its events. Absent for a very long time.
@@ -812,6 +832,30 @@ export function projectedSessionContextPolicy(
  * the reason title lives here: a lost projection was what previously stranded
  * these decisions as page-memory-only.
  */
+/**
+ * Every device-granted pin an append projects, in one place.
+ *
+ * Both backends used to inline the same three "compute it, test it, compute it
+ * again" spreads. Naming the set is what lets a replay decline all of them at
+ * once (`JournalAppendOptions`) instead of each backend remembering which
+ * fields are grants and which are the conversation's own facts.
+ */
+export function projectedSessionPins(
+  events: readonly DurableEvent[],
+  current: Readonly<Pick<SessionRecord, "approvalModeOverride" | "modelOverride" | "contextPolicyOverride">>,
+): Partial<SessionRecord> {
+  const approvalModeOverride = projectedSessionApprovalMode(events, current.approvalModeOverride);
+  const modelOverride = projectedSessionModel(events, current.modelOverride);
+  const contextPolicyOverride = projectedSessionContextPolicy(events, current.contextPolicyOverride);
+  return {
+    // stableStringify cannot carry an explicit undefined key, so an override is
+    // never minted absent — the pinned manifest is what an absent override means.
+    ...(approvalModeOverride !== undefined ? { approvalModeOverride } : {}),
+    ...(modelOverride !== undefined ? { modelOverride } : {}),
+    ...(contextPolicyOverride !== undefined ? { contextPolicyOverride } : {}),
+  };
+}
+
 export function projectedSessionApprovalMode(
   events: readonly DurableEvent[],
   fallback: ApprovalProvenance["mode"] | undefined,

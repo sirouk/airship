@@ -5,7 +5,7 @@ import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
 // Type only: erased at build time, so the dock's code is still fetched rather
 // than pulled back into the entry chunk.
 import type { ApprovalDockProps } from "./approval-dock";
-import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
+import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, displayedSessionApprovalMode, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
 import type { VaultUsageFacts } from "./vault-view";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
@@ -1604,11 +1604,8 @@ export function App() {
      the two stream concurrently within a step, and one store keyed by message
      id cannot hold both without interleaving them into the same string. */
   const reasoningStreams = useMemo(() => new TranscriptStreamStore(), []);
-  /** A conversation pin wins over global preferences; historical sessions stay semantically intact. */
-  const pinnedApprovalMode = activeSessionRecord?.approvalModeOverride
-    ?? (activeSessionRecord?.manifest.profile?.version === 2
-      ? activeSessionRecord.manifest.profile.approvalMode
-      : preferences.approvalMode);
+  /** A conversation pin wins over global preferences; a file's pin never does. */
+  const pinnedApprovalMode = displayedSessionApprovalMode(activeSessionRecord, preferences.approvalMode);
   const activeApprovalMode = liveApprovalMode && liveApprovalMode.sessionId === activeSessionRecord?.id
     ? liveApprovalMode.mode
     : pinnedApprovalMode;

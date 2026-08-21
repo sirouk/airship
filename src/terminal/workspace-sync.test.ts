@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FileSystemTree } from "@webcontainer/api";
 import { MemoryWorkspace } from "../workspace/memory";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes } from "../workspace/content-codec";
-import { mountTerminalWorkspace, reconcileTerminalWorkspace, syncTerminalWorkspace } from "./workspace-sync";
+import { ATTACHED_FOLDER_REFUSAL, mountTerminalWorkspace, reconcileTerminalWorkspace, syncTerminalWorkspace } from "./workspace-sync";
 
 describe("terminal workspace synchronization", () => {
   it("mounts bounded user files, excludes control state, and adopts revision-fenced changes", async () => {
@@ -182,8 +182,16 @@ describe("terminal workspace synchronization", () => {
     exported = { ...mounted, local: { directory: { "airship": { directory: { "secrets.env": { file: { contents: "OPENAI_API_KEY=stolen\n" } } } } } } };
     await expect(syncTerminalWorkspace(host, workspace, baseline))
       .rejects.toThrow(/does not carry the folder you attached from this device/u);
+    /*
+     * The sentence has to be true of the path it sends a person to. A workbench
+     * save writes straight through the workspace port with no broker — the same
+     * port the Terminal writes through — so "every write to it is reviewed" was
+     * false. What that path does have is a person choosing each file and
+     * pressing Save, and an agent write that is reviewed in every approval mode.
+     */
     await expect(syncTerminalWorkspace(host, workspace, baseline))
-      .rejects.toThrow(/Work on it in the Workspace or the editor, where every write to it is reviewed/u);
+      .rejects.toThrow(/where you save it yourself and every agent write to it is reviewed/u);
+    expect(ATTACHED_FOLDER_REFUSAL).not.toContain("where every write to it is reviewed");
     await expect(syncTerminalWorkspace(host, workspace, baseline))
       .rejects.toThrow(/Refused: \/workspace\/local\/airship\/secrets\.env/u);
     // The real file is untouched.

@@ -29,7 +29,10 @@ describe("what the move-work panel says before it writes anything", () => {
     expect(sentence).toContain("This bundle holds 4 conversations.");
     expect(sentence).toContain("1 will be added.");
     expect(sentence).toContain("1 is already here and will be skipped.");
-    expect(sentence).toContain("1 will be refused: this journal holds different work under the same id.");
+    // The count names both reasons a conversation is refused as a conflict —
+    // a different conversation under that id, and one the file addresses to
+    // another profile — and the row beside each says which.
+    expect(sentence).toContain("1 will be refused: different work under that id, or another profile's.");
     expect(sentence).toContain("1 will be refused: the digest chain did not verify.");
   });
 

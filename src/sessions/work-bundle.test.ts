@@ -6,6 +6,7 @@ import { MemoryWorkspace } from "../workspace/memory";
 import { migrateJournalState } from "../vault/runtime-adoption";
 import { auditSessionHistory } from "../core/session-audit";
 import { decideSessionResume, extractSessionPins } from "./domain";
+import { SessionLibrary } from "./library";
 import {
   IMPORTED_CONVERSATION_REFUSAL,
   importedConversation,
@@ -13,9 +14,12 @@ import {
   resumableProfileManifestMatches,
 } from "./profile-cockpit";
 import type { ActiveSessionRuntime, SessionHistoryAssessment } from "./domain";
+import type { SessionProfileBinding } from "../core/contracts";
 import type { SessionRecord } from "../core/journal";
 import {
+  REFUSED_BUNDLE_PINS,
   WORK_BUNDLE_SEAL_NAMESPACE,
+  WORK_BUNDLE_SESSION_FIELDS,
   applyWorkBundleImport,
   collectWorkBundle,
   isSealedWorkBundle,
@@ -59,13 +63,35 @@ async function device(): Promise<Readonly<{ backend: MemoryJournalBackend; journ
   return { backend, journal: new EventJournal(backend) };
 }
 
-async function conversation(journal: EventJournal, title: string): Promise<string> {
+/** The Profile pin every conversation the product mints actually carries. */
+function profileBinding(profileId: string): SessionProfileBinding {
+  return Object.freeze({
+    version: 2,
+    profileId,
+    profileRevision: "1",
+    themeId: "default",
+    themeDigest: "theme",
+    resolvedSkills: [],
+    skillSetDigest: "skills",
+    resolutionDigest: "resolution",
+    workspaceBinding: { kind: "active-workspace" },
+    memoryScope: "profile",
+    approvalMode: "ask-first",
+  }) as SessionProfileBinding;
+}
+
+async function conversation(
+  journal: EventJournal,
+  title: string,
+  profile?: SessionProfileBinding,
+): Promise<string> {
   const manifest = await createSessionManifest({
     systemPrompt: "test",
     providerId: "local",
     model: "demo",
     tools: [],
     workspaceId: "workspace",
+    ...(profile ? { profile } : {}),
   });
   const session = await journal.createSession(title, manifest);
   // A real journal verb rather than a synthetic event: `session.renamed` is
@@ -380,38 +406,223 @@ describe("work bundle", () => {
   });
 
   /*
-   * Real history still crosses; only the unaudited copy of it does not.
+   * Refusing the record's copy of a pin was not enough, and this is the test
+   * that used to say so out loud.
    *
-   * A mode a person chose is journaled as `session.approval-mode.changed`, so
-   * the projection re-derives it from the events the bundle carries. The
-   * record's own copy is the *fallback* the projection uses when no event says
-   * otherwise, which is exactly what a crafted file was reaching, so it is the
-   * copy that stops travelling.
+   * It asserted that the pin was "re-derived from the chain" on the landing
+   * device, which is the defeat: `migrateJournalState` replays the file's whole
+   * history through `JournalBackend.append`, and that append's projection reads
+   * a pin out of `session.approval-policy-changed` and `session.model-changed`
+   * and writes it onto the landed record. So a file that carried no pin at all
+   * still granted one — the product's own export button was enough to build it.
+   * A replay now grants nothing (`JournalAppendOptions`); the events are still
+   * in the file, readable and audited, and they change nothing this device did
+   * not decide for itself.
    */
-  it("takes a pinned conversation out without taking the record's copy of the pin", async () => {
+  it("lands a pinned conversation with the pin its events would have granted refused", async () => {
     const laptop = await device();
     const id = await conversation(laptop.journal, "Pinned here");
-    await laptop.journal.setSessionApprovalMode(id, "auto-approve");
-    expect((await laptop.journal.getSession(id))?.approvalModeOverride).toBe("auto-approve");
+    await laptop.journal.setSessionApprovalMode(id, "full-access");
+    await laptop.journal.setSessionModel(id, "attacker-model");
+    expect((await laptop.journal.getSession(id))?.approvalModeOverride).toBe("full-access");
+    expect((await laptop.journal.getSession(id))?.modelOverride).toBe("attacker-model");
 
     const bundle = await bundleOf(laptop.journal, [id]);
     expect(bundle.conversations[0]!.session.approvalModeOverride).toBeUndefined();
     expect(serializeWorkBundle(bundle)).not.toContain("approvalModeOverride");
-    // The audited event is still in the file, so the history is not lost.
+    // The audited events are still in the file, so the history is not lost.
     expect(bundle.conversations[0]!.events.map((event) => event.type))
-      .toContain("session.approval-policy-changed");
+      .toEqual(expect.arrayContaining(["session.approval-policy-changed", "session.model-changed"]));
 
     const phone = await device();
     const { result } = await importInto(phone, parseWorkBundle(serializeWorkBundle(bundle)));
     expect(result.imported).toBe(1);
-    // Re-derived from the chain, not adopted from the record beside it.
-    expect((await phone.journal.getSession(id))?.approvalModeOverride).toBe("auto-approve");
+    const landed = await phone.journal.getSession(id);
+    // The whole point: no mode, no model, no context policy came out of a file.
+    expect(landed?.approvalModeOverride).toBeUndefined();
+    expect(landed?.modelOverride).toBeUndefined();
+    expect(landed?.contextPolicyOverride).toBeUndefined();
+    // Everything the file legitimately carries still landed, digests and all.
+    expect(landed?.headDigest).toBe((await laptop.journal.getSession(id))?.headDigest);
+    expect((await phone.journal.readEvents(id)).map((event) => event.digest))
+      .toEqual((await laptop.journal.readEvents(id)).map((event) => event.digest));
+    const report = await auditSessionHistory({ session: landed!, events: await phone.journal.readEvents(id) });
+    expect(report.status).toBe("verified");
 
     // And re-offering the same file to the device that still holds the pin is
     // recognised as the same conversation rather than reported as a conflict.
     const again = await importInto(laptop, parseWorkBundle(serializeWorkBundle(bundle)));
     expect(again.plan.conversations.map((entry) => entry.state)).toEqual(["present"]);
     expect(again.result.skipped).toBe(1);
+  });
+
+  /*
+   * The same replay, on the device's own storage move, must keep the pin.
+   *
+   * A Vault adoption copies the record verbatim through `createSession` and
+   * then replays the events, so the pin the person chose on this device
+   * survives without the replay re-granting anything. This is the half of the
+   * fix that could have been broken silently.
+   */
+  it("keeps a pin the person set on this device when its journal moves storage", async () => {
+    const here = await device();
+    const id = await conversation(here.journal, "Mine");
+    await here.journal.setSessionApprovalMode(id, "auto-approve");
+    await here.journal.setSessionModel(id, "chosen-model");
+
+    const vault = await device();
+    await migrateJournalState(here.journal, vault.backend);
+    const moved = await vault.journal.getSession(id);
+    expect(moved?.approvalModeOverride).toBe("auto-approve");
+    expect(moved?.modelOverride).toBe("chosen-model");
+    expect(moved?.headDigest).toBe((await here.journal.getSession(id))?.headDigest);
+    expect(moved?.updatedAt).toBe((await here.journal.getSession(id))?.updatedAt);
+    // Idempotent: adopting the same journal again is a match, not a conflict.
+    await expect(migrateJournalState(here.journal, vault.backend)).resolves.toBeUndefined();
+  });
+
+  /*
+   * A conversation lands in the Profile the *file* names, not the one doing the
+   * importing, and every reader of the journal narrows on that pin.
+   *
+   * Measured before the refusal: imported from a panel bound to General, zero
+   * landed in General and one landed in `finance`. A file naming a Profile this
+   * browser does not have is worse — the conversation is on the device and
+   * reachable by no route at all.
+   */
+  it("refuses a conversation the file addresses to another profile", async () => {
+    const laptop = await device();
+    const id = await conversation(laptop.journal, "Payroll", profileBinding("finance"));
+    const bundle = parseWorkBundle(serializeWorkBundle(await bundleOf(laptop.journal, [id])));
+
+    // The panel doing the importing is bound to General; `importInto` passes it.
+    const phone = await device();
+    const { plan, result } = await importInto(phone, bundle);
+    expect(plan.conversations[0]!.state).toBe("conflict");
+    expect(plan.conversations[0]!.reason).toContain("pinned to the finance profile");
+    expect(plan.conversations[0]!.reason).toContain("lands in the profile doing the importing");
+    expect(result.refused).toBe(1);
+    expect(result.imported).toBe(0);
+    // Nothing was written, in that profile or any other.
+    expect(await phone.journal.listSessions()).toEqual([]);
+
+    // The applier asks again rather than trusting a plan read for some other
+    // profile: a plan that said "new" still writes nothing.
+    const forged = Object.freeze({
+      ...plan,
+      conversations: Object.freeze([{ ...plan.conversations[0]!, state: "new" as const, reason: undefined }]),
+    });
+    const forced = await applyWorkBundleImport({
+      bundle, plan: forged, target: phone.backend, migrate: migrateJournalState, profileId: "general",
+    });
+    expect(forced.refused).toBe(1);
+    expect(await phone.journal.listSessions()).toEqual([]);
+
+    // And the profile that owns it takes it in unchanged.
+    const finance = await device();
+    const chain = await verifyWorkBundleChain(bundle);
+    const ownPlan = await planWorkBundleImport({ bundle, journal: finance.journal, chain, profileId: "finance" });
+    expect(ownPlan.conversations[0]!.state).toBe("new");
+    const owned = await applyWorkBundleImport({
+      bundle, plan: ownPlan, target: finance.backend, migrate: migrateJournalState, profileId: "finance",
+    });
+    expect(owned.imported).toBe(1);
+  });
+
+  /*
+   * A record was cast, not read: five named pins were refused and every other
+   * key was copied onto the journal record verbatim. The cost is not the junk
+   * that lands today — it is that the next pin added to `SessionRecord` is
+   * file-granted from the day it is declared until somebody remembers the list.
+   */
+  it("refuses a record field this build does not know, rather than landing it", async () => {
+    const laptop = await device();
+    const id = await conversation(laptop.journal, "Unknown field");
+    const crafted = JSON.parse(serializeWorkBundle(await bundleOf(laptop.journal, [id]))) as {
+      conversations: { session: Record<string, unknown> }[];
+    };
+    crafted.conversations[0]!.session.sandboxEscape = true;
+
+    expect(() => parseWorkBundle(JSON.stringify(crafted))).toThrow(/carries sandboxEscape on conversation/u);
+    expect(() => parseWorkBundle(JSON.stringify(crafted)))
+      .toThrow(/a field this build does not read is a grant it cannot check, so nothing was written/u);
+  });
+
+  /*
+   * The allowlist above is only as good as its coverage of the record type, so
+   * this is the assertion that fails when a field is added and forgotten.
+   * `Required<SessionRecord>` makes the object below a compile error until the
+   * new field is named, and the comparison makes it a test failure until the
+   * field is put in one of the two lists deliberately.
+   */
+  it("accounts for every field of a session record in one of its two lists", async () => {
+    const laptop = await device();
+    const id = await conversation(laptop.journal, "Coverage");
+    const record = (await laptop.journal.getSession(id))!;
+    const everyField: Required<SessionRecord> = {
+      id: record.id,
+      title: record.title,
+      manifest: record.manifest,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      headSequence: record.headSequence,
+      headDigest: record.headDigest,
+      headIncarnation: "incarnation",
+      importedAt: "2026-08-21T09:00:00.000Z",
+      approvalModeOverride: "full-access",
+      modelOverride: "model",
+      contextPolicyOverride: null,
+    };
+    expect([...Object.keys(everyField)].sort())
+      .toEqual([...WORK_BUNDLE_SESSION_FIELDS, ...REFUSED_BUNDLE_PINS].sort());
+  });
+
+  /*
+   * The open question, settled.
+   *
+   * `forkFromMessage` — the transcript's Fork, Edit and Retry — is the one fork
+   * call site that supplies no manifest, so its branch inherits
+   * `manifestAtBoundary(source)`: the source's whole manifest, including the
+   * `systemPrompt` sent to the provider on every turn. On a conversation that
+   * arrived in a bundle that is `IMPORTED_CONVERSATION_REFUSAL` undone by
+   * another door — the import is held because its instructions were written
+   * somewhere else, and the branch would be a conversation that is *not* held,
+   * carrying those instructions, able to take turns. It is reachable: an
+   * exported conversation carries real `turn.requested`/`turn.completed`
+   * events, every message row therefore exposes a `sourcePoint`, and
+   * `branchDisabled` asks only for a source point. So it refuses.
+   */
+  it("refuses to branch an imported conversation onto the manifest that came with it", async () => {
+    const laptop = await device();
+    const id = await conversation(laptop.journal, "Branchable");
+    const phone = await device();
+    expect((await importInto(phone, parseWorkBundle(serializeWorkBundle(await bundleOf(laptop.journal, [id]))))).result.imported).toBe(1);
+    const landed = (await phone.journal.getSession(id))!;
+    expect(landed.importedAt).toBeDefined();
+
+    // What the transcript's Fork/Edit/Retry does: no manifest of its own.
+    const library = new SessionLibrary(phone.journal);
+    await expect(library.fork(id, { title: "Branch" })).rejects.toThrow(
+      /arrived in a bundle file. A branch of it has to be pinned to this device's own profile/u,
+    );
+    await expect(library.fork(id, { title: "Branch" })).rejects.toThrow(/use .Fork to continue./u);
+    // Nothing was created, so nothing can take a turn on the file's prompt.
+    expect((await phone.journal.listSessions()).map((entry) => entry.id)).toEqual([id]);
+
+    // And the remedy the product already offers still works: a branch pinned to
+    // this device's own manifest, which is what "Fork to continue" passes.
+    const mine = await createSessionManifest({
+      systemPrompt: "composed here",
+      providerId: "local",
+      model: "demo",
+      tools: [],
+      workspaceId: "workspace",
+    });
+    const forked = await library.fork(id, { title: "Continued here", manifest: mine });
+    expect(forked.session.manifest.systemPrompt).toBe("composed here");
+    expect(forked.session.manifest.systemPromptDigest).toBe(mine.systemPromptDigest);
+    expect(forked.session.importedAt).toBeUndefined();
+    expect(forked.session.manifest.lineage?.sourceSessionId).toBe(id);
   });
 
   /*

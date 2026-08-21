@@ -1,11 +1,10 @@
 import {
   JournalConflictError,
   lastRecencyAdvancingEvent,
-  projectedSessionApprovalMode,
-  projectedSessionContextPolicy,
-  projectedSessionModel,
+  projectedSessionPins,
   projectedSessionTitle,
   type DurableEvent,
+  type JournalAppendOptions,
   type JournalBackend,
   type SessionRecord,
 } from "./journal";
@@ -51,6 +50,8 @@ export class MemoryJournalBackend implements JournalBackend {
     sessionId: string,
     expectedHead: { sequence: number; digest: string },
     events: DurableEvent[],
+    signal?: AbortSignal,
+    options?: JournalAppendOptions,
   ): Promise<SessionRecord> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
@@ -77,15 +78,8 @@ export class MemoryJournalBackend implements JournalBackend {
     const updated: SessionRecord = {
       ...session,
       title: projectedSessionTitle(events, session.title),
-      ...(projectedSessionApprovalMode(events, session.approvalModeOverride) !== undefined
-        ? { approvalModeOverride: projectedSessionApprovalMode(events, session.approvalModeOverride) }
-        : {}),
-      ...(projectedSessionModel(events, session.modelOverride) !== undefined
-        ? { modelOverride: projectedSessionModel(events, session.modelOverride) }
-        : {}),
-      ...(projectedSessionContextPolicy(events, session.contextPolicyOverride) !== undefined
-        ? { contextPolicyOverride: projectedSessionContextPolicy(events, session.contextPolicyOverride) }
-        : {}),
+      // A replay grants nothing; see `JournalAppendOptions`.
+      ...(options?.replay ? {} : projectedSessionPins(events, session)),
       /* The head is the head — it always advances. `updatedAt` is a
          reading about the conversation, so a bookkeeping-only append
          (selecting this thread, reordering a favorite) leaves it where

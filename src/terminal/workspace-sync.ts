@@ -27,11 +27,19 @@ const EXCLUDED = new Set([".git", ".airship", "node_modules"]);
  * anywhere on that path, because `syncTerminalWorkspace` writes through the
  * port rather than through the tool broker. So the folder is not mounted, and
  * output addressed to it is refused rather than written.
+ *
+ * The sentence below used to send a person to the Workspace "where every write
+ * to it is reviewed", and a workbench save writes through the same port with
+ * no broker either. What is true of that path is the part that matters: the
+ * person picks the file and presses Save, one write at a time, and the agent's
+ * own writes to that folder are reviewed in every approval mode
+ * (`ATTACHED_FOLDER_REVIEW_REASON` in `src/approvals/modes.ts`). The Terminal
+ * has neither property, which is why it refuses.
  */
 export const ATTACHED_FOLDER_REFUSAL =
   "The Terminal does not carry the folder you attached from this device: it copies files into a sandbox and writes"
   + " them back with no approval request, and that folder is written in place. Work on it in the Workspace or the"
-  + " editor, where every write to it is reviewed. Nothing on your device was changed.";
+  + " editor, where you save it yourself and every agent write to it is reviewed. Nothing on your device was changed.";
 
 type Host = Readonly<{
   fs: Readonly<{

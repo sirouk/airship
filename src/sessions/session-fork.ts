@@ -23,6 +23,14 @@ import {
   type SessionForkResult,
 } from "./library";
 
+/**
+ * What a branch of an imported conversation is told, when nobody named the
+ * manifest it should be pinned to.
+ */
+export const IMPORTED_CONVERSATION_FORK_REFUSAL =
+  "This conversation arrived in a bundle file. A branch of it has to be pinned to this device's own profile,"
+  + " not to the instructions that came with it; use “Fork to continue”.";
+
 /** Lazy implementation: a user who never forks a conversation never fetches it. */
 export async function forkSession(
   journal: EventJournal,
@@ -36,6 +44,26 @@ export async function forkSession(
   const source = await journal.getSession(sourceSessionId);
   throwIfAborted(request.signal);
   if (!source) throw new Error(`Unknown session: ${sourceSessionId}`);
+  /*
+   * A branch of a conversation that arrived in a file is pinned by this device
+   * or not made at all.
+   *
+   * Without `request.manifest` a fork inherits `manifestAtBoundary(source)` —
+   * the source's whole manifest, including the `systemPrompt` sent to the
+   * provider on every turn the branch ever takes. For a conversation this
+   * browser composed that is exactly right. For one that arrived in a bundle it
+   * is the refusal in `IMPORTED_CONVERSATION_REFUSAL` undone by another door:
+   * the import is held because its instructions were written somewhere else,
+   * and the branch would carry those instructions into a conversation that is
+   * *not* held and can take turns. `forkHeldConversation`, the Sessions view
+   * and the `sessions.fork` command all pass this device's own manifest and are
+   * unaffected; the transcript's Fork/Edit/Retry did not, which is the one call
+   * site this closes. Checked here rather than at that call site so a later
+   * caller cannot reopen it by forgetting.
+   */
+  if (source.importedAt !== undefined && !request.manifest) {
+    throw new SessionForkConflictError(IMPORTED_CONVERSATION_FORK_REFUSAL);
+  }
   if (
     request.expectedSourceHead &&
     (

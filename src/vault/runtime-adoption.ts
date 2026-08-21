@@ -142,6 +142,14 @@ export function adoptionCarriedNote(carried: AdoptionCarriedWork | undefined): s
  * three reads and nothing else, and typing the parameter as the class made the
  * class the only possible source. The behaviour is unchanged — skip a session
  * already present, refuse a conflicting one, never overwrite.
+ *
+ * The replay grants no pin (`JournalAppendOptions`). The landed record is the
+ * one `createSession` was handed, which is how both callers stay correct: a
+ * Vault move copies the source record verbatim, pins and all, so its
+ * conversation keeps the mode and the model the person chose on this device;
+ * a bundle's record may carry no pin at all, and its `session.approval-policy-
+ * changed` and `session.model-changed` events no longer re-grant one on the
+ * way in.
  */
 export async function migrateJournalState(source: JournalStateSource, target: JournalBackend): Promise<void> {
   const sessions = await source.listSessions();
@@ -191,7 +199,7 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
     };
     for (let offset = 0; offset < events.length; offset += 4_096) {
       const segment = events.slice(offset, offset + 4_096);
-      const updated = await target.append(session.id, expectedHead, segment);
+      const updated = await target.append(session.id, expectedHead, segment, undefined, { replay: true });
       expectedHead = {
         sequence: updated.headSequence,
         digest: updated.headDigest,

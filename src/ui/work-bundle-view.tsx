@@ -389,7 +389,11 @@ export function planSentence(plan: WorkBundleImportPlan): string {
   const parts = [`This bundle holds ${countLabel(plan.conversations.length)}.`];
   parts.push(`${String(counts.new)} will be added.`);
   if (counts.present > 0) parts.push(`${String(counts.present)} ${counts.present === 1 ? "is" : "are"} already here and will be skipped.`);
-  if (counts.conflict > 0) parts.push(`${String(counts.conflict)} will be refused: this journal holds different work under the same id.`);
+  // Two things are refused as a conflict and the sentence has to admit both:
+  // a different conversation already under that id, and a conversation the
+  // file addresses to a profile that is not the one doing the importing. The
+  // row below each states which; this is the count, and it names the pair.
+  if (counts.conflict > 0) parts.push(`${String(counts.conflict)} will be refused: different work under that id, or another profile's.`);
   if (counts.unreadable > 0) parts.push(`${String(counts.unreadable)} will be refused: the digest chain did not verify.`);
   if (plan.memory) {
     parts.push(

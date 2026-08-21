@@ -128,11 +128,18 @@ export async function collectWorkBundle(args: Readonly<{
  * this device agreed to. Every field below is the opposite kind of fact: each
  * is authority a *device* grants. Three of them are read back by the journal
  * projection with the record's own value as the fallback
- * (`projectedSessionApprovalMode` and its peers in `src/core/journal.ts`), so a
- * record that arrives with one set keeps it for every later append — a crafted
- * bundle could land `full-access` on a conversation nobody put in that mode,
- * and a model route nobody chose. `importedAt` is the stamp the importing
- * device writes, so a file may neither claim to be native nor forge a date.
+ * (`projectedSessionPins` in `src/core/journal.ts`), so a record that arrives
+ * with one set keeps it for every later append — a crafted bundle could land
+ * `full-access` on a conversation nobody put in that mode, and a model route
+ * nobody chose. `importedAt` is the stamp the importing device writes, so a
+ * file may neither claim to be native nor forge a date.
+ *
+ * Refusing them on the record was necessary and was not sufficient: the same
+ * three pins ride into a journal as `session.approval-policy-changed` and
+ * `session.model-changed` events, and the merge replays every event a file
+ * carries. That half is closed where the projection is — a replay grants no
+ * pin (`JournalAppendOptions`) — because the events are the conversation's real
+ * history and refusing them would refuse the export button's own output.
  *
  * `headIncarnation` was already refused for the same reason and is kept in the
  * list rather than checked separately, so a pin added to `SessionRecord` later
@@ -145,6 +152,32 @@ export const REFUSED_BUNDLE_PINS = Object.freeze([
   "contextPolicyOverride",
   "importedAt",
 ] as const);
+
+/**
+ * Every field of a session record a bundle may carry. Nothing else lands.
+ *
+ * The record used to be cast — `value.session as unknown as SessionRecord` —
+ * with five named pins refused and the rest of the object copied through
+ * verbatim, so a file could deposit any key it liked on a journal record and,
+ * more to the point, the next pin added to `SessionRecord` would be
+ * file-granted from the day it was declared until somebody remembered to
+ * extend the refusal list. An allowlist inverts that: a new field is refused
+ * until it is deliberately named here, and `work-bundle.test.ts` fails the
+ * build if a field of the record type is in neither list.
+ */
+export const WORK_BUNDLE_SESSION_FIELDS = Object.freeze([
+  "id",
+  "title",
+  "manifest",
+  "createdAt",
+  "updatedAt",
+  "headSequence",
+  "headDigest",
+] as const);
+
+/** Said by both record-field refusals, so the bytes are written once. */
+const REFUSED_FIELD_TAIL =
+  " so nothing was written. Delete that field and choose the file again; its messages and digests import unchanged.";
 
 /** The record without any device-granted pin, which is all a file may carry. */
 function withoutCarriedPins(session: SessionRecord): SessionRecord {
@@ -215,25 +248,34 @@ function parseConversation(value: unknown): WorkBundleConversation {
   if (!isRecord(value) || !isRecord(value.session) || !Array.isArray(value.events)) {
     throw new Error("That bundle contains a conversation Airship cannot read.");
   }
-  const session = value.session as unknown as SessionRecord;
+  const record = value.session;
+  const session = record as unknown as SessionRecord;
   if (
     typeof session.id !== "string" || !session.id
     || typeof session.title !== "string"
+    || typeof session.createdAt !== "string"
+    || typeof session.updatedAt !== "string"
     || typeof session.headSequence !== "number"
     || typeof session.headDigest !== "string"
     || !isRecord(session.manifest)
   ) {
     throw new Error("That bundle contains a conversation record Airship cannot read.");
   }
-  for (const pin of REFUSED_BUNDLE_PINS) {
-    if (session[pin] !== undefined) {
-      throw new Error(
-        `That bundle carries ${pin} on conversation ${session.id}. An approval mode, a model, a context policy and a`
-        + " storage fence are granted by the device that runs the conversation, never by a file, so nothing was"
-        + " written. Delete that field and choose the file again; its messages and digests import unchanged.",
-      );
-    }
+  // One question for both refusals, because they have the same answer: every
+  // device-granted pin is outside the allowlist by construction, and so is a
+  // key this build has never heard of.
+  const refused = Object.keys(record).find((key) => !(WORK_BUNDLE_SESSION_FIELDS as readonly string[]).includes(key));
+  if (refused !== undefined) {
+    throw new Error(
+      `That bundle carries ${refused} on conversation ${session.id}. An approval mode, a model, a context policy and a`
+      + " storage fence are granted by the device that runs the conversation, never by a file, and a field this build"
+      + " does not read is a grant it cannot check," + REFUSED_FIELD_TAIL,
+    );
   }
+  // Built field by field from the allowlist rather than copied, so the record
+  // this function returns can hold nothing the check above did not see.
+  const allowed: Record<string, unknown> = {};
+  for (const field of WORK_BUNDLE_SESSION_FIELDS) allowed[field] = record[field];
   const events = value.events.map((event) => {
     if (
       !isRecord(event) || event.version !== 1
@@ -246,7 +288,7 @@ function parseConversation(value: unknown): WorkBundleConversation {
     }
     return event as unknown as DurableEvent;
   });
-  return Object.freeze({ session, events: Object.freeze(events) });
+  return Object.freeze({ session: allowed as unknown as SessionRecord, events: Object.freeze(events) });
 }
 
 function parseBundleMemory(value: unknown): WorkBundleMemory {
@@ -375,6 +417,8 @@ export async function planWorkBundleImport(args: Readonly<{
     if (chain && !chain.verified) {
       return plan(entry, "unreadable", `Refused: ${chain.reason ?? "its digest chain did not verify"}.`);
     }
+    const foreign = foreignProfileRefusal(entry.session, args.profileId);
+    if (foreign) return plan(entry, "conflict", foreign);
     const present = byId.get(entry.session.id);
     if (!present) return plan(entry, "new");
     return samePortableSession(present, entry.session)
@@ -390,6 +434,29 @@ export async function planWorkBundleImport(args: Readonly<{
       : {}),
     untouchedConversations: existing.filter((session) => !named.has(session.id)).length,
   });
+}
+
+/**
+ * Why a conversation the file addresses to another Profile is refused.
+ *
+ * A conversation lands in the Profile its manifest names, and that name comes
+ * from the file. Measured: imported from a panel bound to General, zero
+ * conversations landed in General and one landed in `finance`. Every reader of
+ * the journal narrows on `manifest.profile.profileId` — the rail, the durable
+ * active-conversation pointer, `profileOwnedSessions` — so a file naming a
+ * Profile this device does not have lands a conversation no route can reach,
+ * and one naming a Profile it does have deposits work in a silo the person
+ * importing never chose. Rescoping the pin would forge it, so the conversation
+ * is refused by name instead, exactly as a foreign memory record already is.
+ *
+ * Asked again by the applier rather than trusted from the plan: a plan read a
+ * second ago is a claim about the past, and about the profile it was read for.
+ */
+function foreignProfileRefusal(session: SessionRecord, profileId: string | undefined): string | undefined {
+  const named = session.manifest.profile?.profileId;
+  if (!profileId || named === undefined || named === profileId) return undefined;
+  return `Refused: this conversation is pinned to the ${named} profile. An import lands in the profile doing the`
+    + " importing, so switch to that one and choose the file again.";
 }
 
 function plan(
@@ -553,12 +620,13 @@ export async function applyWorkBundleImport(args: Readonly<{
   const outcomes: WorkBundleImportOutcome[] = [];
   for (const entry of args.bundle.conversations) {
     const planned = args.plan.conversations.find((candidate) => candidate.sessionId === entry.session.id);
-    if (planned?.state === "unreadable" || planned?.state === "conflict") {
+    const foreign = foreignProfileRefusal(entry.session, args.profileId);
+    if (foreign || planned?.state === "unreadable" || planned?.state === "conflict") {
       outcomes.push(Object.freeze({
         sessionId: entry.session.id,
         title: entry.session.title,
         outcome: "refused",
-        reason: planned.reason ?? "Refused.",
+        reason: foreign ?? planned?.reason ?? "Refused.",
       }));
       continue;
     }

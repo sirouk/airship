@@ -839,6 +839,60 @@ describe("SessionLibrary", () => {
     expect(source).toContain("forkHeldConversation()");
   });
 
+  /*
+   * The one fork call site that names no manifest, and why the refusal lives in
+   * the library rather than beside it.
+   *
+   * `forkHeldConversation`, the Sessions view and the `sessions.fork` command
+   * all pass this device's own manifest; the transcript's Fork, Edit and Retry
+   * pass a title and a source point and nothing else, so their branch inherits
+   * the source manifest — the file's `systemPrompt` included. The controls are
+   * reachable on a held conversation: `branchDisabled` asks only for a session
+   * library, a record and a source point. `forkSession` therefore refuses an
+   * imported source that nobody pinned, which closes it for this call site and
+   * for any later one that forgets.
+   */
+  it("leaves the transcript's branch controls unpinned, so the library is what refuses", () => {
+    const app = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
+    const fork = app.slice(app.indexOf("async function forkFromMessage("));
+    const call = fork.slice(fork.indexOf("await sessionLibrary.fork("), fork.indexOf("preserveComposerForDraftIdentity"));
+    expect(call).toContain("sourcePoint: forkPoint,");
+    expect(call).not.toContain("manifest:");
+    // The three transcript controls that reach it, and the gate they pass.
+    expect(app).toContain('onBranch={() => void forkFromMessage(entry.item, "fork")}');
+    expect(app).toContain("branchDisabled={!sessionLibrary || !activeSessionRecord || !entry.item.sourcePoint}");
+    // The two call sites that do pin, and stay working.
+    expect(app).toContain("manifest: authority.manifest,");
+    expect(app).toContain("manifest: targetManifest,");
+  });
+
+  it("refuses an unpinned fork of a conversation that arrived in a file", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("From a file", await manifest());
+    // The record an import lands: the same conversation, stamped by the device
+    // that took it in. Written through the backend because that is what
+    // `migrateJournalState` does.
+    const landed = (await fixture.journal.getSession(created.id))!;
+    const reborn = new MemoryJournalBackend();
+    await reborn.createSession({ ...landed, importedAt: "2026-08-21T09:00:00.000Z", headSequence: 0, headDigest: "genesis" });
+    await reborn.append(
+      created.id,
+      { sequence: 0, digest: "genesis" },
+      await fixture.journal.readEvents(created.id),
+      undefined,
+      { replay: true },
+    );
+    const imported = new SessionLibrary(new EventJournal(reborn));
+
+    await expect(imported.fork(created.id, { title: "Branch" }))
+      .rejects.toBeInstanceOf(SessionForkConflictError);
+    await expect(imported.fork(created.id, { title: "Branch" }))
+      .rejects.toThrow(/A branch of it has to be pinned to this device.s own profile/u);
+    // Pinned by this device, it forks.
+    const pinned = await imported.fork(created.id, { title: "Branch", manifest: await manifest({ model: "mine" }) });
+    expect(pinned.session.manifest.model).toBe("mine");
+  });
+
   it("loads a stable bounded detail snapshot with a compatibility decision", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Inspectable", await manifest({ securityPosture: "local" }));

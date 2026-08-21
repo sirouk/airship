@@ -276,6 +276,58 @@ class ThrowingTrashObjectStore extends MemoryObjectStore {
 }
 
 describe("EncryptedObjectJournalBackend", () => {
+  /*
+   * The Vault lane of the same defeat.
+   *
+   * `migrateJournalState` is what an import writes through, and on this backend
+   * the projection in `append` re-established the pin from the replayed
+   * `session.approval-policy-changed` and `session.model-changed` events — so a
+   * file whose record declared no pin still landed `full-access` and a model
+   * override on a device whose journal lives in a Vault. A replay grants
+   * nothing; an ordinary append still projects exactly as before.
+   */
+  it("grants no pin on a replayed history, and still projects one on an ordinary append", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const source = new EventJournal(new EncryptedObjectJournalBackend(new MemoryObjectStore(), key));
+    const created = await source.createSession("Pinned elsewhere", await manifest());
+    await source.setSessionApprovalMode(created.id, "full-access");
+    await source.setSessionModel(created.id, "attacker-model");
+    const events = await source.readEvents(created.id);
+    const head = (await source.getSession(created.id))!;
+    // The ordinary append path is unchanged: this backend projected both pins.
+    expect(head.approvalModeOverride).toBe("full-access");
+    expect(head.modelOverride).toBe("attacker-model");
+
+    // The record a bundle carries: no pin on it, the same events beside it.
+    const backend = new EncryptedObjectJournalBackend(new MemoryObjectStore(), key);
+    await backend.createSession({
+      id: head.id,
+      title: head.title,
+      manifest: head.manifest,
+      createdAt: head.createdAt,
+      updatedAt: head.createdAt,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    const blank = (await backend.getSession(head.id))!;
+    const landed = await backend.append(
+      head.id,
+      { sequence: 0, digest: "genesis", ...(blank.headIncarnation ? { incarnation: blank.headIncarnation } : {}) },
+      events,
+      undefined,
+      { replay: true },
+    );
+
+    expect(landed.headSequence).toBe(head.headSequence);
+    expect(landed.headDigest).toBe(head.headDigest);
+    expect(landed.approvalModeOverride).toBeUndefined();
+    expect(landed.modelOverride).toBeUndefined();
+    expect(landed.contextPolicyOverride).toBeUndefined();
+    // The conversation's own facts still travel: title and recency.
+    expect(landed.title).toBe(head.title);
+    expect(landed.updatedAt).toBe(head.updatedAt);
+  });
+
   it("round-trips cloud-authoritative sessions without plaintext object bytes", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const store = new MemoryObjectStore();

@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalBroker } from "../approvals/broker";
-import { createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent } from "../approvals/modes";
+import {
+  createApprovalModePolicy,
+  createHumanIntentPolicy,
+  decideHumanIntent,
+  displayedSessionApprovalMode,
+  type ApprovalMode,
+} from "../approvals/modes";
+import { LOCAL_FOLDER_MOUNT_ROOT } from "../workspace/contracts";
 import { ToolRegistry } from "../tools/registry";
 import type { ToolContext, ToolDefinition } from "../core/contracts";
 
@@ -71,6 +78,108 @@ describe("human-initiated approvals", () => {
     expect(reviewed.provenance).toMatchObject({ mode: "full-access", source: "bounded-browser-sandbox" });
     expect(reviewed.provenance.reason).toContain("remote origin");
     expect(broker.snapshot().pending).toHaveLength(0);
+  });
+
+  /*
+   * "A write that reaches an attached folder is reviewed in every approval
+   * mode" was true of the model-proposed path and false here. Measured: under
+   * Full Access this returned `allow` without asking anyone, and journaled
+   * "its workspace path confinement" — the exact confinement that does not
+   * hold for a folder on a person's own disk, which Airship writes in place
+   * and cannot undo.
+   */
+  it("asks about a folder on this device even under Full Access, and says why", async () => {
+    const broker = new ApprovalBroker();
+    const pending = decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { path: `${LOCAL_FOLDER_MOUNT_ROOT}/notes.md`, content: "x" },
+      context: context(),
+    });
+
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "allow");
+    const reviewed = await pending;
+
+    expect(reviewed.decision).toBe("allow");
+    expect(reviewed.provenance).toMatchObject({ mode: "full-access", source: "human-fallback" });
+    expect(reviewed.provenance.reason).toContain("names a folder on your own device");
+    expect(reviewed.provenance.reason).not.toContain("workspace path confinement");
+  });
+
+  it("refuses a folder write under Full Access when the person refuses it", async () => {
+    const broker = new ApprovalBroker();
+    const pending = decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { edits: [{ path: `${LOCAL_FOLDER_MOUNT_ROOT}/a/b.txt` }] },
+      context: context(),
+    });
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "deny");
+    expect((await pending).decision).toBe("deny");
+  });
+
+  it("leaves a browser-workspace path under Full Access exactly as it was", async () => {
+    const broker = new ApprovalBroker();
+    const reviewed = await decideHumanIntent({
+      mode: "full-access",
+      broker,
+      tool: commitTool,
+      argumentsValue: { path: "/workspace/README.md", content: "x" },
+      context: context(),
+    });
+    expect(reviewed.decision).toBe("allow");
+    expect(reviewed.provenance).toMatchObject({ source: "bounded-browser-sandbox" });
+    expect(broker.snapshot().pending).toHaveLength(0);
+  });
+});
+
+/*
+ * The landing was not the worst of it.
+ *
+ * The shell reads the approval mode from whichever conversation is on screen,
+ * held or not, and every human-proposed effect — Git commit and push, GitHub
+ * import, the vault probe — is decided under it. So opening an imported
+ * conversation, which is exactly what the product tells a person to do with
+ * one, put the whole page into the mode the file named: the record's pin when
+ * a replay granted one, and the manifest's `profile.approvalMode` — which a
+ * file carries by construction — even when it did not.
+ */
+describe("a conversation that arrived in a file sets no approval mode", () => {
+  const manifest = (approvalMode: ApprovalMode) => ({
+    profile: { version: 2 as const, approvalMode },
+  });
+
+  it("uses this device's own preference for a held import, whatever the file says", () => {
+    expect(displayedSessionApprovalMode(
+      { importedAt: "2026-08-21T09:00:00.000Z", approvalModeOverride: "full-access", manifest: manifest("full-access") },
+      "ask-first",
+    )).toBe("ask-first");
+    expect(displayedSessionApprovalMode(
+      { importedAt: "2026-08-21T09:00:00.000Z", manifest: manifest("full-access") },
+      "auto-approve",
+    )).toBe("auto-approve");
+  });
+
+  it("still lets a conversation this device composed carry its own pin", () => {
+    expect(displayedSessionApprovalMode(
+      { approvalModeOverride: "full-access", manifest: manifest("ask-first") },
+      "ask-first",
+    )).toBe("full-access");
+    expect(displayedSessionApprovalMode({ manifest: manifest("auto-approve") }, "ask-first")).toBe("auto-approve");
+    expect(displayedSessionApprovalMode({ manifest: {} }, "auto-approve")).toBe("auto-approve");
+    expect(displayedSessionApprovalMode(undefined, "full-access")).toBe("full-access");
+  });
+
+  it("is the only thing the shell reads the visible conversation's mode from", () => {
+    expect(source).toContain(
+      "const pinnedApprovalMode = displayedSessionApprovalMode(activeSessionRecord, preferences.approvalMode);",
+    );
+    expect(source).not.toContain("activeSessionRecord?.approvalModeOverride");
+    expect(source).not.toContain("activeSessionRecord.manifest.profile.approvalMode");
   });
 
   it("routes every human-proposed effect through the one helper that records it", () => {
