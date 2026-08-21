@@ -83,3 +83,7 @@ next-env.d.ts
 # Sweep captures are evidence for a review, not source. They live in the
 # scratchpad beside the rest of the campaign's screenshots.
 shots/
+
+# A measuring copy of the release gate, written by hand while re-taking
+# readings. It is not the authority and must never be tracked beside it.
+scripts/.gate-instrument.mjs

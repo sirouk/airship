@@ -33,6 +33,14 @@ const ROUTES = [
   "chat", "sessions", "memory", "workspace", "editor",
   "access", "profiles", "vault",
   /*
+   * `connection` was missing while it was the route the shell sends a person to
+   * when nothing is connected, and the sweep could not have added it: the route
+   * rendered no `h1`, so `openRoute`'s mount signal never arrived. It has one
+   * now, and the three controls a connection creates — measured at 357x40 —
+   * are inside the floor rule beside the route's own styles.
+   */
+  "connection",
+  /*
    * `skills` joined when the route became writable. It was measurably under the
    * floor the whole time it was read-only: the global toggle is a
    * `role="switch"` button at 37px and the per-profile mode control is a
@@ -78,6 +86,33 @@ const ROUTES = [
  * to refuse.
  */
 const STATES_A_GOTO_NEVER_REACHES = [
+  {
+    route: "connection",
+    state: "a connected provider's own card",
+    /*
+     * The card a connection creates holds the three controls this route exists
+     * for, and a plain `goto` never renders it. They measured 357x40 until the
+     * floor rule beside the route's own styles covered `.provider-connection`.
+     */
+    enter: async (page: Page) => {
+      await page.route("**/127.0.0.1:11434/**", async (route) => {
+        const headers = { "access-control-allow-origin": "*", "content-type": "application/json" };
+        if (route.request().method() === "OPTIONS") { await route.fulfill({ status: 204, headers }); return; }
+        if (route.request().url().includes("/api/tags")) {
+          await route.fulfill({ status: 200, headers, body: JSON.stringify({ models: [{ name: "llama3.2:1b" }] }) });
+          return;
+        }
+        await route.fulfill({ status: 404, body: "not found", headers });
+      });
+      const card = page.locator('.provider-setup-card.local[data-provider="ollama"]');
+      await expect(card).toBeVisible({ timeout: 20_000 });
+      await card.getByRole("button", { name: "Check Ollama", exact: true }).click();
+      await expect(
+        page.getByRole("group", { name: "Connected inference providers" })
+          .locator("article.provider-connection").filter({ hasText: "Ollama" }),
+      ).toBeVisible({ timeout: 30_000 });
+    },
+  },
   {
     route: "memory",
     state: "a settled memory search",

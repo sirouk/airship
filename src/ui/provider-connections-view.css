@@ -578,6 +578,19 @@
  * out of its own box.
  */
 @media (pointer: coarse) {
+  /*
+   * `.provider-connection` joined because the pass above could not have
+   * measured it. It ran against a route with nothing connected, so the card a
+   * connection creates was not on the page at all — and it holds three of the
+   * controls this route exists for. Measured on the shipped build at 390x844
+   * with an LM Studio connection held: the model picker for a new pinned
+   * conversation, `Use in new conversation` and `Disconnect`, all three at
+   * 357x40, and the only sub-floor controls left anywhere in the product.
+   *
+   * Height only, for the same reason: at this width the card's footer is a
+   * one-column grid and every button already fills it.
+   */
+  .provider-connection button,
   .provider-setup-card button {
     min-height: var(--touch-target);
   }

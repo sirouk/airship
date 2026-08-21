@@ -212,6 +212,23 @@ export function ProviderConnectionsView({
       aria-labelledby="provider-fabric-title"
       aria-busy={Boolean(busyConnection)}
     >
+      {/*
+        * The route's own name, clipped to the accessible tree.
+        *
+        * Providers was the one settled route in the product with no `<h1>` at
+        * all: its heading tree started at the `<h2>` below, so a reader who
+        * navigates by heading level landed nowhere on the route the shell sends
+        * them to when nothing is connected. `route-header.tsx` already carries
+        * this recipe — "`title` is always a real `<h1>`; `titleVisible={false}`
+        * clips it to the accessible tree" — and this is the same thing without
+        * importing the primitive, which the entry budget will not pay for.
+        *
+        * The word is the one `document.title` and the rail already use, so the
+        * three names for this route agree. The visible `<h2>` keeps its sentence
+        * and becomes a correct child of the page's heading, which is also what
+        * stops `e2e/touch-target-floor.spec.ts` measuring the boot splash here.
+        */}
+      <h1 class="sr-only">Providers</h1>
       <header class="provider-fabric__heading">
         <div>
           <span>Provider fabric</span>
