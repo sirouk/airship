@@ -43,7 +43,7 @@ ceiling.
 | HTML-referenced entry JavaScript | 375 KiB | 117 KiB |
 | Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 488 KiB | 159 KiB |
 | Deferred advanced capability bundle | 229 KiB | 68 KiB |
-| First-party and other non-vendor JS/workers | 1967 KiB | 617 KiB |
+| First-party and other non-vendor JS/workers | 1968 KiB | 617 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
 | Absolute installed JavaScript/worker backstop | 2652 KiB | 807 KiB |
 | Service worker | 12 KiB | 5 KiB |
@@ -53,9 +53,9 @@ ceiling.
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Optional agent runtime / tool bundle | 57 KiB / 126 KiB | 18 KiB / 40 KiB |
 | Optional Workspace / Source Control / browser Git | 86 KiB / 40 KiB / 262 KiB | 28 KiB / 13 KiB / 80 KiB |
-| Optional folder on this device | 15 KiB | 6 KiB |
+| Optional folder on this device | 16 KiB | 6 KiB |
 | Optional move-work bundle pack | 17 KiB | 6 KiB |
-| Optional Sessions / Memory / Memory support | 66 KiB / 64 KiB / 4 KiB | 20 KiB / 21 KiB / 2 KiB |
+| Optional Sessions / Memory / Memory support | 66 KiB / 64 KiB / 3 KiB | 20 KiB / 21 KiB / 2 KiB |
 | Optional Skills route / skill editor | 8 KiB / 4 KiB | 4 KiB / 2 KiB |
 | Optional Terminal | 425 KiB | 112 KiB |
 | Optional semantic worker | 16 KiB | 6 KiB |

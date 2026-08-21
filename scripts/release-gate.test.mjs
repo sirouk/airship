@@ -519,13 +519,13 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "382,287 B raw / 118,354 B gzip",
-      "382,287 B raw / 117.60 KiB gzip",
+      "382,595 B raw / 118,539 B gzip",
+      "382,595 B raw / 117.60 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 382287, gzip: 118354 },
+      entryJavaScript: { raw: 382595, gzip: 118539 },
     })).toThrow(
       /entryJavaScript: its comment claims 117\.60 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );
@@ -578,8 +578,8 @@ describe("release gate", () => {
      * is still material and still fails.
      */
     const coarse = source
-      .replaceAll("4,002 B raw", "3.91 KiB raw")
-      .replaceAll("1,587 B gzip", "1.55 KiB gzip");
+      .replaceAll("measures 4,002 B raw", "measures 3.91 KiB raw")
+      .replaceAll("/ 1,587 B gzip", "/ 1.55 KiB gzip");
     expect(coarse).not.toBe(source);
     const withinPrecision = { ...asDocumented, optionalSkillEditor: { raw: 4002, gzip: 1587 } };
     expect(() => assertDocumentedMeasurementsMatchBuild(coarse, withinPrecision)).not.toThrow();
