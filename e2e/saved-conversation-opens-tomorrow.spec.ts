@@ -128,6 +128,50 @@ async function runtimeSentences(page: Page): Promise<readonly string[]> {
   return page.evaluate(() => (globalThis as unknown as { __runtimeSentences?: string[] }).__runtimeSentences ?? []);
 }
 
+/**
+ * Every conversation this page has drawn under this address, in order.
+ *
+ * The assertions below used to begin by awaiting the requested transcript, so
+ * they could only ever describe the end of the journey. Measured on the build
+ * before this recorder existed, that hid the whole defect: at 166ms the screen
+ * held one conversation, at 682ms a different one, and only at 8,375ms the one
+ * the address named — with the address bar naming the right one throughout, and
+ * the second of those three minted into the library on the spot. A single
+ * end-state assertion cannot see a conversation that was shown and replaced.
+ */
+async function recordConversationScreens(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    const seen: string[] = [];
+    (globalThis as unknown as { __conversationScreens: string[] }).__conversationScreens = seen;
+    const read = () => {
+      if (seen.length > 400) return;
+      const title = (document.querySelector(".session-bar__title")?.textContent ?? "").trim();
+      const transcript = (document.querySelector(".transcript")?.textContent ?? "").trim().slice(0, 300);
+      if (!title && !transcript) return;
+      const frame = `${title} :: ${transcript}`;
+      if (seen[seen.length - 1] !== frame) seen.push(frame);
+    };
+    const start = () => {
+      read();
+      new MutationObserver(read).observe(document.body, { subtree: true, childList: true, characterData: true });
+    };
+    if (document.body) start();
+    else document.addEventListener("DOMContentLoaded", start, { once: true });
+  });
+}
+
+async function conversationScreens(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => (globalThis as unknown as { __conversationScreens?: string[] }).__conversationScreens ?? []);
+}
+
+/** How many conversations this profile's library holds right now. */
+async function libraryRowCount(page: Page): Promise<number> {
+  await page.goto("/#sessions");
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".session-library-row").first()).toBeVisible({ timeout: 30_000 });
+  return page.locator(".session-library-row").count();
+}
+
 async function openProfile(
   userDataDir: string,
   baseURL: string,
@@ -142,6 +186,7 @@ async function openProfile(
     localStorage.setItem("airship.display-preferences.v1", preferences);
   }, PREFERENCES);
   await recordRuntimeSentences(context);
+  await recordConversationScreens(context);
   await mockEndpoint(context, answer);
   return context;
 }
@@ -199,6 +244,7 @@ test("a saved conversation opens at its own address the next day, and says why i
   // ── Day 1 ──────────────────────────────────────────────────────────────
   const dayOne = await openProfile(userDataDir, baseURL, ANSWER);
   let saved: string;
+  let libraryRowsAfterDayOne = 0;
   try {
     const page = dayOne.pages()[0] ?? await dayOne.newPage();
     await page.goto("/#vault");
@@ -213,6 +259,10 @@ test("a saved conversation opens at its own address the next day, and says why i
     saved = new URL(page.url()).hash.replace("#chat/", "");
     expect(saved).toMatch(/^[0-9a-f-]{16,}$/u);
     await sendOneTurn(page, PROMPT, ANSWER);
+    // What the library holds when the browser closes. Tomorrow's arrival may
+    // not change this number: opening a conversation is not creating one.
+    libraryRowsAfterDayOne = await libraryRowCount(page);
+    expect(libraryRowsAfterDayOne).toBeGreaterThan(0);
   } finally {
     await dayOne.close();
   }
@@ -232,6 +282,27 @@ test("a saved conversation opens at its own address the next day, and says why i
     // No empty conversation was minted into this address in its place: the
     // opening line of an app-minted vault conversation is not on screen.
     await expect(page.locator(".transcript")).not.toContainText("The encrypted Local Device Vault is active");
+
+    /*
+     * And it was never on screen — not for the eight seconds before the
+     * requested transcript landed either. Every assertion above this block
+     * describes the end of the wait; these describe the wait itself, from the
+     * recorder that has been running since the document was created.
+     */
+    const screens = (await conversationScreens(page)).join(" | ");
+    expect(screens).not.toContain("The encrypted Local Device Vault is active");
+    expect(screens).not.toContain("General · encrypted vault");
+    // What it said instead, while it was opening.
+    expect(screens).toContain("Opening this conversation");
+    expect(screens).toContain("No other conversation is shown in its place.");
+
+    // Nor was one minted into the library. Three visits to this address grew
+    // it from 2 rows to 3 to 4, each new row an empty conversation nobody
+    // asked for; arriving is not creating.
+    expect(await libraryRowCount(page)).toBe(libraryRowsAfterDayOne);
+    await page.goto(`/#chat/${saved}`);
+    await expect(page.locator(".message.user").filter({ hasText: PROMPT }))
+      .toBeVisible({ timeout: 90_000 });
 
     // The refusal is already on screen in the same commit as that transcript,
     // not eight seconds later behind a chunk fetch.

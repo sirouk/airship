@@ -20,6 +20,12 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
  * auto-open effect fetches `local-device-keyring` before it can open the key, so
  * a slow disk or a cold cache is the same wait. Everything else — the enrolment,
  * the OPFS journal, the bundle file on disk, the merge — is the product.
+ *
+ * The second half of the journey was measured wrong for a while, and is now
+ * what it says: a plan read inside that window describes the journal the
+ * adoption replaces, so it is withdrawn when the storage opens rather than
+ * being left on screen until its own button enables itself and contradicts it.
+ * "Choose the file again" is what the refusal promises and what happens.
  */
 
 const PARTITION = "airship-workspace-v1";
@@ -118,10 +124,33 @@ test("an import refuses while the receiving Vault is still being adopted, and la
     // Refused, not queued: nothing is promised for later and nothing was added.
     await expect(targetPage.locator(".work-bundle__preview")).not.toContainText("conversation added");
 
-    // ── The storage opens, and the same press now lands ─────────────────────
-    const add = preview.getByRole("button", { name: "Add 1 conversation" });
-    await expect(add).toBeEnabled({ timeout: 60_000 });
+    /*
+     * ── The storage opens, and the plan about the other journal goes with it ─
+     *
+     * Measured before this: the plan stayed on screen saying "1 will be added"
+     * for the whole eight-second adoption, the button enabled itself against a
+     * journal the plan had never been read against, and pressing it reported
+     * "0 conversations added. 1 skipped as already present." — an outcome the
+     * panel had just promised could not happen. The refusal above had already
+     * named the remedy, so the remedy is what happens.
+     */
+    const withdrawn = targetPage.locator(".work-bundle__refused").filter({ hasText: "finished opening" });
+    await expect(withdrawn).toBeVisible({ timeout: 60_000 });
     expect(released, "the refusal held until the keyring module was released").toBeGreaterThan(0);
+    await expect(withdrawn).toContainText("Nothing changed and nothing was added");
+    await expect(withdrawn).toContainText("choose the file again");
+    // The plan it described is gone rather than sitting there being wrong.
+    await expect(targetPage.locator(".work-bundle__preview")).toHaveCount(0);
+    await expect(targetPage.locator(".work-bundle")).not.toContainText("will be added");
+    await expect(targetPage.locator(".work-bundle")).not.toContainText("conversation added");
+
+    // ── Choosing the file again is the remedy, and it lands ─────────────────
+    await targetPage.locator('.work-bundle__file input[type="file"]').setInputFiles(bundlePath);
+    const replanned = targetPage.locator(".work-bundle__preview").first();
+    await expect(replanned).toContainText("This bundle holds 1 conversation.", { timeout: 20_000 });
+    await expect(replanned).toContainText("1 will be added.");
+    const add = replanned.getByRole("button", { name: "Add 1 conversation" });
+    await expect(add).toBeEnabled({ timeout: 60_000 });
     await add.click();
     await expect(targetPage.locator(".work-bundle__preview")).toContainText("1 conversation added.", { timeout: 30_000 });
 

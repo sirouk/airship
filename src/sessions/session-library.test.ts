@@ -822,7 +822,19 @@ describe("SessionLibrary", () => {
     const source = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
     // Synchronous, pure, and computed before the audit that follows it.
     expect(source).toContain("profileManifestResumeRefusal(");
-    expect(source).toContain("if (held) setComposerNotice(held);");
+    /*
+     * One carrier, and it is the publisher's.
+     *
+     * `if (held) setComposerNotice(held);` used to stand one line above a
+     * publish that can still throw, and when it threw the sentence stayed on
+     * the conversation the person had NOT left — measured in Chromium, with
+     * that conversation's Send disabled and the notice surviving both turns.
+     * `publishActiveSessionSelection` sets the verdict and clears the notice in
+     * the same commit as the transcript, so the band is written once, for the
+     * conversation actually being opened, or not at all.
+     */
+    expect(source).not.toContain("if (held) setComposerNotice(held);");
+    expect(source).toContain("setHeldReason(held);");
     // A conversation opened only for reading is not selected as the profile's
     // durable active conversation.
     expect(source).toContain("const selected = held ? audited.session : await selectSessionForActivation(audited.session);");
@@ -861,8 +873,11 @@ describe("SessionLibrary", () => {
     // The three transcript controls that reach it, and the gate they pass.
     expect(app).toContain('onBranch={() => void forkFromMessage(entry.item, "fork")}');
     expect(app).toContain("branchDisabled={!sessionLibrary || !activeSessionRecord || !entry.item.sourcePoint}");
-    // The two call sites that do pin, and stay working.
-    expect(app).toContain("manifest: authority.manifest,");
+    // The two call sites that do pin, and stay working. `authority` is the
+    // route's manifest rather than a conversation's record, so that a browser
+    // holding no conversation — an address still opening — can still fork the
+    // conversation it is reading.
+    expect(app).toContain("manifest: authority,");
     expect(app).toContain("manifest: targetManifest,");
   });
 

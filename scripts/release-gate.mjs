@@ -113,19 +113,27 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // The canonical config-free artifact weighed 384,689 B raw / 119,273 B gzip;
   // the reviewed Docker-defaults variant weighed 384,682 B raw / 119,263 B gzip;
-  // the reviewed Pages variant measures 384,698 B raw / 119,284 B gzip;
+  // the reviewed Pages variant weighed 384,698 B raw / 119,284 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,883 B raw /
   // 119,347 B gzip and sets both maxima. 117 KiB gzip would have left 461 B,
   // below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,485 B;
   // 377 KiB raw leaves 1,165 B and does not move.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
-  // The canonical config-free artifact measures 384,699 B raw / 119,284 B gzip;
-  // the reviewed Docker-defaults variant measures 384,704 B raw / 119,277 B gzip;
-  // the reviewed Pages variant measures 384,720 B raw / 119,279 B gzip;
+  // The canonical config-free artifact weighed 384,699 B raw / 119,284 B gzip;
+  // the reviewed Docker-defaults variant weighed 384,704 B raw / 119,277 B gzip;
+  // the reviewed Pages variant weighed 384,720 B raw / 119,279 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,925 B raw /
   // 119,379 B gzip. 376 KiB raw would have left 99 B and 117 KiB gzip would
   // have left 429 B; the 384925/119379 KiB steps leave 393,778,275 / 122,124,717 B.
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 385,616 B raw / 119,621 B gzip;
+  // the reviewed Docker-defaults variant measures 385,621 B raw / 119,617 B gzip;
+  // the reviewed Pages variant measures 385,637 B raw / 119,616 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 385,842 B raw /
+  // 119,722 B gzip. 377 KiB raw would have left 206 B and 117 KiB gzip would
+  // have left 86 B; the 385842/119722 KiB steps leave 394,716,366 / 122,475,606 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -198,20 +206,28 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // The canonical config-free artifact weighed 501,276 B raw / 162,814 B gzip;
   // the reviewed Docker-defaults variant weighed 501,269 B raw / 162,802 B gzip;
-  // the reviewed Pages variant measures 501,285 B raw / 162,827 B gzip;
+  // the reviewed Pages variant weighed 501,285 B raw / 162,827 B gzip;
   // and the reviewed Google-Drive-configured variant measures 501,470 B raw /
   // 162,882 B gzip and sets both maxima. 160 KiB gzip is already the smallest
   // whole-KiB step that clears that reading and leaves 958 B; 490 KiB raw leaves
   // 290 B and does not move.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
-  // The canonical config-free artifact measures 501,286 B raw / 162,819 B gzip;
-  // the reviewed Docker-defaults variant measures 501,291 B raw / 162,807 B gzip;
-  // the reviewed Pages variant measures 501,307 B raw / 162,816 B gzip;
+  // The canonical config-free artifact weighed 501,286 B raw / 162,819 B gzip;
+  // the reviewed Docker-defaults variant weighed 501,291 B raw / 162,807 B gzip;
+  // the reviewed Pages variant weighed 501,307 B raw / 162,816 B gzip;
   // and the reviewed Google-Drive-configured variant measures 501,512 B raw /
   // 162,912 B gzip. 490 KiB raw would have left 248 B and 160 KiB gzip would
   // have left 928 B; the 501512/162912 KiB steps leave 513,046,776 / 166,658,976 B.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 490 * 1024, gzip: 160 * 1024 }),
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 502,203 B raw / 163,157 B gzip;
+  // the reviewed Docker-defaults variant measures 502,208 B raw / 163,149 B gzip;
+  // the reviewed Pages variant measures 502,224 B raw / 163,158 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 502,429 B raw /
+  // 163,256 B gzip. 491 KiB raw would have left 355 B and 160 KiB gzip would
+  // have left 584 B; the 502429/163256 KiB steps leave 513,984,867 / 167,010,888 B.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 491 * 1024, gzip: 160 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
   // Earlier readings of 251,691 B raw and 72,556 B gzip, then 250,266 B raw and
@@ -265,12 +281,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // first paint.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
-  // The canonical config-free artifact measures 232,991 B raw / 68,202 B gzip;
-  // the reviewed Docker-defaults variant measures 232,991 B raw / 68,205 B gzip;
-  // the reviewed Pages variant measures 232,991 B raw / 68,205 B gzip;
+  // The canonical config-free artifact weighed 232,991 B raw / 68,202 B gzip;
+  // the reviewed Docker-defaults variant weighed 232,991 B raw / 68,205 B gzip;
+  // the reviewed Pages variant weighed 232,991 B raw / 68,205 B gzip;
   // and the reviewed Google-Drive-configured variant measures 233,063 B raw /
   // 68,252 B gzip. 228 KiB raw would have left 409 B and 67 KiB gzip would
   // have left 356 B; the 233063/68252 KiB steps leave 238,423,449 / 69,821,796 B.
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 233,005 B raw / 68,211 B gzip;
+  // the reviewed Docker-defaults variant measures 233,005 B raw / 68,212 B gzip;
+  // the reviewed Pages variant measures 233,005 B raw / 68,212 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 233,077 B raw /
+  // 68,260 B gzip. 228 KiB raw would have left 395 B and 67 KiB gzip would
+  // have left 348 B; the 233077/68260 KiB steps leave 238,437,771 / 69,829,980 B.
   deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -381,13 +405,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 505 B, so gzip does not move.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
-  // The canonical config-free artifact measures 2,019,474 B raw / 632,108 B gzip;
-  // the reviewed Docker-defaults variant measures 2,019,479 B raw / 632,091 B gzip;
-  // the reviewed Pages variant measures 2,019,552 B raw / 632,126 B gzip;
+  // The canonical config-free artifact weighed 2,019,474 B raw / 632,108 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,019,479 B raw / 632,091 B gzip;
+  // the reviewed Pages variant weighed 2,019,552 B raw / 632,126 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,020,045 B raw /
   // 632,361 B gzip. 1973 KiB raw would have left 307 B and 618 KiB gzip would
   // have left 471 B; the 2020045/632361 KiB steps leave 2,066,506,035 / 646,905,303 B.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1974 * 1024, gzip: 618 * 1024 }),
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 2,020,824 B raw / 632,580 B gzip;
+  // the reviewed Docker-defaults variant measures 2,020,829 B raw / 632,571 B gzip;
+  // the reviewed Pages variant measures 2,020,902 B raw / 632,622 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,021,395 B raw /
+  // 632,877 B gzip. 1975 KiB raw would have left 1,005 B and 619 KiB gzip would
+  // have left 979 B; the 2021395/632877 KiB steps leave 2,067,887,085 / 647,433,171 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1975 * 1024, gzip: 619 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -526,12 +558,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 1,018 B.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
-  // The canonical config-free artifact measures 2,720,672 B raw / 827,176 B gzip;
-  // the reviewed Docker-defaults variant measures 2,720,677 B raw / 827,158 B gzip;
-  // the reviewed Pages variant measures 2,720,750 B raw / 827,193 B gzip;
+  // The canonical config-free artifact weighed 2,720,672 B raw / 827,176 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,720,677 B raw / 827,158 B gzip;
+  // the reviewed Pages variant weighed 2,720,750 B raw / 827,193 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,721,243 B raw /
   // 827,427 B gzip. 2658 KiB raw would have left 549 B and 809 KiB gzip would
   // have left 989 B; the 2721243/827427 KiB steps leave 2,783,831,589 / 846,457,821 B.
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 2,722,022 B raw / 827,647 B gzip;
+  // the reviewed Docker-defaults variant measures 2,722,027 B raw / 827,638 B gzip;
+  // the reviewed Pages variant measures 2,722,100 B raw / 827,692 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,722,593 B raw /
+  // 827,945 B gzip. 2659 KiB raw would have left 223 B and 809 KiB gzip would
+  // have left 471 B; the 2722593/827945 KiB steps leave 2,785,212,639 / 846,987,735 B.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2659 * 1024, gzip: 809 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
@@ -831,7 +871,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Pass 2 added the verb this product had promised and never had: deleting a
   // conversation, with the shared destructive confirmation and an announcement
   // that states what left and from where. It also lifted the list's silent
-  // 200-row cap into a stated bound with a load-more control. Measured
+  // 200-row cap into a stated bound with a load-more control. Weighed
   // 54,296 B raw / 15,964 B gzip, the tightest whole-KiB step above each; none
   // is in first paint.
   //
@@ -851,7 +891,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // ledger's storage accessor and the forget call. Measured 59.58 KiB raw /
   // 17.78 KiB gzip; both steps move one whole KiB above the new figures.
   //
-  // Re-measured at 64,411 B raw / 19,292 B gzip. The 3,401 bytes are
+  // Re-weighed at 64,411 B raw / 19,292 B gzip. The 3,401 bytes are
   // `conversations: a way back into a pinned conversation that is not a fork`
   // (ebb61fb): `sessions-presentation` — the projection that decides what a
   // pinned thread looks like when you return to it rather than branch from it —
@@ -880,10 +920,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the journal a merge would land in is the authority that will still be there
   // when it lands. It is one boolean on a prop the route already passes, and it
   // is the whole delta here — 36 raw bytes. The canonical config-free, Docker
-  // defaults and Pages variants measure 65,792 B raw / 19,585 B gzip, and the
+  // defaults and Pages variants weighed 65,792 B raw / 19,585 B gzip, and the
   // reviewed Google-Drive-configured variant measures 65,858 B raw / 19,642 B
   // gzip. Neither ceiling moves, leaving 1,726 B raw and 838 B gzip. Still
   // fetched on navigation and never at first paint.
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 65,780 B raw / 19,581 B gzip;
+  // the reviewed Docker-defaults variant measures 65,780 B raw / 19,582 B gzip;
+  // the reviewed Pages variant measures 65,780 B raw / 19,583 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 65,856 B raw /
+  // 19,648 B gzip. 65 KiB raw would have left 704 B and 20 KiB gzip would
+  // have left 832 B; the 65856/19648 KiB steps leave 67,370,688 / 20,099,904 B.
   optionalSessionLibrary: Object.freeze({ raw: 66 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,
@@ -1008,9 +1056,9 @@ export const RELEASE_BUDGETS = Object.freeze({
    * it is read here and forked to continue. Each refusal states what it refused
    * and what to do, which is where most of the bytes are.
    *
-   * The canonical config-free artifact measures 17,724 B raw / 5,645 B gzip;
-   * the reviewed Docker-defaults variant measures 17,724 B raw / 5,646 B gzip;
-   * the reviewed Pages variant measures 17,724 B raw / 5,647 B gzip; and the
+   * The canonical config-free artifact weighed 17,724 B raw / 5,645 B gzip;
+   * the reviewed Docker-defaults variant weighed 17,724 B raw / 5,646 B gzip;
+   * the reviewed Pages variant weighed 17,724 B raw / 5,647 B gzip; and the
    * reviewed Google-Drive-configured variant measures 17,724 B raw / 5,648 B
    * gzip and sets the gzip maximum. Both ceilings take the
    * smallest whole-KiB step that clears those readings: 18 KiB raw leaves 708 B
@@ -1020,9 +1068,9 @@ export const RELEASE_BUDGETS = Object.freeze({
    */
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 17,724 B raw / 5,646 B gzip;
-  // the reviewed Docker-defaults variant measures 17,724 B raw / 5,645 B gzip;
-  // the reviewed Pages variant measures 17,724 B raw / 5,645 B gzip;
+  // The canonical config-free artifact weighed 17,724 B raw / 5,646 B gzip;
+  // the reviewed Docker-defaults variant weighed 17,724 B raw / 5,645 B gzip;
+  // the reviewed Pages variant weighed 17,724 B raw / 5,645 B gzip;
   // and the reviewed Google-Drive-configured variant measures 17,724 B raw /
   // 5,647 B gzip. 18 KiB raw would have left 708 B and 6 KiB gzip would
   // have left 497 B; the 19/7 KiB steps leave 1,732 / 1,521 B.
@@ -1037,9 +1085,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // route waits for, says why while it is unavailable, and refuses rather than
   // queues. Taking work out is untouched: an export writes nothing.
   //
-  // The canonical config-free and reviewed Docker-defaults artifacts measure
+  // The canonical config-free and reviewed Docker-defaults artifacts weighed
   // 18,082 B raw / 5,790 B gzip; the reviewed Pages variant measures 18,082 B
-  // raw / 5,791 B gzip and the reviewed Google-Drive-configured variant measures
+  // raw / 5,791 B gzip and the reviewed Google-Drive-configured variant weighed
   // 18,082 B raw / 5,788 B gzip. 18 KiB raw would have left
   // 350 B, below the tripwire floor, so raw keeps the 19 KiB step and leaves
   // 1,374 B; 6 KiB gzip is already the smallest step that clears the reading and
@@ -1057,13 +1105,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // Every reviewed variant measures 18,708 B raw: the canonical config-free and
   // Docker-defaults artifacts measure 18,708 B raw / 5,997 B and 5,996 B gzip,
-  // the reviewed Pages variant measures 18,708 B raw / 5,998 B gzip and sets the
-  // gzip maximum, and the reviewed Google-Drive-configured variant measures
+  // the reviewed Pages variant weighed 18,708 B raw / 5,998 B gzip and sets the
+  // gzip maximum, and the reviewed Google-Drive-configured variant weighed
   // 18,708 B raw / 5,995 B gzip. Both ceilings are already the smallest
   // whole-KiB step that clears those readings: 19 KiB raw leaves 748 B and
   // 6 KiB gzip leaves 146 B. Nothing here is fetched until someone presses
   // "Move work".
-  optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 6 * 1024 }),
+  //
+  // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
+  // The canonical config-free artifact measures 19,127 B raw / 6,128 B gzip;
+  // the reviewed Docker-defaults variant measures 19,127 B raw / 6,128 B gzip;
+  // the reviewed Pages variant measures 19,127 B raw / 6,131 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 19,127 B raw /
+  // 6,129 B gzip. 19 KiB raw would have left 329 B and 6 KiB gzip would
+  // have left 13 B; the 19127/6131 KiB steps leave 19,566,921 / 6,272,013 B.
+  optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 7 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch
   // refusal. It is fetched only for `#skills`; the authoring form remains the

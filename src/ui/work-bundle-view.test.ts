@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { planSentence, resultSentence, untouchedSentence, WORK_BUNDLE_AUTHORITY_UNSETTLED } from "./work-bundle-view";
+import {
+  planSentence,
+  resultSentence,
+  untouchedSentence,
+  WORK_BUNDLE_AUTHORITY_UNSETTLED,
+  WORK_BUNDLE_PLAN_SUPERSEDED,
+} from "./work-bundle-view";
 import type { WorkBundleImportPlan, WorkBundleImportResult } from "../sessions/work-bundle";
 
 function plan(overrides: Partial<WorkBundleImportPlan> = {}): WorkBundleImportPlan {
@@ -158,5 +164,56 @@ describe("an import waits for the journal it is writing into", () => {
     expect(exportBody).not.toContain("authoritySettled");
     const inspectBody = source.slice(source.indexOf("async function inspect"), source.indexOf("async function runImport"));
     expect(inspectBody).not.toContain("authoritySettled");
+  });
+});
+
+/*
+ * F6. The refusal above says "choose the file again once it is open", and until
+ * now that is not what happened.
+ *
+ * Measured with a Local Device Vault configured: a bundle chosen while the page
+ * was still opening that Vault was planned against the page-memory journal, so
+ * the panel said "4 will be added" — and kept saying it for the eight seconds
+ * the adoption took, after which the button enabled itself against a different
+ * journal. Pressing it then reported "0 conversations added. 4 skipped as
+ * already present." Nothing was lost, and nothing was overwritten; the panel
+ * had simply stated an outcome that could not happen and then contradicted it.
+ *
+ * The fact that decides whether a plan still describes anything is the journal
+ * it would be merged into, not the settled-authority latch — so the panel
+ * compares the journal it planned against with the journal it now holds, and
+ * withdraws a plan that is about the other one.
+ */
+describe("a plan is about one journal, and says so when that journal is replaced", () => {
+  const source = readFileSync(new URL("./work-bundle-view.tsx", import.meta.url), "utf8");
+
+  it("says what was withdrawn, that nothing changed, and the one remedy", () => {
+    expect(WORK_BUNDLE_PLAN_SUPERSEDED).toContain("finished opening");
+    expect(WORK_BUNDLE_PLAN_SUPERSEDED).toContain("the journal it replaced");
+    expect(WORK_BUNDLE_PLAN_SUPERSEDED).toContain("Nothing changed and nothing was added");
+    expect(WORK_BUNDLE_PLAN_SUPERSEDED).toContain("choose the file again");
+    // The remedy the sentence above promises is the remedy this one performs,
+    // so neither may promise a retry nobody will run.
+    expect(WORK_BUNDLE_PLAN_SUPERSEDED).not.toMatch(/queued for|will be added|retry automatically/u);
+  });
+
+  it("records the journal a plan was read against, and compares it every render", () => {
+    expect(source).toContain("const plannedJournal = useRef<JournalStateSource>();");
+    expect(source).toContain("plannedJournal.current = journal;");
+    expect(source).toContain("const supersededPlan = incoming !== undefined && plannedJournal.current !== journal;");
+    // Derived, not latched: there is no frame in which the stale plan is on
+    // screen beside a button that has just enabled itself.
+    expect(source).not.toContain("setSupersededPlan");
+  });
+
+  it("withdraws the plan from the screen and from the action", () => {
+    expect(source).toContain("{supersededPlan ? (\n            <p class=\"work-bundle__refused\" role=\"alert\">{WORK_BUNDLE_PLAN_SUPERSEDED}</p>\n          ) : incoming ? (");
+    // And the plan's own narration goes with it, so the two live regions in
+    // this panel cannot contradict each other about the same file.
+    expect(source).toContain('<p class="work-bundle__status" role="status">{supersededPlan ? "" : announcement}</p>');
+    const runImport = source.slice(source.indexOf("async function runImport"), source.indexOf("const supersededPlan ="));
+    expect(runImport).toContain("if (supersededPlan) {\n      setIncoming(undefined);\n      setError(WORK_BUNDLE_PLAN_SUPERSEDED);\n      return;\n    }");
+    // The storage gate stays exactly where it was, ahead of this one.
+    expect(runImport.indexOf("WORK_BUNDLE_AUTHORITY_UNSETTLED")).toBeLessThan(runImport.indexOf("WORK_BUNDLE_PLAN_SUPERSEDED"));
   });
 });

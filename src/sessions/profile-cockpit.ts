@@ -53,12 +53,31 @@ export function requireProfileOwnedSession(
   profileId: string,
   operation: "open" | "fork",
 ): SessionRecord {
-  if (!profileOwnsSession(session, profileId)) {
+  requireProfileOwnedManifest(session.manifest, profileId, operation);
+  return session;
+}
+
+/**
+ * The same fence, over the manifest the record only carries.
+ *
+ * A browser can hold a route authority with no conversation behind it — an
+ * address still opening, a Vault just adopted — and the profile binding this
+ * refuses on is a field of the manifest either way. One sentence, so a shell
+ * that has a manifest and a shell that has a record cannot come to refuse in
+ * two different vocabularies.
+ */
+export function requireProfileOwnedManifest(
+  manifest: SessionManifest,
+  profileId: string,
+  operation: "open" | "fork",
+): SessionManifest {
+  assertProfileId(profileId);
+  if (manifest.profile?.profileId !== profileId) {
     throw new Error(
       `The requested conversation belongs to another Profile. Switch Profiles before trying to ${operation} it.`,
     );
   }
-  return session;
+  return manifest;
 }
 
 export class ProfileActiveConversationConflictError extends Error {

@@ -110,6 +110,7 @@ import {
   profileManifestResumeRefusal,
   profileOwnedSessions,
   profileOwnsSession,
+  requireProfileOwnedManifest,
   requireProfileOwnedSession,
   resumableProfileConversationCandidates,
   resumableProfileManifestMatches,
@@ -962,6 +963,14 @@ function uiMessageEstimate(message: UiMessage): number {
 const MARKER_MESSAGE_ESTIMATE = 56;
 
 /**
+ * What the chat surface calls itself while the address it was opened at has not
+ * been answered. One string, two carriers — the session bar's name for what is
+ * on screen, and the band standing where the transcript will be — so the two
+ * cannot come to say different things about the same wait.
+ */
+const OPENING_ADDRESSED_CONVERSATION = "Opening this conversation";
+
+/**
  * The materializer's per-turn metadata, in the shape the presentation checks it
  * against. Written out twice, identically, at the two call sites — which is one
  * copy more than a projection this mechanical can be trusted to keep in step.
@@ -1315,11 +1324,33 @@ export function App() {
    * that genuinely runs on this route, and every authority read below uses it.
    */
   const authoritySession = useRef<SessionRecord>();
+  /**
+   * The manifest a conversation started right now would be pinned to, when no
+   * conversation on this route can stand for it.
+   *
+   * `authoritySession` is that answer whenever a runnable conversation exists,
+   * and adoption used to guarantee one by *minting* an empty conversation on
+   * every visit — which is where the durable junk in the library came from. The
+   * manifest is the fact the route comparison, the refusal wording and Fork all
+   * actually read; `compatibleProfileConversations` already computes it, so it
+   * is kept here rather than smuggled inside a conversation nobody asked for.
+   */
+  const routeAuthorityManifest = useRef<SessionManifest>();
   /** Why the displayed conversation may be read but not continued, if it may not. */
   const [heldReason, setHeldReason] = useState<string>();
   const [chatRouteRequest, setChatRouteRequest] = useState<string | undefined>(() =>
     typeof window === "undefined" ? undefined : chatSessionIdFromHash(window.location.hash)
   );
+  /**
+   * The address this page tried to open and could not.
+   *
+   * The request survives a failure on purpose — the conversation is durable and
+   * its journal is whole, so the URL stays intact — which means "a request is
+   * outstanding" alone cannot mean "it is still opening". This is the one fact
+   * that tells the two apart, so the transcript never says a conversation is
+   * opening over the sentence explaining why it did not.
+   */
+  const [unopenableAddress, setUnopenableAddress] = useState<string>();
   const [sessionLibrary, setSessionLibrary] = useState<SessionLibrary>();
   const [sessionRevision, setSessionRevision] = useState(0);
   const [pendingForkRetryRevision, setPendingForkRetryRevision] = useState(0);
@@ -2473,8 +2504,31 @@ export function App() {
     ? providerModelCapability(activeExternalModel, "image-input")
     : "unsupported";
   const activeRemoteInference = activeInferenceBinding?.transportBoundary === "provider-tls";
-  const sessionRuntime = authoritySession.current && runtime.current
-    ? activeSessionRuntime(runtime.current, authoritySession.current)
+  /** The manifest every route comparison, refusal and fork on this page reads. */
+  const routeAuthority = (): SessionManifest | undefined =>
+    authoritySession.current?.manifest ?? routeAuthorityManifest.current;
+  /**
+   * The same manifest, proven to belong to the Profile that is asking for it.
+   *
+   * `requireProfileOwnedSession` asked this of the authority *record*; the
+   * authority is a manifest, and the profile binding it is checked against is a
+   * field of that manifest, so nothing about the check moved except what
+   * carries it. Keeping it is the point: a torn Profile switch must not let one
+   * cockpit's manifest open or fork another cockpit's conversation.
+   */
+  function ownedRouteAuthority(ownerProfileId: string, operation: "open" | "fork"): SessionManifest | undefined {
+    const manifest = routeAuthority();
+    return manifest ? requireProfileOwnedManifest(manifest, ownerProfileId, operation) : undefined;
+  }
+  const routeManifest = routeAuthority();
+  const sessionRuntime = routeManifest && runtime.current
+    ? sessionManifestRuntime(
+        runtime.current,
+        routeManifest,
+        // A conversation carries its own model; a bare manifest authority means
+        // there is no conversation, so a new one would take the route's.
+        authoritySession.current ? effectiveSessionModel(authoritySession.current) : undefined,
+      )
     : undefined;
   // The menu shows ten rows out of a command set that is routinely three times
   // that, so it carries the total as well as the slice: a list that silently
@@ -2608,6 +2662,21 @@ export function App() {
    * conversation cannot leave a live composer disabled behind it.
    */
   const conversationHeld = sessionId ? heldReason : undefined;
+  /*
+   * The address names a conversation, and that conversation is not on screen.
+   *
+   * Measured on a browser restart at a saved conversation's address: one
+   * unrelated conversation at 166ms, a second at 682ms, the requested one at
+   * 8,375ms, and the address bar naming the right one for all of it. Two of
+   * those three screens were a substitution nothing on the page admitted to.
+   * The wait is real — a page-memory boot, then a Vault to open, then a
+   * conversation to audit — so what is owed is not speed but honesty: while
+   * this is true the transcript says the conversation is being opened, and no
+   * other conversation is drawn in its place.
+   */
+  const openingAddressedConversation = chatRouteRequest !== undefined
+    && chatRouteRequest !== sessionId
+    && chatRouteRequest !== unopenableAddress;
   const windowedTranscript = useWindowedTranscript({
     items: messages,
     scrollContainerRef: transcriptElement,
@@ -2854,6 +2923,7 @@ export function App() {
         const unavailable = `This conversation could not be opened: ${
           error instanceof Error ? error.message : "the local runtime refused the request."
         }`;
+        setUnopenableAddress(requestedSessionId);
         setComposerNotice(unavailable);
         setRuntimeStatus(unavailable);
       })
@@ -3965,7 +4035,7 @@ export function App() {
     targetSessionId: string,
     signal?: AbortSignal,
     sourceRuntime: Runtime | undefined = runtime.current,
-    authorityManifest: SessionManifest | undefined = authoritySession.current?.manifest,
+    authorityManifest: SessionManifest | undefined = routeAuthority(),
   ): Promise<SessionLibraryDetail> {
     if (!sourceRuntime) throw new Error("The local runtime is not ready.");
     signal?.throwIfAborted();
@@ -4006,14 +4076,13 @@ export function App() {
       return;
     }
     try {
-      const authority = authoritySession.current;
+      const authority = ownedRouteAuthority(ownerProfile.profileId, "open");
       const target = await ownerRuntime.journal.getSession(targetSessionId);
       if (!target || !authority) throw new Error("The requested conversation is unavailable.");
       requireProfileOwnedSession(target, ownerProfile.profileId, "open");
-      requireProfileOwnedSession(authority, ownerProfile.profileId, "open");
       const detail = await new SessionLibrary(ownerRuntime.journal).inspect(
         target.id,
-        sessionManifestRuntime(ownerRuntime, authority.manifest, effectiveSessionModel(target)),
+        sessionManifestRuntime(ownerRuntime, authority, effectiveSessionModel(target)),
       );
       if (
         runtime.current !== ownerRuntime
@@ -7177,12 +7246,40 @@ export function App() {
         resumedPresentation = undefined;
       }
     }
-    const nextSession = resumableSession ?? await createProfileSession(
-      nextRuntime,
-      profile,
-      nextCatalog,
-      appMintedConversationTitle(profile.name, "vault"),
-    );
+    /*
+     * An address is a request for one conversation, and adoption answers it
+     * with that conversation or with nothing at all.
+     *
+     * Measured on a real browser restart at a saved conversation's own address:
+     * the screen held an unrelated page-memory conversation at 166ms, a second
+     * unrelated one at 682ms, and the requested one at 8,375ms — while the
+     * address bar named the right one throughout. Worse, the second one was
+     * *minted here*: a conversation whose pin this page cannot reproduce yet
+     * (no provider is connected 700ms into a boot) is not resumable, the loop
+     * above leaves it alone, and this line then created an empty "General ·
+     * encrypted vault" to stand in its place. The library grew a durable junk
+     * row on every visit — 2, 3, then 4 — none of which anybody asked for.
+     *
+     * So a boot that names a conversation this journal *holds* mints nothing.
+     * The chat route owns that address, is already fenced on this same adoption
+     * settling, and opens it for reading with its own reason when it cannot
+     * continue. Until it lands, `openingAddressedConversation` below says the
+     * conversation is being opened rather than showing another one in its place.
+     *
+     * An address this journal does not hold is a different fact and keeps the
+     * old behaviour: adopting a Vault from inside a page-memory conversation
+     * leaves that conversation's id in the hash, no adopted journal has it, and
+     * suppressing the mint there would land a person in a Profile with no
+     * conversation at all and no way for the route to make one.
+     */
+    const nextSession = resumableSession ?? (candidateSessions.some((session) => session.id === addressedConversation)
+      ? undefined
+      : await createProfileSession(
+          nextRuntime,
+          profile,
+          nextCatalog,
+          appMintedConversationTitle(profile.name, "vault"),
+        ));
 
     workspaceRefreshCoordinator.invalidate();
     // The storage authority changed, so every cached Profile authority is over
@@ -7198,8 +7295,32 @@ export function App() {
     setSessionLibrary(library);
     publishCatalogCheckpoint(nextCatalogCheckpoint);
     publishProfileId(profile.profileId);
-    const activated = await activateSession(nextSession);
-    setMessages(resumedPresentation?.messages.length
+    /*
+     * The route authority moves with the storage, conversation or not.
+     *
+     * `candidates.expected` is the manifest a conversation started right now
+     * would be pinned to — the same value the loop above judged every candidate
+     * against. Publishing it here is what lets adoption stop minting an empty
+     * conversation purely to have something to compare against: the comparison,
+     * the refusal wording and Fork all read a manifest, and the record they used
+     * to read it from was the junk row.
+     */
+    if (candidates) routeAuthorityManifest.current = candidates.expected;
+    const activated = nextSession ? await activateSession(nextSession) : undefined;
+    if (!activated) {
+      // Nothing is published under an address that names another conversation.
+      // The page-memory conversation this boot minted belongs to the journal
+      // that has just been replaced, so it is dropped rather than displayed —
+      // and it stops being this route's authority in the same commit.
+      authoritySession.current = undefined;
+      activeSessionIdentity.current = undefined;
+      activeSessionByProfile.current.delete(profile.profileId);
+      setSessionId(undefined);
+      setActiveSessionRecord(undefined);
+    }
+    setMessages(!activated
+      ? []
+      : resumedPresentation?.messages.length
       ? [...resumedPresentation.messages]
       : [{
           ...welcomeMessage,
@@ -7211,7 +7332,7 @@ export function App() {
               : "The Vault storage checks passed and its encrypted adapters are now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable."
             }${adoptionCarriedNote(adoptionCarried)}`,
         }]);
-    setEventCount(activated.headSequence);
+    setEventCount(activated?.headSequence ?? 0);
     setQuarantinedSession(quarantined);
     setSessionRevision((value) => value + 1);
     setSessionLifecycle(resumedPresentation?.lifecycle ?? READY_SESSION_LIFECYCLE);
@@ -8486,13 +8607,32 @@ export function App() {
        * it cannot go on and why, and Fork remains the one remedy. The refusal
        * is composed here, synchronously, from pure manifest comparison.
        */
-      const held = fresh.compatibility?.action === "resume"
+      /*
+       * A turn this page is running is not an unfinished journal.
+       *
+       * `decideSessionResume` reads the journal alone, so a turn still in
+       * flight looks exactly like one abandoned mid-answer: `TURN_INCOMPLETE`
+       * becomes a `HISTORY_INCOMPLETE` warning and the conversation is offered
+       * for reading only. Returning to a conversation *this page is answering*
+       * therefore refused it — with a sentence that could not name one thing
+       * that had moved, because nothing had. The journal cannot know a turn is
+       * live; the page can, and `activeTurns` is the same authority Stop and
+       * the rail's "Working…" already read. Every other reason, and a blocked
+       * verdict, still hold. So does a history the inspection could not read to
+       * the end, which is a different fact wearing the same code.
+       */
+      const answeringHere = activeTurns.current.has(fresh.session.id)
+        && fresh.compatibility?.action === "fork-required"
+        && fresh.history.checkedEvents === fresh.history.totalEvents
+        && fresh.compatibility.reasons.every((reason) =>
+          reason.code === "HISTORY_INCOMPLETE" || reason.severity === "info");
+      const held = fresh.compatibility?.action === "resume" || answeringHere
         ? undefined
         : fresh.session.importedAt
           ? IMPORTED_CONVERSATION_REFUSAL
           : profileManifestResumeRefusal(
               fresh.session.manifest,
-              authoritySession.current?.manifest ?? fresh.session.manifest,
+              routeAuthority() ?? fresh.session.manifest,
             );
       const audited = await loadAuditedSessionSnapshot(fresh.session.id);
       if (sessionAuditRefusesResume(audited.report)) {
@@ -8559,12 +8699,19 @@ export function App() {
           setProfileCockpitTransition(Object.freeze({ profileId: profile.profileId, name: profile.name }));
         }
       }
-      // Announced only once the conversation is actually being opened: a
-      // refusal above this line must not leave a "you are reading" sentence
-      // standing over a conversation nobody opened.
-      if (held) setComposerNotice(held);
-      // One sentence, two carriers: the live region says exactly what the
-      // composer band says, rather than a second wording of the same fact.
+      /*
+       * One sentence, two carriers: the live region says exactly what the
+       * composer band says, rather than a second wording of the same fact.
+       *
+       * `setComposerNotice(held)` used to stand here, one line above a publish
+       * that can still throw — and when it threw, the "you are reading a saved
+       * conversation" sentence stayed on the conversation the person had *not*
+       * left, with its Send disabled, until something else cleared it. The
+       * comment above it said exactly that must not happen. It is not needed
+       * either: `publishActiveSessionSelection` sets the verdict and clears
+       * the notice in the same commit as the transcript, so the band is
+       * written once, by the publisher, for the conversation being opened.
+       */
       await publishAuditedSession(fresh, audited, held ?? "Audited session resumed", undefined, held);
       if (resumedProfileId) publishProfileId(resumedProfileId);
       navigate("chat");
@@ -8624,14 +8771,14 @@ export function App() {
    */
   async function forkHeldConversation(): Promise<void> {
     const owner = runtime.current;
-    const authority = authoritySession.current;
+    const authority = routeAuthority();
     const sourceSessionId = activeSessionIdentity.current;
     if (!owner || !authority || !sessionLibrary || !sourceSessionId) return;
     try {
       const source = await owner.journal.getSession(sourceSessionId);
       if (!source) throw new UnknownSessionError(sourceSessionId);
       await activateForkedSession(await sessionLibrary.fork(sourceSessionId, {
-        manifest: authority.manifest,
+        manifest: authority,
         expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
       }));
     } catch (error) {
@@ -8699,8 +8846,11 @@ export function App() {
       const activationRuntime = runtime.current;
       const activationProfile = activeProfileRef.current;
       const activationSessionId = activeSessionIdentity.current;
-      const authority = authoritySession.current;
-      if (!activationRuntime || !activationProfile || !activationSessionId || !authority) {
+      if (!activationRuntime || !activationProfile || !activationSessionId) {
+        throw new Error("The active Profile/session authority is unavailable for fork verification.");
+      }
+      const authority = ownedRouteAuthority(activationProfile.profileId, "fork");
+      if (!authority) {
         throw new Error("The active Profile/session authority is unavailable for fork verification.");
       }
       if (
@@ -8709,13 +8859,12 @@ export function App() {
         || profileAuthorityId.current !== activationProfile.profileId
         || activeProfileRef.current?.revision !== activationProfile.revision
       ) throw new Error("The active Profile/session authority changed before the fork could be confirmed.");
-      requireProfileOwnedSession(authority, activationProfile.profileId, "fork");
       await activateForkedSessionAgainst(result, Object.freeze({
         runtime: activationRuntime,
         profileId: activationProfile.profileId,
         profileRevision: activationProfile.revision,
         activeSessionId: activationSessionId,
-        manifest: authority.manifest,
+        manifest: authority,
       }));
     } finally {
       sessionNavigationChanging.current = false;
@@ -9065,7 +9214,9 @@ export function App() {
                   every thread. Per-turn provider and model facts remain in Run
                   details, and session pins remain in All conversations. */}
               <SessionBar
-                title={activeSessionRecord?.title ?? activeProfile.name}
+                title={openingAddressedConversation
+                  ? OPENING_ADDRESSED_CONVERSATION
+                  : activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}
                 monogram={profileMonogram(activeProfile.name)}
                 profileBadgeStyle={profileBadgeStyle(activeTheme)}
@@ -9211,7 +9362,22 @@ export function App() {
                     Retry/Branch menu whose operations had no referent; its two
                     real claims are the intro's own lines and its per-context
                     note is passed through verbatim. */}
-                {seedOnlyTranscript ? (
+                {/*
+                  A conversation nobody asked for, drawn under the address of
+                  one somebody did, is the defect this replaces. The band stands
+                  where that other conversation's transcript used to, states
+                  what is being opened, and is withdrawn by the same commit that
+                  publishes the conversation — or by the sentence that says why
+                  it could not be opened.
+                */}
+                {openingAddressedConversation ? (
+                  <div class="transcript-boundary" role="status">
+                    <span>
+                      <strong>{OPENING_ADDRESSED_CONVERSATION}</strong>
+                      {" Airship is opening the conversation this address names. No other conversation is shown in its place."}
+                    </span>
+                  </div>
+                ) : seedOnlyTranscript ? (
                   <TranscriptIntro
                     note={transcriptIntroNote(messages[0]?.content, TRANSCRIPT_SEED_BODY)}
                     demo={composerUsesDemo}
@@ -9260,7 +9426,7 @@ export function App() {
                   </div>
                 ))}
                 </>}
-                {firstRunTranscript ? (
+                {firstRunTranscript && !openingAddressedConversation ? (
                   <div class="transcript-starters" role="group" aria-label="Suggested ways to begin">
                     {(inferenceConnected ? CONNECTED_STARTERS : DISCONNECTED_STARTERS).map((starter) => (
                       <button
@@ -9643,7 +9809,7 @@ export function App() {
             activeSessionId={sessionId}
             scopeProfileId={profileId}
             scopeProfileName={activeProfile.name}
-            forkManifest={authoritySession.current?.manifest}
+            forkManifest={routeManifest}
             revision={sessionRevision}
             inspectSession={(targetSessionId, signal) => inspectSessionForNavigation(targetSessionId, signal)}
             onResume={resumeLibrarySession}

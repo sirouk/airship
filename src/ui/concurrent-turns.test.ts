@@ -103,6 +103,34 @@ describe("turns run per conversation, not per page", () => {
     const guard = app.slice(app.indexOf("useBeforeUnloadGuard(unloadWouldLoseWork({"));
     expect(guard.slice(0, guard.indexOf("}))"))).toContain("busy: anyTurnRunning,");
   });
+
+  /*
+   * You can go back to a conversation while it is still answering.
+   *
+   * `decideSessionResume` reads the journal alone, so a turn in flight is
+   * indistinguishable there from one abandoned mid-answer: `TURN_INCOMPLETE`
+   * becomes a `HISTORY_INCOMPLETE` warning and `resumeLibrarySessionNow` opened
+   * the conversation for reading only. Measured in Chromium with a real
+   * endpoint held open: clicking that conversation in the rail did nothing, and
+   * the refusal it produced could not name one thing that had moved, because
+   * nothing had. `activeTurns` is the page's own answer to "is this thread
+   * live" — the same authority Stop and the rail's "Working…" read — so it is
+   * the one that decides here too.
+   */
+  it("does not call a conversation this page is answering a saved one", async () => {
+    const app = await appSource();
+    const resume = app.slice(
+      app.indexOf("async function resumeLibrarySessionNow("),
+      app.indexOf("function queueSessionAction("),
+    );
+    expect(resume).toContain("const answeringHere = activeTurns.current.has(fresh.session.id)");
+    // Only the reason a live turn actually raises is discounted, only when the
+    // whole history was inspected, and never for a blocked verdict.
+    expect(resume).toContain('&& fresh.compatibility?.action === "fork-required"');
+    expect(resume).toContain("&& fresh.history.checkedEvents === fresh.history.totalEvents");
+    expect(resume).toContain('reason.code === "HISTORY_INCOMPLETE" || reason.severity === "info"');
+    expect(resume).toContain('const held = fresh.compatibility?.action === "resume" || answeringHere');
+  });
 });
 
 /*

@@ -1,4 +1,4 @@
-import { useId, useState } from "preact/hooks";
+import { useId, useRef, useState } from "preact/hooks";
 import type { JournalBackend, JournalStateSource } from "../core/journal";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import {
@@ -65,6 +65,24 @@ export const WORK_BUNDLE_AUTHORITY_UNSETTLED =
   "This device is still opening the storage its work lives in. Adding now would write into the journal it is about"
   + " to replace, so this is refused rather than queued. Nothing changed; choose the file again once it is open.";
 
+/**
+ * Why the plan on screen was withdrawn instead of being pressed.
+ *
+ * A plan is a set of claims about one journal — which conversations are new,
+ * which are already there, which are refused. Read while the storage above was
+ * still opening, every one of those claims is about the journal that was then
+ * replaced. Measured: the panel said "4 will be added" for the eight seconds it
+ * took the Vault to open, the button enabled itself, and pressing it reported
+ * "0 conversations added. 4 skipped as already present." Nothing was lost and
+ * nothing was overwritten — but the panel had stated an outcome that could not
+ * happen, and the refusal above had already told the person the remedy was to
+ * choose the file again. This is that remedy actually happening.
+ */
+export const WORK_BUNDLE_PLAN_SUPERSEDED =
+  "The storage this device keeps its work in finished opening while that file was on screen, so what the plan said"
+  + " was about the journal it replaced. Nothing changed and nothing was added; choose the file again to read it"
+  + " against the storage that is open now.";
+
 type Incoming = Readonly<{
   name: string;
   sealed: boolean;
@@ -117,6 +135,16 @@ export function WorkBundleView({
   const [announcement, setAnnouncement] = useState("");
   const [error, setError] = useState<string>();
   const [incoming, setIncoming] = useState<Incoming>();
+  /*
+   * Which journal the plan below was read against.
+   *
+   * Not the settled-authority latch: the fact that decides whether a plan still
+   * describes anything is the journal it would be merged into, and adoption
+   * hands this panel a different `EventJournal` the moment it replaces one.
+   * Comparing the two is also what keeps the read side honest — choosing a file
+   * writes nothing and is never gated (see `work-bundle-view.test.ts`).
+   */
+  const plannedJournal = useRef<JournalStateSource>();
   const [outcome, setOutcome] = useState<WorkBundleImportResult>();
   const formatId = useId();
   const headingId = useId();
@@ -171,6 +199,7 @@ export function WorkBundleView({
         : parseWorkBundle(text);
       const chain = await verifyWorkBundleChain(bundle);
       const plan = await planWorkBundleImport({ bundle, journal, chain, workspace, profileId });
+      plannedJournal.current = journal;
       setAddMemory(false);
       setIncoming(Object.freeze({ name: file.name, sealed: isSealed, bundle, plan }));
       setAnnouncement(planSentence(plan));
@@ -187,6 +216,13 @@ export function WorkBundleView({
     // is what answers a call that reached here anyway.
     if (!authoritySettled) {
       setError(WORK_BUNDLE_AUTHORITY_UNSETTLED);
+      return;
+    }
+    // Same shape, for the plan rather than the press: a plan read against a
+    // journal that has since been replaced is not a plan for this one.
+    if (supersededPlan) {
+      setIncoming(undefined);
+      setError(WORK_BUNDLE_PLAN_SUPERSEDED);
       return;
     }
     setBusy(true);
@@ -215,6 +251,15 @@ export function WorkBundleView({
     }
   }
 
+  /*
+   * The plan on screen describes a journal this panel no longer writes into.
+   *
+   * Derived rather than latched, so the withdrawal happens in the same commit
+   * as the journal it is about — there is no frame in which "4 will be added"
+   * is still on screen beside a button that has just enabled itself against a
+   * different store.
+   */
+  const supersededPlan = incoming !== undefined && plannedJournal.current !== journal;
   const importable = incoming?.plan.conversations.filter((entry) => entry.state === "new").length ?? 0;
   const offeredMemory = incoming?.plan.memory;
   const addableMemory = addMemory ? offeredMemory?.add ?? 0 : 0;
@@ -314,7 +359,9 @@ export function WorkBundleView({
             />
           </label>
 
-          {incoming ? (
+          {supersededPlan ? (
+            <p class="work-bundle__refused" role="alert">{WORK_BUNDLE_PLAN_SUPERSEDED}</p>
+          ) : incoming ? (
             <div class="work-bundle__preview">
               <p class="work-bundle__note">
                 {incoming.name} · {incoming.sealed ? "sealed, opened with this Vault" : "readable JSON"} ·
@@ -378,7 +425,12 @@ export function WorkBundleView({
       </div>
 
       {error ? <p class="work-bundle__refused" role="alert">{error}</p> : null}
-      <p class="work-bundle__status" role="status">{announcement}</p>
+      {/* A withdrawn plan takes its narration with it. This region held the
+          plan's own sentence — "1 will be added." — and leaving it there while
+          the alert above says the plan was about another journal is two live
+          regions contradicting each other about the same file. The alert is the
+          one carrier while that is true. */}
+      <p class="work-bundle__status" role="status">{supersededPlan ? "" : announcement}</p>
     </section>
   );
 }

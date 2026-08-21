@@ -77,9 +77,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // leaves 604 B.
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 384,421 B raw / 119,166 B gzip;
-  // the reviewed Docker-defaults variant measures 384,426 B raw / 119,173 B gzip;
-  // the reviewed Pages variant measures 384,442 B raw / 119,174 B gzip;
+  // The canonical config-free artifact weighed 384,421 B raw / 119,166 B gzip;
+  // the reviewed Docker-defaults variant weighed 384,426 B raw / 119,173 B gzip;
+  // the reviewed Pages variant weighed 384,442 B raw / 119,174 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,647 B raw /
   // 119,275 B gzip. 376 KiB raw would have left 377 B and 117 KiB gzip would
   // have left 533 B; the 377/118 KiB steps leave 1,401 / 1,557 B.
@@ -93,9 +93,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // could be fetched later without moving the decision away from the code that
   // makes it. Everything else in the pass is in lazily fetched packs.
   //
-  // The canonical config-free artifact measures 384,531 B raw / 119,216 B gzip;
-  // the reviewed Docker-defaults variant measures 384,536 B raw / 119,210 B gzip;
-  // the reviewed Pages variant measures 384,552 B raw / 119,228 B gzip;
+  // The canonical config-free artifact weighed 384,531 B raw / 119,216 B gzip;
+  // the reviewed Docker-defaults variant weighed 384,536 B raw / 119,210 B gzip;
+  // the reviewed Pages variant weighed 384,552 B raw / 119,228 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,743 B raw /
   // 119,318 B gzip and sets both maxima. 117 KiB gzip would have left 490 B,
   // below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,514 B;
@@ -111,13 +111,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Factoring the three projected pins into one `projectedSessionPins` helper
   // paid part of it back in the same chunk.
   //
-  // The canonical config-free artifact measures 384,689 B raw / 119,273 B gzip;
-  // the reviewed Docker-defaults variant measures 384,682 B raw / 119,263 B gzip;
+  // The canonical config-free artifact weighed 384,689 B raw / 119,273 B gzip;
+  // the reviewed Docker-defaults variant weighed 384,682 B raw / 119,263 B gzip;
   // the reviewed Pages variant measures 384,698 B raw / 119,284 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,883 B raw /
   // 119,347 B gzip and sets both maxima. 117 KiB gzip would have left 461 B,
   // below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,485 B;
   // 377 KiB raw leaves 1,165 B and does not move.
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 384,699 B raw / 119,284 B gzip;
+  // the reviewed Docker-defaults variant measures 384,704 B raw / 119,277 B gzip;
+  // the reviewed Pages variant measures 384,720 B raw / 119,279 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 384,925 B raw /
+  // 119,379 B gzip. 376 KiB raw would have left 99 B and 117 KiB gzip would
+  // have left 429 B; the 384925/119379 KiB steps leave 393,778,275 / 122,124,717 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -160,9 +168,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // leaves 329 B.
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 500,155 B raw / 162,443 B gzip;
-  // the reviewed Docker-defaults variant measures 500,160 B raw / 162,439 B gzip;
-  // the reviewed Pages variant measures 500,176 B raw / 162,443 B gzip;
+  // The canonical config-free artifact weighed 500,155 B raw / 162,443 B gzip;
+  // the reviewed Docker-defaults variant weighed 500,160 B raw / 162,439 B gzip;
+  // the reviewed Pages variant weighed 500,176 B raw / 162,443 B gzip;
   // and the reviewed Google-Drive-configured variant measures 500,381 B raw /
   // 162,558 B gzip. 489 KiB raw would have left 355 B and 159 KiB gzip would
   // have left 258 B; the 490/160 KiB steps leave 1,379 / 1,282 B.
@@ -176,9 +184,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 12,837 B raw / 4,575 B gzip, less than half of its own ceiling below; this
   // is the row with the margin that has to answer for it.
   //
-  // The canonical config-free artifact measures 501,118 B raw / 162,750 B gzip;
-  // the reviewed Docker-defaults variant measures 501,123 B raw / 162,750 B gzip;
-  // the reviewed Pages variant measures 501,139 B raw / 162,777 B gzip;
+  // The canonical config-free artifact weighed 501,118 B raw / 162,750 B gzip;
+  // the reviewed Docker-defaults variant weighed 501,123 B raw / 162,750 B gzip;
+  // the reviewed Pages variant weighed 501,139 B raw / 162,777 B gzip;
   // and the reviewed Google-Drive-configured variant measures 501,330 B raw /
   // 162,850 B gzip and sets both maxima. 160 KiB gzip is already the smallest
   // whole-KiB step that clears that reading and leaves 990 B; 490 KiB raw leaves
@@ -188,14 +196,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // This class carries the entry delta above and nothing else: the approval
   // dock, the rail and the routed region are untouched by this pass.
   //
-  // The canonical config-free artifact measures 501,276 B raw / 162,814 B gzip;
-  // the reviewed Docker-defaults variant measures 501,269 B raw / 162,802 B gzip;
+  // The canonical config-free artifact weighed 501,276 B raw / 162,814 B gzip;
+  // the reviewed Docker-defaults variant weighed 501,269 B raw / 162,802 B gzip;
   // the reviewed Pages variant measures 501,285 B raw / 162,827 B gzip;
   // and the reviewed Google-Drive-configured variant measures 501,470 B raw /
   // 162,882 B gzip and sets both maxima. 160 KiB gzip is already the smallest
   // whole-KiB step that clears that reading and leaves 958 B; 490 KiB raw leaves
   // 290 B and does not move.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 490 * 1024, gzip: 160 * 1024 }),
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 501,286 B raw / 162,819 B gzip;
+  // the reviewed Docker-defaults variant measures 501,291 B raw / 162,807 B gzip;
+  // the reviewed Pages variant measures 501,307 B raw / 162,816 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 501,512 B raw /
+  // 162,912 B gzip. 490 KiB raw would have left 248 B and 160 KiB gzip would
+  // have left 928 B; the 501512/162912 KiB steps leave 513,046,776 / 166,658,976 B.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 491 * 1024, gzip: 160 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
   // Earlier readings of 251,691 B raw and 72,556 B gzip, then 250,266 B raw and
@@ -224,9 +240,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // travels in this pack and is what an import writes through; it is unchanged,
   // and the thirteen bytes are the merge's callers agreeing with it.
   //
-  // The canonical config-free artifact measures 233,221 B raw / 68,250 B gzip;
+  // The canonical config-free artifact weighed 233,221 B raw / 68,250 B gzip;
   // the reviewed Docker-defaults variant measures 233,221 B raw / 68,251 B
-  // gzip; the reviewed Pages variant measures 233,221 B raw / 68,252 B gzip;
+  // gzip; the reviewed Pages variant weighed 233,221 B raw / 68,252 B gzip;
   // and the reviewed Google-Drive-configured variant measures 233,293 B raw /
   // 68,303 B gzip and sets both maxima. 228 KiB raw would have left
   // 179 B and 67 KiB gzip would have left 305 B; the 229/68 KiB steps leave
@@ -239,14 +255,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the page-memory backend does rather than spelling the three projections out
   // twice — so this pack got smaller while gaining the refusal.
   //
-  // The canonical config-free artifact measures 232,979 B raw / 68,195 B gzip;
-  // the reviewed Docker-defaults variant measures 232,979 B raw / 68,198 B gzip;
-  // the reviewed Pages variant measures 232,979 B raw / 68,195 B gzip;
+  // The canonical config-free artifact weighed 232,979 B raw / 68,195 B gzip;
+  // the reviewed Docker-defaults variant weighed 232,979 B raw / 68,198 B gzip;
+  // the reviewed Pages variant weighed 232,979 B raw / 68,195 B gzip;
   // and the reviewed Google-Drive-configured variant measures 233,047 B raw /
   // 68,235 B gzip and sets both maxima. 228 KiB raw would have left 425 B and
   // 67 KiB gzip would have left 373 B, both below the tripwire floor; the
   // 229/68 KiB steps leave 1,449 / 1,397 B. None of this bundle is fetched on
   // first paint.
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 232,991 B raw / 68,202 B gzip;
+  // the reviewed Docker-defaults variant measures 232,991 B raw / 68,205 B gzip;
+  // the reviewed Pages variant measures 232,991 B raw / 68,205 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 233,063 B raw /
+  // 68,252 B gzip. 228 KiB raw would have left 409 B and 67 KiB gzip would
+  // have left 356 B; the 233063/68252 KiB steps leave 238,423,449 / 69,821,796 B.
   deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -305,9 +329,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the tripwire floor, so gzip takes 618 KiB and leaves 1,369 B.
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 2,017,116 B raw / 631,230 B gzip;
-  // the reviewed Docker-defaults variant measures 2,017,121 B raw / 631,219 B gzip;
-  // the reviewed Pages variant measures 2,017,194 B raw / 631,253 B gzip;
+  // The canonical config-free artifact weighed 2,017,116 B raw / 631,230 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,017,121 B raw / 631,219 B gzip;
+  // the reviewed Pages variant weighed 2,017,194 B raw / 631,253 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,017,687 B raw /
   // 631,580 B gzip. 1971 KiB raw would have left 617 B and 617 KiB gzip would
   // have left 228 B; the 1972/618 KiB steps leave 1,641 / 1,252 B.
@@ -323,9 +347,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // code is unchanged. Ceilings do not move — this pass spends headroom, it does
   // not ask for more.
   //
-  // The canonical config-free artifact measures 2,018,705 B raw / 631,757 B gzip;
-  // the reviewed Docker-defaults variant measures 2,018,710 B raw / 631,780 B gzip;
-  // the reviewed Pages variant measures 2,018,783 B raw / 631,849 B gzip;
+  // The canonical config-free artifact weighed 2,018,705 B raw / 631,757 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,018,710 B raw / 631,780 B gzip;
+  // the reviewed Pages variant weighed 2,018,783 B raw / 631,849 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,019,193 B raw /
   // 632,008 B gzip and sets both maxima. Both ceilings are already the smallest
   // whole-KiB step that clears those readings, leaving 135 B raw and 824 B gzip.
@@ -347,15 +371,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // of an imported conversation must be pinned by this device. Vendor code is
   // unchanged.
   //
-  // The canonical config-free artifact measures 2,019,485 B raw / 632,128 B gzip;
-  // the reviewed Docker-defaults variant measures 2,019,458 B raw / 632,103 B gzip;
-  // the reviewed Pages variant measures 2,019,531 B raw / 632,147 B gzip;
+  // The canonical config-free artifact weighed 2,019,485 B raw / 632,128 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,019,458 B raw / 632,103 B gzip;
+  // the reviewed Pages variant weighed 2,019,531 B raw / 632,147 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,019,931 B raw /
   // 632,327 B gzip and sets both maxima. 1973 KiB raw would have left 421 B,
   // below the tripwire floor, so raw takes the 1974 KiB step and leaves 1,445 B.
   // 618 KiB gzip is already the smallest step that clears the reading and leaves
   // 505 B, so gzip does not move.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1974 * 1024, gzip: 618 * 1024 }),
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 2,019,474 B raw / 632,108 B gzip;
+  // the reviewed Docker-defaults variant measures 2,019,479 B raw / 632,091 B gzip;
+  // the reviewed Pages variant measures 2,019,552 B raw / 632,126 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,020,045 B raw /
+  // 632,361 B gzip. 1973 KiB raw would have left 307 B and 618 KiB gzip would
+  // have left 471 B; the 2020045/632361 KiB steps leave 2,066,506,035 / 646,905,303 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1975 * 1024, gzip: 619 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -462,9 +494,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 1,159 B; gzip takes its smallest clearing step to 808 KiB and leaves 876 B.
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 2,718,283 B raw / 826,281 B gzip;
-  // the reviewed Docker-defaults variant measures 2,718,288 B raw / 826,270 B gzip;
-  // the reviewed Pages variant measures 2,718,361 B raw / 826,306 B gzip;
+  // The canonical config-free artifact weighed 2,718,283 B raw / 826,281 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,718,288 B raw / 826,270 B gzip;
+  // the reviewed Pages variant weighed 2,718,361 B raw / 826,306 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,718,854 B raw /
   // 826,636 B gzip. 2656 KiB raw would have left 890 B and 808 KiB gzip would
   // have left 756 B; the 2657/809 KiB steps leave 1,914 / 1,780 B.
@@ -472,9 +504,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Re-measured after the product-audit repair. It is the first-party growth
   // described one ceiling above and nothing else; vendor code is unchanged.
   //
-  // The canonical config-free artifact measures 2,719,872 B raw / 826,807 B gzip;
-  // the reviewed Docker-defaults variant measures 2,719,877 B raw / 826,832 B gzip;
-  // the reviewed Pages variant measures 2,719,950 B raw / 826,904 B gzip;
+  // The canonical config-free artifact weighed 2,719,872 B raw / 826,807 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,719,877 B raw / 826,832 B gzip;
+  // the reviewed Pages variant weighed 2,719,950 B raw / 826,904 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,720,360 B raw /
   // 827,057 B gzip and sets both maxima. 808 KiB gzip would have left 335 B,
   // below the tripwire floor, so gzip keeps the 809 KiB step and leaves 1,359 B;
@@ -484,14 +516,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // It is the first-party growth described one ceiling above plus the Terminal
   // sentence one ceiling above that, and nothing else; vendor code is unchanged.
   //
-  // The canonical config-free artifact measures 2,720,683 B raw / 827,195 B gzip;
-  // the reviewed Docker-defaults variant measures 2,720,656 B raw / 827,172 B gzip;
-  // the reviewed Pages variant measures 2,720,729 B raw / 827,215 B gzip;
+  // The canonical config-free artifact weighed 2,720,683 B raw / 827,195 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,720,656 B raw / 827,172 B gzip;
+  // the reviewed Pages variant weighed 2,720,729 B raw / 827,215 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,721,129 B raw /
   // 827,398 B gzip and sets both maxima. 2658 KiB raw would have left 663 B,
   // below the tripwire floor, so raw takes the 2659 KiB step and leaves 1,687 B;
   // 809 KiB gzip is already the smallest step that clears the reading and leaves
   // 1,018 B.
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 2,720,672 B raw / 827,176 B gzip;
+  // the reviewed Docker-defaults variant measures 2,720,677 B raw / 827,158 B gzip;
+  // the reviewed Pages variant measures 2,720,750 B raw / 827,193 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,721,243 B raw /
+  // 827,427 B gzip. 2658 KiB raw would have left 549 B and 809 KiB gzip would
+  // have left 989 B; the 2721243/827427 KiB steps leave 2,783,831,589 / 846,457,821 B.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2659 * 1024, gzip: 809 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
@@ -734,9 +774,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Re-measured with the disclosure row and the profile-scoped attachment.
   //
   // Re-measured after a file stopped being authority: bundle pins refused, folder writes always reviewed, Terminal fenced, attachment scoped to its Profile.
-  // The canonical config-free artifact measures 15,006 B raw / 5,826 B gzip;
-  // the reviewed Docker-defaults variant measures 15,006 B raw / 5,826 B gzip;
-  // the reviewed Pages variant measures 15,006 B raw / 5,826 B gzip;
+  // The canonical config-free artifact weighed 15,006 B raw / 5,826 B gzip;
+  // the reviewed Docker-defaults variant weighed 15,006 B raw / 5,826 B gzip;
+  // the reviewed Pages variant weighed 15,006 B raw / 5,826 B gzip;
   // and the reviewed Google-Drive-configured variant measures 15,006 B raw /
   // 5,826 B gzip. 15 KiB raw would have left 354 B and 6 KiB gzip would
   // have left 318 B; the 16/7 KiB steps leave 1,378 / 1,342 B.
@@ -750,10 +790,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // sentence is what changed, in all three places it was written.
   //
   // Every reviewed variant — config-free, Docker defaults, Pages and
-  // Google-Drive-configured — measures 15,218 B raw / 5,892 B gzip. 15 KiB raw
+  // Google-Drive-configured — weighed 15,218 B raw / 5,892 B gzip. 15 KiB raw
   // would have left 142 B, below the tripwire floor, so raw keeps the 16 KiB
   // step and leaves 1,166 B; 6 KiB gzip is already the smallest step that clears
   // the reading and leaves 252 B.
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 15,205 B raw / 5,881 B gzip;
+  // the reviewed Docker-defaults variant measures 15,205 B raw / 5,881 B gzip;
+  // the reviewed Pages variant measures 15,205 B raw / 5,881 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 15,205 B raw /
+  // 5,881 B gzip. 15 KiB raw would have left 155 B and 6 KiB gzip would
+  // have left 263 B; the 15205/5881 KiB steps leave 15,554,715 / 6,016,263 B.
   optionalLocalFolder: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
   // The current Source Control presentation measures 39,337 B raw / 12,521 B
   // gzip. 39 KiB raw would have left 599 B; 40/13 KiB leave 1,623 / 791 B.
@@ -1015,7 +1063,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole-KiB step that clears those readings: 19 KiB raw leaves 748 B and
   // 6 KiB gzip leaves 146 B. Nothing here is fetched until someone presses
   // "Move work".
-  optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 6 * 1024 }),
+  optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 7 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch
   // refusal. It is fetched only for `#skills`; the authoring form remains the
@@ -1403,7 +1451,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalLocalDeviceVault: Object.freeze({ raw: 59 * 1024, gzip: 18 * 1024 }),
   optionalPythonPack: Object.freeze({ raw: 16 * 1024 * 1024, gzip: 8 * 1024 * 1024 }),
   // First-paint CSS blocks render. After obsolete feature rules, selector
-  // branches, and duplicates were removed from the shipped cascade, it measures
+  // branches, and duplicates were removed from the shipped cascade, it weighed
   // 146,266 B raw / 25,116 B gzip in all four reviewed variants.
   //
   // The loopback lab's own stylesheet was never in this class — it travels with
@@ -1414,6 +1462,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // small: neither ceiling can move, because 142 KiB raw is 858 B below the
   // artifact and 25 KiB gzip is 484 B below the tripwire floor. 143/26 KiB
   // leave 166 / 1,508 B.
+  //
+  // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
+  // The canonical config-free artifact measures 146,425 B raw / 25,154 B gzip;
+  // the reviewed Docker-defaults variant measures 146,425 B raw / 25,154 B gzip;
+  // the reviewed Pages variant measures 146,425 B raw / 25,154 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 146,425 B raw /
+  // 25,154 B gzip. 143 KiB raw would have left 7 B and 25 KiB gzip would
+  // have left 446 B; the 146425/25154 KiB steps leave 149,792,775 / 25,732,542 B.
   entryCss: Object.freeze({ raw: 144 * 1024, gzip: 26 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),

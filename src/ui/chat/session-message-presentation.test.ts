@@ -11,6 +11,7 @@ import type { CanonicalMessage } from "../../core/contracts";
 import { auditSessionHistory } from "../../core/session-audit";
 import { selectProfileActiveConversation } from "../../sessions/profile-cockpit";
 import { SessionLibrary } from "../../sessions/library";
+import { materializeSessionMessages } from "../../sessions/domain";
 import {
   SessionMessagePresentationError,
   describeSessionPresentationFault,
@@ -411,8 +412,18 @@ describe("presentSessionMessages", () => {
 
     expect(view.auditStatus).toBe("incomplete");
     expect(view.rows).toHaveLength(2);
+    /*
+     * Unfinished, and in provider context — which is what actually happens.
+     *
+     * `materializeMessages` drops only failed turns and unsalvaged cancelled
+     * ones, so an unterminated turn's request IS replayed to the model on the
+     * next turn. This row used to be labelled "excluded", which was a false
+     * statement about the turn and, because `materializeSessionMessages` says
+     * "included" for the same journal, a disagreement that `validateHistory`
+     * then refused the whole presentation over.
+     */
     expect(view.rows.every((row) =>
-      row.turnStatus === "incomplete" && row.providerContext === "excluded"
+      row.turnStatus === "incomplete" && row.providerContext === "included"
     )).toBe(true);
     expect(view.rows[1]?.parts).toEqual([]);
   });
@@ -1091,6 +1102,44 @@ describe("a turn still in flight projects the row its live stream is addressed t
     expect(assistant?.turnStatus).toBe("incomplete");
     // And the finished turn beside it is untouched by the running one.
     expect(view.rows.find((row) => row.role === "assistant" && row.turnId === "turn-1")?.turnStatus).toBe("completed");
+  });
+
+  /*
+   * The two projections of one journal have to agree, or nobody can return to
+   * a conversation that is still answering.
+   *
+   * `resumeLibrarySessionNow` hands this function the bounded transcript's own
+   * per-turn metadata as `history` — the same pairing `app.tsx`'s
+   * `presentationHistory` builds — precisely so a projection that has drifted
+   * is refused rather than displayed. Both sides derive from the same events,
+   * so for a turn in flight they must produce the same pair. They did not:
+   * `materializeSessionMessages` said `incomplete/included` and this file said
+   * `incomplete/excluded`, so `validateHistory` threw `HISTORY_MISMATCH` for
+   * every conversation with a live turn. Measured in Chromium: clicking a
+   * running conversation in the rail did nothing at all, and the topbar read
+   * "“Alpha” could not be replayed: Bounded history metadata disagrees with
+   * durable turn …". This is that exact pairing, built the way the shell
+   * builds it.
+   */
+  it("agrees with the bounded transcript projection of the same running turn", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "First", "First answer"),
+      draft("turn.requested", "turn-2", { content: "Still thinking" }),
+      draft("inference.started", "turn-2", { step: 0 }),
+    ]);
+    const materialized = materializeSessionMessages(events, {}, "session-1");
+    const history = materialized.messages.flatMap((message) => message.turnId
+      ? [{ turnId: message.turnId, turnStatus: message.turnStatus, providerContext: message.providerContext }]
+      : []);
+    expect(history.some((entry) => entry.turnId === "turn-2")).toBe(true);
+
+    const view = presentSessionMessages(input(events, { history }));
+    for (const entry of history) {
+      const row = view.rows.find((candidate) => candidate.turnId === entry.turnId);
+      expect(row?.turnStatus).toBe(entry.turnStatus);
+      expect(row?.providerContext).toBe(entry.providerContext);
+    }
   });
 });
 

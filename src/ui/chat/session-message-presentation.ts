@@ -378,8 +378,23 @@ export function presentSessionMessages(
 
   for (const group of groups) {
     const turnStatus = groupTerminalStatus(group);
+    /*
+     * What the next request will actually carry, not what this row looks like.
+     *
+     * `materializeMessages` drops a failed turn and an unsalvaged cancelled one
+     * and carries everything else, so an *unterminated* turn's request is
+     * replayed as provider history — and `providerContextDisposition` in
+     * `sessions/domain.ts`, the bounded projection of the same journal, says so.
+     * This copy said `!== "completed"`, which made "excluded" a false statement
+     * about a turn still in flight and, worse, made the two projections
+     * disagree: `validateHistory` below refused the whole presentation with
+     * `HISTORY_MISMATCH` for every conversation whose turn was running, so
+     * returning to a running conversation could not open it at all.
+     */
     const providerContext: SessionPresentationProviderContext =
-      group.kind === "local-command" || turnStatus !== "completed" ? "excluded" : "included";
+      group.kind === "local-command" || turnStatus === "failed" || turnStatus === "cancelled"
+        ? "excluded"
+        : "included";
     validateHistory(group.turnId, turnStatus, providerContext, history.get(group.turnId));
 
     const projectedUpperBound = estimatedPartCount(group);
