@@ -137,9 +137,9 @@ export function TranscriptIntro({
             anything at minimal density: nothing kept yet, or no provider yet.
             Somebody who has chosen storage and connected a model has answered
             it, and gets the quiet screen the density asks for. It reuses
-            `__lead` rather than earning a class of its own, so the entry
-            stylesheet does not move. */}
-        {unsaved || demo ? <p class="transcript-intro__lead">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}
+            the lead's own recipe under its own name, so the density contract
+            that asserts what the lead mounts stays unambiguous. */}
+        {unsaved || demo ? <p class="transcript-intro__what">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}
         {note ? <p class="transcript-intro__note">{note}</p> : null}
         {unsaved ? (
           <p class="transcript-intro__unsaved">

@@ -490,7 +490,7 @@ const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
       expect(variant.environment, variant.name).toContain("npm run build:static");
     }
     const droppedFromEntry = source.replace(
-      "// Reviewed reading (Pages Google-Drive-configured): 386,181 B raw / 119,814 B gzip.\n",
+      "Reviewed reading (Pages Google-Drive-configured): 386,172 B raw / 119,806 B gzip.\n",
       "",
     );
     expect(droppedFromEntry).not.toBe(source);

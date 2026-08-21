@@ -94,7 +94,7 @@ describe("what the first screen says this is", () => {
    */
   it("renders outside the density gate, on the two states a newcomer is in", () => {
     expect(transcriptIntroSource)
-      .toContain('{unsaved || demo ? <p class="transcript-intro__lead">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}');
+      .toContain('{unsaved || demo ? <p class="transcript-intro__what">{TRANSCRIPT_INTRO_WHAT_LINE}</p> : null}');
     const copy = transcriptIntroSource.slice(
       transcriptIntroSource.indexOf('<div class="transcript-intro__copy">'),
       transcriptIntroSource.indexOf("{full ? ("),
