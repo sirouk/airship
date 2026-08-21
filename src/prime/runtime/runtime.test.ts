@@ -10,7 +10,7 @@ import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux.test-support";
+} from "../ai/faux.test-support";
 import type { Api, Model } from "../ai/types";
 import type { StreamFn } from "../agent";
 import type { InferenceTransport } from "../../core/contracts";

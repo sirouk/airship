@@ -1,3 +1,4 @@
+import { isRecord } from "../core/records";
 import type { JsonValue, SessionManifest } from "../core/contracts";
 import { canonicalSessionContextPolicy } from "../core/context-policy";
 import { assertValidSessionInferenceBinding } from "../core/inference-binding";
@@ -893,6 +894,3 @@ function requiredInteger(value: unknown, label: string, allowZero = false): numb
   return Number(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

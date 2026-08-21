@@ -2,6 +2,7 @@ import type { JsonValue, SessionManifest } from "./contracts";
 import { deepFreeze } from "./freeze";
 import { sha256, stableStringify } from "./hash";
 import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
+import { isRecord } from "./records";
 
 const DIGEST = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const MAX_HITS = 8;
@@ -613,9 +614,6 @@ function arrayIndex(value: string, length: number): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function digest(value: unknown): boolean {
   return typeof value === "string" && DIGEST.test(value);

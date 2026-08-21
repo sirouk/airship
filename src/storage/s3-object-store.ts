@@ -1,4 +1,4 @@
-import { ownedArrayBuffer } from "../core/bytes";
+import { ownedArrayBuffer, sha256Hex } from "../core/bytes";
 import type {
   CompareAndSwapResult,
   ObjectRange,
@@ -598,9 +598,6 @@ async function hmac(keyBytes: Uint8Array, value: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", ownedArrayBuffer(bytes))));
-}
 
 function hex(bytes: Uint8Array): string {
   return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");

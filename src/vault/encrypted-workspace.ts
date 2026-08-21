@@ -1,3 +1,5 @@
+import { requiredVaultString } from "./field";
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { stableStringify, sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
@@ -425,7 +427,7 @@ function compareWorkspacePaths(left: string, right: string): number {
 
 function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
   if (!isRecord(value)) throw new Error("Encrypted workspace manifest entry is invalid.");
-  const path = normalizeWorkspacePath(requiredString(value.path, "workspace path", 4_096));
+  const path = normalizeWorkspacePath(requiredVaultString(value.path, "workspace path", 4_096));
   if (path === "/workspace") throw new Error("Encrypted workspace manifest contains the workspace root as a file.");
   const size = requiredInteger(value.size, "workspace file size", true);
   if (size > MAX_FILE_BYTES) throw new Error("Encrypted workspace manifest file exceeds the client limit.");
@@ -441,12 +443,12 @@ function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
   }
   return {
     path,
-    revision: requiredString(value.revision, "workspace revision", 512),
-    updatedAt: validTimestamp(requiredString(value.updatedAt, "workspace update time", 128), "workspace update time"),
+    revision: requiredVaultString(value.revision, "workspace revision", 512),
+    updatedAt: validTimestamp(requiredVaultString(value.updatedAt, "workspace update time", 128), "workspace update time"),
     size,
     ...(contentByteLength === undefined ? {} : { contentByteLength }),
-    cloudKey: requiredString(value.cloudKey, "workspace cloud key", 4_096),
-    etag: requiredString(value.etag, "workspace ETag", 4_096),
+    cloudKey: requiredVaultString(value.cloudKey, "workspace cloud key", 4_096),
+    etag: requiredVaultString(value.etag, "workspace ETag", 4_096),
   };
 }
 
@@ -494,14 +496,6 @@ function parseJson(bytes: Uint8Array, label: string): unknown {
   }
 }
 
-function requiredString(value: unknown, label: string, maxBytes: number): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    encoder.encode(value).byteLength > maxBytes
-  ) throw new Error(`${label} is invalid.`);
-  return value;
-}
 
 function requiredInteger(value: unknown, label: string, allowZero = false): number {
   if (!Number.isSafeInteger(value) || (allowZero ? Number(value) < 0 : Number(value) <= 0)) {
@@ -516,6 +510,3 @@ function validTimestamp(value: string, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

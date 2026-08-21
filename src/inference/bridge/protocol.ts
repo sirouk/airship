@@ -10,6 +10,7 @@
  * table, an exact protocol version, ordered sequence numbers, and exactly one
  * terminator. Anything else is unsolicited and is dropped without effect.
  */
+import { isRecord } from "../../core/records";
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
@@ -463,6 +464,3 @@ function boundedText(value: unknown, maximum: number): string | undefined {
   return clean ? clean.slice(0, maximum) : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}

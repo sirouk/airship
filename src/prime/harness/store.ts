@@ -17,6 +17,7 @@
  * entry.
  */
 
+import { isRecord } from "../../core/records";
 import {
   HARNESS_EDIT_ACTIONS,
   HARNESS_ENTRY_KINDS,
@@ -155,9 +156,6 @@ export interface HarnessStore {
 // model-emitted JSON; fail closed by rejecting, never by coercing kinds).
 // ---------------------------------------------------------------------------
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** deterministicStringify: snapshot ids must not depend on key insertion order. */
 export function stableStringify(value: unknown): string {

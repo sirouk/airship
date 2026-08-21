@@ -36,3 +36,16 @@ export function formatBytes(value: number): string {
   return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
 }
 
+/**
+ * Lowercase hex SHA-256 of these bytes.
+ *
+ * One question with two callers that both need the *hex* spelling rather than
+ * `core/hash.ts`'s `sha256:` base64url form: AWS SigV4 canonical requests and
+ * the Walrus blob transport's integrity header both name it in hex because
+ * their wire formats do. It lives here beside `ownedArrayBuffer`, which both
+ * callers already import, so sharing it adds no import edge that was not there.
+ */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", ownedArrayBuffer(bytes)));
+  return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
+}

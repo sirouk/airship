@@ -1,3 +1,4 @@
+import { isRecord } from "../../core/records";
 import type {
   CanonicalMessage,
   InferenceEvent,
@@ -2317,9 +2318,6 @@ function objectHeaders(headers: HeadersInit | undefined): Record<string, string>
   return Object.fromEntries(new Headers(headers).entries());
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isJsonValue(value: unknown): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;

@@ -8,7 +8,8 @@ import type {
   LocalProviderOptions,
 } from "./contracts";
 import { LocalProviderError, providerDiagnostic, resolveLocalEndpoint } from "./endpoint-policy";
-import { boundedInteger, boundedJson, boundedOptions, isRecord, LOCAL_GENERATION_BUDGET_MS } from "./http";
+import { isRecord } from "../../core/records";
+import { boundedInteger, boundedJson, boundedOptions, LOCAL_GENERATION_BUDGET_MS } from "./http";
 import { LocalOpenAiTransport } from "./openai-transport";
 
 export const LM_STUDIO_DEFAULT_ENDPOINT = "http://127.0.0.1:1234";

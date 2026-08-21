@@ -1910,7 +1910,9 @@ export function App() {
     if (pendingCount === 0 || approvalDockSettlingFailure.current) return;
     approvalDockSettlingFailure.current = true;
     try {
-      approvalBroker.denyAll();
+      // Nobody was asked: the dialog that would have shown this request never
+      // loaded, so the journal records a withdrawal, not a person's refusal.
+      approvalBroker.settleAll("page");
     } finally {
       approvalDockSettlingFailure.current = false;
     }
@@ -3470,7 +3472,9 @@ export function App() {
   }
 
   useEffect(() => () => {
-    approvalBroker.denyAll();
+    // The page is going away under a live request. Fails closed exactly as
+    // before; the record says the page withdrew it, because nobody answered.
+    approvalBroker.settleAll("page");
     vaultContextPublication.current?.abort(new DOMException("Airship is closing.", "AbortError"));
   }, [approvalBroker]);
 
@@ -3530,7 +3534,7 @@ export function App() {
     // background thread whose request is still waiting, and denying that
     // request would destroy a decision nobody made.
     if (!sessionId || seen.sessionId !== sessionId || seen.mode === activeApprovalMode) return;
-    approvalBroker.denyAll(sessionId);
+    approvalBroker.settleAll("page", sessionId);
   }, [approvalBroker, activeApprovalMode, sessionId]);
 
   useEffect(() => {
@@ -10167,7 +10171,9 @@ export function App() {
             <small>{`${approvalDockWaitingRequests === 1 ? "One capability request is" : `${approvalDockWaitingRequests} capability requests are`} waiting. No effect has run. You can deny ${approvalDockWaitingRequests === 1 ? "it" : "them"} now or wait for the controls.`}</small>
           </span>
           <button type="button" onClick={() => {
-            approvalBroker.denyAll();
+            // The one caller that is a person. This is the only place the
+            // journal is entitled to say a human refused.
+            approvalBroker.settleAll("human");
             requestAnimationFrame(() => {
               (textarea.current ?? mainRegion.current)?.focus({ preventScroll: true });
             });

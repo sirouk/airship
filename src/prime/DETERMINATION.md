@@ -10,10 +10,9 @@ Answer, with numbers.
 
 ## 1. What airship Python execution can actually host (verified against code)
 
-Every figure here is from `src/tools/execution-tools.ts` /
-`src/execution/*-contract.ts` (cross-checked table in
-`/root/pa-audit/airship-exec-budgets.md`; no contradiction found between
-docs and code):
+Every figure here is from `src/tools/execution-tools.ts` and
+`src/execution/*-contract.ts`, which are in this repository and are where to
+check them:
 
 - Pyodide pack: 64 KiB source per job, `timeoutMs ≤ 10_000` per job (after a
   separately-bounded 30 s boot), fresh interpreter per job, ambient
@@ -38,16 +37,12 @@ disposable-per-job at 10 jobs: 20.7 s | persistent: 2.6 s + 11 ms   (~8×)
 The measurement records the performance motive for dormant persistent-Pyodide research; it does not authorize activation. A persistent kernel would avoid roughly 21 seconds of fresh CPython boots across ten model calls. It does not describe the stock JavaScript engine, whose lightweight
 worker is intentionally recreated for every job as a hard completion boundary.
 
-**Stream/parse throughput of the ported parsers** (`scripts/bench/parse-throughput.test.ts`,
-200k SSE events streamed through the ported parser + 100k partial-JSON parses):
-
-```
-run isolated (node):  SSE 131.1 MB/s · 1,640,431 events/s → covers 100k-events/step broker budgets ~120×
-                      stream-json partial parse: 30,227 ops/s at ~4 KiB args
-run under vitest full-suite parallelism (same machine, contention):
-                      SSE 58.9 MB/s  · 736,931 events/s
-                      stream-json:   11,728 ops/s
-```
+**Stream/parse throughput of the ported parsers.** This section recorded 131.1
+MB/s of SSE and 30,227 partial-JSON parses per second, measured by a bench that
+ran the SSE and partial-JSON parsers under `src/prime/ai/`. Both parsers, the
+bench, and the provider stack that was their only caller have been deleted, so
+the figures are history and cannot be re-taken from this repository. Airship's
+own streaming lives in `src/inference/openai-wire/`.
 
 Provider-realistic load (~2–10k SSE events per agent turn with ~400B
 events) is two orders of magnitude below the contended floor, so parsing
@@ -68,8 +63,8 @@ Reasons, in order of weight:
    tunneling through `execute_workspace_program`'s ≤16 predeclared exact
    calls, which is a hard ceiling on prime-agent's RLM shape.
 2. **Feature completeness.** Prime-agent is ≈ 6–7k lines of semantic core
-   (streaming + loop + harness + subagents + session machines) per
-   `/root/pa-audit/prime-agent-port-manifest.md`. A faithful port needs those
+   (streaming + loop + harness + subagents + session machines); the port of
+   it is `src/prime/`, which is where that count can be re-taken. A faithful port needs those
    exact voucher semantics on live journals — Python-in-Pyodide replicas
    would require a TypeScript "assistant governor" anyway.
 3. **Performance.** Dormant persistent-Pyodide research measured ≈ 8× versus fresh CPython per job on warm assets. It remains quarantined because cross-cell task provenance is unprovable. Stock JavaScript instead pays a small fresh-worker cost to enforce its hard

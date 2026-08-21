@@ -4,7 +4,7 @@ import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux.test-support";
+} from "../ai/faux.test-support";
 import { createSessionContextPolicy } from "../../core/context-policy";
 import type { JsonValue, SessionContextPolicy, SessionManifest } from "../../core/contracts";
 import { EventJournal, JournalConflictError, type DurableEvent } from "../../core/journal";

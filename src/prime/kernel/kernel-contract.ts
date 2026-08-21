@@ -210,3 +210,19 @@ export type KernelEngineDescription = Readonly<{
    */
   network: "absent-ambient; tool bridge only";
 }>;
+
+/**
+ * Is this a bounded protocol string?
+ *
+ * The predicate, without the refusal. Both kernel engines — the JavaScript
+ * host in `kernel-host.ts` and the Pyodide engine in `pyodide-engine.ts` —
+ * carried a byte-identical `requiredString`, and each threw its own protocol
+ * error class. The question they were asking was one question; only the
+ * identity of the complaint differed, and callers do branch on that identity.
+ * So the test lives here once and each engine keeps a one-line wrapper that
+ * raises its own error.
+ */
+export function boundedProtocolString(value: unknown, maxChars: number, allowEmpty: boolean): string | undefined {
+  if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.length > maxChars) return undefined;
+  return value;
+}

@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { streamSimple } from "../ai/stream";
 import type { Model } from "../ai/types";
-import { type FauxProviderRegistration, registerFauxProvider } from "../ai/providers/faux.test-support";
+import { type FauxProviderRegistration, registerFauxProvider } from "../ai/faux.test-support";
 import { canonicalTaskPlanNote, runTurn } from "../../core/agent";
 import {
   canonicalContextSelection,

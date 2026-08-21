@@ -242,7 +242,7 @@ describe("a conversation that arrived in a file sets no approval mode", () => {
  * It cannot happen, and this pins the three facts that make it so rather than
  * leaving them as an assumption in a review note. If any of them is ever
  * loosened — the dock moved inside the routed region, `approvalPending`
- * dropped from the inert set, `denyAll` removed from teardown — a route-change
+ * dropped from the inert set, `settleAll` removed from teardown — a route-change
  * abort becomes necessary and these assertions are where that is discovered.
  */
 describe("a pending decision cannot be navigated away from", () => {
@@ -281,9 +281,32 @@ describe("a pending decision cannot be navigated away from", () => {
   });
 
   it("fails the decision closed if the page goes away under it", () => {
-    // The one exit that is not navigation. Teardown denies rather than
+    // The one exit that is not navigation. Teardown settles rather than
     // abandoning, so no awaited decision outlives the surface that asked for it.
-    expect(source).toContain("approvalBroker.denyAll();");
+    expect(source).toContain('approvalBroker.settleAll("page");');
+  });
+
+  /*
+   * Three of the four callers of the page-wide settle helper are the page
+   * itself: the approval dialog's chunk failed to load, the shell is
+   * unmounting, or a conversation's approval mode changed under an outstanding
+   * prompt. None of them asked anybody anything, and all three used to file the
+   * same `deny` the person's own control files — so the journal recorded a
+   * human refusal of a question that was never answered, and for the failed
+   * chunk was never even shown. The actor is now named at every call site, and
+   * these assertions are where a fourth automatic caller borrowing the person's
+   * word is caught.
+   */
+  it("names the page, not a person, on every automatic settle", () => {
+    // Failed dialog chunk, teardown, and a conversation whose mode changed.
+    expect(source.match(/approvalBroker\.settleAll\("page"(?:, sessionId)?\);/gu)).toHaveLength(3);
+    expect(source).toContain('approvalBroker.settleAll("page", sessionId);');
+    // Exactly one caller is a person, and it is the button that says so.
+    expect(source.match(/approvalBroker\.settleAll\("human"\);/gu)).toHaveLength(1);
+    expect(source).toContain(">Deny pending request</button>");
+    // The word a person's refusal is filed under may never be spelled by an
+    // automatic path again.
+    expect(source).not.toContain("approvalBroker.denyAll(");
   });
 });
 

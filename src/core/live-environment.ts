@@ -11,6 +11,7 @@ import {
   sessionInferenceProviderIdMatches,
 } from "./inference-binding";
 import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
+import { isRecord } from "./records";
 
 const MAX_ENTRIES_PER_GROUP = 48;
 const MAX_ENTRY_DETAIL_CHARS = 512;
@@ -453,6 +454,3 @@ function cleanText(value: unknown, max: number): string | undefined {
   return cleaned && cleaned.length <= max ? cleaned : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

@@ -1,3 +1,4 @@
+import { isRecord } from "../../core/records";
 import type {
   CanonicalMessage,
   InferenceEvent,
@@ -267,9 +268,6 @@ function optionalTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isJsonValue(value: unknown): value is JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;

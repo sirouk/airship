@@ -1,5 +1,5 @@
-import { createAssistantMessageEventStream, type AssistantMessageEventStream } from "../event-stream";
-import { registerApiProvider, unregisterApiProviders } from "../registry";
+import { createAssistantMessageEventStream, type AssistantMessageEventStream } from "./event-stream";
+import { registerApiProvider, unregisterApiProviders } from "./registry";
 import type {
   AssistantMessage,
   Context,
@@ -14,7 +14,7 @@ import type {
   ToolCall,
   ToolResultMessage,
   Usage,
-} from "../types";
+} from "./types";
 
 /**
  * Port of prime-agent packages/ai/src/providers/faux.ts: a deterministic

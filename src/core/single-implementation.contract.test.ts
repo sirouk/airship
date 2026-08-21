@@ -98,4 +98,80 @@ describe("one implementation per question", () => {
     expect(declaring(/^(?:export )?function requiredString\(value: JsonValue/mu)).toEqual(["tools/schema.ts"]);
   });
 
+  /*
+   * "Is this a plain JSON object?" was written out in seventeen files, in three
+   * spellings that agree: `Boolean(value) &&`, `!!value &&`, and
+   * `value !== null &&`. They agree today; three spellings of one predicate are
+   * three chances to stop agreeing, and every one of them guards a boundary
+   * where untrusted JSON arrives.
+   */
+  it("declares isRecord once, for every boundary that reads untrusted JSON", async () => {
+    expect(declaring(/^(?:export )?function isRecord\(/mu)).toEqual(["core/records.ts"]);
+
+    const { isRecord } = await import("./records");
+    expect(isRecord({})).toBe(true);
+    // The three things every copy agreed were not records.
+    expect(isRecord(null)).toBe(false);
+    expect(isRecord([])).toBe(false);
+    expect(isRecord("x")).toBe(false);
+  });
+
+  /*
+   * A content digest is a promise that two devices computing it over the same
+   * value get the same string. `profiles/domain.ts` carried `canonicalStringify`
+   * — the same recursion, the same `JSON.stringify` of keys, and the same
+   * code-unit key order — as a second implementation of that one preimage.
+   *
+   * `prime/harness/store.ts` keeps its own and is NOT folded in: it canonicalises
+   * `unknown` rather than `JsonValue` and answers `"null"` for `undefined`,
+   * where this one would emit invalid JSON. Different domain, different
+   * behaviour, different question.
+   */
+  it("declares one canonical JSON preimage for content digests", async () => {
+    expect(declaring(/^(?:export )?function stableStringify\(value: JsonValue/mu)).toEqual(["core/hash.ts"]);
+    expect(declaring(/^(?:export )?function canonicalStringify\(/mu)).toEqual([]);
+
+    const { stableStringify } = await import("./hash");
+    // Code-unit order, which is where a `localeCompare` copy would diverge.
+    expect(stableStringify({ a0b: 1, a_b: 2 })).toBe('{"a0b":1,"a_b":2}');
+  });
+
+  /*
+   * The rest of `requiredString` is genuinely several questions, and stays
+   * several functions. What is fixed here is the two pairs that were one
+   * question written twice: the vault's byte-bounded record field, and the
+   * kernel protocol's bounded string — the latter shared as a predicate so each
+   * engine keeps raising its own protocol error, which callers branch on.
+   */
+  it("declares each remaining requiredString contract exactly once", () => {
+    const byteBounded = declaring(/^(?:export )?function requiredString\(value: unknown, label: string, maxBytes: number/mu);
+    expect(byteBounded).toEqual([]);
+    expect(declaring(/^(?:export )?function requiredVaultString\(/mu)).toEqual(["vault/field.ts"]);
+    expect(declaring(/^(?:export )?function boundedProtocolString\(/mu)).toEqual(["prime/kernel/kernel-contract.ts"]);
+    // The kernel host and the Pyodide engine now share the one predicate. The
+    // third occurrence is not a module: `pyodide-worker-source.ts` emits the
+    // worker's own runtime as source text, inside a lexical scope that cannot
+    // import anything, which is what makes it a different question.
+    expect(declaring(/^\s*if \(typeof value !== "string" \|\| \(!allowEmpty && value\.length === 0\)/mu)).toEqual([
+      "prime/kernel/kernel-contract.ts",
+      "prime/kernel/pyodide-worker-source.ts",
+    ]);
+  });
+
+  /*
+   * `sha256Hex` is the hex spelling of a digest, which two wire formats need
+   * and `core/hash.ts`'s `sha256:`-prefixed base64url form cannot give them.
+   * The two `Uint8Array` copies were one question; the string-taking copies in
+   * `inference/providers/openai-compatible-provider.ts` and `prime/ai/hash.ts`
+   * are left alone and named here so the difference is a decision rather than
+   * an oversight: the first carries its own refusal when Web Crypto is absent,
+   * and the second is a port that ships in its own chunk beside `shortHash`
+   * and `hmacSha256Hex`.
+   */
+  it("declares one hex SHA-256 over bytes", () => {
+    expect(declaring(/^(?:export )?async function sha256Hex\(bytes: Uint8Array\)/mu)).toEqual(["core/bytes.ts"]);
+    expect(declaring(/^(?:export )?async function sha256Hex\(/mu).filter((file) => file !== "core/bytes.ts"))
+      .toEqual(["inference/providers/openai-compatible-provider.ts", "prime/ai/hash.ts"]);
+  });
+
 });

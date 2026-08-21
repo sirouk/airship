@@ -1,6 +1,6 @@
 import { deepFreeze } from "../core/freeze";
 import type { JsonValue, ToolDefinition } from "../core/contracts";
-import { sha256 } from "../core/hash";
+import { sha256, stableStringify } from "../core/hash";
 import {
   composeAirshipOperatingPrompt,
   type InferenceDirectoryPromptDefinition,
@@ -849,15 +849,19 @@ function assertKnownSkillIds(
   }
 }
 
+/*
+ * The preimage comes from `core/hash.ts`, not from a second copy here.
+ *
+ * This file used to carry `canonicalStringify`: the same recursion, the same
+ * `JSON.stringify` of keys, and the same code-unit key order `asciiCompare`
+ * gives — a byte-for-byte re-implementation of `stableStringify` under another
+ * name. A content digest is a promise that two devices computing it over the
+ * same value get the same string, and two implementations of one preimage is
+ * the drift that breaks that promise silently: whichever copy is edited first
+ * wins on one device and loses on the other.
+ */
 async function digestJson(value: unknown): Promise<ContentDigest> {
-  return asContentDigest(await sha256(canonicalStringify(toJsonValue(value))));
-}
-
-function canonicalStringify(value: JsonValue): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(",")}]`;
-  const entries = Object.entries(value).sort(([left], [right]) => asciiCompare(left, right));
-  return `{${entries.map(([key, child]) => `${JSON.stringify(key)}:${canonicalStringify(child)}`).join(",")}}`;
+  return asContentDigest(await sha256(stableStringify(toJsonValue(value))));
 }
 
 function toJsonValue(value: unknown): JsonValue {

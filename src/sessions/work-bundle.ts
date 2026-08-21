@@ -31,6 +31,7 @@
  * synced folder, a Git repository or on a USB stick. This module adds no
  * storage provider, no relay and no pairing service.
  */
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import type { DurableEvent, JournalBackend, JournalStateSource, SessionRecord } from "../core/journal";
@@ -784,6 +785,3 @@ export async function openSealedWorkBundle(seal: PortableSealPort, sealed: Uint8
   return parseWorkBundle(new TextDecoder().decode(plaintext));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}

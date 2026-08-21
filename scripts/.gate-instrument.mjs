@@ -488,11 +488,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 1975 KiB raw is the smallest whole-KiB step that clears that reading and leaves 757 B; 619 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 852 B.
   //
   // Re-measured after a stock artifact stopped carrying the development lab's own copy. The lab profile's outer freeze was annotated pure and its nested facts freeze was not, so dropping the object left the inner call standing and 231 B of lab wording — a loopback endpoint, disposable keys, a lab bucket — shipped in the Sessions pack where nothing could render it. Both annotations are load-bearing, and this pack is smaller for it.
-  // The canonical config-free artifact measures 2,020,837 B raw / 632,672 B gzip;
-  // the reviewed Docker-defaults variant measures 2,020,842 B raw / 632,621 B gzip;
-  // the reviewed Pages variant measures 2,020,915 B raw / 632,641 B gzip;
+  // The canonical config-free artifact weighed 2,020,837 B raw / 632,672 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,020,842 B raw / 632,621 B gzip;
+  // the reviewed Pages variant weighed 2,020,915 B raw / 632,641 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,021,408 B raw /
   // 1975 KiB raw is the smallest whole-KiB step that clears that reading and leaves 992 B; 619 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 959 B.
+  //
+  // Re-measured after Select all stopped committing an answer a later render contradicts. It sets the panel's everything rule instead of copying the rows on screen, so a press before the conversations arrive still ticks every one of them; Clear still means the empty list on purpose; and the panel says it is still reading rather than claiming there is nothing to take out.
+  // The canonical config-free artifact measures 2,020,932 B raw / 632,654 B gzip;
+  // the reviewed Docker-defaults variant measures 2,020,937 B raw / 632,653 B gzip;
+  // the reviewed Pages variant measures 2,021,010 B raw / 632,642 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,021,504 B raw /
+  // 1975 KiB raw is the smallest whole-KiB step that clears that reading and leaves 896 B; 619 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 863 B.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1975 * 1024, gzip: 619 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
@@ -665,13 +672,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 999 B; 809 KiB gzip was already the smallest step that cleared it, at 345 B.
   //
   // Re-measured after a stock artifact stopped carrying the development lab's own copy. The lab profile's outer freeze was annotated pure and its nested facts freeze was not, so dropping the object left the inner call standing and 231 B of lab wording — a loopback endpoint, disposable keys, a lab bucket — shipped in the Sessions pack where nothing could render it. Both annotations are load-bearing, and this pack is smaller for it.
-  // The canonical config-free artifact measures 2,722,035 B raw / 827,743 B gzip;
-  // the reviewed Docker-defaults variant measures 2,722,040 B raw / 827,690 B gzip;
-  // the reviewed Pages variant measures 2,722,113 B raw / 827,709 B gzip;
+  // The canonical config-free artifact weighed 2,722,035 B raw / 827,743 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,722,040 B raw / 827,690 B gzip;
+  // the reviewed Pages variant weighed 2,722,113 B raw / 827,709 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,722,606 B raw /
   // 827,966 B gzip and sets both maxima.
   // 2659 KiB raw would have left 210 B, below the tripwire floor, so raw keeps the 2660 KiB step and leaves 1,234 B; 809 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 450 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2660 * 1024, gzip: 809 * 1024 }),
+  //
+  // Re-measured after Select all stopped committing an answer a later render contradicts. It sets the panel's everything rule instead of copying the rows on screen, so a press before the conversations arrive still ticks every one of them; Clear still means the empty list on purpose; and the panel says it is still reading rather than claiming there is nothing to take out.
+  // The canonical config-free artifact measures 2,722,130 B raw / 827,722 B gzip;
+  // the reviewed Docker-defaults variant measures 2,722,135 B raw / 827,721 B gzip;
+  // the reviewed Pages variant measures 2,722,208 B raw / 827,710 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,722,702 B raw /
+  // 2659 KiB raw would have left 114 B, below the tripwire floor, so raw keeps the 2660 KiB step and leaves 1,138 B; 809 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 352 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2659 * 1024, gzip: 809 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -1032,11 +1046,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 19,648 B gzip. 65 KiB raw would have left 704 B and 20 KiB gzip would
   //
   // Re-measured after a stock artifact stopped carrying the development lab's own copy. The lab profile's outer freeze was annotated pure and its nested facts freeze was not, so dropping the object left the inner call standing and 231 B of lab wording — a loopback endpoint, disposable keys, a lab bucket — shipped in the Sessions pack where nothing could render it. Both annotations are load-bearing, and this pack is smaller for it.
-  // The canonical config-free artifact measures 65,545 B raw / 19,505 B gzip;
-  // the reviewed Docker-defaults variant measures 65,545 B raw / 19,502 B gzip;
-  // the reviewed Pages variant measures 65,545 B raw / 19,503 B gzip;
+  // The canonical config-free artifact weighed 65,545 B raw / 19,505 B gzip;
+  // the reviewed Docker-defaults variant weighed 65,545 B raw / 19,502 B gzip;
+  // the reviewed Pages variant weighed 65,545 B raw / 19,503 B gzip;
   // and the reviewed Google-Drive-configured variant measures 65,621 B raw /
   // 65 KiB raw would still have cleared this reading, but the step is not taken back in the same pass that measured it; 66 KiB leaves 1,963 B; 20 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 915 B.
+  //
+  // Re-measured after Select all stopped committing an answer a later render contradicts. It sets the panel's everything rule instead of copying the rows on screen, so a press before the conversations arrive still ticks every one of them; Clear still means the empty list on purpose; and the panel says it is still reading rather than claiming there is nothing to take out.
+  // The canonical config-free artifact measures 65,571 B raw / 19,509 B gzip;
+  // the reviewed Docker-defaults variant measures 65,571 B raw / 19,508 B gzip;
+  // the reviewed Pages variant measures 65,571 B raw / 19,513 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 65,648 B raw /
+  // 65 KiB raw would still have cleared this reading, but the step is not taken back in the same pass that measured it; 66 KiB leaves 1,936 B; 20 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 904 B.
   optionalSessionLibrary: Object.freeze({ raw: 66 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,
@@ -1229,20 +1250,27 @@ export const RELEASE_BUDGETS = Object.freeze({
   // nobody answered stops being journaled as a decision a person made. The delta is `replayedRecord` and one head
   // helper in the merge primitive, one condition in the bundle reader, and one shared `approvalWasAnswered` predicate
   // that replaced four spellings of the same test — which is why the entry chunk got eight bytes smaller.
-  // The canonical config-free artifact measures 19,145 B raw / 6,137 B gzip;
-  // the reviewed Docker-defaults variant measures 19,145 B raw / 6,137 B gzip;
-  // the reviewed Pages variant measures 19,145 B raw / 6,139 B gzip;
+  // The canonical config-free artifact weighed 19,145 B raw / 6,137 B gzip;
+  // the reviewed Docker-defaults variant weighed 19,145 B raw / 6,137 B gzip;
+  // the reviewed Pages variant weighed 19,145 B raw / 6,139 B gzip;
   // and the reviewed Google-Drive-configured variant measures 19,145 B raw /
   // 6,137 B gzip; the Pages variant sets the gzip maximum and every variant
   // measures the same raw bytes.
   // 19 KiB raw is already the smallest whole-KiB step that clears the reading and leaves 311 B; 6 KiB gzip would have left 5 B, below the tripwire floor, so gzip keeps the 7 KiB step and leaves 1,029 B.
   //
   // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
-  // The canonical config-free artifact measures 19,145 B raw / 6,137 B gzip;
-  // the reviewed Docker-defaults variant measures 19,145 B raw / 6,137 B gzip;
-  // the reviewed Pages variant measures 19,145 B raw / 6,138 B gzip;
+  // The canonical config-free artifact weighed 19,145 B raw / 6,137 B gzip;
+  // the reviewed Docker-defaults variant weighed 19,145 B raw / 6,137 B gzip;
+  // the reviewed Pages variant weighed 19,145 B raw / 6,138 B gzip;
   // and the reviewed Google-Drive-configured variant measures 19,145 B raw /
   // 19 KiB raw is the smallest whole-KiB step that clears that reading and leaves 311 B; 6 KiB gzip would have left 6 B, below the tripwire floor, so gzip keeps the 7 KiB step and leaves 1,030 B.
+  //
+  // Re-measured after Select all stopped committing an answer a later render contradicts. It sets the panel's everything rule instead of copying the rows on screen, so a press before the conversations arrive still ticks every one of them; Clear still means the empty list on purpose; and the panel says it is still reading rather than claiming there is nothing to take out.
+  // The canonical config-free artifact measures 19,214 B raw / 6,158 B gzip;
+  // the reviewed Docker-defaults variant measures 19,214 B raw / 6,158 B gzip;
+  // the reviewed Pages variant measures 19,214 B raw / 6,156 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 19,214 B raw /
+  // 19 KiB raw is the smallest whole-KiB step that clears that reading and leaves 242 B; 7 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 1,009 B.
   optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 7 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch

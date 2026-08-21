@@ -1,3 +1,4 @@
+import { isRecord } from "../core/records";
 import type {
   CanonicalImageInput,
   CanonicalMessage,
@@ -849,9 +850,6 @@ function safeJson(value: JsonValue): string | undefined {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Identity through core/id only — see the single-implementation contract. */
 import { randomUuid } from "../core/id";

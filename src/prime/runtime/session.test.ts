@@ -14,7 +14,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
   registerFauxProvider,
-} from "../ai/providers/faux.test-support";
+} from "../ai/faux.test-support";
 import { materializeMessages } from "../../core/agent";
 import type {
   ApprovalPolicy,

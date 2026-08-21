@@ -1,3 +1,4 @@
+import { isRecord } from "../../core/records";
 import type { MemoryCredential } from "./contracts";
 import {
   LocalProviderError,
@@ -160,9 +161,6 @@ export function timeoutSignal(
   };
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 export function boundedOptions(options: {
   fetch?: typeof fetch;

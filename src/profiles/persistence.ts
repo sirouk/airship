@@ -1,3 +1,4 @@
+import { isRecord } from "../core/records";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -432,9 +433,6 @@ function assertUnique(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new Error(`Profile catalog contains a duplicate ${label}.`);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[A-Za-z0-9_-]{43}$/u.test(value);

@@ -269,8 +269,8 @@ export interface AnthropicMessagesCompat {
   supportsLongCacheRetention?: boolean;
   /**
    * Anthropic requires `anthropic-dangerous-direct-browser-access: true` to
-   * accept CORS requests from browser origins. prime-agent-trans sets this by
-   * default for api.anthropic.com; set to false when proxying.
+   * accept CORS requests from browser origins. Upstream prime-agent sets this
+   * by default for api.anthropic.com; set to false when proxying.
    */
   directBrowserAccess?: boolean;
 }

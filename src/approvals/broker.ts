@@ -18,12 +18,21 @@ export type ApprovalRisk = "observe" | "change" | "communicate" | "execute" | "i
  * a decision on the record; an expiry is the absence of one, and the record is
  * not entitled to invent the difference.
  *
+ * `withdrawn` is the same defect one step earlier. Three page events take a
+ * live request off the table without anybody being asked anything: the
+ * approval dialog's chunk fails to load, the shell unmounts, and a
+ * conversation's approval mode changes under an outstanding prompt. All three
+ * called the page-wide settle helper the person's own Deny button calls, so
+ * the journal read `source: "human"` and "Denied without approval" for a
+ * question that was never answered — and, for the failed chunk, never shown.
+ *
  * `ApprovalDecision` stays two-valued on purpose: it is the gate every caller
- * fails closed on, and an expiry must keep failing closed exactly as before.
- * The outcome is the wider fact, kept beside the decision rather than folded
- * into it, so no reader can count an expiry as a denial without saying so.
+ * fails closed on, and an expiry or a withdrawal must keep failing closed
+ * exactly as before. The outcome is the wider fact, kept beside the decision
+ * rather than folded into it, so no reader can count either as a denial
+ * without saying so.
  */
-export type ApprovalOutcome = ApprovalDecision | "expired" | "unavailable";
+export type ApprovalOutcome = ApprovalDecision | "expired" | "unavailable" | "withdrawn";
 
 export type PendingApproval = Readonly<{
   id: string;
@@ -104,13 +113,14 @@ const MAX_SETTLED_OUTCOMES = 256;
  * The reason string is what the journal keeps and what Memory and the message
  * transcript read back, so two writers of it drift into two accounts of the
  * same event. The `deny` sentence names no author because this broker denies
- * for four different reasons — the person pressed Deny, the turn aborted, the
- * queue was full, the operation identity repeated — and only the first is a
- * person refusing. Expiry says plainly that nobody answered.
+ * for two reasons — the person pressed Deny, or the turn aborted — and only
+ * the first is a person refusing. Expiry, withdrawal and a full queue each say
+ * plainly that nobody answered, and which of the three it was.
  */
 export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
   if (outcome === "allow") return "Allowed once by the user.";
   if (outcome === "expired") return "No decision was recorded; the request expired before the user answered it.";
+  if (outcome === "withdrawn") return "No decision was recorded; the page withdrew this request before anyone answered it.";
   if (outcome === "unavailable") {
     return "Nobody was asked: this page already held the most approval requests it allows at once, so the effect did"
       + " not run. Answer the requests that are waiting, then ask for this one again.";
@@ -124,12 +134,13 @@ export function approvalOutcomeReason(outcome: ApprovalOutcome): string {
  * `allow` and `deny` are the two things `decide` can file, and `decide` is
  * reachable from nothing but a control a person operates. Everything else in
  * this vocabulary is the absence of an answer: an expiry ran the clock out
- * while nobody was at the screen, and `unavailable` never put the question on
- * screen at all. The record's `source` field is the one place that difference
- * survives into the journal, so it is derived here rather than spelled out at
- * each of the four writers — three of which read only `unavailable` and so
- * filed every expiry as a refusal a person made, directly against the sentence
- * beside it saying that no decision was recorded.
+ * while nobody was at the screen, `withdrawn` took the question away before
+ * anyone answered it, and `unavailable` never put the question on screen at
+ * all. The record's `source` field is the one place that difference survives
+ * into the journal, so it is derived here rather than spelled out at each of
+ * the four writers — three of which read only `unavailable` and so filed every
+ * expiry as a refusal a person made, directly against the sentence beside it
+ * saying that no decision was recorded.
  */
 export function approvalWasAnswered(outcome: ApprovalOutcome): boolean {
   return outcome === "allow" || outcome === "deny";
@@ -306,17 +317,29 @@ export class ApprovalBroker {
   }
 
   /**
-   * Deny every live request, or only the ones one conversation raised.
+   * Settle every live request, or only the ones one conversation raised, and
+   * say who is doing it.
    *
-   * The page-wide form answers a page-wide loss of authority: the dialog's code
-   * did not load, or the app is unmounting. The scoped form answers a change
-   * that belongs to one conversation — re-moding a thread may not reinterpret a
-   * request a *different* thread is still waiting on, and with turns running
-   * per conversation that is no longer a hypothetical.
+   * `human` is the person's own "Deny pending request" control, and only that
+   * control: a refusal on the record. `page` is the shell settling requests
+   * nobody was asked — the approval dialog's chunk failed to load, the shell is
+   * unmounting, or a conversation's approval mode changed under an outstanding
+   * prompt. All four callers used to reach this by the same name and file the
+   * same `deny`, so three of them wrote a person's refusal into the journal for
+   * a question that was never answered.
+   *
+   * The gate is unchanged: `withdrawn` resolves `deny` exactly as before, so
+   * every one of these still fails closed. Only the record can tell them apart.
+   *
+   * The scoped form answers a change that belongs to one conversation —
+   * re-moding a thread may not reinterpret a request a *different* thread is
+   * still waiting on, and with turns running per conversation that is no longer
+   * a hypothetical.
    */
-  denyAll(sessionId?: string): void {
+  settleAll(actor: "human" | "page", sessionId?: string): void {
+    const outcome = actor === "human" ? "deny" : "withdrawn";
     for (const [id, entry] of [...this.entries]) {
-      if (sessionId === undefined || entry.request.sessionId === sessionId) this.settle(id, "deny");
+      if (sessionId === undefined || entry.request.sessionId === sessionId) this.settle(id, outcome);
     }
   }
 

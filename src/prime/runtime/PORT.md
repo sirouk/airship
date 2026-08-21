@@ -3,8 +3,7 @@
 Upstream anchors: `packages/coding-agent/src/core/agent-session.ts` (turn
 authority) and `packages/coding-agent/src/core/session-manager.ts` (facade),
 pinned against airship's `src/core/agent.ts#runTurn`, the session audit
-(`src/core/session-audit.ts`), the §9.3 behavior-compat checklist in
-`pa-audit/airship-integration-map.md`, and `SRC_PRIME_SPEC.md` §1–§17.
+(`src/core/session-audit.ts`), and `SRC_PRIME_SPEC.md` §1–§17.
 
 ## Port mapping (upstream concept → what carries it here)
 

@@ -1,8 +1,7 @@
 # Prime port style
 
 The `src/prime/` tree is a port of prime-agent core into Airship. It follows
-Airship conventions (`pa-audit/airship-integration-map.md` §8), not upstream
-prime-agent formatting:
+Airship conventions, not upstream prime-agent formatting:
 
 - 2-space indent, double quotes, semicolons, ES modules with explicit relative
   imports and no `.ts` extension in import specifiers.

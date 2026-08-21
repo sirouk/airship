@@ -25,6 +25,7 @@ import type {
   KernelState,
 } from "./kernel-contract";
 import {
+  boundedProtocolString,
   DEFAULT_KERNEL_BUDGETS,
   KERNEL_PROTOCOL_TOKEN_BYTES,
   KERNEL_STREAM_FRAME_OVERHEAD_CHARS,
@@ -166,10 +167,7 @@ function plainRecord(
 }
 
 function requiredString(value: unknown, name: string, maxChars: number, allowEmpty = false): string {
-  if (typeof value !== "string" || (!allowEmpty && value.length === 0) || value.length > maxChars) {
-    return protocolError(`${name} must be a bounded string.`);
-  }
-  return value;
+  return boundedProtocolString(value, maxChars, allowEmpty) ?? protocolError(`${name} must be a bounded string.`);
 }
 
 function requiredSafeInteger(value: unknown, name: string, maximum = Number.MAX_SAFE_INTEGER): number {

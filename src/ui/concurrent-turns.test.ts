@@ -261,9 +261,9 @@ describe("an approval belongs to the conversation that raised it", () => {
     // Opening a thread pinned to another mode changes `activeApprovalMode`
     // without changing anything about a background thread's pending request.
     expect(app).toContain("if (!sessionId || seen.sessionId !== sessionId || seen.mode === activeApprovalMode) return;");
-    expect(app).toContain("approvalBroker.denyAll(sessionId);");
+    expect(app).toContain('approvalBroker.settleAll("page", sessionId);');
     const broker = await readFile(new URL("../approvals/broker.ts", import.meta.url), "utf8");
-    expect(broker).toContain("denyAll(sessionId?: string): void {");
+    expect(broker).toContain('settleAll(actor: "human" | "page", sessionId?: string): void {');
     expect(broker).toContain("if (sessionId === undefined || entry.request.sessionId === sessionId)");
   });
 });

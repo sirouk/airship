@@ -193,6 +193,51 @@ describe("approval modes", () => {
   });
 
   /*
+   * The same defect one step earlier than the expiry above. Three page events
+   * take a live request off the table with nobody asked anything: the approval
+   * dialog's chunk fails to load, the shell unmounts, and a conversation's
+   * approval mode changes under an outstanding prompt. All three reached the
+   * broker's page-wide settle helper — the same one the person's own "Deny
+   * pending request" button reaches — and filed `deny`, so the journal read
+   * `source: "human"` and "Denied without approval" for a question that was
+   * never answered and, for the failed chunk, never shown.
+   */
+  it("records a request the page withdrew as a withdrawal, not as a refusal", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const withdrawnContext = context("withdrawn");
+    const decision = policy.review(writeTool, { path: "a.md" }, withdrawnContext);
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    broker.settleAll("page");
+    // The gate is exactly as closed as it was; only the record changed.
+    await expect(decision).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, withdrawnContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "unattended" });
+    expect(provenance?.reason).toBe("No decision was recorded; the page withdrew this request before anyone answered it.");
+    expect(provenance?.reason).not.toContain("Denied without approval");
+  });
+
+  /*
+   * And the one caller that really is a person keeps saying so. "Deny pending
+   * request" is a refusal on the record, and nothing here may quietly turn it
+   * into "nobody answered" — that would be the same lie pointed the other way.
+   */
+  it("still records the person's own Deny control as a decision they made", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "ask-first", broker });
+    const deniedContext = context("denied");
+    const decision = policy.review(writeTool, { path: "a.md" }, deniedContext);
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+
+    broker.settleAll("human");
+    await expect(decision).resolves.toBe("deny");
+    const provenance = approvalProvenance(policy, deniedContext);
+    expect(provenance).toMatchObject({ mode: "ask-first", source: "human" });
+    expect(provenance?.reason).toBe("Denied without approval; the effect did not run.");
+  });
+
+  /*
    * A page-wide cap that background conversations can fill without the person
    * seeing anything was journaled as a refusal the person made.
    */

@@ -16,7 +16,7 @@ import {
   type FauxProviderRegistration,
   fauxAssistantMessage,
   registerFauxProvider,
-} from "../ai/providers/faux.test-support";
+} from "../ai/faux.test-support";
 import type { Model } from "../ai/types";
 import { createSessionManifest, runTurn } from "../../core/agent";
 import type {

@@ -18,7 +18,7 @@ been Python?" Session conformance is validated against
 
 | Area | What lives here |
 |---|---|
-| `ai/` | Ported model/streaming core: message vocabulary, terminal-latching `EventStream`, lazy provider registry, SSE and partial-JSON parsers, usage/cache cost accounting, and schema-lite validation. Production protocols are `anthropic-messages`, `openai-completions`, and `openai-responses`; deterministic faux code is explicitly test support. |
+| `ai/` | Ported model/streaming core: message vocabulary, terminal-latching `EventStream`, an API registry keyed by wire protocol, usage/cache cost accounting, and schema-lite validation. It carries no built-in provider implementations: the 5,053-line stack that chose behaviour from a provider name was deleted, and `src/prime/provider-stack.contract.test.ts` refuses its return. `faux.test-support.ts` is a deterministic scripted stream for the runtime suites, and is test support by its name. |
 | `agent/` | Ported `packages/agent`: the turn loop state machine with all hook contracts (prepare → validate → beforeToolCall → execute → afterToolCall → finalize), parallel/sequential twins, abort-as-value, Agent wrapper with settlement semantics. |
 | `kernel/` | The RLM execution kernel: a serialized host queue, host-attributed streaming, and the approval-bound tool bridge (`KernelToolBridge`) that gives sandboxed code exactly the host's tool surface under `prime.kernel.tool.*` identity. Stock JavaScript uses one terminated worker per job; only the environment-qualified, non-stock Pyodide engine keeps a kernel-instance namespace. |
 | `subagents/` | `PrimeAgentRegistry`: admission (never awaited), nuclear-family routing, depth gate (chat > global > env > default), rate limits, terminal notices incl. `completed_without_reply`, usage fold-in surface. |
@@ -50,5 +50,6 @@ been Python?" Session conformance is validated against
   module they use; there is no broad production barrel.
 - `src/prime/SRC_PRIME_SPEC.md` — the binding implementation contract for
   the session authority (validate against it; the suite pins it).
-- `scripts/bench/` — Pyodide boot/roundtrip + SSE/stream-json throughput
-  numbers that back `DETERMINATION.md`.
+- `scripts/bench/` — the Pyodide boot/roundtrip numbers that back
+  `DETERMINATION.md`. Its SSE/stream-json bench went with the parsers it
+  measured.
