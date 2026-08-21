@@ -1499,9 +1499,13 @@ export function App() {
    * a name this page cannot support.
    */
   function conversationDisplayName(id: string): string {
-    if (id === activeSessionRecord?.id) return activeSessionRecord.title;
-    return recentProfileConversations.find((conversation) => conversation.id === id)?.title
-      ?? `conversation ${id.slice(0, 8)}`;
+    return conversationDisplayTitle(
+      id,
+      id === activeSessionRecord?.id
+        ? activeSessionRecord.title
+        : recentProfileConversations.find((conversation) => conversation.id === id)?.title,
+      activeProfile?.name ?? "",
+    );
   }
   const [modelSwitching, setModelSwitching] = useState(false);
   const [sessionLifecycle, setSessionLifecycle] = useState<SessionLifecycle>(READY_SESSION_LIFECYCLE);
@@ -9660,6 +9664,11 @@ export function App() {
               journalStorage: runtime.current.journal.storage,
               workspace: runtime.current.workspace,
               storage: runtime.current.storage,
+              /* The same latch the chat route waits for before it answers for
+                 an address. An import that lands while a configured Vault is
+                 still being adopted is written into the journal adoption is
+                 about to replace, so the panel refuses instead. */
+              authoritySettled: resumeAuthoritySettled,
             }) : undefined}
           />
         ) : sessionsViewError ? (
@@ -10141,6 +10150,24 @@ export function isAppMintedConversationTitle(title: string, profileName: string)
   const normalized = title.trim();
   return (Object.keys(APP_MINTED_TITLE_SUFFIX) as (keyof typeof APP_MINTED_TITLE_SUFFIX)[])
     .some((kind) => normalized === appMintedConversationTitle(profileName, kind));
+}
+
+/**
+ * What to call a conversation in front of a person who has to tell it from
+ * another one.
+ *
+ * Two conversations nobody has named yet carry the same minted title, so an
+ * approval scoped to one of them named both: the dialog's eyebrow, the waiting
+ * bar's line and the button that answers it all read "General conversation",
+ * and a request a person cannot attribute is one they cannot answer. A minted
+ * title therefore carries the short id that already identifies the row
+ * everywhere else. A title somebody chose is left exactly as they wrote it —
+ * that is the name, and appending anything to it would be the same defect in
+ * the other direction.
+ */
+export function conversationDisplayTitle(id: string, title: string | undefined, profileName: string): string {
+  if (!title) return `conversation ${id.slice(0, 8)}`;
+  return isAppMintedConversationTitle(title, profileName) ? `${title} ${id.slice(0, 8)}` : title;
 }
 
 async function createProfileSessionManifest(

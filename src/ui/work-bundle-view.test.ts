@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { planSentence, resultSentence, untouchedSentence } from "./work-bundle-view";
+import { planSentence, resultSentence, untouchedSentence, WORK_BUNDLE_AUTHORITY_UNSETTLED } from "./work-bundle-view";
 import type { WorkBundleImportPlan, WorkBundleImportResult } from "../sessions/work-bundle";
 
 function plan(overrides: Partial<WorkBundleImportPlan> = {}): WorkBundleImportPlan {
@@ -107,5 +107,53 @@ describe("bringing memory in is a decision the person makes", () => {
   it("imports memory into the profile this panel names, and no other", () => {
     expect(source).toContain("planWorkBundleImport({ bundle, journal, chain, workspace, profileId })");
     expect(source).toContain("profileId,\n        includeMemory: addMemory,");
+  });
+});
+
+/*
+ * P1. The first thing a person does on a new device, and the exact job this
+ * feature exists for.
+ *
+ * Measured in Chromium with a Local Device Vault enrolled: the page-memory
+ * runtime boots first, adoption reads that journal and then replaces it, and an
+ * import that lands inside that window is written into the journal being
+ * replaced. The panel reported "1 conversation added.", the list held the row
+ * at t+3ms, and after the adoption, after Refresh and after a reload the row
+ * was gone — with nothing anywhere admitting a loss.
+ *
+ * The fix is a gate on the same settled-authority latch the chat route waits
+ * for before it answers for an address, and it refuses rather than queues: a
+ * queued import would run against a journal nobody has looked at since, and the
+ * file is still on disk to choose again.
+ */
+describe("an import waits for the journal it is writing into", () => {
+  const source = readFileSync(new URL("./work-bundle-view.tsx", import.meta.url), "utf8");
+
+  it("says why it is unavailable, and that it refused rather than queued", () => {
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).toContain("still opening the storage");
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).toContain("about to replace");
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).toContain("refused rather than queued");
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).toContain("Nothing changed");
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).toContain("choose the file again");
+    // A refusal is not a queue. Nothing here may promise a later retry.
+    expect(WORK_BUNDLE_AUTHORITY_UNSETTLED).not.toMatch(/queued for|will be added|retry automatically/u);
+  });
+
+  it("gates the import action itself, before anything is read or written", () => {
+    // The refusal is the first thing `runImport` does, ahead of `setBusy`.
+    expect(source).toContain("if (!authoritySettled) {\n      setError(WORK_BUNDLE_AUTHORITY_UNSETTLED);\n      return;\n    }");
+    expect(source.indexOf("setError(WORK_BUNDLE_AUTHORITY_UNSETTLED)"))
+      .toBeLessThan(source.indexOf("const { migrateJournalState } = await loadDeferredCapabilities();"));
+    // And the control says so before it is pressed.
+    expect(source).toContain("disabled={busy || !authoritySettled || (importable === 0 && addableMemory === 0)}");
+    expect(source).toContain('? "Waiting for this storage"');
+    expect(source).toContain("{authoritySettled ? null : <p class=\"work-bundle__refused\">{WORK_BUNDLE_AUTHORITY_UNSETTLED}</p>}");
+  });
+
+  it("leaves taking work out alone, because an export writes nothing", () => {
+    const exportBody = source.slice(source.indexOf("async function exportBundle"), source.indexOf("async function inspect"));
+    expect(exportBody).not.toContain("authoritySettled");
+    const inspectBody = source.slice(source.indexOf("async function inspect"), source.indexOf("async function runImport"));
+    expect(inspectBody).not.toContain("authoritySettled");
   });
 });

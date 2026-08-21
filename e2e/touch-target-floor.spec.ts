@@ -119,6 +119,36 @@ const STATES_A_GOTO_NEVER_REACHES = [
     },
   },
   {
+    route: "chat",
+    state: "two decisions waiting at the bottom edge",
+    async enter(page: Page) {
+      /*
+       * The waiting bar prints one row per deferred decision, and the second
+       * row is exactly the kind of control a goto sweep can never reach: it
+       * exists only while two conversations are each holding an unanswered
+       * request. Before the bar listed them, the second decision had no control
+       * at all — so there was nothing here to measure and nothing to press.
+       */
+      const composer = page.getByRole("combobox", { name: "Message Airship" });
+      for (const [index, path] of ["touch/first.txt", "touch/second.txt"].entries()) {
+        if (index > 0) {
+          // The rail is not on a phone; the session bar carries the same verb.
+          await page.getByRole("button", { name: "New conversation" }).first().click();
+          await expect(composer).toBeVisible();
+        }
+        await composer.click();
+        await composer.fill(`/write ${path} payload-${String(index)}`);
+        await page.getByRole("button", { name: "Send message" }).click();
+        const dialog = page.getByRole("dialog", { name: /Allow write_file once/u });
+        await expect(dialog).toBeVisible({ timeout: 30_000 });
+        await dialog.press("Escape");
+        await expect(page.getByRole("dialog", { name: /Allow write_file once/u })).toHaveCount(0);
+      }
+      await expect(page.getByRole("group", { name: "Capability request waiting for a decision" }))
+        .toContainText("2 decisions waiting");
+    },
+  },
+  {
     route: "terminal",
     state: "a running shell",
     async enter(page: Page) {

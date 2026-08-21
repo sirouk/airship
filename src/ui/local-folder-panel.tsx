@@ -40,13 +40,13 @@ export type LocalFolderState =
 export const LOCAL_FOLDER_TIER = Object.freeze({
   title: "Folder on this device",
   description: "Your own folder, opened in place and never copied",
-  note: "This device, this browser, revocable. Airship reads and writes the files where they already are — it copies the folder nowhere: not into the Vault, not into Airship's Git, not off this device. The folder is not added to the searchable index Airship can publish to your Vault, so ask for its files by path.",
+  note: "This device, this browser, revocable. Airship reads and writes the files where they already are and stores no copy of the folder: not in the Vault, not in Airship's Git, not off this device. A file the agent reads becomes part of that conversation, which a readable bundle carries in the clear. The folder is not added to the searchable index Airship can publish to your Vault, so ask for its files by path.",
   facts: Object.freeze({
     survives: "Yes · the files are already yours",
     offline: "Yes",
     reach: "No · this browser profile only",
     supply: "A folder, and permission each session",
-    keep: "Everything — Airship keeps no copy",
+    keep: "The folder — Airship stores no copy of it; a file the agent reads is in that conversation",
     lose: "Revoking permission · moving the folder",
   }),
 } as const);
@@ -65,7 +65,8 @@ export function localFolderAttachedSummary(name: string, mountPath: string): str
   return `“${name}” is open at ${mountPath} for this profile only. The Explorer, the editor and the agent read and `
     + "write it through the permission you granted this browser. Every agent write still goes through approvals, and "
     + "this folder is reviewed in every approval mode — Auto Approve and Full Access included — because a write here "
-    + "lands on your own disk and cannot be undone. The Terminal does not carry it at all.";
+    + "lands on your own disk and cannot be undone. The Terminal does not carry it at all. A file read from here "
+    + "becomes part of that conversation.";
 }
 
 export const LOCAL_FOLDER_FORGET_NOTE =

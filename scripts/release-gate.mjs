@@ -83,6 +83,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 384,647 B raw /
   // 119,275 B gzip. 376 KiB raw would have left 377 B and 117 KiB gzip would
   // have left 533 B; the 377/118 KiB steps leave 1,401 / 1,557 B.
+  //
+  // Re-measured after the product-audit repair. The whole entry delta is two
+  // sentences the shell has to be able to say: which conversation an approval
+  // belongs to when nobody has named it yet, and whether the storage a work
+  // bundle would merge into is the one that will still be there when the merge
+  // lands. Both are decisions the entry chunk already owns — the shell resolves
+  // the conversation name and holds the settled-authority latch — so neither
+  // could be fetched later without moving the decision away from the code that
+  // makes it. Everything else in the pass is in lazily fetched packs.
+  //
+  // The canonical config-free artifact measures 384,531 B raw / 119,216 B gzip;
+  // the reviewed Docker-defaults variant measures 384,536 B raw / 119,210 B gzip;
+  // the reviewed Pages variant measures 384,552 B raw / 119,228 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 384,743 B raw /
+  // 119,318 B gzip and sets both maxima. 117 KiB gzip would have left 490 B,
+  // below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,514 B;
+  // 377 KiB raw leaves 1,305 B and does not move.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -131,6 +148,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 500,381 B raw /
   // 162,558 B gzip. 489 KiB raw would have left 355 B and 159 KiB gzip would
   // have left 258 B; the 490/160 KiB steps leave 1,379 / 1,282 B.
+  //
+  // Re-measured after the product-audit repair. This class carries the entry
+  // delta above plus the approval dock, which the shell mounts: the dock now
+  // renders one named row, one clock and one control per waiting decision
+  // rather than the first and a count, announces a decision that arrived from a
+  // conversation nobody is reading, and stops drawing a previous file content
+  // it never had. The dock's own chunk went from 11,984 B raw / 4,308 B gzip to
+  // 12,837 B raw / 4,575 B gzip, less than half of its own ceiling below; this
+  // is the row with the margin that has to answer for it.
+  //
+  // The canonical config-free artifact measures 501,118 B raw / 162,750 B gzip;
+  // the reviewed Docker-defaults variant measures 501,123 B raw / 162,750 B gzip;
+  // the reviewed Pages variant measures 501,139 B raw / 162,777 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 501,330 B raw /
+  // 162,850 B gzip and sets both maxima. 160 KiB gzip is already the smallest
+  // whole-KiB step that clears that reading and leaves 990 B; 490 KiB raw leaves
+  // 430 B and does not move.
   allJavaScriptAndWorkers: Object.freeze({ raw: 490 * 1024, gzip: 160 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -231,6 +265,26 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 2,017,687 B raw /
   // 631,580 B gzip. 1971 KiB raw would have left 617 B and 617 KiB gzip would
   // have left 228 B; the 1972/618 KiB steps leave 1,641 / 1,252 B.
+  //
+  // Re-measured after the product-audit repair. All of it is first-party and
+  // all of it is a refusal or a sentence that says what to do about one: a work
+  // bundle may not be merged into a journal a Vault adoption is about to
+  // replace; the folder tier no longer promises that a file the agent reads
+  // stays out of the conversation, because a bundle carries the conversation;
+  // a write approval draws a previous file content only when it has one; two
+  // conversations nobody has named are told apart; every waiting decision owns
+  // its own row and control; and one that arrived unasked says so once. Vendor
+  // code is unchanged. Ceilings do not move — this pass spends headroom, it does
+  // not ask for more.
+  //
+  // The canonical config-free artifact measures 2,018,705 B raw / 631,757 B gzip;
+  // the reviewed Docker-defaults variant measures 2,018,710 B raw / 631,780 B gzip;
+  // the reviewed Pages variant measures 2,018,783 B raw / 631,849 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,019,193 B raw /
+  // 632,008 B gzip and sets both maxima. Both ceilings are already the smallest
+  // whole-KiB step that clears those readings, leaving 135 B raw and 824 B gzip.
+  // The raw margin is the tightest this file carries and it is spent, not
+  // granted: the ceiling is where it was.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1972 * 1024, gzip: 618 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
@@ -329,6 +383,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 2,718,854 B raw /
   // 826,636 B gzip. 2656 KiB raw would have left 890 B and 808 KiB gzip would
   // have left 756 B; the 2657/809 KiB steps leave 1,914 / 1,780 B.
+  //
+  // Re-measured after the product-audit repair. It is the first-party growth
+  // described one ceiling above and nothing else; vendor code is unchanged.
+  //
+  // The canonical config-free artifact measures 2,719,872 B raw / 826,807 B gzip;
+  // the reviewed Docker-defaults variant measures 2,719,877 B raw / 826,832 B gzip;
+  // the reviewed Pages variant measures 2,719,950 B raw / 826,904 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,720,360 B raw /
+  // 827,057 B gzip and sets both maxima. 808 KiB gzip would have left 335 B,
+  // below the tripwire floor, so gzip keeps the 809 KiB step and leaves 1,359 B;
+  // 2657 KiB raw leaves 408 B and does not move.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2657 * 1024, gzip: 809 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
@@ -577,6 +642,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 15,006 B raw /
   // 5,826 B gzip. 15 KiB raw would have left 354 B and 6 KiB gzip would
   // have left 318 B; the 16/7 KiB steps leave 1,378 / 1,342 B.
+  //
+  // Re-measured after the folder tier stopped promising a fence it does not
+  // have. The three doors it named — the Vault, Airship's Git, off this device —
+  // are all real and all still shut. A fourth was not named: the conversation
+  // journal keeps tool results, so a folder file the agent reads once comes out
+  // in the clear inside a readable bundle. The tool payload is deliberately not
+  // fenced, because it is the provenance that makes a transcript checkable; the
+  // sentence is what changed, in all three places it was written.
+  //
+  // Every reviewed variant — config-free, Docker defaults, Pages and
+  // Google-Drive-configured — measures 15,218 B raw / 5,892 B gzip. 15 KiB raw
+  // would have left 142 B, below the tripwire floor, so raw keeps the 16 KiB
+  // step and leaves 1,166 B; 6 KiB gzip is already the smallest step that clears
+  // the reading and leaves 252 B.
   optionalLocalFolder: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
   // The current Source Control presentation measures 39,337 B raw / 12,521 B
   // gzip. 39 KiB raw would have left 599 B; 40/13 KiB leave 1,623 / 791 B.
@@ -650,6 +729,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and 19 KiB gzip would have left 169 B, both below the tripwire floor, so the
   // existing 64/20 KiB ceilings stand and leave 596 / 1,193 B. None of it is in
   // first paint.
+  //
+  // The route then had to carry one more fact to the move-work panel: whether
+  // the journal a merge would land in is the authority that will still be there
+  // when it lands. It is one boolean on a prop the route already passes, and it
+  // is the whole delta here — 36 raw bytes. The canonical config-free, Docker
+  // defaults and Pages variants measure 65,792 B raw / 19,585 B gzip, and the
+  // reviewed Google-Drive-configured variant measures 65,858 B raw / 19,642 B
+  // gzip. Neither ceiling moves, leaving 1,726 B raw and 838 B gzip. Still
+  // fetched on navigation and never at first paint.
   optionalSessionLibrary: Object.freeze({ raw: 66 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,
@@ -792,6 +880,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 17,724 B raw /
   // 5,647 B gzip. 18 KiB raw would have left 708 B and 6 KiB gzip would
   // have left 497 B; the 19/7 KiB steps leave 1,732 / 1,521 B.
+  //
+  // Re-measured after the pack learned to wait for the journal it writes into.
+  // Bringing work in on a new device is the first thing a person does with this
+  // feature and it was the one case it could not do: with a Vault configured,
+  // the page-memory runtime boots first and adoption replaces the journal an
+  // import had just been written into — measured as "1 conversation added",
+  // present at t+3ms, gone after the adoption, after Refresh and after a reload.
+  // The import action is now gated on the same settled-authority latch the chat
+  // route waits for, says why while it is unavailable, and refuses rather than
+  // queues. Taking work out is untouched: an export writes nothing.
+  //
+  // The canonical config-free and reviewed Docker-defaults artifacts measure
+  // 18,082 B raw / 5,790 B gzip; the reviewed Pages variant measures 18,082 B
+  // raw / 5,791 B gzip and the reviewed Google-Drive-configured variant measures
+  // 18,082 B raw / 5,788 B gzip. 18 KiB raw would have left
+  // 350 B, below the tripwire floor, so raw keeps the 19 KiB step and leaves
+  // 1,374 B; 6 KiB gzip is already the smallest step that clears the reading and
+  // leaves 353 B.
   optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 6 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch
@@ -932,11 +1038,26 @@ export const RELEASE_BUDGETS = Object.freeze({
    * *whose* request it is: the dialog's eyebrow, the waiting bar's line and the
    * button that answers it all name the conversation, and the sentence spoken
    * on Escape quotes that button by the name it actually carries.
-   * Measured 11,984 B raw / 4,308 B gzip — 158 raw bytes above the pack that
-   * preceded it, and less than half its raw ceiling. That ceiling is not where
-   * this work is bounded: the dock is fetched as the shell mounts, so the same
-   * bytes are also charged to `allJavaScriptAndWorkers` above, which is the row
-   * with the real margin to answer for.
+   * An earlier reading of 11,984 B raw and 4,308 B gzip is history and is not
+   * phrased as a measurement.
+   *
+   * The pack then learned to say what is actually waiting and what is actually
+   * known. "2 decisions waiting" printed one name, one clock and one button, so
+   * the second request had no name a person could read and no control until the
+   * first was answered — every deferred request now owns a row. The bar was a
+   * `role="group"` with no live region, so a request filed because it came from
+   * a conversation nobody is reading was announced only by the Escape handler,
+   * which never fires for it — it now speaks once, from its own polite region
+   * rather than the transcript narrator's. And a write approval drew "∅" as the
+   * file's current content over a file that had content: the previous side is
+   * drawn only when the arguments carry it, and the single value is labelled as
+   * new content instead.
+   *
+   * Every reviewed variant measures 12,837 B raw / 4,576 B gzip, still less than
+   * half this raw ceiling. That ceiling is not where this work is bounded: the
+   * dock is fetched as the shell mounts, so the same bytes are also charged to
+   * `allJavaScriptAndWorkers` above, which is the row with the real margin to
+   * answer for.
    */
   optionalApprovalDock: Object.freeze({ raw: 24 * 1024, gzip: 8 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part

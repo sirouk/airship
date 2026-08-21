@@ -113,6 +113,12 @@ export type SessionsViewProps = Readonly<{
     journalStorage: JournalBackend;
     workspace?: WorkspacePort;
     storage?: unknown;
+    /**
+     * Whether `journalStorage` is the authority that will still be here when a
+     * merge lands. False while a configured Vault is still being adopted, which
+     * is exactly the state a new device boots into.
+     */
+    authoritySettled: boolean;
   }>;
 }>;
 
@@ -742,6 +748,7 @@ export function SessionsView({
               profileName={scopeProfileName}
               workspace={bundleSources.workspace}
               storage={bundleSources.storage}
+              authoritySettled={bundleSources.authoritySettled}
               onImported={() => setRefresh((value) => value + 1)}
             />
           ) : (

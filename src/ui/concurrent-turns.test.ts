@@ -219,8 +219,13 @@ describe("an approval belongs to the conversation that raised it", () => {
     expect(app).toContain("conversationName={conversationDisplayName}");
     expect(app).toContain("function conversationDisplayName(id: string): string {");
     expect(dock).toContain("Capability request \u00b7 {conversationName(current.sessionId)} \u00b7 {current.risk}");
-    expect(dock).toContain("{waiting.toolName} \u00b7 {waitingIn} \u00b7 expires in");
-    expect(dock).toContain("{reviewLabel(waiting, waitingIn)}");
+    // One row per waiting request, each naming its own conversation: the bar
+    // used to print `deferred[0]` and count the rest, so a second request had
+    // no name a person could read and no control that answered it.
+    expect(dock).toContain("{snapshot.deferred.map((request) => {");
+    expect(dock).toContain("const named = conversationName(request.sessionId);");
+    expect(dock).toContain("{request.toolName} \u00b7 {named} \u00b7 expires in");
+    expect(dock).toContain("{reviewLabel(request, named)}");
   });
 
   it("re-modes only the conversation whose policy changed", async () => {

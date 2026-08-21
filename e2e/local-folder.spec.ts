@@ -80,7 +80,11 @@ test("opens a folder on this device, reads it, has the agent edit it with approv
 
   const panel = page.getByRole("region", { name: "Folder on this device" });
   await expect(panel).toContainText("No folder is open.");
-  await expect(panel).toContainText("it copies the folder nowhere");
+  // Precise about what is not copied — the folder — and about the door the
+  // three named fences do not cover: what the agent reads is in the
+  // conversation, and a conversation travels in a bundle.
+  await expect(panel).toContainText("stores no copy of the folder");
+  await expect(panel).toContainText("becomes part of that conversation");
 
   const open = panel.getByRole("button", { name: "Open a folder…" });
   const box = await open.boundingBox();

@@ -121,6 +121,34 @@ export function approvalDeferralNotice(request: PendingApproval, now: number, co
   return `Not decided. The request to allow ${request.toolName} is still waiting and expires in ${remainingApprovalTime(request.expiresAt, now)}. Use the “${reviewLabel(request, conversation)}” button at the bottom of the screen to answer it.`;
 }
 
+/**
+ * What the waiting bar says for itself, once, when a request lands in it that
+ * nobody put there.
+ *
+ * The bar was a `role="group"` with no live region, so the only request ever
+ * announced was one the person had just deferred with Escape — and that is the
+ * one case they already know about. A request filed because it came from a
+ * conversation they are not reading (see `focusSession`) appeared silently at
+ * the bottom edge of a screen they were not looking at.
+ *
+ * It is the bar's own channel, not the transcript's: the turn narrator is
+ * saying what the conversation on screen is doing, and a decision waiting in a
+ * different one may not overwrite that. It states that nothing was interrupted,
+ * because nothing was, and it names the button by the label that button
+ * actually carries.
+ */
+export function deferredArrivalNotice(
+  requests: readonly PendingApproval[],
+  conversation: (sessionId: string) => string,
+): string {
+  const first = requests[0];
+  if (!first) return "";
+  const named = conversation(first.sessionId);
+  const more = requests.length > 1 ? `, and ${requests.length - 1} more with it` : "";
+  return `${first.toolName} is waiting for a decision in ${named}${more}. Nothing was interrupted; nothing runs`
+    + ` until you answer it. Use “${reviewLabel(first, named)}” below.`;
+}
+
 /** The one spelling of the way back, shared by the bar and the sentence about it. */
 export function reviewLabel(request: PendingApproval, conversation?: string): string {
   return conversation ? `Review ${request.toolName} in ${conversation}` : `Review ${request.toolName}`;
@@ -145,8 +173,6 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
   const restore = useRef<{ id: string; element: HTMLElement }>();
   const current = snapshot.pending[0];
   const waiting = snapshot.deferred[0];
-  /** Resolved once: the bar prints it, the button names it, the sentence quotes it. */
-  const waitingIn = waiting ? conversationName(waiting.sessionId) : "";
   // The request the clock is running on. A deferred request is still on the
   // same five-minute timer, and its deadline matters more, not less, once the
   // modal is no longer in front of the person.
@@ -156,8 +182,13 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
   const [clock, setClock] = useState(() => Date.now());
   const [notice, setNotice] = useState("");
   const [warning, setWarning] = useState("");
+  /** The waiting bar's own one-shot sentence; see `deferredArrivalNotice`. */
+  const [arrival, setArrival] = useState("");
+  /** Every request this bar has already spoken for, pruned as they settle. */
+  const spokenFor = useRef(new Set<string>());
   const warnedFor = useRef<string>();
   const timers = useRef<number[]>([]);
+  const arrivalTimers = useRef<number[]>([]);
 
   const announce = useRef<(text: string) => void>(() => {});
   announce.current = (text: string) => {
@@ -172,8 +203,33 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
   useEffect(() => broker.subscribe(setSnapshot), [broker]);
 
   useEffect(() => () => {
-    for (const timer of timers.current) window.clearTimeout(timer);
+    for (const timer of [...timers.current, ...arrivalTimers.current]) window.clearTimeout(timer);
   }, []);
+
+  /*
+   * One announcement per request that arrives already waiting.
+   *
+   * Escape marks its own request spoken-for before it defers, so the sentence
+   * that path already speaks is never doubled here; what is left is exactly the
+   * request nobody was shown. The set is pruned against the live snapshot, so
+   * it cannot outgrow the queue and a resumed-then-deferred request is spoken
+   * for again by whichever path put it back.
+   */
+  useEffect(() => {
+    const fresh = snapshot.deferred.filter((request) => !spokenFor.current.has(request.id));
+    // Rebuilt rather than added to, so a settled request cannot leave an entry
+    // behind and the set can never outgrow the queue.
+    spokenFor.current = new Set(snapshot.deferred.map((request) => request.id));
+    if (fresh.length === 0) return;
+    const sentence = deferredArrivalNotice(fresh, conversationName);
+    for (const timer of arrivalTimers.current) window.clearTimeout(timer);
+    setArrival("");
+    arrivalTimers.current = [
+      window.setTimeout(() => setArrival(sentence), ANNOUNCEMENT_GAP_MS),
+      window.setTimeout(() => setArrival(""), ANNOUNCEMENT_GAP_MS + ANNOUNCEMENT_MS),
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.deferred]);
 
   useEffect(() => broker.subscribeSettled((settlement) => {
     announce.current(approvalSettlementAnnouncement(settlement, factsFor(settlement.request)));
@@ -283,6 +339,10 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
       */}
       <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{notice}</span>
       <span class="sr-only" role="alert" aria-atomic="true">{warning}</span>
+      {/* The waiting bar's own voice, kept apart from the outcome channel above
+          so a settlement and an arrival do not overwrite each other, and apart
+          from the transcript's narrator so neither steals the other's turn. */}
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{arrival}</span>
 
       {waiting ? (
         <div
@@ -291,19 +351,33 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
           aria-label="Capability request waiting for a decision"
           style={{ "--approval-deferred-floor": `${floor}px` }}
         >
-          <span>
-            <strong>{snapshot.deferred.length === 1 ? "1 decision waiting" : `${snapshot.deferred.length} decisions waiting`}</strong>
-            {/* The conversation, not only the tool: with turns running in
-                parallel the same tool name can be waiting in two threads, and a
-                decision a person cannot attribute is one they cannot make. */}
-            <small>{waiting.toolName} · {waitingIn} · expires in {remainingApprovalTime(waiting.expiresAt, clock)}</small>
-          </span>
-          {/* Reachable, and it answers where the person is standing. A
-              conversation whose turn is still in flight cannot be re-opened —
-              its journal has no terminal event yet, which the local audit reads
-              as invalid — so "go there first" would be a route to nowhere. The
-              dialog names the thread instead. */}
-          <button class="small-button" type="button" onClick={() => broker.resume(waiting.id)}>{reviewLabel(waiting, waitingIn)}</button>
+          <strong>{snapshot.deferred.length === 1 ? "1 decision waiting" : `${snapshot.deferred.length} decisions waiting`}</strong>
+          {/* Every one of them, not only the first. The count said two and the
+              bar printed one name, one clock and one button: the second request
+              had no name a person could read and no control at all until the
+              first was answered, while its own five minutes ran out. */}
+          <ul>
+            {snapshot.deferred.map((request) => {
+              /* Resolved once per row: the line prints it, the button names it,
+                 and the arrival sentence quotes that same button. With turns
+                 running in parallel the same tool name can be waiting in two
+                 threads, and a decision a person cannot attribute is one they
+                 cannot make. */
+              const named = conversationName(request.sessionId);
+              return (
+                <li key={request.id}>
+                  <small>{request.toolName} · {named} · expires in {remainingApprovalTime(request.expiresAt, clock)}</small>
+                  {/* Reachable, and it answers where the person is standing. A
+                      conversation whose turn is still in flight cannot be
+                      re-opened — its journal has no terminal event yet, which
+                      the local audit reads as invalid — so "go there first"
+                      would be a route to nowhere. The dialog names the thread
+                      instead. */}
+                  <button class="small-button" type="button" onClick={() => broker.resume(request.id)}>{reviewLabel(request, named)}</button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
 
@@ -320,6 +394,9 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
               // and stops being modal, so the person can go and read the file
               // they are being asked to overwrite before answering.
               if (broker.defer(current.id)) {
+                // Spoken for by the sentence below, so the arrival
+                // announcement on the waiting bar does not repeat it.
+                spokenFor.current.add(current.id);
                 announce.current(approvalDeferralNotice(current, Date.now(), conversationName(current.sessionId)));
               }
             } else if (event.key === "Tab") {
@@ -370,8 +447,25 @@ export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
               <div><small>Target</small><strong>{facts.targets.length ? facts.targets.join(", ") : "Adapter-selected target"}</strong></div>
               <div><small>Change</small><strong class="approval-disposition" data-derived={facts.derived ? "true" : "false"}>{facts.disposition}</strong></div>
               <div><small>New size</small><strong>{facts.byteLength === undefined ? "Not supplied" : `${facts.byteLength} bytes`}</strong></div>
-              <div><small>Size delta</small><strong>{facts.byteDelta === undefined ? "Not supplied" : `${facts.byteDelta >= 0 ? "+" : ""}${facts.byteDelta} bytes`}</strong></div>
-              {facts.before !== undefined || facts.after !== undefined ? <div class="approval-diff"><small>Bounded old → new preview</small><pre><del>{facts.before || "∅"}</del>{"\n"}<ins>{facts.after || "∅"}</ins></pre></div> : null}
+              {/* A delta is a difference from a value this panel does not have.
+                  Printing "Not supplied" beside it read as a missing argument,
+                  when the truth is that nothing here reads the file. The row is
+                  shown when the arguments declare both sides and omitted when
+                  they do not — which is what the spoken description already
+                  did, so the two now agree. */}
+              {facts.byteDelta === undefined ? null : <div><small>Size delta</small><strong>{`${facts.byteDelta >= 0 ? "+" : ""}${facts.byteDelta} bytes`}</strong></div>}
+              {/* Two sides only when there are two. A create-or-overwrite call
+                  carries the new content and nothing about what it replaces, so
+                  the old side rendered "∅" over a file that had content — a
+                  claim this surface cannot make, and the worst one to make
+                  wrong now that a write can land on a person's own disk. The
+                  single value is labelled as what it is instead. */}
+              {facts.after === undefined ? null : <div class="approval-diff">
+                <small>{facts.before === undefined
+                  ? "New content, bounded. What it replaces is not read here."
+                  : "Bounded old → new preview"}</small>
+                <pre>{facts.before === undefined ? null : <del>{facts.before}{"\n"}</del>}<ins>{facts.after || "(empty)"}</ins></pre>
+              </div>}
             </section> : null}
 
             {/* The two halves of the accessible description the grid and the

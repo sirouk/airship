@@ -36,8 +36,34 @@ export type WorkBundleViewProps = Readonly<{
   workspace?: WorkspacePort;
   /** The storage authority. Sealing is offered only when it holds a Vault key. */
   storage?: unknown;
+  /**
+   * Whether `target` is the authority that will still be here when the merge
+   * lands. See `WORK_BUNDLE_AUTHORITY_UNSETTLED`.
+   */
+  authoritySettled: boolean;
   onImported?: () => void | Promise<void>;
 }>;
+
+/**
+ * Why bringing work in is refused while this device is still deciding where
+ * its work lives.
+ *
+ * Measured on the first thing a person does on a new device: with a Local
+ * Device Vault configured, the page-memory runtime boots first, adoption reads
+ * that journal and then replaces it. An import that lands inside that window
+ * is written into the journal being replaced — the panel said "1 conversation
+ * added", the list held it for a moment, and it was gone after the adoption,
+ * after Refresh and after a reload.
+ *
+ * Refused rather than queued, for the same reason the rest of this panel
+ * refuses rather than merges: a queued import would run against a journal
+ * nobody has looked at since, and the file is still on disk to choose again.
+ * The chat route already waits for this same settled-authority signal before
+ * it answers for an address.
+ */
+export const WORK_BUNDLE_AUTHORITY_UNSETTLED =
+  "This device is still opening the storage its work lives in. Adding now would write into the journal it is about"
+  + " to replace, so this is refused rather than queued. Nothing changed; choose the file again once it is open.";
 
 type Incoming = Readonly<{
   name: string;
@@ -63,6 +89,7 @@ export function WorkBundleView({
   profileName,
   workspace,
   storage,
+  authoritySettled,
   onImported,
 }: WorkBundleViewProps) {
   const seal = supportsPortableSeal(storage) ? storage : undefined;
@@ -156,6 +183,12 @@ export function WorkBundleView({
 
   async function runImport(): Promise<void> {
     if (busy || !incoming) return;
+    // The gate, not a caveat: the button below is already disabled, and this
+    // is what answers a call that reached here anyway.
+    if (!authoritySettled) {
+      setError(WORK_BUNDLE_AUTHORITY_UNSETTLED);
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -310,15 +343,18 @@ export function WorkBundleView({
                 </label>
               ) : null}
               <p class="work-bundle__note">{untouchedSentence(incoming.plan, addMemory)}</p>
+              {authoritySettled ? null : <p class="work-bundle__refused">{WORK_BUNDLE_AUTHORITY_UNSETTLED}</p>}
               <button
                 class="primary"
                 type="button"
-                disabled={busy || (importable === 0 && addableMemory === 0)}
+                disabled={busy || !authoritySettled || (importable === 0 && addableMemory === 0)}
                 onClick={() => void runImport()}
               >
-                {importable === 0 && addableMemory === 0
-                  ? "Nothing here to add"
-                  : `Add ${countLabel(importable)}${addableMemory > 0 ? ` and ${String(addableMemory)} memory records` : ""}`}
+                {!authoritySettled
+                  ? "Waiting for this storage"
+                  : importable === 0 && addableMemory === 0
+                    ? "Nothing here to add"
+                    : `Add ${countLabel(importable)}${addableMemory > 0 ? ` and ${String(addableMemory)} memory records` : ""}`}
               </button>
             </div>
           ) : null}
