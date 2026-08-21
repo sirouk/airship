@@ -45,6 +45,16 @@ export type RailConversation = Readonly<{
   updatedAt: string;
   favorite: boolean;
   /**
+   * A turn is in flight in this conversation.
+   *
+   * Turns run per conversation, so "is anything working" was never a property of
+   * the page. Without this the rail could show four threads of which two were
+   * answering and print exactly the same row for all four — and the one thing a
+   * person needs from a list of parallel conversations is which of them are
+   * still going.
+   */
+  running?: boolean;
+  /**
    * Branches of this row's lineage the shortcut collapsed behind it. Stated on
    * the row rather than merely acted on: a hidden conversation that is not
    * counted is one the shortcut silently lost.
@@ -70,7 +80,6 @@ export type RailProps = Readonly<{
   state: RailState;
   navRef: Ref<HTMLElement>;
   inert: boolean;
-  busy: boolean;
   /** Aggregated model-turn activity for every conversation this page owns. */
   activity?: SessionActivityReport;
   unreadTurnCount: number;
@@ -276,7 +285,6 @@ export function Rail({
   state,
   navRef,
   inert,
-  busy,
   activity,
   unreadTurnCount,
   conversations,
@@ -834,6 +842,10 @@ export function Rail({
             {session.id === unresumableConversationId ? (
               <small class="recent-conversation__blocked">Needs review · could not be reopened</small>
             ) : null}
+            {/* Words, not a colour or a spinner: this line is part of the row's
+                accessible name, so "which of these is still going" has the same
+                answer for a reader and for a listener. */}
+            {session.running ? <small class="recent-conversation__running">Working…</small> : null}
             {session.hiddenBranchCount ? <small class="recent-conversation__branches">
               {session.hiddenBranchCount} more branch{session.hiddenBranchCount === 1 ? "" : "es"} in All conversations
             </small> : null}
@@ -918,7 +930,6 @@ export function Rail({
                 type="button"
                 aria-label="New conversation"
                 title="New conversation"
-                disabled={busy}
                 // The list stays up where it is part of the rail: you have just
                 // made a conversation and its row is about to appear in it, and
                 // closing here also latched the disclosure shut for the rest of
@@ -987,7 +998,6 @@ export function Rail({
           className="profile-menu"
           ariaLabel="Agent profile"
           value={profileId}
-          disabled={busy}
           placement="down"
           options={profiles.map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
           leading={(option) => <span class="profile-monogram" style={profileBadgeStyle?.(option.value)} aria-hidden="true">{monogram(option.label)}</span>}

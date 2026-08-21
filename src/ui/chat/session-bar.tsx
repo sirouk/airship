@@ -83,9 +83,7 @@ export type SessionBarProps = Readonly<{
   journal: SessionJournal;
   onOpenSession(): void;
   onRename(title: string): void | Promise<void>;
-  renameDisabled?: boolean;
   onNewConversation(): void;
-  newConversationDisabled: boolean;
   /** The profile's recent threads, newest first. Empty is a valid state. */
   conversations: readonly SwitchableConversation[];
   activeConversationId: string;
@@ -110,9 +108,7 @@ export function SessionBar({
   journal,
   onOpenSession,
   onRename,
-  renameDisabled = false,
   onNewConversation,
-  newConversationDisabled,
   conversations,
   activeConversationId,
   formatTime,
@@ -129,11 +125,10 @@ export function SessionBar({
   }, [renaming]);
 
   useEffect(() => {
-    if (renameRequest > 0 && !renameDisabled) setRenaming(true);
+    if (renameRequest > 0) setRenaming(true);
   }, [renameRequest]);
 
   function startRename() {
-    if (renameDisabled) return;
     setRenaming(true);
   }
 
@@ -214,7 +209,6 @@ export function SessionBar({
             // the gesture that device actually has, because the sentence is the
             // only place the tap is documented.
             title={coarsePointer ? `${title} · Tap to rename` : `${title} · ${RENAME_START_HINT}`}
-            disabled={renameDisabled}
             /*
              * One tap renames, but only where a tap is the only gesture there is.
              *
@@ -324,7 +318,6 @@ export function SessionBar({
           type="button"
           aria-label="New conversation"
           title="New conversation"
-          disabled={newConversationDisabled}
           onClick={onNewConversation}
         >
           <Icon name="plus" size={16} />

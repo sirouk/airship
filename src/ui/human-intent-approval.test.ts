@@ -144,7 +144,7 @@ describe("a pending decision cannot be navigated away from", () => {
    * which is the whole of what this contract is about, so the assertion follows
    * the component rather than the import.
    */
-  const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}";
+  const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} conversationName={conversationDisplayName} /> : null}";
 
   it("renders the dock outside the routed region, so a view change cannot unmount it", () => {
     expect(source).toContain(dock);

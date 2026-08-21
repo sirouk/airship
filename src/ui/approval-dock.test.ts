@@ -9,6 +9,7 @@ import {
   approvalDeadlineWarning,
   approvalDeferralNotice,
   approvalSettlementAnnouncement,
+  reviewLabel,
 } from "./approval-dock";
 
 function request(overrides: Partial<PendingApproval> = {}): PendingApproval {
@@ -157,5 +158,30 @@ describe("the deadline, which was inaudible", () => {
     expect(notice).toContain("04:58");
     expect(notice).toContain("Review write_file");
     expect(notice).not.toMatch(/denied/iu);
+  });
+
+});
+
+/*
+ * One broker serves every conversation, and turns run in parallel.
+ *
+ * The dialog is the shell's only self-inflicted inert state, so which requests
+ * may raise it is a product decision, not a queue order. A request from the
+ * thread on screen is the interruption it has always been; a request from a
+ * thread answering in the background is not allowed to stop the work a person
+ * is looking at, and the broker files it as waiting instead.
+ */
+describe("the deferred bar names the conversation that is asking", () => {
+  const here = request({ id: "here:turn:op", sessionId: "here" });
+
+  it("puts the conversation on the button and in the sentence about it", () => {
+    expect(reviewLabel(here, "Alpha")).toBe("Review write_file in Alpha");
+    expect(approvalDeferralNotice(here, Date.parse(here.requestedAt), "Alpha"))
+      .toContain("\u201cReview write_file in Alpha\u201d");
+  });
+
+  it("still reads correctly for a host that names no conversation", () => {
+    expect(reviewLabel(here)).toBe("Review write_file");
+    expect(approvalDeferralNotice(here, Date.parse(here.requestedAt))).toContain("\u201cReview write_file\u201d");
   });
 });

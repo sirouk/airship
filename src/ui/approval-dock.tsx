@@ -117,17 +117,36 @@ export function approvalDeadlineWarning(request: PendingApproval): string {
 }
 
 /** What Escape now means: put the request down, do not answer it. */
-export function approvalDeferralNotice(request: PendingApproval, now: number): string {
-  return `Not decided. The request to allow ${request.toolName} is still waiting and expires in ${remainingApprovalTime(request.expiresAt, now)}. Use the “Review ${request.toolName}” button at the bottom of the screen to answer it.`;
+export function approvalDeferralNotice(request: PendingApproval, now: number, conversation?: string): string {
+  return `Not decided. The request to allow ${request.toolName} is still waiting and expires in ${remainingApprovalTime(request.expiresAt, now)}. Use the “${reviewLabel(request, conversation)}” button at the bottom of the screen to answer it.`;
 }
 
-export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
+/** The one spelling of the way back, shared by the bar and the sentence about it. */
+export function reviewLabel(request: PendingApproval, conversation?: string): string {
+  return conversation ? `Review ${request.toolName} in ${conversation}` : `Review ${request.toolName}`;
+}
+
+export type ApprovalDockProps = Readonly<{
+  broker: ApprovalBroker;
+  /**
+   * What to call a conversation in front of a person.
+   *
+   * Turns run per conversation and one broker serves all of them, so an
+   * effect, an operation and a turn no longer identify a request: the first
+   * thing a person needs is which thread is asking.
+   */
+  conversationName(sessionId: string): string;
+}>;
+
+export function ApprovalDock({ broker, conversationName }: ApprovalDockProps) {
   const [snapshot, setSnapshot] = useState<ApprovalBrokerSnapshot>(() => broker.snapshot());
   const panel = useRef<HTMLDivElement>(null);
   /** The control this request interrupted, tagged with the request it belongs to. */
   const restore = useRef<{ id: string; element: HTMLElement }>();
   const current = snapshot.pending[0];
   const waiting = snapshot.deferred[0];
+  /** Resolved once: the bar prints it, the button names it, the sentence quotes it. */
+  const waitingIn = waiting ? conversationName(waiting.sessionId) : "";
   // The request the clock is running on. A deferred request is still on the
   // same five-minute timer, and its deadline matters more, not less, once the
   // modal is no longer in front of the person.
@@ -274,9 +293,17 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
         >
           <span>
             <strong>{snapshot.deferred.length === 1 ? "1 decision waiting" : `${snapshot.deferred.length} decisions waiting`}</strong>
-            <small>{waiting.toolName} · expires in {remainingApprovalTime(waiting.expiresAt, clock)}</small>
+            {/* The conversation, not only the tool: with turns running in
+                parallel the same tool name can be waiting in two threads, and a
+                decision a person cannot attribute is one they cannot make. */}
+            <small>{waiting.toolName} · {waitingIn} · expires in {remainingApprovalTime(waiting.expiresAt, clock)}</small>
           </span>
-          <button class="small-button" type="button" onClick={() => broker.resume(waiting.id)}>Review {waiting.toolName}</button>
+          {/* Reachable, and it answers where the person is standing. A
+              conversation whose turn is still in flight cannot be re-opened —
+              its journal has no terminal event yet, which the local audit reads
+              as invalid — so "go there first" would be a route to nowhere. The
+              dialog names the thread instead. */}
+          <button class="small-button" type="button" onClick={() => broker.resume(waiting.id)}>{reviewLabel(waiting, waitingIn)}</button>
         </div>
       ) : null}
 
@@ -292,7 +319,9 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
               // It now decides nothing: the request stays live on its own clock
               // and stops being modal, so the person can go and read the file
               // they are being asked to overwrite before answering.
-              if (broker.defer(current.id)) announce.current(approvalDeferralNotice(current, Date.now()));
+              if (broker.defer(current.id)) {
+                announce.current(approvalDeferralNotice(current, Date.now(), conversationName(current.sessionId)));
+              }
             } else if (event.key === "Tab") {
               trapFocus(event, panel.current);
             }
@@ -310,7 +339,12 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
             <header class="approval-heading">
               <span class="approval-glyph"><Icon name={iconForApproval(current)} /></span>
               <div>
-                <span class="eyebrow">Capability request · {current.risk}</span>
+                {/* An effect, an operation and a turn named the request; the
+                    thread it came from was the one fact missing, and with turns
+                    running in parallel it is the first one a person needs. It
+                    goes above the title rather than into the identity grid
+                    because it is read before the question, not after it. */}
+                <span class="eyebrow">Capability request · {conversationName(current.sessionId)} · {current.risk}</span>
                 <h2 id="approval-title">Allow {current.toolName} once?</h2>
               </div>
               {snapshot.pending.length > 1 ? <span class="approval-queue">1 of {snapshot.pending.length}</span> : null}

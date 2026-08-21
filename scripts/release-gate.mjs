@@ -43,6 +43,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // so raw takes the tight 377 KiB step and leaves 952 B. 117 KiB gzip would
   // have left 467 B, below the tripwire floor, so gzip keeps 118 KiB and leaves
   // 1,491 B.
+  //
+  // Parallel conversations then took the shell's page-wide `busy` gate apart:
+  // the rail's new-conversation control, the profile switchers, rename, retry,
+  // fork and branch no longer refuse while a turn runs, and the shell asks the
+  // approval broker about the conversation on screen rather than about the
+  // page. Net of the refusal sentences and disabled props that left, this tree
+  // re-measures the reviewed Pages variant at 385,026 B raw / 119,295 B gzip,
+  // inside both ceilings above; neither moves.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -56,6 +64,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Google-Drive-configured variant measures 505,457 B raw / 164,062 B gzip and
   // sets both maxima. 493 KiB raw is 625 B below that artifact and 160 KiB gzip
   // is 222 B below it. The tight 494/161 KiB steps leave 399 / 802 B.
+  //
+  // This aggregate is where the parallel-conversation work is charged, because
+  // the approval dock is fetched as the shell mounts and is therefore counted
+  // here as well as under its own ceiling. What it bought: an approval names
+  // the conversation that raised it, a request from a background conversation
+  // reaches the existing non-modal bar instead of making the whole shell inert,
+  // and the rail states which conversations are working. The reviewed Pages
+  // variant re-measures 505,518 B raw / 164,079 B gzip — 242 raw bytes above
+  // the reading it replaces, 338 B under the unchanged raw ceiling and 785 B
+  // under the unchanged gzip one. Neither ceiling moves. This row is the
+  // tightest one this change touches, and the next feature that needs it has
+  // to shrink something inside it rather than take a step.
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -97,6 +117,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and it refused an honest build of the fourth. 1961 KiB raw is 508 B below
   // that artifact; the tight 1962 KiB step leaves 516 B. 612 KiB gzip is 496 B
   // below it, so gzip keeps its tight 613 KiB step and leaves 528 B.
+  //
+  // With per-conversation shell state and a conversation-scoped approval dock,
+  // the reviewed Pages variant re-measures 2,008,272 B raw / 626,981 B gzip:
+  // 151 raw bytes above the reading it replaces, still under the largest
+  // reviewed variant recorded above, and 816 B under the unchanged ceiling.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -150,6 +175,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 784 B below that artifact; the tight 2646 KiB step leaves 240 B. 802 KiB
   // gzip is 728 B below the artifact, so gzip keeps its tight 803 KiB step and
   // leaves 296 B.
+  //
+  // The parallel-conversation work adds no vendor code, so this backstop moves
+  // by exactly what the first-party graph moved: the reviewed Pages variant
+  // re-measures 2,708,964 B raw / 821,774 B gzip, under both unchanged
+  // ceilings and under the largest reviewed variant recorded above.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
@@ -520,6 +550,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 7,974 B raw / 3,076 B gzip, and the reviewed origin-inlined variant measures
   // 7,974 B raw / 3,074 B gzip. Both ceilings are already the smallest whole-KiB
   // step that clears those readings: raw leaves 218 B and gzip leaves 1,020 B.
+  //
+  // The route then gave up `startConversationDisabledReason`, which had exactly
+  // one producer: the shell's "Stop the active turn before starting a new
+  // conversation." A new conversation has no turn of its own to collide with,
+  // and with turns running per conversation that sentence was never true, so
+  // the prop, its pre-emptive `disabled` and the status branch that split
+  // "refused in advance" from "the attempt failed" are gone rather than
+  // reworded. The reviewed Pages variant re-measures 7,883 B raw / 3,028 B
+  // gzip. Both ceilings stay where they are; the shrink is recorded so it
+  // cannot read later as headroom nobody reviewed.
   optionalSkillsManagerView: Object.freeze({ raw: 8 * 1024, gzip: 4 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
@@ -589,7 +629,12 @@ export const RELEASE_BUDGETS = Object.freeze({
    *
    * Words only — the host keeps the availability rules and the callbacks — and
    * nothing here can paint before ⌘K, so it is fetched on first open rather
-   * than shipped in first paint. Measured 979 B raw / 465 B gzip.
+   * than shipped in first paint.
+   *
+   * It shrank when turns became per conversation: New conversation and Rename
+   * lost their `blocked` fields, because the only sentence that ever filled
+   * them was the page-wide "Stop the active turn first." and neither verb is in
+   * a running turn's way. Measured 936 B raw / 462 B gzip.
    */
   optionalPaletteActions: Object.freeze({ raw: 3 * 1024, gzip: 2 * 1024 }),
   /*
@@ -612,7 +657,20 @@ export const RELEASE_BUDGETS = Object.freeze({
    * default (expanded without a fold), not duplication. Raw takes one tighter
    * whole-KiB step. */
   optionalMessageParts: Object.freeze({ raw: 14 * 1024, gzip: 5 * 1024 }),
-  /* See `isOptionalApprovalDockPath`. Measured after the accessibility pass. */
+  /*
+   * See `isOptionalApprovalDockPath`. Measured after the accessibility pass.
+   *
+   * The dock is now scoped to a conversation. The broker decides what may
+   * interrupt (see `focusSession`), so this pack only had to learn to say
+   * *whose* request it is: the dialog's eyebrow, the waiting bar's line and the
+   * button that answers it all name the conversation, and the sentence spoken
+   * on Escape quotes that button by the name it actually carries.
+   * Measured 11,984 B raw / 4,308 B gzip — 158 raw bytes above the pack that
+   * preceded it, and less than half its raw ceiling. That ceiling is not where
+   * this work is bounded: the dock is fetched as the shell mounts, so the same
+   * bytes are also charged to `allJavaScriptAndWorkers` above, which is the row
+   * with the real margin to answer for.
+   */
   optionalApprovalDock: Object.freeze({ raw: 24 * 1024, gzip: 8 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part
   // of initial navigation or a background capability probe. The dock state and

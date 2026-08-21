@@ -2,6 +2,9 @@ import { formatBytes } from "../core/bytes";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { isReclaimableObjectStore } from "../storage/object-store";
 import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
+// Type only: erased at build time, so the dock's code is still fetched rather
+// than pulled back into the entry chunk.
+import type { ApprovalDockProps } from "./approval-dock";
 import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
 import type { VaultUsageFacts } from "./vault-view";
@@ -428,6 +431,8 @@ type RecentConversation = Readonly<{
   updatedAt: string;
   favorite: boolean;
   durableEventCount: number;
+  /** A turn is in flight in this conversation. Page state, never journal state. */
+  running?: boolean;
   /** Branches of this row's lineage the shortcut collapsed behind it. */
   hiddenBranchCount: number;
   open(): void;
@@ -1483,6 +1488,31 @@ export function App() {
   const railDurableEventCount = recentProfileConversations.length > 0
     ? recentDurableEventCount
     : eventCount;
+  /*
+   * The rail's rows, with the one fact the journal cannot supply.
+   *
+   * `recentProfileConversations` is loaded from the session library and is
+   * durable; whether a turn is in flight is page state that changes several
+   * times a minute. Folding the two here — rather than reloading the library
+   * whenever a turn starts — keeps the rail honest about parallel work without
+   * turning every turn boundary into a journal read.
+   */
+  const railConversations = recentProfileConversations.map((conversation) => busySessions.has(conversation.id)
+    ? { ...conversation, running: true }
+    : conversation);
+  /*
+   * What to call a conversation in front of a person.
+   *
+   * The approval dock has to attribute a request to the thread that raised it,
+   * and a thread outside the rail's bounded shortcut still has to be nameable —
+   * so the short address `#sessions` already prints is the fallback, rather than
+   * a name this page cannot support.
+   */
+  function conversationDisplayName(id: string): string {
+    if (id === activeSessionRecord?.id) return activeSessionRecord.title;
+    return recentProfileConversations.find((conversation) => conversation.id === id)?.title
+      ?? `conversation ${id.slice(0, 8)}`;
+  }
   const [modelSwitching, setModelSwitching] = useState(false);
   const [sessionLifecycle, setSessionLifecycle] = useState<SessionLifecycle>(READY_SESSION_LIFECYCLE);
   const [transcriptBoundary, setTranscriptBoundary] = useState<Readonly<{
@@ -1655,8 +1685,22 @@ export function App() {
     return created;
   }
   if (sessionId) sessionLocalCommandPolicy(sessionId).replace(humanIntentModePolicy);
+  /*
+   * Which conversation may interrupt this screen.
+   *
+   * Turns run in parallel, and the modal dock is the shell's only self-inflicted
+   * inert state. A request raised by the thread on screen is still the
+   * interruption it has always been; one raised by a thread answering in the
+   * background is filed as waiting instead, so it never stops the work somebody
+   * is actually doing. Published here beside the two policy delegates for the
+   * same reason they are: it is a property of the visible conversation, and it
+   * has to be current before any turn asks.
+   */
+  approvalBroker.focusSession(sessionId);
   const localCommandPolicy = sessionId ? sessionLocalCommandPolicy(sessionId) : undefined;
-  const previousApprovalMode = useRef(activeApprovalMode);
+  const previousApprovalMode = useRef<Readonly<{ sessionId?: string; mode: ApprovalMode }>>(
+    Object.freeze({ sessionId, mode: activeApprovalMode }),
+  );
   const vault = useMemo(() => new VaultCoordinator(), []);
   const [vaultSnapshot, setVaultSnapshot] = useState<VaultSnapshot>(() => vault.snapshot);
   const [vaultSetupOpen, setVaultSetupOpen] = useState(false);
@@ -1827,7 +1871,7 @@ export function App() {
      Readiness is separate from the component value because a broker request can
      arrive between the chunk resolving and Preact committing the next render.
      The gate may become modal only when the dialog code is already resident. */
-  const [ApprovalDockView, setApprovalDockView] = useState<(props: { broker: typeof approvalBroker }) => VNode>();
+  const [ApprovalDockView, setApprovalDockView] = useState<(props: ApprovalDockProps) => VNode>();
   const [approvalDockLoadFailed, setApprovalDockLoadFailed] = useState(false);
   const [approvalDockLoading, setApprovalDockLoading] = useState(false);
   const [approvalDockRetryStarted, setApprovalDockRetryStarted] = useState(false);
@@ -2010,7 +2054,17 @@ export function App() {
     if (id) activeTurns.current.get(id)?.abort(reason);
   }
 
-  const localCommandAdmission = useRef(false);
+  /*
+   * The conversations with a local command admitted, not a page-wide latch.
+   *
+   * A `/write` waits on the approval dock for as long as the person takes to
+   * answer it, and this boolean was consulted by `sendMessage` for every
+   * conversation — so one unanswered prompt in one thread silently refused
+   * every send in every other thread. The guarantee it was written for is
+   * per conversation: two click/key events in one render must not append two
+   * turns to one immutable session head.
+   */
+  const localCommandAdmission = useRef(new Set<string>());
   const activeSessionIdentity = useRef<string>();
   const activeSessionByProfile = useRef(new Map<string, string>());
   const pendingSessionResume = useRef<Readonly<{
@@ -2461,12 +2515,15 @@ export function App() {
     if (!paletteActionsModule) return undefined;
     const lastUser = [...messages].reverse().find((message) => message.role === "user" && message.sourcePoint);
     const lastAnswer = [...messages].reverse().find((message) => message.role === "assistant" && message.sourcePoint);
-    const turnBusy = busy ? "Stop the active turn first." : undefined;
-    const branchBlocked = turnBusy ?? (!sessionLibrary || !activeSessionRecord
+    /* These five verbs used to refuse with “Stop the active turn first.” Four of
+       them mint a *new* conversation and the fifth renames a journal record, so
+       none of them was ever in the running turn's way; the refusal was the
+       page-wide gate, not a rule about them. What remains is the one real
+       precondition: branching needs the local journal. */
+    const branchBlocked = !sessionLibrary || !activeSessionRecord
       ? "Available once the local session journal is ready."
-      : undefined);
+      : undefined;
     return paletteActionsModule.conversationPaletteActions({
-      ...(turnBusy ? { newConversationBlocked: turnBusy, renameBlocked: turnBusy } : {}),
       ...(branchBlocked ?? !lastAnswer ? { retryBlocked: branchBlocked ?? "No answer in this conversation to retry yet." } : {}),
       ...(branchBlocked ?? !lastUser ? { editBranchBlocked: branchBlocked ?? "No prompt in this conversation to branch from yet." } : {}),
       ...(branchBlocked ?? !lastAnswer ? { forkBlocked: branchBlocked ?? "No message in this conversation to fork from yet." } : {}),
@@ -2476,7 +2533,7 @@ export function App() {
       onEditBranch: () => { if (lastUser) void forkFromMessage(lastUser, "edit"); },
       onFork: () => { if (lastAnswer) void forkFromMessage(lastAnswer, "fork"); },
     });
-  }, [paletteActionsModule, messages, busy, sessionLibrary, activeSessionRecord]);
+  }, [paletteActionsModule, messages, sessionLibrary, activeSessionRecord]);
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
     openPreferences: () => requestDeferredOverlay("Preferences"),
@@ -3350,6 +3407,12 @@ export function App() {
    */
   useEffect(
     () => approvalBroker.subscribe((state) => {
+      /*
+       * `pending` is now exactly the requests this screen owes an answer to.
+       * The broker files anything a background conversation raises as waiting
+       * instead — see `focusSession` — so this count no longer speaks for
+       * threads the person is not looking at.
+       */
       const pendingCount = state.pending.length;
       if (pendingCount === 0) {
         setApprovalDockWaitingRequests(0);
@@ -3377,12 +3440,19 @@ export function App() {
   );
 
   useEffect(() => {
-    if (previousApprovalMode.current === activeApprovalMode) return;
-    previousApprovalMode.current = activeApprovalMode;
+    const seen = previousApprovalMode.current;
+    previousApprovalMode.current = Object.freeze({ sessionId, mode: activeApprovalMode });
     // A pending prompt belongs to the policy that created it. Never let a
     // preference change reinterpret that outstanding decision under a new mode.
-    approvalBroker.denyAll();
-  }, [approvalBroker, activeApprovalMode]);
+    //
+    // Scoped to the conversation whose mode changed, because `activeApprovalMode`
+    // is the *visible* conversation's mode: opening a thread pinned to a
+    // different policy changes this value without changing anything about the
+    // background thread whose request is still waiting, and denying that
+    // request would destroy a decision nobody made.
+    if (!sessionId || seen.sessionId !== sessionId || seen.mode === activeApprovalMode) return;
+    approvalBroker.denyAll(sessionId);
+  }, [approvalBroker, activeApprovalMode, sessionId]);
 
   useEffect(() => {
     const unsubscribe = vault.subscribe(setVaultSnapshot);
@@ -4008,7 +4078,6 @@ export function App() {
     const active = activeSessionRecord;
     const activeRuntime = runtime.current;
     if (!active || !activeRuntime) throw new Error("The conversation journal is not ready yet.");
-    if (busy) throw new Error("Wait for the current turn to finish before renaming this conversation.");
     const renamed = await activeRuntime.journal.renameSession(active.id, title);
     if (activeSessionIdentity.current !== active.id) return;
     setActiveSessionRecord(renamed);
@@ -4712,8 +4781,14 @@ export function App() {
     /** The runtime this call published, if it got that far. See the catch. */
     let committed: Runtime | undefined;
     try {
+      /* A switch replaces the workspace, tools and Git client every running
+         turn is holding, so it still ends all of them — that rule is unchanged
+         and is why it is the one turn-related refusal that stays. What changed
+         is that the switcher is now reachable while turns run, so the price is
+         stated rather than discovered afterwards. */
+      const stopped = activeTurns.current.size;
       abortAllTurns();
-      setRuntimeStatus("Switching profile cockpit");
+      setRuntimeStatus(`Switching profile cockpit${stopped > 0 ? ` · ${stopped} turn${stopped === 1 ? "" : "s"} stopped` : ""}`);
       let profile: ProfileRevision | undefined;
       let nextSession: SessionRecord | undefined;
       let restored: Readonly<{
@@ -4924,9 +4999,12 @@ export function App() {
   }
 
   async function createConversation(title?: string) {
+    /* No `busy` here. A turn is a property of one conversation, and starting a
+       second conversation is the thing a person does *because* the first one is
+       still answering. What still refuses is a transition that would leave the
+       new conversation bound to an authority that is being replaced. */
     if (
-      busy
-      || !runtime.current
+      !runtime.current
       || !activeProfile
       || !catalog
       || inferenceRouteChanging.current
@@ -5366,10 +5444,11 @@ export function App() {
       setComposerNotice("Conversation branching will be available when the local session journal is ready.");
       return;
     }
-    if (busy || sessionNavigationChanging.current || !message.sourcePoint) {
-      setComposerNotice(busy
-        ? "Stop the active turn before creating a branch."
-        : "This message does not expose a recorded historical boundary yet. Resume the conversation and try again.");
+    /* A branch is a new conversation cut at a recorded boundary; the turn still
+       running in this one keeps writing to its own head and is not disturbed by
+       it. Only a conversation transition already in flight still refuses. */
+    if (sessionNavigationChanging.current || !message.sourcePoint) {
+      setComposerNotice("This message does not expose a recorded historical boundary yet. Resume the conversation and try again.");
       return;
     }
     // Retry regenerates the turn, so it forks *before* the request. Fail closed
@@ -5619,7 +5698,7 @@ export function App() {
       || !sessionId
       || busy
       || activeTurns.current.has(sessionId)
-      || localCommandAdmission.current
+      || localCommandAdmission.current.has(sessionId)
       || inferenceRouteChanging.current
       || vaultProviderSwitchingRef.current
       || localDeviceBusy
@@ -5683,7 +5762,7 @@ export function App() {
         // Local built-ins do not all create an AbortController. Keep a separate
         // synchronous admission lock so duplicate click/key events in one
         // render cannot create two sessions, forks, or local transcript rows.
-        localCommandAdmission.current = true;
+        localCommandAdmission.current.add(admissionSessionId);
         setInput("");
         try {
           await runSlashPlan(slashPlan, content, localPresentationAuthority);
@@ -5703,7 +5782,7 @@ export function App() {
           // durable events on every iteration. Admit exactly once here, on
           // both the success and the error path above.
           queue?.onAdmitted();
-          localCommandAdmission.current = false;
+          localCommandAdmission.current.delete(admissionSessionId);
         }
         requestAnimationFrame(() => textarea.current?.focus());
         return true;
@@ -8023,8 +8102,11 @@ export function App() {
   async function setProfileSkill(profileIdToEdit: string, skillId: string, mode: SkillMode) {
     const editingActiveProfile = profileIdToEdit === profileId;
     const active = runtime.current;
+    /* `anyTurnRunning`, not this conversation's: a revised profile rebinds the
+       workspace, tools and Git client every running turn is holding, so the
+       refusal has to be about all of them. */
     if (editingActiveProfile && (
-      busy
+      anyTurnRunning
       || !active
       || !activeSessionRecord
       || inferenceRouteChanging.current
@@ -8740,7 +8822,6 @@ export function App() {
             compact
             ariaLabel="Agent profile"
             value={profileId}
-            disabled={busy}
             options={managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))}
             leading={(option) => <span class="profile-monogram" style={profileBadgeStyle(profileThemeFor(catalog, option.value))} aria-hidden="true">{profileMonogram(option.label)}</span>}
             onChange={(nextId) => void requestProfileChange(nextId)}
@@ -8798,10 +8879,9 @@ export function App() {
         state={railState}
         navRef={primaryNav}
         inert={platformOverlayOpen}
-        busy={busy}
-        activity={[+busy, `${busy ? "1 active" : "Ready"} · ${railDurableEventCount} events`]}
+        activity={[busySessions.size, `${busySessions.size > 0 ? `${busySessions.size} active` : "Ready"} · ${railDurableEventCount} events`]}
         unreadTurnCount={unreadTurnCount}
-        conversations={recentProfileConversations}
+        conversations={railConversations}
         activeConversationId={sessionId ?? ""}
         {...(quarantinedSession ? { unresumableConversationId: quarantinedSession.sessionId } : {})}
         formatTime={formatConversationTime}
@@ -8850,10 +8930,8 @@ export function App() {
                 }}
                 onOpenSession={() => navigate("sessions")}
                 onRename={renameActiveConversation}
-                renameDisabled={busy}
                 onNewConversation={() => void createConversation()}
-                newConversationDisabled={busy}
-                conversations={recentProfileConversations}
+                conversations={railConversations}
                 activeConversationId={sessionId ?? ""}
                 formatTime={formatConversationTime}
                 onOpenAllConversations={() => navigate("sessions")}
@@ -9019,7 +9097,7 @@ export function App() {
                         : undefined}
                       onEdit={() => void forkFromMessage(entry.item, "edit")}
                       onBranch={() => void forkFromMessage(entry.item, "fork")}
-                      branchDisabled={!sessionLibrary || !activeSessionRecord || busy || !entry.item.sourcePoint}
+                      branchDisabled={!sessionLibrary || !activeSessionRecord || !entry.item.sourcePoint}
                       streamStore={transcriptStreams}
                       reasoningStore={reasoningStreams}
                     />}
@@ -9568,9 +9646,6 @@ export function App() {
                 return `New conversation failed: ${error instanceof Error ? error.message : String(error)}`;
               }
             }}
-            startConversationDisabledReason={busy
-              ? "Stop the active turn before starting a new conversation."
-              : undefined}
             scope={profileHubScope}
           />
         ) : skillsViewError ? <DeferredRouteFailure title="Skills" message={skillsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Skills" /> : null}
@@ -9681,7 +9756,7 @@ export function App() {
         onOpenCommandPalette={() => { setMobileMoreOpen(false); requestDeferredOverlay("Command Center"); }}
         onOpenSettings={() => requestDeferredOverlay("Preferences")}
       />
-      {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}
+      {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} conversationName={conversationDisplayName} /> : null}
       {deferredOverlayNoticeActive
         && deferredOverlayNoticePositionReady
         && !approvalDockWaitingVisible

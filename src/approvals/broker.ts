@@ -43,7 +43,12 @@ export type ApprovalBrokerSnapshot = Readonly<{
   /** Requests still demanding an answer. The shell goes inert for exactly these. */
   pending: readonly PendingApproval[];
   /**
-   * Requests the person put down without answering.
+   * Requests waiting for a decision that is not being demanded right now.
+   *
+   * Two things land here: a request the person put down with Escape, and a
+   * request raised by a conversation that is not the one on screen (see
+   * `focusSession`). Both are live, both are on their original clock, and
+   * neither makes anything inert.
    *
    * Escape used to file a denial, so the two reflexes a chat surface trains —
    * Escape to dismiss, Enter on the focused control — destroyed a typed command
@@ -128,6 +133,7 @@ export class ApprovalBroker {
   private readonly maxPending: number;
   private readonly decisionTimeoutMs: number;
   private readonly now: () => string;
+  private focused: string | undefined;
 
   constructor(options: ApprovalBrokerOptions = {}) {
     this.maxPending = integerWithin(options.maxPending ?? DEFAULT_MAX_PENDING, 1, 128, "maxPending");
@@ -184,6 +190,25 @@ export class ApprovalBroker {
   }
 
   /**
+   * The conversation on screen, so this broker can tell an interruption from an
+   * errand.
+   *
+   * Turns run per conversation, and one broker serves all of them. A request
+   * from the thread a person is reading is the interruption it has always been.
+   * A request from a thread answering in the background is not: making the
+   * whole shell inert for it stops the work somebody is doing to ask about work
+   * they are not looking at. Those arrive postponed — same queue, same clock,
+   * same closed gate, and reachable from the non-modal bar the moment the
+   * person chooses to answer them.
+   *
+   * Unset means every request is an interruption, which is the behaviour before
+   * a conversation is bound and the behaviour of any host that never calls this.
+   */
+  focusSession(sessionId: string | undefined): void {
+    this.focused = sessionId;
+  }
+
+  /**
    * The outcome of one settled request, consumed once by whatever writes the
    * record for it.
    *
@@ -228,6 +253,8 @@ export class ApprovalBroker {
       // record that reads this must not report it as one the person made.
       const timer = setTimeout(() => this.settle(id, "expired"), this.decisionTimeoutMs);
       this.entries.set(id, { request, resolve, timer, signal: context.signal, abort });
+      // Filed as waiting rather than as a demand: see `focusSession`.
+      if (this.focused !== undefined && context.sessionId !== this.focused) this.postponed.add(id);
       context.signal.addEventListener("abort", abort, { once: true });
       this.emit();
     });
@@ -243,8 +270,19 @@ export class ApprovalBroker {
     return this.settle(id, decision);
   }
 
-  denyAll(): void {
-    for (const id of [...this.entries.keys()]) this.settle(id, "deny");
+  /**
+   * Deny every live request, or only the ones one conversation raised.
+   *
+   * The page-wide form answers a page-wide loss of authority: the dialog's code
+   * did not load, or the app is unmounting. The scoped form answers a change
+   * that belongs to one conversation — re-moding a thread may not reinterpret a
+   * request a *different* thread is still waiting on, and with turns running
+   * per conversation that is no longer a hypothetical.
+   */
+  denyAll(sessionId?: string): void {
+    for (const [id, entry] of [...this.entries]) {
+      if (sessionId === undefined || entry.request.sessionId === sessionId) this.settle(id, "deny");
+    }
   }
 
   private settle(id: string, outcome: ApprovalOutcome): boolean {

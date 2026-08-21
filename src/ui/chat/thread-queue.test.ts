@@ -73,7 +73,7 @@ describe("thread queue surface contract", () => {
     // queue once.
     const branch = app.slice(app.indexOf('if (slashPlan.kind !== "chat" && !unknownSlashDemoPrompt)'));
     expect(branch.indexOf("queue?.onAdmitted();")).toBeGreaterThan(-1);
-    expect(branch.indexOf("queue?.onAdmitted();")).toBeLessThan(branch.indexOf("localCommandAdmission.current = false;"));
+    expect(branch.indexOf("queue?.onAdmitted();")).toBeLessThan(branch.indexOf("localCommandAdmission.current.delete(admissionSessionId);"));
     // Exactly once on this path: the chat path's admission is unreachable
     // past the branch's return.
     expect(branch.slice(0, branch.indexOf("return true;")).match(/queue\?\.onAdmitted\(\);/gu)).toHaveLength(1);

@@ -175,6 +175,72 @@ describe("ApprovalBroker", () => {
     expect(broker.takeOutcome(approvalRequestId(allowed))).toBe("allow");
   });
 
+  /*
+   * Turns run per conversation, so a page-wide denial is a page-wide claim.
+   *
+   * The shell denies outstanding requests when the visible conversation's
+   * approval mode changes, on the rule that a prompt belongs to the policy that
+   * created it. Opening a thread pinned to a different mode changes that value
+   * without changing anything about a thread still answering in the background,
+   * and denying its request would file a refusal nobody made.
+   */
+  it("denies one conversation's requests without touching another's", async () => {
+    const broker = new ApprovalBroker();
+    const here = { ...context(), sessionId: "here" };
+    const there = { ...context(), sessionId: "there" };
+    const mine = broker.request(writeTool, { path: "a.md" }, here);
+    const theirs = broker.request(writeTool, { path: "b.md" }, there);
+    expect(broker.snapshot().pending).toHaveLength(2);
+
+    broker.denyAll("here");
+    await expect(mine).resolves.toBe("deny");
+    expect(broker.snapshot().pending.map((request) => request.sessionId)).toEqual(["there"]);
+    expect(broker.takeOutcome(approvalRequestId(here))).toBe("deny");
+
+    // The page-wide form still exists, and still means every conversation:
+    // teardown and a failed dialog chunk are page-wide losses of authority.
+    broker.denyAll();
+    await expect(theirs).resolves.toBe("deny");
+    expect(broker.snapshot().pending).toHaveLength(0);
+  });
+
+  /*
+   * The modal dialog is the shell's only self-inflicted inert state, and turns
+   * run in parallel. A request from the thread on screen is the interruption it
+   * has always been; a request from a thread answering in the background may
+   * not stop the work somebody is doing to ask about work they are not looking
+   * at, so it is filed as waiting on the same clock.
+   */
+  it("files a request from a background conversation as waiting, not as a demand", async () => {
+    const broker = new ApprovalBroker();
+    broker.focusSession("here");
+    const mine = broker.request(writeTool, { path: "a.md" }, { ...context(), sessionId: "here" });
+    const theirs = broker.request(writeTool, { path: "b.md" }, { ...context(), sessionId: "there", operationId: "operation-2" });
+
+    const snapshot = broker.snapshot();
+    expect(snapshot.pending.map((entry) => entry.sessionId)).toEqual(["here"]);
+    expect(snapshot.deferred.map((entry) => entry.sessionId)).toEqual(["there"]);
+    // Waiting is not decided: same queue, same clock, same closed gate.
+    expect(snapshot.deferred[0]!.expiresAt).toBeTruthy();
+
+    // And it is reachable: the bar's Review is `resume`, which asks it here.
+    expect(broker.resume(snapshot.deferred[0]!.id)).toBe(true);
+    expect(broker.snapshot().pending).toHaveLength(2);
+
+    broker.denyAll();
+    await expect(mine).resolves.toBe("deny");
+    await expect(theirs).resolves.toBe("deny");
+  });
+
+  it("treats every conversation as the foreground until a host says otherwise", async () => {
+    const broker = new ApprovalBroker();
+    const decision = broker.request(writeTool, {}, { ...context(), sessionId: "unbound" });
+    expect(broker.snapshot().pending).toHaveLength(1);
+    expect(broker.snapshot().deferred).toHaveLength(0);
+    broker.denyAll();
+    await expect(decision).resolves.toBe("deny");
+  });
+
   it("auto-allows configured read effects but brokers mutations", async () => {
     const broker = new ApprovalBroker();
     const policy = createBrokeredApprovalPolicy(broker);

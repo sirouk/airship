@@ -74,10 +74,25 @@ describe("the routes that switch profiles report their own failures", () => {
     expect(skills).toContain("async function startConversation(): Promise<void> {");
     expect(skills).toContain("const failure = await onStartConversation();");
     expect(skills).toContain("if (failure) setConversationStartFailure(failure)");
-    expect(skills).toContain("disabled={Boolean(startConversationDisabledReason)}");
-    expect(skills).toContain('aria-describedby={conversationStartStatus ? "skill-conversation-start-status" : undefined}');
+    /*
+     * No pre-emptive disable left on this control. Its only producer was the
+     * shell's “Stop the active turn…” refusal, and turns run per conversation:
+     * a new conversation has no turn of its own to collide with. What the
+     * surface reports is what the attempt returned.
+     */
+    expect(skills).not.toContain("startConversationDisabledReason");
+    expect(skills).toContain('aria-describedby={conversationStartFailure ? "skill-conversation-start-status" : undefined}');
     expect(skills).toContain('id="skill-conversation-start-status"');
-    expect(app).toContain("Stop the active turn before starting a new conversation.");
+    /*
+     * The refusal the route still reports is the one it can fail with — a
+     * conversation transition already in flight, or a throw from the create
+     * path. The shell used to add a second one on top of it, "Stop the active
+     * turn before starting a new conversation.", and that one was never about
+     * this verb: a new conversation has no turn to collide with, and turns run
+     * per conversation. It is gone rather than reworded.
+     */
+    expect(app).not.toContain("Stop the active turn before starting a new conversation.");
+    expect(app).toContain("A new conversation could not be started while the current session was changing. Try again.");
   });
 
   it("types both props as the outcome they must report", () => {
