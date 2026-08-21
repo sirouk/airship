@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  PYODIDE_DISTRIBUTION_PINS,
+  assertPinnedPyodideDistribution,
+  assertEveryStylesheetIsReferenced,
   RELEASE_BUDGETS,
   assertSinglePrimeKernelWorkerArtifact,
   assertNoSimulatedGitRuntime,
@@ -46,8 +49,6 @@ import {
   resolveOptionalSourceSelectionDelivery,
   assertDocumentedBudgetMeasurements,
   assertEveryArtifactIsClassified,
-  assertEveryAssetIsReachable,
-  assertExactPyodideInventory,
   RELEASE_ARTIFACT_CLASSES,
   RELEASE_BUDGET_CLASSES,
   REVIEWED_BUILD_VARIANTS,
@@ -406,6 +407,20 @@ describe("release gate", () => {
       ]))]),
   );
 
+/**
+ * The Pyodide bytes as `scripts/pyodide-assets.ts` emits them: the package's
+ * own files, with the upstream `sourceMappingURL` trailer stripped from the
+ * two `.mjs` ones. Reading them here means the pins are checked against what
+ * `npm ci` actually installs, not against a fixture that agrees with itself.
+ */
+const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
+  const name = pin.path.slice("execution-packs/pyodide/".length);
+  const payload = readFileSync(new URL(`../node_modules/pyodide/${name}`, import.meta.url));
+  return [pin.path, name.endsWith(".mjs")
+    ? Buffer.from(payload.toString("utf8").replace(/\/\/[#@]\s*sourceMappingURL=.*?(?:\r?\n|$)/gu, ""), "utf8")
+    : payload];
+}));
+
   /** …plus the one module the bundler folded into its consumer in this build. */
   const asBuilt = (source) => ({
     ...asRecorded(source),
@@ -429,7 +444,7 @@ describe("release gate", () => {
 
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(
-      source.replace("Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.", "Reviewed reading (Pages): 912,837 B raw / 4,574 B gzip."),
+      source.replace("Reviewed reading (Google-Drive-configured): 12,837 B raw / 4,576 B gzip.", "Reviewed reading (Google-Drive-configured): 912,837 B raw / 4,576 B gzip."),
     )).toThrow(/optionalApprovalDock: its reviewed reading of 912,837 B raw is above the 17\.00 KiB raw ceiling/u);
 
     // …and a raise cannot be laundered by deleting the number it contradicts.
@@ -438,7 +453,7 @@ describe("release gate", () => {
 
     // A reading nobody can rebuild is a number, not a measurement.
     expect(() => assertDocumentedBudgetMeasurements(
-      source.replace("Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.", "Reviewed reading (my laptop): 12,837 B raw / 4,574 B gzip."),
+      source.replace("Reviewed reading (Google-Drive-configured): 12,837 B raw / 4,576 B gzip.", "Reviewed reading (my laptop): 12,837 B raw / 4,576 B gzip."),
     )).toThrow(/optionalApprovalDock: its comment attributes a reading to my laptop, which is not a reviewed build variant/u);
   });
 
@@ -475,7 +490,7 @@ describe("release gate", () => {
       expect(variant.environment, variant.name).toContain("npm run build:static");
     }
     const droppedFromEntry = source.replace(
-      "// Reviewed reading (Pages Google-Drive-configured): 386,021 B raw / 119,757 B gzip.\n",
+      "// Reviewed reading (Pages Google-Drive-configured): 386,020 B raw / 119,769 B gzip.\n",
       "",
     );
     expect(droppedFromEntry).not.toBe(source);
@@ -497,18 +512,18 @@ describe("release gate", () => {
   it("keeps Class 1 tight and refuses a Class 2 ceiling outside its headroom band", () => {
     const source = gateSource();
     const raised = source.replace(
-      "  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),",
-      "  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 119 * 1024 }),",
+      "  entryJavaScript: Object.freeze({ raw: 378 * 1024, gzip: 118 * 1024 }),",
+      "  entryJavaScript: Object.freeze({ raw: 378 * 1024, gzip: 119 * 1024 }),",
     );
     expect(raised).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(raised))
       .toThrow(/entryJavaScript: the 119\.00 KiB gzip ceiling is above the smallest whole-KiB step/u);
 
     // Remove the arithmetic that pays for the step this file does take.
-    const untripped = source.replace("117 KiB gzip would have left 48 B", "117 KiB gzip would have left 999 B");
+    const untripped = source.replace("117 KiB gzip would have left 39 B", "117 KiB gzip would have left 999 B");
     expect(untripped).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(untripped))
-      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 48 B"/u);
+      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 39 B"/u);
 
     for (const [ceiling, expected] of [
       ["raw: 64 * 1024", /optionalApprovalDock: the 64\.00 KiB raw ceiling is outside the Class 2 headroom band/u],
@@ -537,7 +552,7 @@ describe("release gate", () => {
     );
     expect(shaved).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(shaved))
-      .toThrow(/optionalSessionManifest: the gzip ceiling leaves the reviewed reading only 35 B, under the 512 B a compressor change moves/u);
+      .toThrow(/optionalSessionManifest: the gzip ceiling leaves the reviewed reading only 33 B, under the 512 B a compressor change moves/u);
 
     const recorded = asBuilt(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(source, recorded)).not.toThrow();
@@ -554,8 +569,8 @@ describe("release gate", () => {
     const source = gateSource();
     const grown = source
       .replace(
-        "// Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.",
-        "// Reviewed reading (Pages): 16,837 B raw / 4,574 B gzip.",
+        "// Reviewed reading (Google-Drive-configured): 12,837 B raw / 4,576 B gzip.",
+        "// Reviewed reading (Google-Drive-configured): 16,837 B raw / 4,576 B gzip.",
       )
       .replace(
         "  optionalApprovalDock: Object.freeze({ raw: 17 * 1024, gzip: 9 * 1024 }),",
@@ -567,18 +582,18 @@ describe("release gate", () => {
 
     // One sentence, and it has to state the bytes it is explaining.
     const wrongFigure = grown.replace(
-      "// Previous reading: 12,837 B raw / 4,576 B gzip.",
-      "// Previous reading: 12,837 B raw / 4,576 B gzip. Grew 400 B raw in one change: a second decision row and the line that names it.",
+      "// Previous reading: 12,837 B raw / 4,575 B gzip.",
+      "// Previous reading: 12,837 B raw / 4,575 B gzip. Grew 400 B raw in one change: a second decision row and the line that names it.",
     );
     expect(() => assertDocumentedBudgetMeasurements(wrongFigure)).toThrow(/past the 3,209 B growth alarm/u);
     const declared = grown.replace(
-      "// Previous reading: 12,837 B raw / 4,576 B gzip.",
-      "// Previous reading: 12,837 B raw / 4,576 B gzip. Grew 4,000 B raw in one change: a second decision row and the line that names it.",
+      "// Previous reading: 12,837 B raw / 4,575 B gzip.",
+      "// Previous reading: 12,837 B raw / 4,575 B gzip. Grew 4,000 B raw in one change: a second decision row and the line that names it.",
     );
     expect(() => assertDocumentedBudgetMeasurements(declared)).not.toThrow();
 
     // And the ledger cannot be silenced by deleting the line it compares with.
-    const forgotten = source.replace("// Previous reading: 12,837 B raw / 4,576 B gzip.", "//");
+    const forgotten = source.replace("// Previous reading: 12,837 B raw / 4,575 B gzip.", "//");
     expect(forgotten).not.toBe(source);
     expect(() => assertDocumentedBudgetMeasurements(forgotten))
       .toThrow(/optionalApprovalDock: its comment records no "Previous reading:" line/u);
@@ -1134,43 +1149,55 @@ describe("release gate", () => {
   });
 
   /*
-   * The class test is a shape test, and for `.css` and `.wasm` a shape was the
-   * whole review: a 512 KiB `assets/bloat.css` and an `assets/payload.wasm`
-   * were dropped into a real `dist` and the gate printed "Release gate passed"
-   * and inventoried both with a checksum. Only the one HTML-referenced entry
-   * stylesheet has a ceiling, so the stylesheet was not even measured.
+   * "Pinned" was a version string in `node_modules`, and the ceiling that
+   * quoted it summed five paths with 3.2 MB of headroom. So the WASM could be
+   * rewritten in place at the same length, a 5 MB file could be added beside
+   * it, and a lab literal could be hidden in it — the lab scan skips this
+   * directory by name — all with a green gate.
    */
-  it("refuses a stylesheet or WebAssembly artifact nothing loads", () => {
-    const shipped = ["assets/index-DEADBEEF.css", "assets/tree-sitter-DEADBEEF.wasm", "assets/index-DEADBEEF.js"];
-    const referrers = [
-      '<link rel="stylesheet" href="/assets/index-DEADBEEF.css">',
-      'const w=new URL("/assets/tree-sitter-DEADBEEF.wasm",import.meta.url)',
-    ];
-    expect(() => assertEveryAssetIsReachable(shipped, referrers)).not.toThrow();
-    expect(() => assertEveryAssetIsReachable([...shipped, "assets/bloat-DEADBEEF.css"], referrers))
-      .toThrow(/Release ships stylesheet or WebAssembly artifacts nothing loads: assets\/bloat-DEADBEEF\.css/u);
-    expect(() => assertEveryAssetIsReachable([...shipped, "assets/payload-CAFEBABE.wasm"], referrers))
-      .toThrow(/assets\/payload-CAFEBABE\.wasm/u);
+  it("pins the Pyodide distribution by digest, and refuses a sixth file beside it", () => {
+    const pinned = PYODIDE_DISTRIBUTION_PINS.map((pin) => ({
+      path: pin.path,
+      payload: pyodidePayloads.get(pin.path),
+    }));
+    expect(PYODIDE_DISTRIBUTION_PINS).toHaveLength(5);
+    for (const pin of PYODIDE_DISTRIBUTION_PINS) {
+      expect(pin.sha256, pin.path).toMatch(/^[0-9a-f]{64}$/u);
+      expect(pin.bytes, pin.path).toBeGreaterThan(0);
+    }
+    expect(() => assertPinnedPyodideDistribution(pinned)).not.toThrow();
+
+    const mutated = pinned.map((file) => (file.path.endsWith(".wasm")
+      ? { path: file.path, payload: Buffer.concat([file.payload.subarray(0, 8), Buffer.from("TAMPERED"), file.payload.subarray(16)]) }
+      : file));
+    expect(() => assertPinnedPyodideDistribution(mutated))
+      .toThrow(/pyodide\.asm\.wasm is not the pinned bytes/u);
+
+    expect(() => assertPinnedPyodideDistribution([
+      ...pinned,
+      { path: "execution-packs/pyodide/payload.bin", payload: Buffer.alloc(4096) },
+    ])).toThrow(/unreviewed file in the pinned distribution: execution-packs\/pyodide\/payload\.bin/u);
+
+    expect(() => assertPinnedPyodideDistribution(pinned.slice(1)))
+      .toThrow(/missing pinned file: /u);
   });
 
   /*
-   * "Pinned" required five names and forbade nothing, while the artifact class
-   * matched `execution-packs/pyodide/<anything>`. Measured: a 2 MiB
-   * `extra.bin` shipped and did not move the Optional Python pack reading.
+   * JavaScript under `assets/` needs exactly one owner and documents have an
+   * exact inventory; stylesheets had neither, so a 5 MB `assets/extra.css`
+   * shipped with a checksum in the manifest and no ceiling that counted it.
    */
-  it("refuses an extra file inside the pinned Pyodide distribution", () => {
-    const pinned = [
-      "execution-packs/pyodide/pyodide.mjs",
-      "execution-packs/pyodide/pyodide.asm.mjs",
-      "execution-packs/pyodide/pyodide.asm.wasm",
-      "execution-packs/pyodide/pyodide-lock.json",
-      "execution-packs/pyodide/python_stdlib.zip",
-    ];
-    expect(() => assertExactPyodideInventory(["index.html", ...pinned])).not.toThrow();
-    expect(() => assertExactPyodideInventory([...pinned, "execution-packs/pyodide/extra.bin"]))
-      .toThrow(/Pinned Pyodide distribution inventory mismatch \(unexpected: extra\.bin\)/u);
-    expect(() => assertExactPyodideInventory(pinned.slice(1)))
-      .toThrow(/Pinned Pyodide distribution inventory mismatch/u);
+  it("refuses a stylesheet nothing in the build references", () => {
+    const entry = { path: "assets/index-DEADBEEF.css", payload: Buffer.from("body{}") };
+    const referenced = { path: "assets/memory-view-C0FFEE.css", payload: Buffer.from(".memory{}") };
+    const carrier = { path: "assets/memory-view-D00D.js", payload: Buffer.from('import "./memory-view-C0FFEE.css";') };
+    const index = { path: "index.html", payload: Buffer.from('<link rel="stylesheet" href="/assets/index-DEADBEEF.css">') };
+    const shipped = [entry, referenced, carrier, index];
+    expect(() => assertEveryStylesheetIsReferenced(shipped, entry.path)).not.toThrow();
+
+    const stray = { path: "assets/extra.css", payload: Buffer.alloc(5 * 1024 * 1024) };
+    expect(() => assertEveryStylesheetIsReferenced([...shipped, stray], entry.path))
+      .toThrow(/Release contains stylesheets nothing references: assets\/extra\.css/u);
   });
 
   /*

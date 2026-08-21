@@ -74,6 +74,30 @@ to carry it, and one of them cannot:
   Add base-prefixed copies of those four rules before deploying to a subpath on
   a host that reads this format. GitHub Pages and Caddy never read it.
 
+## What a fork's own name costs
+
+The Pages workflow derives the base path from the repository name, so a fork
+publishes at `/<repo>/` and every asset URL carries that prefix. Both that
+prefix and `VITE_GOOGLE_CLIENT_ID` are inlined, and both are measured against
+`entryJavaScript`, which is a Class 1 ceiling:
+
+| Input | Measured cost |
+| --- | --- |
+| One character of `AIRSHIP_PUBLIC_BASE_PATH` | about 2 raw bytes in the entry chunk |
+| One character of `VITE_GOOGLE_CLIENT_ID` | about 3 raw bytes in the entry chunk |
+
+Measured on this commit: `/airship/` with a 72-character client ID builds a
+386,020 B entry chunk. Under the 377 KiB ceiling that shipped in the release
+candidate this left 28 B, so a 22-character repository name (386,050 B) or an
+82-character client ID (386,050 B) failed `npm run check:release` — the fork
+had done nothing but be called something longer. The ceiling now takes the
+further whole-KiB step (378 KiB) with that arithmetic recorded beside it, which
+leaves 1,052 B: about 500 characters of repository name or 350 of client ID.
+
+If you fork and rename, run `npm run build` once with your own base path and
+client ID before you publish. The gate measures the artifact you will actually
+serve.
+
 ## What a deployment must not add
 
 - an Airship plaintext session backend;

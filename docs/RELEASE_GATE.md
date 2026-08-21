@@ -14,6 +14,10 @@ Airship ships as a static client. `npm run build` therefore ends by validating
   Companion ZIP members. Vendor keys are matched on the literal each vendor
   issues; a key that is bare hex or bare base64 has no shape to match, and no
   credential belongs in a build input in the first place;
+- a Pyodide distribution that is not the pinned bytes: the five shipped files
+  are matched by SHA-256 and byte length, and no sixth file may sit beside
+  them;
+- a stylesheet no shipped script or document references;
 - any document the release did not review: `.html`, `.htm`, `.xhtml`, `.shtml`,
   `.svg` and `.xml` ship only from an exact list, and `404.html` must be a byte
   copy of the reviewed index;
@@ -53,7 +57,9 @@ than looser enforcement: every ceiling states a reading, every reading names
 the reviewed variant that reproduces it, a ceiling above three headrooms is
 refused, and a reading that grows by a quarter (or 16 KiB, whichever is
 smaller, never less than a kilobyte) has to be accompanied by a sentence naming
-what was added.
+what was added. Every budget records a previous reading as two numbers. There is
+no "nothing recorded before this pass" form: it silenced the alarm for
+twenty-six of fifty-nine budgets, and one line of it silenced a 16,983 B jump.
 
 ## Reviewed build variants
 
@@ -100,18 +106,21 @@ touched. Several gzip ceilings therefore take a further whole-KiB step with the
 arithmetic written beside them: that step is not slack, it is the width of the
 measuring instrument.
 
-A few roles are declared absolute backstops rather than headroom claims — entry
-and baseline raw bytes, which are parse cost rather than transfer cost; the
-pinned Pyodide distribution, which is a verified byte set; and the general WASM
-ceilings, which govern a class this build does not emit. They still record a
-reading and are still compared with the artifact.
+A few roles are declared absolute backstops rather than headroom claims — the
+pinned Pyodide distribution, which is a byte set verified against recorded
+SHA-256 digests, and the general WASM ceilings, which govern a class this build
+does not emit. They still record a reading and are still compared with the
+artifact. Entry and baseline raw bytes are *not* on that list: being called a
+backstop removed every shape rule, and a 377 KiB entry ceiling could be rewritten
+to 512 KiB with a green gate. Both raw roles take the same whole-KiB step rule as
+their gzip halves.
 
 | Class | Tier | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: | ---: |
-| HTML-referenced entry JavaScript | 1 | 377 KiB | 118 KiB |
+| HTML-referenced entry JavaScript | 1 | 378 KiB | 118 KiB |
 | Baseline JavaScript/workers, including pre-render chunks | 1 | 491 KiB | 160 KiB |
 | Deferred advanced capability bundle | 2 | 292 KiB | 87 KiB |
-| First-party and other non-vendor JS/workers | 2 | 2039 KiB | 683 KiB |
+| First-party and other non-vendor JS/workers | 2 | 2038 KiB | 683 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 2 | 749 KiB | 248 KiB |
 | Absolute installed JavaScript/worker backstop | 2 | 2723 KiB | 873 KiB |
 | Service worker | 1 | 12 KiB | 5 KiB |
@@ -160,7 +169,7 @@ reading and are still compared with the artifact.
 | Optional Terminal | 2 | 488 KiB | 145 KiB |
 | Optional semantic worker | 2 | 13 KiB | 8 KiB |
 | Optional inference/provider + Companion protocol packs | 2 | 182 KiB | 53 KiB |
-| Optional prime runtime pack | 2 | 291 KiB | 86 KiB |
+| Optional prime runtime pack | 2 | 290 KiB | 86 KiB |
 | Optional Companion observation | 2 | 7 KiB | 6 KiB |
 | Optional Local Device Vault | 2 | 76 KiB | 22 KiB |
 | Pinned same-origin Pyodide distribution | 2 | 16384 KiB | 8192 KiB |
