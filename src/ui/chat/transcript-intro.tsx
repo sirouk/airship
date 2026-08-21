@@ -48,13 +48,16 @@ export const TRANSCRIPT_SEED_BODY =
  * lines already say is subtracted. Whether a message is a seed at all is
  * decided by its own flag, not by this function.
  */
-export function transcriptIntroNote(content: string | undefined): string | undefined {
+export function transcriptIntroNote(
+  content: string | undefined,
+  seedBody: typeof TRANSCRIPT_SEED_BODY,
+): string | undefined {
   if (!content) return undefined;
-  const note = content.endsWith(TRANSCRIPT_SEED_BODY)
-    ? content.slice(0, content.length - TRANSCRIPT_SEED_BODY.length)
-    : content;
-  const trimmed = note.trim();
-  return trimmed.length > 0 && trimmed !== TRANSCRIPT_SEED_BODY ? trimmed : undefined;
+  const trimmed = content.trim();
+  const note = trimmed.endsWith(seedBody)
+    ? trimmed.slice(0, -seedBody.length).trim()
+    : trimmed;
+  return note || undefined;
 }
 
 /**

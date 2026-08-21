@@ -8,6 +8,7 @@ import {
   assertWithinBudget,
   assertExclusiveArtifactClassifications,
   assertExactChunkStems,
+  assertRequiredFilesAreMeasured,
   assertOptionalPacksAreNotPreloaded,
   createReleaseManifest,
   inspectPayload,
@@ -31,6 +32,8 @@ import {
   isOptionalWorkspaceBindingPath,
   isOptionalWorkspaceCodecPath,
   isOptionalFileDownloadPath,
+  isBaselineJavaScriptPath,
+  isControlledNavigationPath,
   isOptionalRoutePrimitivePath,
   isOptionalRequestFailurePath,
   isOptionalSourceControlPath,
@@ -459,21 +462,20 @@ describe("release gate", () => {
     expect(() => assertDocumentedMeasurementsMatchBuild(source, asDocumented)).not.toThrow();
 
     /*
-     * Supported variants can have crossed maxima: Pages currently wins raw while
-     * config-free wins gzip. A gzip claim in a higher bucket must not disappear
-     * merely because its paired raw value is nine bytes smaller. Writing this
-     * adversarial maximum in KiB also proves its own precision travels with it.
+     * Supported variants can have crossed maxima. A gzip claim in a higher bucket
+     * must not disappear merely because its paired raw value is six bytes smaller
+     * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "385,247 B raw / 119,150 B gzip",
-      "385,247 B raw / 117.68 KiB gzip",
+      "384,694 B raw / 119,113 B gzip",
+      "384,694 B raw / 117.68 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 385247, gzip: 119150 },
+      entryJavaScript: { raw: 384694, gzip: 119113 },
     })).toThrow(
-      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.36 KiB \(119150 B\), in a lower whole-KiB budget bucket/u,
+      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.32 KiB \(119113 B\), in a lower whole-KiB budget bucket/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
@@ -554,6 +556,31 @@ describe("release gate", () => {
       ["assets/request-state-A.js", "assets/turn-recovery.js"],
       required,
     )).toThrow(/Request failure chunks do not match the required stems/u);
+  });
+
+  it("charges every dynamic import awaited before first render to the baseline", () => {
+    const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+    const firstRender = main.indexOf("render(<App />");
+    expect(firstRender).toBeGreaterThan(0);
+    const preRenderDynamicImports = [...main.matchAll(/\bawait\s+import\("([^"]+)"\)/gu)]
+      .filter((match) => match.index < firstRender)
+      .map((match) => match[1]);
+    expect(preRenderDynamicImports).toEqual(["./controlled-navigation"]);
+
+    const entry = { path: "assets/index-A.js" };
+    const controlled = { path: "assets/controlled-navigation-B.js" };
+    expect(isControlledNavigationPath(controlled.path)).toBe(true);
+    expect(isBaselineJavaScriptPath(controlled.path)).toBe(true);
+    expect(() => assertRequiredFilesAreMeasured(
+      "Required pre-render JavaScript",
+      [entry, controlled],
+      [entry],
+    )).toThrow(/escaped its release measurement: assets\/controlled-navigation-B\.js/u);
+    expect(() => assertRequiredFilesAreMeasured(
+      "Required pre-render JavaScript",
+      [entry, controlled],
+      [entry, controlled],
+    )).not.toThrow();
   });
 
   it("rejects unknown and multiply owned JavaScript artifacts", () => {

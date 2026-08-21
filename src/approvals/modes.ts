@@ -12,6 +12,14 @@ export type ApprovalMode = ApprovalProvenance["mode"];
 
 const MAX_PROVENANCE = 512;
 
+function automaticReadProvenance(mode: ApprovalMode): ApprovalProvenance {
+  return {
+    mode,
+    source: "automatic-read",
+    reason: "Read-only browser tool effects are allowed automatically.",
+  };
+}
+
 export function createApprovalModePolicy(options: Readonly<{
   mode: ApprovalMode;
   broker: ApprovalBroker;
@@ -26,11 +34,7 @@ export function createApprovalModePolicy(options: Readonly<{
   return {
     async review(tool, argumentsValue, context) {
       if (tool.effect === "read") {
-        remember(context, {
-          mode: options.mode,
-          source: "automatic-read",
-          reason: "Read-only browser tool effects are allowed automatically.",
-        });
+        remember(context, automaticReadProvenance(options.mode));
         return "allow";
       }
 
@@ -203,11 +207,7 @@ export function createHumanIntentPolicy(options: Readonly<{
       const reviewed: HumanIntentReview = tool.effect === "read"
         ? {
             decision: "allow",
-            provenance: {
-              mode: options.mode,
-              source: "automatic-read",
-              reason: "Read-only browser tool effects are allowed automatically.",
-            },
+            provenance: automaticReadProvenance(options.mode),
           }
         : await decideHumanIntent({ ...options, tool, argumentsValue, context });
       if (provenance.size >= MAX_PROVENANCE) provenance.delete(provenance.keys().next().value as string);

@@ -9,14 +9,19 @@ import {
 
 describe("transcriptIntroNote", () => {
   it("keeps the per-conversation sentence a seed was prefixed with", () => {
-    expect(transcriptIntroNote(`Resumed Research from the encrypted Vault. ${TRANSCRIPT_SEED_BODY}`))
-      .toBe("Resumed Research from the encrypted Vault.");
-    expect(transcriptIntroNote(`General profile loaded in a new pinned session. ${TRANSCRIPT_SEED_BODY}`))
-      .toBe("General profile loaded in a new pinned session.");
+    expect(transcriptIntroNote(
+      `Resumed Research from the encrypted Vault. ${TRANSCRIPT_SEED_BODY}`,
+      TRANSCRIPT_SEED_BODY,
+    )).toBe("Resumed Research from the encrypted Vault.");
+    expect(transcriptIntroNote(
+      `General profile loaded in a new pinned session. ${TRANSCRIPT_SEED_BODY}`,
+      TRANSCRIPT_SEED_BODY,
+    )).toBe("General profile loaded in a new pinned session.");
   });
 
   it("returns nothing for a bare seed, so the intro does not render an empty line", () => {
-    expect(transcriptIntroNote(TRANSCRIPT_SEED_BODY)).toBeUndefined();
+    expect(transcriptIntroNote(TRANSCRIPT_SEED_BODY, TRANSCRIPT_SEED_BODY)).toBeUndefined();
+    expect(transcriptIntroNote(`  ${TRANSCRIPT_SEED_BODY}  `, TRANSCRIPT_SEED_BODY)).toBeUndefined();
   });
 
   /*
@@ -27,13 +32,13 @@ describe("transcriptIntroNote", () => {
   it("keeps a seed that replaced the body outright", () => {
     const replaced = "Approval policy changed to Auto Approve in this new pinned conversation.";
 
-    expect(transcriptIntroNote(replaced)).toBe(replaced);
+    expect(transcriptIntroNote(replaced, TRANSCRIPT_SEED_BODY)).toBe(replaced);
   });
 
   it("returns nothing when there is nothing to say", () => {
-    expect(transcriptIntroNote(undefined)).toBeUndefined();
-    expect(transcriptIntroNote("")).toBeUndefined();
-    expect(transcriptIntroNote("   ")).toBeUndefined();
+    expect(transcriptIntroNote(undefined, TRANSCRIPT_SEED_BODY)).toBeUndefined();
+    expect(transcriptIntroNote("", TRANSCRIPT_SEED_BODY)).toBeUndefined();
+    expect(transcriptIntroNote("   ", TRANSCRIPT_SEED_BODY)).toBeUndefined();
   });
 });
 

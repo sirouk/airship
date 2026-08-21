@@ -8905,7 +8905,7 @@ export function App() {
                     note is passed through verbatim. */}
                 {seedOnlyTranscript ? (
                   <TranscriptIntro
-                    note={transcriptIntroNote(messages[0]?.content)}
+                    note={transcriptIntroNote(messages[0]?.content, TRANSCRIPT_SEED_BODY)}
                     demo={composerUsesDemo}
                     // The one fact that decides whether anything typed below
                     // survives, read from the same derivation the session chip

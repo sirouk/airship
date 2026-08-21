@@ -1,5 +1,3 @@
-const CONTROLLED_NAVIGATION_MARKER_PREFIX = "airship.controlled-navigation.v1:";
-
 type ControlledNavigationOptions = Readonly<{
   basePath: string;
   revision: string;
@@ -24,49 +22,63 @@ export async function establishControlledNavigationBoundary({
   serviceWorkerPath,
 }: ControlledNavigationOptions): Promise<boolean> {
   if (!("serviceWorker" in navigator)) {
-    refuseUncontrolledNavigation("This browser cannot establish Airship's protected navigation boundary.");
-    return false;
+    return refuseUncontrolledNavigation("This browser cannot establish Airship's protected navigation boundary.");
   }
 
-  const approved = trustedServiceWorkerUrl(serviceWorkerPath, revision);
-  const markerKey = `${CONTROLLED_NAVIGATION_MARKER_PREFIX}${approved.href}`;
-  const controlledByRelease = () => navigator.serviceWorker.controller?.scriptURL === approved.href;
-  const markerMatches = () => {
+  const workers = navigator.serviceWorker;
+  const approved = new URL(serviceWorkerPath, location.origin);
+  approved.searchParams.set("revision", revision);
+  const href = approved.href;
+  const marker = `airship.cn:${href}`;
+  const factory = (globalThis as typeof globalThis & {
+    trustedTypes?: {
+      createPolicy(
+        name: string,
+        rules: { createScriptURL(input: string): string },
+      ): { createScriptURL(input: string): object };
+    };
+  }).trustedTypes;
+  const scriptUrl = factory
+    ? factory.createPolicy("airship-static", {
+      createScriptURL(input) {
+        if (input !== href) throw new TypeError("Invalid worker URL.");
+        return input;
+      },
+    }).createScriptURL(href)
+    : href;
+  const controlledByRelease = () => workers.controller?.scriptURL === href;
+  const reloadControlled = () => {
     try {
-      return sessionStorage.getItem(markerKey) === approved.href;
+      sessionStorage.setItem(marker, href);
     } catch {
-      return false;
+      return refuseUncontrolledNavigation("Airship cannot validate a protected reload in this storage mode.");
     }
-  };
-  const markReloadBoundary = () => {
-    try {
-      sessionStorage.setItem(markerKey, approved.href);
-      return true;
-    } catch {
-      refuseUncontrolledNavigation("Airship cannot validate a protected reload in this storage mode.");
-      return false;
-    }
+    location.reload();
+    return false;
   };
 
   if (controlledByRelease()) {
-    if (markerMatches()) return true;
-    if (markReloadBoundary()) window.location.reload();
-    return false;
+    try {
+      if (sessionStorage.getItem(marker) === href) return true;
+    } catch {
+      // Rewriting the exact marker below either succeeds or leaves the page inert.
+    }
+    return reloadControlled();
   }
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
-    const finish = (ready: boolean) => {
+    const finish = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      navigator.serviceWorker.removeEventListener("controllerchange", controllerChange);
-      resolve(ready);
+      workers.removeEventListener("controllerchange", controllerChange);
+      resolve(false);
     };
     const controllerChange = () => {
       if (!controlledByRelease()) return;
-      if (markReloadBoundary()) window.location.reload();
-      finish(false);
+      reloadControlled();
+      finish();
     };
     const promote = (worker: ServiceWorker | null) => {
       if (!worker) return;
@@ -76,53 +88,30 @@ export async function establishControlledNavigationBoundary({
       });
     };
     const timeout = window.setTimeout(() => {
-      refuseUncontrolledNavigation("Airship could not establish its protected navigation boundary.");
-      finish(false);
+      refuseUncontrolledNavigation();
+      finish();
     }, 30_000);
 
-    navigator.serviceWorker.addEventListener("controllerchange", controllerChange);
-    void navigator.serviceWorker.register(approved.scriptUrl as string, { scope: basePath })
+    workers.addEventListener("controllerchange", controllerChange);
+    void workers.register(scriptUrl as string, { scope: basePath })
       .then((registration) => {
         promote(registration.installing);
         promote(registration.waiting);
         registration.addEventListener("updatefound", () => promote(registration.installing));
         if (controlledByRelease()) controllerChange();
       })
-      .catch((error: unknown) => {
-        console.warn("Airship cache unavailable.", error);
-        refuseUncontrolledNavigation("Airship could not install its protected navigation boundary.");
-        finish(false);
+      .catch(() => {
+        refuseUncontrolledNavigation();
+        finish();
       });
   });
 }
 
-function refuseUncontrolledNavigation(message: string): void {
+function refuseUncontrolledNavigation(
+  message = "Airship could not establish its protected navigation boundary.",
+): false {
   const app = document.getElementById("app");
   if (app) app.textContent = message;
   document.documentElement.dataset.airshipNavigation = "refused";
-}
-
-function trustedServiceWorkerUrl(serviceWorkerPath: string, revision: string): Readonly<{
-  href: string;
-  scriptUrl: string | object;
-}> {
-  const approved = new URL(serviceWorkerPath, window.location.origin);
-  approved.searchParams.set("revision", revision);
-  const value = approved.href;
-  const factory = (globalThis as typeof globalThis & {
-    trustedTypes?: {
-      createPolicy(
-        name: string,
-        rules: { createScriptURL(input: string): string },
-      ): { createScriptURL(input: string): object };
-    };
-  }).trustedTypes;
-  if (!factory) return Object.freeze({ href: value, scriptUrl: value });
-  const policy = factory.createPolicy("airship-static", {
-    createScriptURL(input) {
-      if (input !== value) throw new TypeError("Invalid worker URL.");
-      return input;
-    },
-  });
-  return Object.freeze({ href: value, scriptUrl: policy.createScriptURL(value) });
+  return false;
 }

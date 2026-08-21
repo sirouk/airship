@@ -14,7 +14,10 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 
 ## Executable asset ceilings
 
-The gate measures raw and gzip bytes. Slash-separated figures follow the budget names in the same order.
+The gate measures raw and gzip bytes. Slash-separated figures follow the budget
+names in the same order. The baseline includes the HTML entry and preloads plus
+every dynamic chunk awaited before first render, including the
+controlled-navigation boundary.
 
 For measurement-justified ceilings, raw and gzip are separate claims. The gate
 checks the largest documented raw and gzip readings independently against the
@@ -28,11 +31,11 @@ ceiling.
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
-| Baseline JavaScript and workers, lazy packs excluded | 494 KiB | 161 KiB |
+| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 494 KiB | 161 KiB |
 | Deferred advanced capability bundle | 246 KiB | 72 KiB |
-| First-party and other non-vendor JS/workers | 1962 KiB | 613 KiB |
+| First-party and other non-vendor JS/workers | 1961 KiB | 613 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
-| Absolute installed JavaScript/worker backstop | 2646 KiB | 803 KiB |
+| Absolute installed JavaScript/worker backstop | 2645 KiB | 803 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |

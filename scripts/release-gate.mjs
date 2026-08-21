@@ -32,22 +32,26 @@ export const RELEASE_BUDGETS = Object.freeze({
   // hard per-job worker boundary, and truthful job-scoped prompt copy.
   // An earlier artifact weighed 386,146 B raw / 119,594 B gzip after exact
   // inference-route admission and post-turn naming removed the last authority
-  // races. In the candidate tree, the canonical config-free artifact measures
-  // 385,247 B raw / 119,150 B gzip. The reviewed origin-inlined variant measures
-  // 385,237 B raw / 119,147 B gzip, and the reviewed Pages variant measures
-  // 385,256 B raw / 119,143 B gzip. The Pages raw reading and largest recorded
-  // gzip reading set the documented maxima. 376 KiB raw is 232 B below the
-  // larger artifact; 117 KiB gzip would have left 612 B against the largest
-  // recorded gzip reading, below the tripwire floor. The tight 377/118 KiB
-  // steps leave at least 792 / 1,636 B.
+  // races. After charging the pre-render navigation boundary to startup and
+  // compacting duplicated UI policy, the canonical config-free artifact measures
+  // 384,694 B raw / 119,113 B gzip. The reviewed origin-inlined variant measures
+  // 384,684 B raw / 119,121 B gzip, and the reviewed Pages variant measures
+  // 384,700 B raw / 119,131 B gzip. Pages sets the current raw maximum; the
+  // earlier 119,196 B gzip reading remains the documented gzip maximum. 376 KiB
+  // raw would have left 324 B and 117 KiB gzip would have left 612 B, both below
+  // the tripwire floor. The tight 377/118 KiB steps leave 1,348 / 1,636 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
   // baseline while keeping the static workbench and its eager preloads.
   // Re-measured at 504,247 B raw / 163,264 B gzip after exact inference-route
-  // admission and post-turn naming removed the last authority races. 493 KiB
-  // raw would have left 585 B and 160 KiB gzip would have left 576 B, both
-  // below the tripwire floor. The tight 494/161 KiB steps leave 1,609 / 1,600 B.
+  // admission and post-turn naming removed the last authority races. With the
+  // pre-render controlled-navigation chunk now counted, the canonical config-free
+  // artifact measures 505,055 B raw / 163,847 B gzip. The reviewed origin-inlined
+  // variant measures 505,045 B raw / 163,841 B gzip, and the reviewed Pages
+  // variant measures 505,061 B raw / 163,855 B gzip. Pages sets both maxima.
+  // 493 KiB raw is 229 B below the artifact and 160 KiB gzip is 15 B below it.
+  // The tight 494/161 KiB steps leave 795 / 1,009 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -75,15 +79,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 1993/623 KiB steps left 1,038 / 1,653 B. Vendor code was unchanged.
   // The strict shared execution worker and bridge-drain boundary later took the
   // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
-  // unchanged. In the candidate tree, the canonical config-free artifact
-  // measures 2,007,903 B raw / 626,741 B gzip. The reviewed origin-inlined
-  // variant measures 2,007,870 B raw / 626,727 B gzip, and the reviewed Pages
-  // variant measures 2,007,941 B raw / 626,698 B gzip. The Pages raw reading
-  // and config-free gzip reading set the margins. 1961 KiB raw would have left
-  // 123 B, below the tripwire floor, and 612 KiB gzip is 53 B below the
-  // config-free artifact. The tight 1962/613 KiB steps leave at least
-  // 1,147 / 971 B.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
+  // unchanged. After charging the pre-render navigation chunk and compacting
+  // duplicated UI policy, the canonical config-free artifact measures 2,006,955 B
+  // raw / 626,588 B gzip. The reviewed origin-inlined variant measures 2,006,922 B
+  // raw / 626,533 B gzip, and the reviewed Pages variant measures 2,006,987 B raw /
+  // 626,598 B gzip. Pages sets both maxima. 1960 KiB raw would have left 53 B and
+  // 612 KiB gzip would have left 90 B, both below the tripwire floor. The tighter
+  // 1961/613 KiB steps leave 1,077 / 1,114 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1961 * 1024, gzip: 613 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -125,14 +128,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // leaving 884 / 871 B. The strict shared execution worker then took it to
   // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
   // 1,717 / 1,194 B.
-  // In the candidate tree, the canonical config-free artifact measures 2,708,551 B
-  // raw / 821,532 B gzip. The reviewed origin-inlined variant measures 2,708,518 B
-  // raw / 821,522 B gzip, and the reviewed Pages variant measures 2,708,589 B raw /
-  // 821,490 B gzip. The Pages raw reading and config-free gzip reading set the
-  // margins. The Pages artifact is 109 B over 2645 KiB raw, and the config-free
-  // artifact is 284 B over 802 KiB gzip. The tight 2646/803 KiB steps leave
-  // 915 / 740 B without granting a padding step.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
+  // After charging the pre-render navigation chunk and compacting duplicated UI
+  // policy, the canonical config-free artifact measures 2,707,603 B raw /
+  // 821,378 B gzip. The reviewed origin-inlined variant measures 2,707,570 B raw /
+  // 821,320 B gzip, and the reviewed Pages variant measures 2,707,635 B raw /
+  // 821,390 B gzip. Pages sets both maxima. The Pages artifact is 179 B over
+  // 2644 KiB raw and 142 B over 802 KiB gzip. The tighter 2645/803 KiB steps
+  // leave 845 / 882 B without granting a padding step.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2645 * 1024, gzip: 803 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -1298,6 +1301,16 @@ export function assertExactChunkStems(label, paths, expectedStems) {
 }
 
 /** Every emitted bundled JavaScript artifact has one, and only one, owner. */
+export function assertRequiredFilesAreMeasured(label, requiredFiles, measuredFiles) {
+  const measuredPaths = new Set(measuredFiles.map((file) => file.path));
+  const escapedPaths = requiredFiles
+    .map((file) => file.path)
+    .filter((path) => !measuredPaths.has(path));
+  if (escapedPaths.length > 0) {
+    throw new Error(`${label} escaped its release measurement: ${escapedPaths.join(", ")}.`);
+  }
+}
+
 export function assertExclusiveArtifactClassifications(paths, classifications) {
   const claims = new Map(paths.map((path) => [path, []]));
   for (const classification of classifications) {
@@ -1362,7 +1375,7 @@ export function assertNoSimulatedGitRuntime(files) {
  */
 export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
   Object.freeze({ label: "HTML-referenced entry JavaScript", budgets: Object.freeze(["entryJavaScript"]) }),
-  Object.freeze({ label: "Baseline JavaScript and workers, lazy packs excluded", budgets: Object.freeze(["allJavaScriptAndWorkers"]) }),
+  Object.freeze({ label: "Baseline JavaScript/workers including pre-render chunks, optional packs excluded", budgets: Object.freeze(["allJavaScriptAndWorkers"]) }),
   Object.freeze({ label: "Deferred advanced capability bundle", budgets: Object.freeze(["deferredCapabilities"]) }),
   Object.freeze({ label: "First-party and other non-vendor JS/workers", budgets: Object.freeze(["firstPartyJavaScriptAndWorkers"]) }),
   Object.freeze({ label: "Browser Git + Terminal vendor runtime aggregate", budgets: Object.freeze(["optionalVendorRuntimeAggregate"]) }),
@@ -1965,50 +1978,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   if (controlledNavigationPacks.length !== 1) {
     throw new Error(`Production must contain exactly one controlled-navigation boundary; found ${controlledNavigationPacks.length}.`);
   }
-  const baselineJavaScriptFiles = javaScriptFiles.filter(
-    (file) => !isControlledNavigationPath(file.path)
-      && !isOptionalExecutionPackPath(file.path)
-      && !isOptionalExecutionEnginePath(file.path)
-      && !isOptionalExecutionSupportPath(file.path)
-      && !isOptionalExecutionToolsPath(file.path)
-      && !isOptionalWasiPreview1WorkerPath(file.path)
-      && !isOptionalNodeExecutionPackPath(file.path)
-      && !isOptionalShellPackPath(file.path)
-      && !isOptionalShellOverlayPath(file.path)
-      && !isOptionalAgentRuntimePath(file.path)
-      && !isOptionalMultimodalPath(file.path)
-      && !isOptionalContextPolicyPath(file.path)
-      && !isOptionalAgentToolsPath(file.path)
-      && !isOptionalWorkspaceWorkbenchPath(file.path)
-      && !isOptionalWorkspaceBindingPath(file.path)
-      && !isOptionalWorkspaceCodecPath(file.path)
-      && !isOptionalSourceControlPath(file.path)
-      && !isOptionalSourceSelectionPath(file.path)
-      && !isOptionalBrowserGitPath(file.path)
-      && !isOptionalBrowserGitClientPath(file.path)
-      && !isOptionalRoutePrimitivePath(file.path)
-      && !isOptionalFileDownloadPath(file.path)
-      && !isOptionalRequestFailurePath(file.path)
-      && !isOptionalSlashCommandPath(file.path)
-      && !isOptionalSessionLibraryPath(file.path)
-      && !isOptionalSessionManifestPath(file.path)
-      && !isOptionalFavoriteOrderingPath(file.path)
-      && !isOptionalSessionForkPath(file.path)
-      && !isOptionalCapabilitiesViewPath(file.path)
-      && !isOptionalBrowserCapabilityPath(file.path)
-      && !isOptionalMemoryViewPath(file.path)
-      && !isOptionalMemorySupportPath(file.path)
-      && !isOptionalSkillsManagerViewPath(file.path)
-      && !isOptionalSkillEditorPath(file.path)
-      && !isOptionalTerminalPath(file.path)
-      && !isOptionalSemanticWorkerPath(file.path)
-      && !isOptionalInferenceProviderPath(file.path)
-      && !isOptionalPrimePackPath(file.path)
-      && !isPrimeKernelWorkerPath(file.path)
-      && !isOptionalExtensionObservationPath(file.path)
-      && !isOptionalLocalDeviceVaultPath(file.path)
-      && !isDeferredCapabilityPackPath(file.path)
-      && !isCompanionInstallScriptPath(file.path),
+  const baselineJavaScriptFiles = javaScriptFiles.filter((file) => isBaselineJavaScriptPath(file.path));
+  assertRequiredFilesAreMeasured(
+    "Required pre-render JavaScript",
+    [...initialJavaScriptFiles, ...controlledNavigationPacks],
+    baselineJavaScriptFiles,
   );
   const baselineJavaScriptMeasurement = sumMeasurements(baselineJavaScriptFiles.map((file) => measure(file.payload)));
   const vendorRuntimeFiles = [...optionalBrowserGitPacks, ...optionalTerminalPacks];
@@ -2542,6 +2516,57 @@ export function resolveOptionalSourceSelectionDelivery(dedicatedPacks, carrierPa
  */
 export function isOptionalSlashCommandPath(path) {
   return /^assets\/commands-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * JavaScript required before or at the base workbench render. Optional route,
+ * provider, execution, storage, and tool packs are excluded. The controlled
+ * navigation boundary is deliberately included: production awaits it before
+ * the first render even though Vite emits it as a dynamic chunk.
+ */
+export function isBaselineJavaScriptPath(path) {
+  return !isOptionalExecutionPackPath(path)
+    && !isOptionalExecutionEnginePath(path)
+    && !isOptionalExecutionSupportPath(path)
+    && !isOptionalExecutionToolsPath(path)
+    && !isOptionalWasiPreview1WorkerPath(path)
+    && !isOptionalNodeExecutionPackPath(path)
+    && !isOptionalShellPackPath(path)
+    && !isOptionalShellOverlayPath(path)
+    && !isOptionalAgentRuntimePath(path)
+    && !isOptionalMultimodalPath(path)
+    && !isOptionalContextPolicyPath(path)
+    && !isOptionalAgentToolsPath(path)
+    && !isOptionalWorkspaceWorkbenchPath(path)
+    && !isOptionalWorkspaceBindingPath(path)
+    && !isOptionalWorkspaceCodecPath(path)
+    && !isOptionalSourceControlPath(path)
+    && !isOptionalSourceSelectionPath(path)
+    && !isOptionalBrowserGitPath(path)
+    && !isOptionalBrowserGitClientPath(path)
+    && !isOptionalRoutePrimitivePath(path)
+    && !isOptionalFileDownloadPath(path)
+    && !isOptionalRequestFailurePath(path)
+    && !isOptionalSlashCommandPath(path)
+    && !isOptionalSessionLibraryPath(path)
+    && !isOptionalSessionManifestPath(path)
+    && !isOptionalFavoriteOrderingPath(path)
+    && !isOptionalSessionForkPath(path)
+    && !isOptionalCapabilitiesViewPath(path)
+    && !isOptionalBrowserCapabilityPath(path)
+    && !isOptionalMemoryViewPath(path)
+    && !isOptionalMemorySupportPath(path)
+    && !isOptionalSkillsManagerViewPath(path)
+    && !isOptionalSkillEditorPath(path)
+    && !isOptionalTerminalPath(path)
+    && !isOptionalSemanticWorkerPath(path)
+    && !isOptionalInferenceProviderPath(path)
+    && !isOptionalPrimePackPath(path)
+    && !isPrimeKernelWorkerPath(path)
+    && !isOptionalExtensionObservationPath(path)
+    && !isOptionalLocalDeviceVaultPath(path)
+    && !isDeferredCapabilityPackPath(path)
+    && !isCompanionInstallScriptPath(path);
 }
 
 export function isControlledNavigationPath(path) {
