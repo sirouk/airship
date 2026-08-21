@@ -11,6 +11,7 @@ import {
   inferenceBindingsMatch,
   ProfileActiveConversationConflictError,
   profileManifestResumeMismatches,
+  profileManifestResumeRefusal,
   profileOwnedSessions,
   requireProfileOwnedSession,
   resolveProfileActiveConversation,
@@ -361,6 +362,60 @@ describe("durable profile active-conversation pointer", () => {
     // The single-answer form is this list's head and nothing else, so the two
     // can never disagree about which conversation comes back.
     expect((await resolveResumableProfileConversation(journal, "research", pinned))?.id).toBe(candidates[0]?.id);
+  });
+
+  /*
+   * The substitution this function used to perform.
+   *
+   * `preferredSessionId` is the conversation a caller was asked for by name —
+   * a deep link, or the conversation a profile was last in. It was consulted
+   * only after every candidate had already been filtered by manifest
+   * compatibility, so an asked-for conversation whose pins no longer resolve
+   * was dropped silently and a different one was returned in its place. The
+   * caller then opened that other conversation under the requested
+   * conversation's own address.
+   */
+  it("never answers a named request with a different conversation", async () => {
+    let tick = 0;
+    const journal = new EventJournal(
+      new MemoryJournalBackend(),
+      () => new Date(Date.UTC(2026, 6, 28, 0, 0, tick++)).toISOString(),
+    );
+    const pinned = await manifest("Named request");
+    const asked = await journal.createSession("Asked for", await manifest("Named request", {
+      providerId: "custom-endpoint",
+    }));
+    const other = await journal.createSession("Somebody else", pinned);
+    await selectProfileActiveConversation(journal, "research", other.id);
+
+    // Without a name, the resumable shelf is unchanged.
+    expect((await resumableProfileConversationCandidates(journal, "research", pinned))
+      .map((session) => session.id)).toEqual([other.id]);
+    // Asked for by name, the answer is that conversation or nothing at all.
+    expect((await resolveResumableProfileConversation(journal, "research", pinned, asked.id))?.id)
+      .toBe(asked.id);
+    expect((await resolveResumableProfileConversation(journal, "research", pinned, "not-in-this-journal"))?.id)
+      .toBe(other.id);
+  });
+
+  /*
+   * The answer is synchronous, so it can be given in the frame the route
+   * resolves rather than after a deferred describer chunk arrives.
+   */
+  it("states why a saved conversation cannot continue, naming the pins that moved", async () => {
+    const expected = await manifest("Refusal wording");
+    const pinnedElsewhere = await manifest("Refusal wording", {
+      providerId: "custom-endpoint",
+      model: "custom/opus",
+    });
+
+    const refusal = profileManifestResumeRefusal(pinnedElsewhere, expected);
+    expect(refusal).toContain("reading a saved conversation");
+    expect(refusal).toContain("What no longer matches: provider, model.");
+    expect(refusal).toContain("Fork it to continue.");
+    // A conversation with nothing to name still gets one honest sentence.
+    expect(profileManifestResumeRefusal(expected, expected))
+      .toBe("You are reading a saved conversation. It cannot continue on this route. Fork it to continue.");
   });
 
   it("prefers the explicit selection over a more recently edited compatible conversation", async () => {

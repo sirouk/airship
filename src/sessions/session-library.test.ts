@@ -804,6 +804,39 @@ describe("SessionLibrary", () => {
     expect(absence).toContain("did not survive the reload");
     expect(absence.slice(0, absence.indexOf("Keep the URL intact"))).not.toContain("describeSessionPresentationFault");
     expect(resolver).toContain("Keep the URL intact");
+    /*
+     * And nothing on this arm waits for a chunk to say what it already knows.
+     * The measured defect was eight seconds of a wrong conversation under the
+     * right address while `loadDeferredCapabilities` was fetched to word the
+     * refusal.
+     */
+    expect(resolver).not.toContain("loadDeferredCapabilities()");
+  });
+
+  /*
+   * Reading a saved conversation does not require being able to continue it,
+   * and the sentence that says so has to arrive with the transcript rather than
+   * after a deferred describer.
+   */
+  it("opens a conversation it cannot continue and offers one reachable remedy", () => {
+    const source = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
+    // Synchronous, pure, and computed before the audit that follows it.
+    expect(source).toContain("profileManifestResumeRefusal(");
+    expect(source).toContain("if (held) setComposerNotice(held);");
+    // A conversation opened only for reading is not selected as the profile's
+    // durable active conversation.
+    expect(source).toContain("const selected = held ? audited.session : await selectSessionForActivation(audited.session);");
+    // Send genuinely refuses, and says so in the name a disabled control keeps.
+    expect(source).toContain("|| Boolean(conversationHeld)");
+    expect(source).toContain('"Send unavailable: this conversation cannot continue here"');
+    /*
+     * The remedy is one press, and it carries `small-button` — the class
+     * `tokens.css` floors to `--touch-target` under `(pointer: coarse)`. A
+     * control a finger has to find may not be smaller than that, and this is
+     * the only new control on the composer band.
+     */
+    expect(source).toContain('class="small-button"');
+    expect(source).toContain("forkHeldConversation()");
   });
 
   it("loads a stable bounded detail snapshot with a compatibility decision", async () => {

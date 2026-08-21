@@ -408,9 +408,17 @@ export function SessionsView({
    * y=791, under the bottom tab bar. A person came here to get back into a
    * conversation and the list would not let them.
    *
-   * Selection is preserved as the audit gesture; this is the resume verb, one
-   * press from every row. A refusal selects the row instead of failing
-   * silently, so the pane that explains why is what appears.
+   * Selection is preserved as the audit gesture; this is the open verb, one
+   * press from every row. A journal this runtime genuinely cannot read selects
+   * the row instead of failing silently, so the pane that explains why appears.
+   *
+   * Open opens. It used to stop here whenever the conversation could not be
+   * *continued* — the row's one-press verb answered "Fork required" by staying
+   * on this route with nothing new on screen, which is the same conversation
+   * being withheld from the person who asked for it by name. Reading a saved
+   * conversation does not require being able to continue it: the host opens it
+   * at its own address and states there, beside the composer, that it cannot go
+   * on and why.
    */
   async function openSession(sessionId: string) {
     if (busy) return;
@@ -422,15 +430,9 @@ export function SessionsView({
     setBusy(true);
     setDetailError(undefined);
     try {
-      const fresh = inspectSession
+      await onResume(inspectSession
         ? await inspectSession(sessionId)
-        : await library.inspect(sessionId, runtime);
-      if (fresh.compatibility?.action !== "resume") {
-        setSelectedId(sessionId);
-        setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");
-        return;
-      }
-      await onResume(fresh);
+        : await library.inspect(sessionId, runtime));
     } catch (caught) {
       setSelectedId(sessionId);
       setDetailError(errorMessage(caught));

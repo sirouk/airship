@@ -21,9 +21,20 @@
   margin: 0;
 }
 
+/*
+ * A column, not two named rows.
+ *
+ * `grid-template-rows: auto minmax(0, 1fr)` meant the second child took the
+ * flexible row and anything after it fell into an implicit one. When the folder
+ * tier arrived above the workbench, the workbench became that third child and
+ * was squeezed to nothing on a short viewport — measured on an iPhone-class
+ * WebKit viewport, where the file tree resolved but reported hidden. A column
+ * says what this route actually is: chrome above, one surface that takes the
+ * rest, however many rows of chrome there turn out to be.
+ */
 .editor-route {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -50,6 +61,7 @@
 .editor-route__panel {
   position: relative;
   display: grid;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;

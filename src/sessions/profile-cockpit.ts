@@ -241,28 +241,40 @@ export async function resumableProfileConversationCandidates(
   signal?: AbortSignal,
 ): Promise<readonly SessionRecord[]> {
   const pointer = await resolveProfileActiveConversation(journal, profileId, signal);
-  const sessions = (await journal.listSessions(signal)).filter((session) =>
+  const owned = (await journal.listSessions(signal)).filter((session) =>
     session.manifest.profile?.profileId === profileId
-    && resumableProfileManifestMatches(session.manifest, expectedManifest)
   );
   signal?.throwIfAborted();
-  const byRecency = sessions.sort((left, right) =>
-    Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
-  );
-  // The durable pointer, then the page-local hint, then recency — the same
-  // precedence the single-answer form has always applied, expressed as an
-  // order over the whole set rather than as three early returns.
-  const leadId = pointer.state === "selected"
+  /*
+   * A conversation that was asked for by name is answered about, never
+   * replaced.
+   *
+   * `preferredSessionId` used to be consulted *after* the compatibility filter
+   * below had already discarded it, so a request for one conversation returned
+   * a different one — and the caller then opened that other conversation under
+   * the requested conversation's own address. Measured on a return the next
+   * day: the address bar named the conversation the person asked for, an empty
+   * conversation was on screen, and nothing said the request had not been
+   * honoured. Whether the asked-for conversation can still run here is the
+   * caller's question to answer, at that conversation, in its own words.
+   */
+  const requested = preferredSessionId
+    ? owned.find((session) => session.id === preferredSessionId)
+    : undefined;
+  if (requested) return Object.freeze([requested]);
+  const byRecency = owned
+    .filter((session) => resumableProfileManifestMatches(session.manifest, expectedManifest))
+    .sort((left, right) =>
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
+    );
+  // With nothing asked for by name, the durable pointer leads, then recency.
+  const lead = pointer.state === "selected"
       && pointer.session
       && resumableProfileManifestMatches(pointer.session.manifest, expectedManifest)
-    ? pointer.session.id
-    : pointer.state === "no-selection" && preferredSessionId
-      && byRecency.some((session) => session.id === preferredSessionId)
-      ? preferredSessionId
-      : undefined;
-  const lead = leadId === pointer.session?.id ? pointer.session : byRecency.find((session) => session.id === leadId);
+    ? pointer.session
+    : undefined;
   return Object.freeze(lead
-    ? [lead, ...byRecency.filter((session) => session.id !== leadId)]
+    ? [lead, ...byRecency.filter((session) => session.id !== lead.id)]
     : byRecency);
 }
 
@@ -355,6 +367,28 @@ function inferenceRouteExceptModelMatches(
     && actual.transportId === expected.transportId
     && actual.protocol === expected.protocol
   );
+}
+
+/**
+ * Why a saved conversation cannot continue on the route in front of it, in the
+ * same frame the route resolved.
+ *
+ * The codes below are pure and synchronous, so this answer always was. The
+ * resume path used to wait for a deferred describer chunk to say it — measured
+ * at eight seconds on a cold return, during which the address bar named one
+ * conversation, another was on screen, and the live region reported an audited
+ * session resumed. Reading is not continuing: this sentence states that the
+ * history is intact and readable, names the pins that moved, and offers the one
+ * remedy that can work.
+ */
+export function profileManifestResumeRefusal(
+  actual: SessionManifest,
+  expected: SessionManifest,
+): string {
+  const mismatches = profileManifestResumeMismatches(actual, expected);
+  return "You are reading a saved conversation. It cannot continue on this route."
+    + (mismatches.length ? ` What no longer matches: ${mismatches.join(", ").replace(/-/gu, " ")}.` : "")
+    + " Fork it to continue.";
 }
 
 /** Credential-free mismatch codes suitable for diagnostics and tests. */

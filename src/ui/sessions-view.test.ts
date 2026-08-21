@@ -311,9 +311,18 @@ describe("conversation library below the full-width toolbar", () => {
     expect(source).toContain("onClick={() => void openSession(item.id)}");
     expect(source).toContain("onDblClick={() => void openSession(item.id)}");
     expect(source).toContain('if (event.key === "Enter" && item.id === selectedId) {');
-    // A refusal selects the row so the pane that explains it is what appears,
-    // rather than failing silently at the button that was pressed.
-    expect(source).toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
+    /*
+     * Open opens. Every inspected conversation is handed to the host, whatever
+     * its continuation verdict: a conversation that cannot be *continued* on
+     * this route is still readable, and refusing here left the row's one-press
+     * verb doing nothing visible on the route the person was already on. Only a
+     * journal this runtime could not read at all selects the row and explains
+     * itself in the pane.
+     */
+    expect(source).toContain("await onResume(inspectSession");
+    expect(source).not.toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
+    expect(source.slice(source.indexOf("async function openSession"), source.indexOf("async function resumeSelected")))
+      .toContain("setSelectedId(sessionId);\n      setDetailError(errorMessage(caught));");
     expect(styles).toContain(".session-library-open {");
   });
 
