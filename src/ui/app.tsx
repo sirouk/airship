@@ -5090,14 +5090,32 @@ export function App() {
     ) return;
     const turnId = `local-command-${randomUuid()}`;
     const operationId = `tool-${randomUuid()}`;
+    const userId = randomUuid();
     const assistantId = randomUuid();
+    /*
+     * One turn has one disposition. The prompt row used to be written
+     * "completed" the moment it was appended and never revised, so a `/write`
+     * that failed rendered "COMPLETED TURN" above "FAILED TURN" for the same
+     * exchange — and the durable path (session-message-presentation.ts) gives
+     * both rows one status, so a reload silently disagreed with the live view.
+     */
+    const settleTurn = (
+      turnStatus: "completed" | "failed" | "cancelled",
+      assistant: (message: UiMessage) => UiMessage,
+    ) => {
+      setMessages((current) => current.map((message) => {
+        if (message.id === userId) return { ...message, history: { turnStatus, providerContext: "excluded" as const } };
+        if (message.id !== assistantId) return message;
+        return assistant(message);
+      }));
+    };
     const controller = new AbortController();
     activeTurns.current.set(commandSessionId, controller);
     setSessionBusy(commandSessionId, true);
     setRuntimeStatus(`Reviewing local /${plan.command.name}`);
     setMessages((current) => [
       ...current,
-      { id: randomUuid(), role: "user", content: source, history: { turnStatus: "completed", providerContext: "excluded" } },
+      { id: userId, role: "user", content: source, history: { turnStatus: "incomplete", providerContext: "excluded" } },
       { id: assistantId, role: "assistant", content: "", status: "Awaiting local tool policy", history: { turnStatus: "incomplete", providerContext: "excluded" } },
     ]);
     const append = async (drafts: Parameters<EventJournal["append"]>[1]) => {
@@ -5158,9 +5176,13 @@ export function App() {
         // three: no local command's parameters reach a model before it runs.
         const denied = `Permission denied for local /${plan.command.name}. No tool effect ran, and nothing was sent to the model.`;
         await append([{ type: "local.command.denied", turnId, operationId, payload: { content: denied, toolName: plan.toolName, approval: provenance ?? null } }]);
-        setMessages((current) => current.map((message) => message.id === assistantId
-          ? { ...message, content: denied, status: undefined, error: true, history: { turnStatus: "completed", providerContext: "excluded" } }
-          : message));
+        settleTurn("completed", (message) => ({
+          ...message,
+          content: denied,
+          status: undefined,
+          error: true,
+          history: { turnStatus: "completed", providerContext: "excluded" },
+        }));
         narrateTurn(localCommandAnnouncement(plan.command.name, "denied", "No tool effect ran, and nothing was sent to the model."));
         return;
       }
@@ -5174,9 +5196,16 @@ export function App() {
         payload: { content: result.content, toolName: plan.toolName, isError: result.isError ?? false, metadata: result.metadata ?? null },
       }]);
       if (activeSessionIdentity.current === commandSessionId) {
-        setMessages((current) => current.map((message) => message.id === assistantId
-          ? { ...message, content: boundedTranscriptContent(result.content), status: "Local result · excluded from model context", error: result.isError, history: { turnStatus: "completed", providerContext: "excluded" } }
-          : message));
+        settleTurn(result.isError ? "failed" : "completed", (message) => ({
+          ...message,
+          content: boundedTranscriptContent(result.content),
+          status: "Local result · excluded from model context",
+          error: result.isError,
+          history: {
+            turnStatus: result.isError ? "failed" : "completed",
+            providerContext: "excluded",
+          },
+        }));
         await refreshWorkspacePresentation(commandRuntime, commandProfileId);
         // No longer mode-dependent: a local command makes no provider request
         // under any approval mode, so the line that used to name a "separate
@@ -5209,9 +5238,13 @@ export function App() {
         // Preserve the original review/execute failure when journal completion also fails.
       }
       if (activeSessionIdentity.current === commandSessionId) {
-        setMessages((current) => current.map((item) => item.id === assistantId
-          ? { ...item, content: message, status: undefined, error: true, history: { turnStatus: cancelled ? "cancelled" : "failed", providerContext: "excluded" } }
-          : item));
+        settleTurn(cancelled ? "cancelled" : "failed", (item) => ({
+          ...item,
+          content: message,
+          status: undefined,
+          error: true,
+          history: { turnStatus: cancelled ? "cancelled" : "failed", providerContext: "excluded" },
+        }));
         narrateTurn(localCommandAnnouncement(plan.command.name, cancelled ? "stopped" : "failed", message));
         setRuntimeStatus(cancelled ? "Local command stopped" : "Local command failed safely");
       }
@@ -5246,10 +5279,13 @@ export function App() {
   }
 
   function appendLocalExchange(source: string, response: string, error = false): void {
+    // One turn, one disposition: the prompt row carried a hardcoded "completed"
+    // while the answer beside it could say "failed".
+    const turnStatus = error ? "failed" : "completed";
     setMessages((current) => [
       ...current,
-      { id: randomUuid(), role: "user", content: source, history: { turnStatus: "completed", providerContext: "excluded" } },
-      { id: randomUuid(), role: "assistant", content: boundedTranscriptContent(response), error, status: "Local command · excluded from model context", history: { turnStatus: error ? "failed" : "completed", providerContext: "excluded" } },
+      { id: randomUuid(), role: "user", content: source, history: { turnStatus, providerContext: "excluded" } },
+      { id: randomUuid(), role: "assistant", content: boundedTranscriptContent(response), error, status: "Local command · excluded from model context", history: { turnStatus, providerContext: "excluded" } },
     ]);
     // Every built-in command lands here, and every one of them was silent: a
     // rejected `/nonsense-command` and a full `/help` listing produced the same
@@ -8701,20 +8737,29 @@ export function App() {
         Hiding the line meant the phone answered "what is happening?" with
         nothing ("Opening after turn", the policy-change scope sentence, the
         vault notices — all invisible at exactly the width multi-tasking
-        matters most). This is the same sentence, the same live region, the
-        same semantics; only the place it stands changes. The two are
-        display-exclusives, so a reader never gets it twice.
+        matters most). This is the same sentence in a different place, and it is
+        deliberately NOT a live region.
+
+        It used to carry `role="status" aria-live="polite"`, on the reasoning
+        that it and the topbar line are display-exclusives — but the topbar line
+        has no live semantics at all. The pair that actually speaks is the
+        sr-only mirror above and this band, and that mirror is what holds an
+        ambient kernel sentence back for TURN_NARRATION_HOLD_MS so it cannot
+        land on top of the narration about the answer. Announcing here bypassed
+        that hold: measured on one phone turn, the narration said "Airship's
+        turn ended" at t=1608ms and this band said "Local kernel ready" at
+        t=1611ms. The mirror renders at every width, so removing the live
+        semantics here loses no announcement.
       */}
       {/*
-        `data-empty` collapses the band without unmounting it. The element has
-        to stay in the accessibility tree for `aria-live` to announce the
-        sentence when one arrives — `display: none` would take it out and the
-        announcement with it — but a phone should not spend 34px of its shortest
+        `data-empty` collapses the band without unmounting it, so the sentence
+        can appear and disappear without the surrounding grid reflowing, and a
+        phone does not spend 34px of its shortest
         dimension on a status that says nothing. It reads as a stripe of dead
         `--ground` under the topbar, which is exactly what the nav band's own
         keyboard rule two blocks down exists to prevent for the same reason.
       */}
-      <div class="runtime-line runtime-line--phone" data-empty={runtimeStatus ? undefined : "true"} role="status" aria-live="polite"><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
+      <div class="runtime-line runtime-line--phone" data-empty={runtimeStatus ? undefined : "true"} title={runtimeStatus}><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></div>
 
       <Rail
         view={view}

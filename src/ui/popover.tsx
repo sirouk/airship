@@ -668,7 +668,17 @@ export function Popover({
             Done
           </button>
         </div>
-        <div class="popover__body">{children}</div>
+        {/*
+          * A scroll container that is not a tab stop is content a keyboard
+          * cannot reach: `.popover__body` is `overflow-y: auto`, and on the Run
+          * details receipt it holds 572px of panel in a 235px box, so Request
+          * digest, Response digest and Receipt format existed only for a mouse
+          * wheel. The focus trap parked Tab on Done forever, and ArrowDown,
+          * PageDown and End all left scrollTop at 0. `tabIndex={0}` makes the
+          * region focusable, which is what gives those keys a scroller to act
+          * on; `FOCUSABLE_SELECTOR` then includes it in the trap.
+          */}
+        <div class="popover__body" tabIndex={0}>{children}</div>
       </div>
     </div>
   );
