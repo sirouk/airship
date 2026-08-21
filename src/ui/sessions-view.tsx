@@ -744,6 +744,12 @@ export function SessionsView({
                 title: item.title,
                 events: item.headSequence,
               }))}
+              /* An empty list from a read still in flight is not an empty
+                 journal, and the panel cannot tell the two apart from the
+                 rows alone. A read that failed reports itself in this route's
+                 own alert above, and counts as settled here rather than
+                 leaving the panel claiming to still be reading. */
+              conversationsSettled={!loadingList}
               profileId={scopeProfileId}
               profileName={scopeProfileName}
               workspace={bundleSources.workspace}

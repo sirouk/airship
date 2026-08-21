@@ -30,6 +30,16 @@ export type WorkBundleViewProps = Readonly<{
   /** The write side: what an import merges into, through `migrateJournalState`. */
   target: JournalBackend;
   conversations: readonly WorkBundleRow[];
+  /**
+   * Whether `conversations` is a read that landed, rather than one in flight.
+   *
+   * This panel is fetched lazily and the route's journal read is not, so an
+   * empty list here means either "there are none" or "not yet" — and only the
+   * caller can tell those apart. It is the sentence under the list that needs
+   * it; the selection rule above does not, because "all" is kept as a rule and
+   * is therefore true whenever it is read.
+   */
+  conversationsSettled: boolean;
   profileId: string;
   profileName: string;
   /** The active profile's workspace, which is where memory.json lives. */
@@ -103,6 +113,7 @@ export function WorkBundleView({
   journal,
   target,
   conversations,
+  conversationsSettled,
   profileId,
   profileName,
   workspace,
@@ -117,7 +128,8 @@ export function WorkBundleView({
    * Seeding the state with the list at mount looked equivalent and was not: a
    * `useState` initializer runs once, so opening this panel while the journal
    * read was still in flight left every row unchecked and the count reading
-   * "0 of 12" over a full list.
+   * "0 of 12" over a full list. `Select all` restores this value for the same
+   * reason: it is a rule that stays true, not a copy that goes stale.
    */
   const [chosen, setChosen] = useState<readonly string[]>();
   const selected = chosen ?? conversations.map((row) => row.id);
@@ -279,9 +291,32 @@ export function WorkBundleView({
           <fieldset class="work-bundle__set">
             <legend class="eyebrow">Conversations ({String(selected.length)} of {String(conversations.length)})</legend>
             <div class="work-bundle__actions">
-              <button class="small-button" type="button" onClick={() => setChosen(conversations.map((row) => row.id))}>
+              {/*
+               * "All" is a rule this panel keeps, not a list it copies.
+               *
+               * Copying was the defect: the handler committed the rows the
+               * panel could see at the instant of the press, and this panel is
+               * a lazily fetched chunk while the sessions route's journal read
+               * is not — so on a warm cache the panel is on screen first.
+               * Pressed in that window it committed the empty list: the rows
+               * then arrived unticked, the legend read "Conversations (0 of 1)",
+               * "Write bundle file" stayed disabled, and the control had done
+               * the exact opposite of its label without saying anything. Found
+               * as an intermittent failure of
+               * `e2e/bundle-grants-no-approval-mode.spec.ts`, which is the same
+               * race a person hits.
+               *
+               * Restoring `undefined` restores "everything, because nothing has
+               * been unpicked yet", so the press cannot be contradicted by a
+               * later render: rows that arrive after it arrive selected, which
+               * is what the label promised.
+               */}
+              <button class="small-button" type="button" onClick={() => setChosen(undefined)}>
                 Select all
               </button>
+              {/* Clear commits the empty list on purpose. Empty is what it
+                  means, so rows arriving after the press arrive unticked —
+                  the same answer later, not its opposite. */}
               <button class="small-button" type="button" onClick={() => setChosen([])}>Clear</button>
             </div>
             <ul class="work-bundle__list">
@@ -299,7 +334,16 @@ export function WorkBundleView({
                 </li>
               ))}
             </ul>
-            {conversations.length === 0 ? <p class="work-bundle__note">There is nothing here to take out yet.</p> : null}
+            {/* An unfinished read is not an empty journal, and this sentence
+                used to claim it was: opened during the read it said there was
+                nothing to take out, over a list that was still arriving. */}
+            {conversations.length === 0 ? (
+              <p class="work-bundle__note">
+                {conversationsSettled
+                  ? "There is nothing here to take out yet."
+                  : "Still reading the conversations on this device."}
+              </p>
+            ) : null}
           </fieldset>
 
           <label class="work-bundle__check work-bundle__check--wide">

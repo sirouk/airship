@@ -217,3 +217,43 @@ describe("a plan is about one journal, and says so when that journal is replaced
     expect(runImport.indexOf("WORK_BUNDLE_AUTHORITY_UNSETTLED")).toBeLessThan(runImport.indexOf("WORK_BUNDLE_PLAN_SUPERSEDED"));
   });
 });
+
+/*
+ * P1. "Select all" is this panel's one claim about the whole list, and it was
+ * the one control in it that could not keep that claim.
+ *
+ * Found by a documentation auditor as an intermittent failure of
+ * `e2e/bundle-grants-no-approval-mode.spec.ts`, and reproduced deterministically
+ * in `e2e/move-work-select-all.spec.ts`: the handler committed
+ * `conversations.map(...)` — the rows visible at the instant of the press. This
+ * panel is a lazily fetched chunk and the sessions route's journal read is not,
+ * so on a warm cache the panel is on screen while the read is still in flight.
+ * Pressed there, "Select all" committed the empty list; the rows then arrived
+ * unticked, the legend read "Conversations (0 of 1)", "Write bundle file" stayed
+ * disabled, and nothing said why.
+ *
+ * These are guards on the shape, in the fast suite. The proof that the race is
+ * gone is the browser spec, which presses the control against a held journal
+ * read and then releases it.
+ */
+describe("select all means all, whenever it is pressed", () => {
+  const source = readFileSync(new URL("./work-bundle-view.tsx", import.meta.url), "utf8");
+
+  it("restores the everything rule rather than copying the rows on screen", () => {
+    expect(source).toContain("onClick={() => setChosen(undefined)}");
+    // The copy is the defect. No spelling of it may come back.
+    expect(source).not.toContain("setChosen(conversations.map(");
+    // `undefined` is only "everything" because this line reads it that way.
+    expect(source).toContain("const selected = chosen ?? conversations.map((row) => row.id);");
+  });
+
+  it("leaves Clear committing the empty list, because empty is what Clear means", () => {
+    expect(source).toContain("onClick={() => setChosen([])}");
+  });
+
+  it("does not report a read still in flight as an empty journal", () => {
+    expect(source).toContain("conversationsSettled: boolean;");
+    expect(source).toContain('? "There is nothing here to take out yet."');
+    expect(source).toContain(': "Still reading the conversations on this device."');
+  });
+});
