@@ -57,9 +57,14 @@ than looser enforcement: every ceiling states a reading, every reading names
 the reviewed variant that reproduces it, a ceiling above three headrooms is
 refused, and a reading that grows by a quarter (or 16 KiB, whichever is
 smaller, never less than a kilobyte) has to be accompanied by a sentence naming
-what was added. Every budget records a previous reading as two numbers. There is
-no "nothing recorded before this pass" form: it silenced the alarm for
-twenty-six of fifty-nine budgets, and one line of it silenced a 16,983 B jump.
+what was added. Every budget records a previous reading as two numbers. The
+"nothing recorded before this pass" form is gone — it silenced the alarm for
+twenty-six of fifty-nine budgets, and one line of it silenced a 16,983 B jump —
+but the two numbers that replaced it are still a declaration this script cannot
+verify against anything. Retyping the previous reading to the new one silences
+any jump, measurably: `+20,000 B raw` on `optionalExecutionTools` is refused
+with the line left alone and accepted with it retyped. What reviews that line is
+the diff, not the gate.
 
 ## Reviewed build variants
 

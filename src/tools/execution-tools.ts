@@ -12,7 +12,7 @@ import {
 } from "../execution/runtime-registry";
 import type { ToolRegistry } from "./registry";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
+import { isLocalFolderMountPath, isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
 import { sha256 } from "../core/hash";
 import { createWasiPreview1Adapter } from "../execution/wasi-preview1-pack";
 import { createAirshipShellAdapter } from "../execution/shell/adapter";
@@ -1080,6 +1080,8 @@ async function capturePythonWorkspace(
   const entries = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    // A folder attached from this device is not workspace state; see `pythonEgressRefusal`.
+    .filter(({ path }) => !isLocalFolderMountPath(path))
     .filter(({ path }) => !workspaceRelativeSegments(path, root).some((segment) => PYTHON_WORKSPACE_EXCLUDED_SEGMENTS.has(segment)));
   if (entries.length > MAX_PYTHON_WORKSPACE_FILES) {
     throw new Error(`Python workspace mount exceeds ${MAX_PYTHON_WORKSPACE_FILES} files.`);
@@ -1110,6 +1112,20 @@ function workspaceRelativeSegments(path: string, root: string): string[] {
 }
 
 /**
+ * Same rule, same reason as `ATTACHED_FOLDER_EXCLUSION` in the shell pack.
+ *
+ * Pyodide is the fourth snapshot/write-back tier, and it was the one the
+ * execution fence missed: `execute_code` is reviewed on arguments that name
+ * `/workspace` and never the folder, so `namesAttachedFolder` cannot see it and
+ * Full Access asked nobody. Measured before this: `mountedFiles: 2` carried the
+ * person's own file into the interpreter, `writtenPaths` replaced it on disk,
+ * and a file the job did not return was deleted in place.
+ */
+const ATTACHED_FOLDER_EXCLUSION =
+  "This runtime does not carry the folder you attached from this device: it copies files and writes them back with"
+  + " no approval request, and that folder is written in place.";
+
+/**
  * Egress twin of the mount filter above. WASI already refuses to adopt
  * control-plane paths; Python must not be the one runtime through which
  * a job can write the browser Git or terminal control plane.
@@ -1118,6 +1134,7 @@ function workspaceRelativeSegments(path: string, root: string): string[] {
  * destroy a completed run's exit code and streams.
  */
 function pythonEgressRefusal(path: string, root: string): string | undefined {
+  if (isLocalFolderMountPath(path)) return ATTACHED_FOLDER_EXCLUSION;
   if (isWorkspaceControlPlanePath(path)) return "Python workspace excludes control-plane paths.";
   const excluded = workspaceRelativeSegments(path, root).find((segment) => PYTHON_WORKSPACE_EXCLUDED_SEGMENTS.has(segment));
   return excluded ? `Python workspace excludes the ${excluded} path segment.` : undefined;

@@ -162,7 +162,36 @@ export function adoptionCarriedNote(carried: AdoptionCarriedWork | undefined): s
  */
 export async function migrateJournalState(source: JournalStateSource, target: JournalBackend): Promise<void> {
   const sessions = await source.listSessions();
+  const refused: string[] = [];
   for (const session of sessions) {
+    try {
+      await migrateOneSession(source, target, session);
+    } catch (error) {
+      /*
+       * One conversation may not decide the fate of the others.
+       *
+       * The refusals here are permanent by design — a genuinely different
+       * record under the same id, a bundle imported on two devices at two
+       * times — and this loop used to throw out of the whole adoption at the
+       * first one. Every conversation after it in `listSessions` order was
+       * abandoned, every retry stopped at the same conversation, and
+       * `src/ui/app.tsx` never reached the authority swap, so the Vault could
+       * not be adopted at all. Each session is now finished on its own and the
+       * refusals are reported once, after the ones that can land have landed.
+       */
+      refused.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (refused.length === 1) throw new Error(refused[0]);
+  if (refused.length > 1) throw new Error(`Some conversations were refused:\n- ${refused.join("\n- ")}`);
+}
+
+async function migrateOneSession(
+  source: JournalStateSource,
+  target: JournalBackend,
+  session: SessionRecord,
+): Promise<void> {
+  {
     const events = await source.readEvents(session.id);
     const fresh = await source.getSession(session.id);
     const eventHeadMatches = session.headSequence === 0
@@ -204,7 +233,7 @@ export async function migrateJournalState(source: JournalStateSource, target: Jo
       if (!sameSessionRecord(existing, finished ? session : replayedRecord(session, events.slice(0, replayed), existing))) {
         throw new Error(`Encrypted vault contains a conflicting session ${session.id}.`);
       }
-      if (finished) continue;
+      if (finished) return;
       landed = existing;
     } else {
       const portableSession = structuredClone(session);

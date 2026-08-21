@@ -2777,6 +2777,14 @@ const REVIEWED_READING = /Reviewed reading \(([^)]+)\): (\d[\d,]*) B raw \/ (\d[
  * retyping that one line, which was demonstrated on `optionalAgentTools` at
  * +16,983 B raw with a green gate. A ledger with a documented escape hatch is
  * not a ledger, so every budget now records two numbers.
+ *
+ * What that does not buy: the two numbers are still self-declared, and nothing
+ * here can check them against the tree they claim to describe. Retyping this
+ * line to the current reading silences any jump — measured, +20,000 B raw on
+ * `optionalExecutionTools` is refused with the line left alone and accepted
+ * with it retyped. The alarm is a prompt to write a sentence, and the diff is
+ * what reviews the sentence. Say that plainly rather than let the comment above
+ * read as a guarantee this file cannot make.
  */
 const PREVIOUS_READING = /Previous reading: (\d[\d,]*) B raw \/ (\d[\d,]*) B gzip\./u;
 /** `Grew <n> B raw in one change: <what was added>.` */

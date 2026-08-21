@@ -261,9 +261,9 @@ const STATES_A_GOTO_NEVER_REACHES = [
       // measure a different browser profile than the one `openRoute` opened.
       const route = (hash: string) => `${page.url().split("#")[0]!}#${hash}`;
       await page.goto(route("connection"));
-      // Providers renders no `h1`, so the route's own card is what says it is
-      // mounted. Waiting for a heading here waits for something that never
-      // arrives.
+      // Providers has an `h1` now, but this state is entered from `chat`, so
+      // the route's own card is still the signal that the deferred chunk
+      // arrived rather than the heading of the route we came from.
       const ollama = page.locator('.provider-setup-card.local[data-provider="ollama"]');
       await expect(ollama).toBeVisible({ timeout: 20_000 });
       await ollama.getByRole("button", { name: "Check Ollama", exact: true }).click();
