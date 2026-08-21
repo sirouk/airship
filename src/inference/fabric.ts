@@ -12,9 +12,9 @@ import {
 import { createBrowserLocalModelProvider } from "./local/provider";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
   OpenAiCompatibleBrowserTransport,
-  XaiBrowserTransport,
+  ResponsesBrowserTransport,
+  type BrowserCloudTransportOptions,
 } from "./providers/browser-cloud";
 import { InferenceConnectionRegistry } from "./providers/connection-registry";
 import {
@@ -61,7 +61,7 @@ type Listener = () => void;
 export type BrowserInferenceFabricOptions = Readonly<{
   cloudTransportFactory?: (
     provider: InferenceProviderDescriptor,
-    options: ConstructorParameters<typeof OpenAiBrowserTransport>[0],
+    options: BrowserCloudTransportOptions,
   ) => BrowserCloudCatalogTransport;
   localProviderFactory?: (
     kind: LocalModelProviderKind,
@@ -785,25 +785,34 @@ class AuthorityBoundInferenceTransport implements InferenceTransport {
 }
 
 type CloudCatalogTransport =
-  | OpenAiBrowserTransport
+  | ResponsesBrowserTransport
   | AnthropicBrowserTransport
-  | XaiBrowserTransport
   | OpenAiCompatibleBrowserTransport;
 
+/**
+ * The wire a descriptor declares decides the transport. Nothing here reads a
+ * provider ID.
+ *
+ * This used to `switch (provider.id)` over openai/anthropic/xai, which made
+ * three names the only ones the canonical seam could serve: `normalizeProvider`
+ * accepted a user descriptor declaring `openai-responses` or
+ * `anthropic-messages`, and then this function refused it. Each transport now
+ * reads its origin, catalog and wire details from the descriptor it is given,
+ * so a reviewed first-party provider and a descriptor someone wrote this
+ * morning take the identical path.
+ */
 function cloudTransport(
   provider: InferenceProviderDescriptor,
-  options: ConstructorParameters<typeof OpenAiBrowserTransport>[0],
+  options: BrowserCloudTransportOptions,
 ): CloudCatalogTransport {
-  switch (provider.id) {
-    case "openai": return new OpenAiBrowserTransport(options);
-    case "anthropic": return new AnthropicBrowserTransport(options);
-    case "xai": return new XaiBrowserTransport(options);
+  if (provider.transportBoundary !== "provider-tls") {
+    throw new Error(`${provider.label} has no browser-cloud transport.`);
   }
-  if (
-    provider.transportBoundary === "provider-tls"
-    && (provider.protocol === "openai-compatible" || provider.protocol === "openai-chat-completions")
-  ) {
-    return new OpenAiCompatibleBrowserTransport(provider, options);
+  switch (provider.protocol) {
+    case "openai-responses": return new ResponsesBrowserTransport(provider, options);
+    case "anthropic-messages": return new AnthropicBrowserTransport(provider, options);
+    case "openai-compatible":
+    case "openai-chat-completions": return new OpenAiCompatibleBrowserTransport(provider, options);
   }
   throw new Error(`${provider.label} has no browser-cloud transport.`);
 }

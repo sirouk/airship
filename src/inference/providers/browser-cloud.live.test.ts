@@ -12,12 +12,12 @@
  * Each vendor is skipped unless its key is supplied through the environment;
  * the credential is never written to a file, fixture, or assertion message.
  */
+import { ANTHROPIC_PROVIDER, OPENAI_PROVIDER, XAI_PROVIDER } from "./official-providers";
 import { describe, expect, it } from "vitest";
 import type { InferenceEvent, InferenceRequest, ToolDefinition } from "../../core/contracts";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
-  XaiBrowserTransport,
+  ResponsesBrowserTransport,
 } from "./browser-cloud";
 
 const OPENAI_KEY = process.env.AIRSHIP_OPENAI_API_KEY?.trim();
@@ -93,8 +93,8 @@ describeXai("live xAI wire contract", () => {
   }, TIMEOUT_MS);
 });
 
-function openAi(): OpenAiBrowserTransport {
-  return new OpenAiBrowserTransport({
+function openAi(): ResponsesBrowserTransport {
+  return new ResponsesBrowserTransport(OPENAI_PROVIDER, {
     connectionId: "openai-live-gate",
     connectionGeneration: 1,
     getApiKey: () => OPENAI_KEY!,
@@ -102,15 +102,15 @@ function openAi(): OpenAiBrowserTransport {
 }
 
 function anthropic(): AnthropicBrowserTransport {
-  return new AnthropicBrowserTransport({
+  return new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
     connectionId: "anthropic-live-gate",
     connectionGeneration: 1,
     getApiKey: () => ANTHROPIC_KEY!,
   });
 }
 
-function xai(): XaiBrowserTransport {
-  return new XaiBrowserTransport({
+function xai(): ResponsesBrowserTransport {
+  return new ResponsesBrowserTransport(XAI_PROVIDER, {
     connectionId: "xai-live-gate",
     connectionGeneration: 1,
     getApiKey: () => XAI_KEY!,

@@ -1,3 +1,4 @@
+import { ANTHROPIC_PROVIDER, OPENAI_PROVIDER, XAI_PROVIDER } from "./official-providers";
 import { describe, expect, it, vi } from "vitest";
 import type { InferenceRequest } from "../../core/contracts";
 import {
@@ -8,9 +9,8 @@ import {
 import type { BridgeRequestMessage } from "../bridge/protocol";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
+  ResponsesBrowserTransport,
   ProviderTransportError,
-  XaiBrowserTransport,
   type ProviderFetch,
 } from "./browser-cloud";
 import { InferenceConnectionRegistry } from "./connection-registry";
@@ -206,7 +206,7 @@ describe("browser cloud transports and the extension bridge", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-connection",
       connectionGeneration: 1,
       connections: connections("anthropic", "api-key"),
@@ -224,7 +224,7 @@ describe("browser cloud transports and the extension bridge", () => {
 
   it("reports Anthropic OAuth as typed unavailable without retaining relay prose", async () => {
     const fetch = vi.fn<ProviderFetch>(async () => new Response("{}", { status: 200 }));
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-connection",
       connectionGeneration: 1,
       connections: connections("anthropic", "oauth"),
@@ -255,7 +255,7 @@ describe("browser cloud transports and the extension bridge", () => {
       }),
       { limits: { helloTimeoutMs: 5 } },
     );
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-connection",
       connectionGeneration: 1,
       connections: connections("xai", "oauth"),
@@ -277,7 +277,7 @@ describe("browser cloud transports and the extension bridge", () => {
     const fetch = vi.fn<ProviderFetch>(async () => {
       throw new Error("the OAuth route must never touch the direct fetch");
     });
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-connection",
       connectionGeneration: 1,
       connections: connections("anthropic", "oauth"),
@@ -316,7 +316,7 @@ describe("browser cloud transports and the extension bridge", () => {
   it("routes xAI OAuth through the bridge and keeps xAI API keys direct", async () => {
     const catalog = JSON.stringify({ models: [{ id: "grok-fixture" }] });
     const bridged = scriptedBridge({ contentType: "application/json", body: catalog });
-    const bridgedTransport = new XaiBrowserTransport({
+    const bridgedTransport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-connection",
       connectionGeneration: 1,
       connections: connections("xai", "oauth"),
@@ -342,7 +342,7 @@ describe("browser cloud transports and the extension bridge", () => {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-page-memory");
       return new Response(catalog, { status: 200, headers: { "content-type": "application/json" } });
     });
-    const directTransport = new XaiBrowserTransport({
+    const directTransport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-connection",
       connectionGeneration: 1,
       connections: connections("xai", "api-key"),
@@ -364,7 +364,7 @@ describe("browser cloud transports and the extension bridge", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-connection",
       connectionGeneration: 1,
       connections: connections("openai", "oauth"),
@@ -384,7 +384,7 @@ describe("browser cloud transports and the extension bridge", () => {
       contentType: "application/json",
       body: '{"error":{"type":"authentication_error"}}',
     });
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-connection",
       connectionGeneration: 1,
       connections: connections("anthropic", "oauth"),
@@ -402,7 +402,7 @@ describe("browser cloud transports and the extension bridge", () => {
   it("propagates cancellation through the bridge to the extension", async () => {
     const bridge = scriptedBridge(undefined);
     const controller = new AbortController();
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-connection",
       connectionGeneration: 1,
       connections: connections("xai", "oauth"),

@@ -23,6 +23,7 @@ import type { InferenceConnectionRegistry } from "./connection-registry";
 import { ExtensionBridgeClient, pageExtensionBridge } from "../bridge/client";
 import {
   ANTHROPIC_OAUTH_INFERENCE_HEADERS,
+  BRIDGE_PROVIDER_IDS,
   ExtensionBridgeError,
   type BridgeProviderId,
 } from "../bridge/protocol";
@@ -265,11 +266,11 @@ type ResolvedBrowserOptions = Readonly<{
 }>;
 
 type CloudProviderDefinition = Readonly<{
-  providerId: "openai" | "xai";
-  displayName: "OpenAI" | "xAI";
-  transportId: "openai-responses-v1" | "xai-responses-v1";
-  origin: "https://api.openai.com" | "https://api.x.ai";
-  catalogPath: "/v1/models" | "/v1/language-models";
+  providerId: string;
+  displayName: string;
+  transportId: string;
+  origin: string;
+  catalogPath: string;
   /**
    * Set only where a page genuinely cannot reach the provider with an OAuth
    * token. `https://api.x.ai` sends no `access-control-allow-origin`, so the
@@ -279,22 +280,45 @@ type CloudProviderDefinition = Readonly<{
   oauthBridgeProvider?: BridgeProviderId;
 }>;
 
-const OPENAI: CloudProviderDefinition = Object.freeze({
-  providerId: "openai",
-  displayName: "OpenAI",
-  transportId: "openai-responses-v1",
-  origin: "https://api.openai.com",
-  catalogPath: "/v1/models",
-});
+/** One boundary check for all three browser-cloud wires. */
+function assertRemoteProvider(provider: InferenceProviderDescriptor): void {
+  if (provider.transportBoundary !== "provider-tls") {
+    throw new TypeError(`${provider.label} is not a remote browser-cloud provider.`);
+  }
+}
 
-const XAI: CloudProviderDefinition = Object.freeze({
-  providerId: "xai",
-  displayName: "xAI",
-  transportId: "xai-responses-v1",
-  origin: "https://api.x.ai",
-  catalogPath: "/v1/language-models",
-  oauthBridgeProvider: "xai",
-});
+/**
+ * The Responses wire, described by whichever provider declares it.
+ *
+ * `OPENAI` and `XAI` used to be hand-written constants selected by a
+ * `switch (provider.id)`, which meant three provider IDs were the only ones the
+ * canonical seam could serve: a user descriptor declaring `openai-responses`
+ * was accepted by `normalizeProvider` and then refused here. Every field below
+ * already exists in the descriptor, so the transport reads it instead of
+ * knowing it, and the seam dispatches on protocol.
+ *
+ * The OAuth bridge stays a reviewed fact of the extension protocol rather than
+ * a claim a descriptor can make about itself: `BRIDGE_PROVIDER_IDS` is the
+ * Companion's own compiled-in destination allowlist.
+ */
+export function responsesDefinitionFromDescriptor(
+  provider: InferenceProviderDescriptor,
+): CloudProviderDefinition {
+  assertRemoteProvider(provider);
+  if (provider.protocol !== "openai-responses") {
+    throw new TypeError(`${provider.label} does not use the OpenAI Responses wire.`);
+  }
+  const catalog = new URL(provider.modelsUrl ?? new URL("models", directoryUrl(provider.baseUrl)).toString());
+  const bridged = BRIDGE_PROVIDER_IDS.find((candidate: BridgeProviderId) => candidate === provider.id);
+  return Object.freeze({
+    providerId: provider.id,
+    displayName: provider.label,
+    transportId: `${transportToken(provider.id)}-responses-v1`,
+    origin: catalog.origin,
+    catalogPath: `${catalog.pathname}${catalog.search}`,
+    ...(bridged ? { oauthBridgeProvider: bridged } : {}),
+  });
+}
 
 const DEFAULTS = Object.freeze({
   totalTimeoutMs: 300_000,
@@ -323,31 +347,16 @@ const DEFAULTS = Object.freeze({
 /** Distinct models one Anthropic connection may remember a stated ceiling for. */
 const MAX_OBSERVED_OUTPUT_CEILINGS = 256;
 
-export class OpenAiBrowserTransport implements InferenceTransport {
-  readonly id = OPENAI.transportId;
+/** Any provider whose descriptor declares the OpenAI Responses wire. */
+export class ResponsesBrowserTransport implements InferenceTransport {
+  readonly id: string;
   readonly posture = "plaintext-remote" as const;
   private readonly delegate: OpenAiResponsesBrowserTransport;
 
-  constructor(options: BrowserCloudTransportOptions) {
-    this.delegate = new OpenAiResponsesBrowserTransport(OPENAI, options);
-  }
-
-  listModels(signal?: AbortSignal): Promise<readonly InferenceModelDescriptor[]> {
-    return this.delegate.listModels(signal);
-  }
-
-  stream(request: InferenceRequest, signal: AbortSignal): AsyncIterable<InferenceEvent> {
-    return this.delegate.stream(request, signal);
-  }
-}
-
-export class XaiBrowserTransport implements InferenceTransport {
-  readonly id = XAI.transportId;
-  readonly posture = "plaintext-remote" as const;
-  private readonly delegate: OpenAiResponsesBrowserTransport;
-
-  constructor(options: BrowserCloudTransportOptions) {
-    this.delegate = new OpenAiResponsesBrowserTransport(XAI, options);
+  constructor(provider: InferenceProviderDescriptor, options: BrowserCloudTransportOptions) {
+    const definition = responsesDefinitionFromDescriptor(provider);
+    this.delegate = new OpenAiResponsesBrowserTransport(definition, options);
+    this.id = definition.transportId;
   }
 
   listModels(signal?: AbortSignal): Promise<readonly InferenceModelDescriptor[]> {
@@ -383,9 +392,7 @@ export type ChatCompletionsProviderDefinition = Readonly<{
 function chatCompletionsDefinitionFromDescriptor(
   provider: InferenceProviderDescriptor,
 ): ChatCompletionsProviderDefinition {
-  if (provider.transportBoundary !== "provider-tls") {
-    throw new TypeError(`${provider.label} is not a remote browser-cloud provider.`);
-  }
+  assertRemoteProvider(provider);
   if (provider.protocol !== "openai-compatible" && provider.protocol !== "openai-chat-completions") {
     throw new TypeError(`${provider.label} does not use the OpenAI-compatible chat-completions wire.`);
   }
@@ -692,17 +699,21 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
       );
       const payload = await readJson(response, this.options.maxJsonBytes, this.provider.displayName);
       const observedAt = new Date(this.options.now()).toISOString();
-      const records = this.provider.providerId === "xai"
-        ? recordArray(payload, "models")
-        : recordArray(payload, "data");
+      /*
+       * A model directory publishes its array under `data` (OpenAI) or `models`
+       * (xAI). Reading whichever key this payload carries is a fact about the
+       * response, and it replaced a `providerId === "xai"` test that no other
+       * provider could ever satisfy.
+       */
+      const records = catalogRecords(payload);
       return Object.freeze(
         records.slice(0, 2_048).flatMap((record) => {
           const id = boundedString(record.id, 512);
           if (!id) return [];
-          const capabilities =
-            this.provider.providerId === "xai"
-              ? xaiCapabilities(record, observedAt)
-              : openAiUnknownCapabilities();
+          // Modality arrays are evidence when the record carries them and
+          // absent when it does not, which is what the OpenAI lane always
+          // produced from records that never publish them.
+          const capabilities = modalityCapabilities(record, observedAt);
           return [
             Object.freeze({
               version: 1 as const,
@@ -817,8 +828,38 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
   }
 }
 
+/**
+ * The Messages wire, described by whichever provider declares it. The origin,
+ * catalog and message endpoints come from the descriptor rather than from three
+ * literals that only Anthropic's own ID could reach.
+ */
+export type MessagesProviderDefinition = Readonly<{
+  providerId: string;
+  displayName: string;
+  transportId: string;
+  modelsUrl: string;
+  messagesUrl: string;
+}>;
+
+export function messagesDefinitionFromDescriptor(
+  provider: InferenceProviderDescriptor,
+): MessagesProviderDefinition {
+  assertRemoteProvider(provider);
+  if (provider.protocol !== "anthropic-messages") {
+    throw new TypeError(`${provider.label} does not use the Anthropic Messages wire.`);
+  }
+  const baseUrl = directoryUrl(provider.baseUrl);
+  return Object.freeze({
+    providerId: provider.id,
+    displayName: provider.label,
+    transportId: `${transportToken(provider.id)}-messages-v1`,
+    modelsUrl: provider.modelsUrl ?? new URL("models", baseUrl).toString(),
+    messagesUrl: new URL("messages", baseUrl).toString(),
+  });
+}
+
 export class AnthropicBrowserTransport implements InferenceTransport {
-  readonly id = "anthropic-messages-v1";
+  readonly id: string;
   readonly posture = "plaintext-remote" as const;
   private readonly options: ResolvedBrowserOptions;
   /**
@@ -833,7 +874,11 @@ export class AnthropicBrowserTransport implements InferenceTransport {
    */
   private readonly observedOutputCeilings = new Map<string, number>();
 
-  constructor(options: BrowserCloudTransportOptions) {
+  private readonly provider: MessagesProviderDefinition;
+
+  constructor(provider: InferenceProviderDescriptor, options: BrowserCloudTransportOptions) {
+    this.provider = messagesDefinitionFromDescriptor(provider);
+    this.id = this.provider.transportId;
     this.options = resolveOptions(options);
   }
 
@@ -845,7 +890,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
       const records: Record<string, unknown>[] = [];
       let afterId: string | undefined;
       for (let page = 0; page < 16 && records.length < 2_048; page += 1) {
-        const url = new URL("https://api.anthropic.com/v1/models");
+        const url = new URL(this.provider.modelsUrl);
         url.searchParams.set("limit", "100");
         if (afterId) url.searchParams.set("after_id", afterId);
         const response = await this.request(url.toString(), { method: "GET" }, lifetime.signal, {});
@@ -877,7 +922,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
               version: 1 as const,
               connectionId: this.options.connectionId,
               connectionGeneration: this.options.connectionGeneration,
-              providerId: "anthropic",
+              providerId: this.provider.providerId,
               id,
               label: boundedString(record.display_name, 160) ?? id,
               capabilities: Object.freeze({}),
@@ -889,7 +934,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
               source: Object.freeze({
                 kind: "provider-directory" as const,
                 observedAt,
-                sourceUrl: "https://api.anthropic.com/v1/models",
+                sourceUrl: this.provider.modelsUrl,
               }),
             }),
           ];
@@ -983,7 +1028,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
     const refusal: { body: string | undefined } = { body: undefined };
     try {
       const response = await this.request(
-        "https://api.anthropic.com/v1/messages",
+        this.provider.messagesUrl,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1436,7 +1481,7 @@ function openAiUnknownCapabilities(): Readonly<
   return Object.freeze({});
 }
 
-function xaiCapabilities(
+function modalityCapabilities(
   record: Record<string, unknown>,
   observedAt: string,
 ): Readonly<Partial<Record<ModelCapability, ModelCapabilityEvidence>>> {
@@ -2149,6 +2194,19 @@ function parseRecord(value: string, label: string): Record<string, unknown> {
     throw new ProviderTransportError("invalid-response", `${label} must be an object.`);
   }
   return parsed;
+}
+
+/**
+ * A model directory publishes its array under `data` or under `models`. Reading
+ * whichever key the payload carries is a fact about the response; the previous
+ * `providerId === "xai"` test could never be satisfied by any other provider
+ * that publishes the same shape.
+ */
+function catalogRecords(payload: unknown): Record<string, unknown>[] {
+  for (const field of ["data", "models"]) {
+    if (isRecord(payload) && Array.isArray(payload[field])) return payload[field].filter(isRecord);
+  }
+  throw new ProviderTransportError("invalid-response", "Model catalog has no data array.");
 }
 
 function recordArray(payload: unknown, field: string): Record<string, unknown>[] {

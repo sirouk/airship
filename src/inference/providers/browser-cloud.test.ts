@@ -2,16 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import type { InferenceEvent, InferenceRequest } from "../../core/contracts";
 import {
   AnthropicBrowserTransport,
-  OpenAiBrowserTransport,
+  ResponsesBrowserTransport,
   OpenAiCompatibleBrowserTransport,
   ProviderTransportError,
-  XaiBrowserTransport,
   type ProviderFetch,
 } from "./browser-cloud";
 import { ExtensionBridgeError } from "../bridge/protocol";
 import { InferenceConnectionRegistry } from "./connection-registry";
 import { MAX_MODEL_OUTPUT_TOKENS, type InferenceProviderDescriptor } from "./contracts";
-import { OFFICIAL_CLOUD_PROVIDERS } from "./official-providers";
+import { OFFICIAL_CLOUD_PROVIDERS,
+  ANTHROPIC_PROVIDER,
+  OPENAI_PROVIDER,
+  XAI_PROVIDER,
+} from "./official-providers";
 import { InferenceProviderCatalog } from "./provider-catalog";
 
 const NOW = Date.parse("2026-07-24T12:00:00.000Z");
@@ -26,7 +29,7 @@ describe("browser-direct cloud inference adapters", () => {
         data: [{ id: "model-a", object: "model", owned_by: "openai" }],
       });
     });
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey,
@@ -186,7 +189,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("scrubs a fetch failure that echoes the key before its credential lease ends", async () => {
     const apiKey = "fetch-lease-must-not-be-durable";
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-echo-main",
       connectionGeneration: 1,
       getApiKey: () => apiKey,
@@ -425,7 +428,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("uses only xAI-declared modalities and leaves undeclared tools unknown", async () => {
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -450,9 +453,79 @@ describe("browser-direct cloud inference adapters", () => {
     expect(model?.capabilities["tool-calling"]).toBeUndefined();
   });
 
+  /*
+   * The seam used to `switch (provider.id)` over openai/anthropic/xai, so a
+   * descriptor that declared one of these wires and was accepted by
+   * `normalizeProvider` was then refused with "has no browser-cloud transport".
+   * A provider is now whatever its descriptor says it is.
+   */
+  it("serves any descriptor that declares a reviewed wire, reading its own endpoints", async () => {
+    const requested: string[] = [];
+    const responses = new ResponsesBrowserTransport({
+      version: 1,
+      id: "acme-responses",
+      label: "Acme Responses",
+      protocol: "openai-responses",
+      transportBoundary: "provider-tls",
+      baseUrl: "https://api.acme.test/v2/",
+      modelsUrl: "https://api.acme.test/v2/language-models",
+      oauth: { state: "not-documented", detail: "No public-PKCE registration." },
+      authMethods: [{
+        id: "acme-api-key",
+        kind: "api-key",
+        label: "Acme key",
+        header: { name: "Authorization", scheme: "bearer" },
+        browserUse: "direct-contract-unpublished",
+        warning: "Browser-direct key.",
+      }],
+      capabilities: ["invoke", "models:list"],
+      documentationUrl: "https://acme.test/docs",
+    }, {
+      connectionId: "acme-main",
+      connectionGeneration: 1,
+      getApiKey: () => "acme-memory-only",
+      now: () => NOW,
+      fetch: async (input) => {
+        requested.push(String(input));
+        return jsonResponse({ models: [{ id: "acme-large" }] });
+      },
+    });
+
+    expect(responses.id).toBe("acme-responses-responses-v1");
+    const [model] = await responses.listModels();
+    expect(model?.id).toBe("acme-large");
+    expect(model?.providerId).toBe("acme-responses");
+    expect(requested).toEqual(["https://api.acme.test/v2/language-models"]);
+
+    // The reviewed first-party providers keep the exact transport identities
+    // their sessions are pinned to.
+    expect(new ResponsesBrowserTransport(OPENAI_PROVIDER, {
+      connectionId: "openai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-memory-only",
+    }).id).toBe("openai-responses-v1");
+    expect(new ResponsesBrowserTransport(XAI_PROVIDER, {
+      connectionId: "xai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "xai-memory-only",
+    }).id).toBe("xai-responses-v1");
+    expect(new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "anthropic-memory-only",
+    }).id).toBe("anthropic-messages-v1");
+
+    // A wire nobody reviewed is still refused.
+    expect(() => new ResponsesBrowserTransport(ANTHROPIC_PROVIDER, {
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "anthropic-memory-only",
+    })).toThrow(/does not use the OpenAI Responses wire/u);
+  });
+
   it("streams OpenAI Responses text, usage, and bounded function calls", async () => {
     let requestBody: Record<string, unknown> | undefined;
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -498,7 +571,7 @@ describe("browser-direct cloud inference adapters", () => {
 
 
   it("streams OpenAI Responses reasoning as its own event beside the answer", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -521,7 +594,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("streams Anthropic thinking deltas once as progress and every time as reasoning", async () => {
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -544,7 +617,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("adapts Anthropic Messages streaming and direct-browser headers", async () => {
     const requests: Array<{ url: string; headers: Headers; body?: Record<string, unknown> }> = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -604,13 +677,13 @@ describe("browser-direct cloud inference adapters", () => {
         event("response.completed", { type: "response.completed", response: {} }),
       ]);
     };
-    const openai = new OpenAiBrowserTransport({
+    const openai = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
       fetch: capture,
     });
-    const xai = new XaiBrowserTransport({
+    const xai = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -631,7 +704,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("omits Anthropic tool_choice when the connection probe carries no tools", async () => {
     let body: Record<string, unknown> | undefined;
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -650,7 +723,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("prefers a declared per-model output ceiling over the connection default", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -681,7 +754,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("refuses an out-of-range declared output ceiling instead of falling back", async () => {
     const fetch = vi.fn<ProviderFetch>();
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -697,7 +770,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("accepts a declaration exactly at the shared catalog ceiling and refuses one above it", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -730,7 +803,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("adopts the output ceiling Anthropic states in a refusal and re-sends exactly once", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -752,7 +825,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("raises a 400 that names no ceiling instead of guessing a smaller one", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -796,7 +869,7 @@ describe("browser-direct cloud inference adapters", () => {
 
     for (const message of nearMisses) {
       const bodies: Record<string, unknown>[] = [];
-      const transport = new AnthropicBrowserTransport({
+      const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
         connectionId: "anthropic-main",
         connectionGeneration: 1,
         getApiKey: () => "sk-ant-memory-only",
@@ -818,7 +891,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("stops after one corrected re-send when the stated ceiling is refused again", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -837,7 +910,7 @@ describe("browser-direct cloud inference adapters", () => {
 
   it("does not re-send a refused operator declaration behind the operator's back", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -856,7 +929,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("reports browser reachability honestly without asserting CORS as fact", async () => {
-    const transport = new XaiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(XAI_PROVIDER, {
       connectionId: "xai-main",
       connectionGeneration: 1,
       getApiKey: () => "xai-memory-only",
@@ -881,7 +954,7 @@ describe("browser-direct cloud inference adapters", () => {
    * saying which provider broke.
    */
   it("names the provider when a bridged catalog body fails mid-read", async () => {
-    const transport = new AnthropicBrowserTransport({
+    const transport = new AnthropicBrowserTransport(ANTHROPIC_PROVIDER, {
       connectionId: "anthropic-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-ant-memory-only",
@@ -903,7 +976,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("rejects oversized model directories before parsing provider data", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",
@@ -925,7 +998,7 @@ describe("browser-direct cloud inference adapters", () => {
       apiKey: "sk-registry-only",
     });
     let requestInit: RequestInit | undefined;
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       connections,
@@ -956,7 +1029,7 @@ describe("browser-direct cloud inference adapters", () => {
   });
 
   it("accepts a conventional terminal [DONE] marker only as stream framing", async () => {
-    const transport = new OpenAiBrowserTransport({
+    const transport = new ResponsesBrowserTransport(OPENAI_PROVIDER, {
       connectionId: "openai-main",
       connectionGeneration: 1,
       getApiKey: () => "sk-memory-only",

@@ -11,7 +11,11 @@ This document describes the fabric behind the **Providers** surface.
 3. Provider identity, connection identity, connection generation, model
    identity, and transport boundary are separate facts.
 4. Model catalogs are runtime observations from each connected provider.
-5. No provider gets a privileged trust tier.
+5. No provider gets a privileged trust tier, and no transport is selected by
+   provider identity. The wire a descriptor declares — OpenAI Responses,
+   Anthropic Messages, or OpenAI-compatible chat completions — chooses the
+   transport, and that transport reads its origin, catalog endpoint and
+   authentication contract from the descriptor it was given.
 6. Remote providers are `provider-tls`; exact local loopback providers are
    `loopback-local`.
 
@@ -25,7 +29,7 @@ This document describes the fabric behind the **Providers** surface.
 | Chutes | OpenAI-compatible | `https://llm.chutes.ai/v1` | `provider-tls` |
 | Ollama | OpenAI-compatible | `http://127.0.0.1:11434` | `loopback-local` |
 | LM Studio | OpenAI-compatible | `http://127.0.0.1:1234` | `loopback-local` |
-| Custom | OpenAI-compatible | user supplied | `provider-tls` |
+| Custom | OpenAI-compatible, OpenAI Responses, or Anthropic Messages | user supplied | `provider-tls` |
 
 ## Connection lifecycle
 
