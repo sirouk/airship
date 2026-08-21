@@ -2772,14 +2772,32 @@ export function App() {
           }
           return;
         }
-        // Keep the URL intact: a durable conversation can become available
-        // after its Vault or exact inference connection is restored.
+        /*
+         * Say so now, in the same frame the open failed.
+         *
+         * The only notice this path wrote came after `loadDeferredCapabilities`
+         * resolved, which on a cold reload is a chunk fetch: measured at 8.0 s.
+         * For those eight seconds the address bar named one conversation, the
+         * session bar named another, and the transcript showed the first-run
+         * zero state, with nothing on screen admitting a failure. The refined
+         * sentence still arrives when the describer does.
+         *
+         * `setRuntimeStatus` as well as the composer notice, because the click
+         * that fails may have come from All conversations, and a notice
+         * rendered beside the composer is not on that route: the person saw a
+         * control that did nothing at all.
+         */
+        const unavailable = "This conversation link is not available in the current runtime. Connect its Vault and exact inference provider, then retry.";
+        setComposerNotice(unavailable);
+        setRuntimeStatus(unavailable);
+        // Keep the URL intact: the conversation is durable and its journal is
+        // whole. What is missing is the exact route it is pinned to, and an
+        // exact route includes the connection generation — so reconnecting the
+        // same provider opens a new one and does not restore this pin. Forking
+        // is the remedy the record itself names.
         void loadDeferredCapabilities().then(({ describeSessionPresentationFault }) => {
-          setComposerNotice(
-            error instanceof Error
-              ? `This conversation link is not available in the current runtime: ${describeSessionPresentationFault(error)}`
-              : "This conversation link is not available in the current runtime. Connect its Vault and exact inference provider, then retry.",
-          );
+          if (!(error instanceof Error)) return;
+          setComposerNotice(`This conversation link is not available in the current runtime: ${describeSessionPresentationFault(error)}`);
         });
       })
       .finally(() => {

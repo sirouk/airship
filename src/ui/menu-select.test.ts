@@ -219,6 +219,17 @@ describe("a sheet says whose it is, and can be left", () => {
     expect(styles).toContain("z-index:320;");
   });
 
+  /*
+   * The listbox renders with `aria-expanded="true"` in the same commit that
+   * schedules its dismissal listeners, so a passive effect left one frame in
+   * which an open menu answered neither Escape nor an outside click — and the
+   * repository's own anchored-menu gate failed 27 times in 50 runs on it.
+   */
+  it("installs dismissal before the frame the listbox is open in", () => {
+    const install = source.slice(0, source.indexOf("const handleOutsidePointer"));
+    expect(install.slice(install.lastIndexOf("Effect(() => {") - 20)).toContain("useLayoutEffect(() => {");
+  });
+
   it("lets Escape reach an open menu from anywhere without taking the key from anyone else", () => {
     const escape = source.slice(source.indexOf("const handleEscape"), source.indexOf('document.addEventListener("pointerdown"'));
     // Any open menu, anchored or sheet: a pointer click leaves focus on the

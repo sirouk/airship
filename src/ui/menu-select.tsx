@@ -174,7 +174,15 @@ export function MenuSelect({
     optionRefs.current[activeIndex]?.focus({ preventScroll: true });
   }, [activeIndex, open]);
 
-  useEffect(() => {
+  /*
+   * Layout, not passive: the listbox renders with `aria-expanded="true"` in the
+   * same commit that schedules this, so a deferred effect left one frame in
+   * which an open menu answered neither Escape nor an outside click. A pointer
+   * that opened a menu and pressed Escape immediately kept it open, and the
+   * repository's own anchored-menu gate failed 27 times in 50 runs on exactly
+   * that window. Escape at 0 ms failed; at 5 ms it worked.
+   */
+  useLayoutEffect(() => {
     if (!open) return;
     /*
      * Dismissal asks about the two boxes a reader can press, not about the host.
