@@ -205,7 +205,7 @@ test("a stopped queue stays paused across conversation switches and reconnects",
     .filter({ hasText: "queued follow-up must remain paused" })).toHaveCount(1);
 });
 
-test("Skills explains why its pinned conversation cannot start during an active turn", async ({ page }, testInfo) => {
+test("Skills starts its pinned conversation while another turn is still running", async ({ page }, testInfo) => {
   test.skip(
     testInfo.project.name !== "desktop-chromium",
     "One deterministic held-turn journey is sufficient; responsive Skills coverage runs separately.",
@@ -254,17 +254,27 @@ test("Skills explains why its pinned conversation cannot start during an active 
     await page.getByRole("navigation", { name: "Agent configuration" })
       .getByRole("button", { name: "Skills", exact: true }).click();
     await expect(page).toHaveURL(/#skills$/u);
+    /*
+     * A running turn used to disable this control and explain itself. The
+     * engine always ran turns per conversation; the shell was the only thing
+     * serialising them, so the honest answer is that the control works and the
+     * held turn keeps running in the conversation that owns it.
+     */
     const start = page.getByRole("button", { name: "New conversation with this set" });
-    await expect(start).toBeDisabled();
-    await expect(start).toHaveAttribute("aria-describedby", "skill-conversation-start-status");
-    await expect(page.locator("#skill-conversation-start-status"))
-      .toHaveText("Stop the active turn before starting a new conversation.");
+    await expect(start).toBeEnabled();
+    await expect(page.locator("#skill-conversation-start-status")).toHaveCount(0);
+    await start.click();
+    await expect(page).toHaveURL(/#chat/u);
     await page.screenshot({ path: testInfo.outputPath("skills-active-turn.png"), animations: "disabled" });
+
+    // The new conversation is immediately usable, and the held turn is still
+    // held in the conversation that owns it.
+    const started = page.getByRole("combobox", { name: "Message Airship" });
+    await expect(started).toBeEnabled();
+    expect(chatRequests).toBe(1);
 
     releaseActiveTurn?.();
     releaseActiveTurn = undefined;
-    await expect(start).toBeEnabled({ timeout: 20_000 });
-    await expect(page.locator("#skill-conversation-start-status")).toHaveCount(0);
   } finally {
     releaseActiveTurn?.();
   }
