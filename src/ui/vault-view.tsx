@@ -182,10 +182,14 @@ export const STOCK_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze
 /**
  * The lab's column, carried by a lab build alone.
  *
- * `LOCAL_LAB_BUILD` folds to `false` in a stock artifact, so the factory below
- * is never called and the copy inside it never reaches the bundle. It is a
- * function rather than a frozen constant for exactly that reason: a frozen
- * module-level object is a side effect the bundler must keep.
+ * `LOCAL_LAB_BUILD` folds to `false` in a stock artifact, so nothing reads the
+ * constant below and the bundler may drop it — but only if every `Object.freeze`
+ * call in the initialiser is marked pure. The outer call was; the nested `facts`
+ * call was not, so dropping the outer object left the inner call standing as a
+ * bare side-effecting statement, and a stock release shipped 231 B of the lab's
+ * six comparison facts — copy naming a loopback endpoint, disposable keys and a
+ * lab bucket — in the Sessions pack, where nothing could ever render it. Both
+ * annotations are load-bearing.
  */
 export function localLabProviderProfile(): ProviderProfile {
   return LOCAL_LAB_PROVIDER_PROFILE;
@@ -198,7 +202,7 @@ const LOCAL_LAB_PROVIDER_PROFILE: ProviderProfile = /* @__PURE__ */ Object.freez
   // claim that a stock build can configure an arbitrary S3 provider.
   description: "Loopback development lab",
   note: "On a loopback lab endpoint nothing is cloud-synchronized. Encrypted journal and workspace state travel directly between this device and the selected storage provider.",
-  facts: Object.freeze({
+  facts: /* @__PURE__ */ Object.freeze({
     survives: "Yes · encrypted in your loopback lab",
     offline: "No · needs the endpoint",
     reach: "No · loopback only",

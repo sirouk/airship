@@ -82,7 +82,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 384,442 B raw / 119,174 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,647 B raw /
   // 119,275 B gzip. 376 KiB raw would have left 377 B and 117 KiB gzip would
-  // have left 533 B; the 377/118 KiB steps leave 1,401 / 1,557 B.
   //
   // Re-measured after the product-audit repair. The whole entry delta is two
   // sentences the shell has to be able to say: which conversation an approval
@@ -125,7 +124,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 384,720 B raw / 119,279 B gzip;
   // and the reviewed Google-Drive-configured variant measures 384,925 B raw /
   // 119,379 B gzip. 376 KiB raw would have left 99 B and 117 KiB gzip would
-  // have left 429 B; the 377/118 KiB steps leave 1,123 / 1,453 B.
   //
   // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
   // The canonical config-free artifact weighed 385,616 B raw / 119,621 B gzip;
@@ -133,7 +131,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 385,637 B raw / 119,616 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 385,842 B raw /
   // 119,722 B gzip. 377 KiB raw would have left 206 B and 117 KiB gzip would
-  // have left 86 B; the 377/118 KiB steps leave 206 / 1,110 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -141,12 +138,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // nobody answered stops being journaled as a decision a person made. The delta is `replayedRecord` and one head
   // helper in the merge primitive, one condition in the bundle reader, and one shared `approvalWasAnswered` predicate
   // that replaced four spellings of the same test — which is why the entry chunk got eight bytes smaller.
-  // The canonical config-free artifact measures 385,620 B raw / 119,614 B gzip;
+  // The canonical config-free artifact weighed 385,620 B raw / 119,614 B gzip;
   // the reviewed Docker-defaults variant measures 385,613 B raw / 119,616 B gzip;
-  // the reviewed Pages variant measures 385,641 B raw / 119,616 B gzip;
+  // the reviewed Pages variant weighed 385,641 B raw / 119,616 B gzip;
   // and the reviewed Google-Drive-configured variant measures 385,814 B raw /
   // 119,671 B gzip and sets both maxima.
   // 117 KiB gzip would have left 137 B, below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,161 B; 377 KiB raw leaves 234 B and does not move.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 385,608 B raw / 119,617 B gzip;
+  // the reviewed Docker-defaults variant measures 385,613 B raw / 119,616 B gzip;
+  // the reviewed Pages variant measures 385,629 B raw / 119,615 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 385,834 B raw /
+  // 377 KiB raw is the smallest whole-KiB step that clears that reading and leaves 214 B; 117 KiB gzip would have left 87 B, below the tripwire floor, so gzip keeps the 118 KiB step and leaves 1,111 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -194,7 +198,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 500,176 B raw / 162,443 B gzip;
   // and the reviewed Google-Drive-configured variant measures 500,381 B raw /
   // 162,558 B gzip. 489 KiB raw would have left 355 B and 159 KiB gzip would
-  // have left 258 B; the 490/160 KiB steps leave 1,379 / 1,282 B.
   //
   // Re-measured after the product-audit repair. This class carries the entry
   // delta above plus the approval dock, which the shell mounts: the dock now
@@ -231,7 +234,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 501,307 B raw / 162,816 B gzip;
   // and the reviewed Google-Drive-configured variant measures 501,512 B raw /
   // 162,912 B gzip. 490 KiB raw would have left 248 B and 160 KiB gzip would
-  // have left 928 B; the 491/160 KiB steps leave 1,272 / 928 B.
   //
   // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
   // The canonical config-free artifact weighed 502,203 B raw / 163,157 B gzip;
@@ -239,7 +241,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 502,224 B raw / 163,158 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 502,429 B raw /
   // 163,256 B gzip. 491 KiB raw would have left 355 B and 160 KiB gzip would
-  // have left 584 B; the 491/160 KiB steps leave 355 / 584 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -247,12 +248,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // nobody answered stops being journaled as a decision a person made. The delta is `replayedRecord` and one head
   // helper in the merge primitive, one condition in the bundle reader, and one shared `approvalWasAnswered` predicate
   // that replaced four spellings of the same test — which is why the entry chunk got eight bytes smaller.
-  // The canonical config-free artifact measures 502,207 B raw / 163,146 B gzip;
+  // The canonical config-free artifact weighed 502,207 B raw / 163,146 B gzip;
   // the reviewed Docker-defaults variant measures 502,200 B raw / 163,159 B gzip;
-  // the reviewed Pages variant measures 502,228 B raw / 163,159 B gzip;
+  // the reviewed Pages variant weighed 502,228 B raw / 163,159 B gzip;
   // and the reviewed Google-Drive-configured variant measures 502,401 B raw /
   // 163,210 B gzip and sets both maxima.
   // Both ceilings are already the smallest whole-KiB step that clears these readings: 491 KiB raw leaves 383 B and 160 KiB gzip leaves 630 B.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 502,195 B raw / 163,150 B gzip;
+  // the reviewed Docker-defaults variant measures 502,200 B raw / 163,159 B gzip;
+  // the reviewed Pages variant measures 502,216 B raw / 163,156 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 502,421 B raw /
+  // 491 KiB raw is the smallest whole-KiB step that clears that reading and leaves 363 B; 160 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 581 B.
   allJavaScriptAndWorkers: Object.freeze({ raw: 491 * 1024, gzip: 160 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -287,7 +295,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gzip; the reviewed Pages variant weighed 233,221 B raw / 68,252 B gzip;
   // and the reviewed Google-Drive-configured variant measures 233,293 B raw /
   // 68,303 B gzip and sets both maxima. 228 KiB raw would have left
-  // 179 B and 67 KiB gzip would have left 305 B; the 229/68 KiB steps leave
   // 1,203 / 1,329 B. None of this bundle is fetched on first paint.
   //
   // Re-measured after a bundle stopped granting authority through its events.
@@ -303,7 +310,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 233,047 B raw /
   // 68,235 B gzip and sets both maxima. 228 KiB raw would have left 425 B and
   // 67 KiB gzip would have left 373 B, both below the tripwire floor; the
-  // 229/68 KiB steps leave 1,449 / 1,397 B. None of this bundle is fetched on
   // first paint.
   //
   // Re-measured after the product-shell repair landed on top of it. The folder tier stopped being a disclosure, so its promises are on screen instead of in textContent; its own pack got smaller, because two `<details>`, two summaries and an unrendered live ref weigh more than a deciding state and a bounded terms band. That pays for an audit comparison that no longer accuses an empty conversation of drift, a first-run link that lands where its sentence says, and coarse-pointer sizes a phone can actually hit.
@@ -312,7 +318,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 232,991 B raw / 68,205 B gzip;
   // and the reviewed Google-Drive-configured variant measures 233,063 B raw /
   // 68,252 B gzip. 228 KiB raw would have left 409 B and 67 KiB gzip would
-  // have left 356 B; the 229/68 KiB steps leave 1,433 / 1,380 B.
   //
   // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
   // The canonical config-free artifact weighed 233,005 B raw / 68,211 B gzip;
@@ -320,7 +325,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 233,005 B raw / 68,212 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 233,077 B raw /
   // 68,260 B gzip. 228 KiB raw would have left 395 B and 67 KiB gzip would
-  // have left 348 B; the 229/68 KiB steps leave 1,419 / 1,372 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -334,6 +338,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and the reviewed Google-Drive-configured variant measures 233,311 B raw /
   // 68,356 B gzip and sets both maxima.
   // 228 KiB raw would have left 161 B and 67 KiB gzip would have left 252 B, both below the tripwire floor, so the 229/68 KiB steps stand and leave 1,185 / 1,276 B. None of this bundle is fetched on first paint.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 233,243 B raw / 68,319 B gzip;
+  // the reviewed Docker-defaults variant measures 233,243 B raw / 68,322 B gzip;
+  // the reviewed Pages variant measures 233,243 B raw / 68,322 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 233,315 B raw /
+  // 228 KiB raw would have left 157 B, below the tripwire floor, so raw keeps the 229 KiB step and leaves 1,181 B; 67 KiB gzip would have left 235 B, below the tripwire floor, so gzip keeps the 68 KiB step and leaves 1,259 B.
   deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -397,7 +408,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,017,194 B raw / 631,253 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,017,687 B raw /
   // 631,580 B gzip. 1971 KiB raw would have left 617 B and 617 KiB gzip would
-  // have left 228 B; the 1972/618 KiB steps leave 1,641 / 1,252 B.
   //
   // Re-measured after the product-audit repair. All of it is first-party and
   // all of it is a refusal or a sentence that says what to do about one: a work
@@ -449,7 +459,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,019,552 B raw / 632,126 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,020,045 B raw /
   // 632,361 B gzip. 1973 KiB raw would have left 307 B and 618 KiB gzip would
-  // have left 471 B; the 1975/619 KiB steps leave 2,355 / 1,495 B.
   //
   // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
   // The canonical config-free artifact weighed 2,020,824 B raw / 632,580 B gzip;
@@ -457,7 +466,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,020,902 B raw / 632,622 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 2,021,395 B raw /
   // 632,877 B gzip. 1975 KiB raw would have left 1,005 B and 619 KiB gzip would
-  // have left 979 B; the 1975/619 KiB steps leave 1,005 / 979 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -465,12 +473,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // nobody answered stops being journaled as a decision a person made. The delta is `replayedRecord` and one head
   // helper in the merge primitive, one condition in the bundle reader, and one shared `approvalWasAnswered` predicate
   // that replaced four spellings of the same test — which is why the entry chunk got eight bytes smaller.
-  // The canonical config-free artifact measures 2,021,104 B raw / 632,696 B gzip;
+  // The canonical config-free artifact weighed 2,021,104 B raw / 632,696 B gzip;
   // the reviewed Docker-defaults variant measures 2,021,077 B raw / 632,739 B gzip;
-  // the reviewed Pages variant measures 2,021,182 B raw / 632,737 B gzip;
+  // the reviewed Pages variant weighed 2,021,182 B raw / 632,737 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,021,550 B raw /
   // 632,881 B gzip and sets both maxima.
   // Both ceilings are already the smallest whole-KiB step that clears these readings: 1975 KiB raw leaves 850 B and 619 KiB gzip leaves 975 B.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 2,021,072 B raw / 632,689 B gzip;
+  // the reviewed Docker-defaults variant measures 2,021,077 B raw / 632,739 B gzip;
+  // the reviewed Pages variant measures 2,021,150 B raw / 632,745 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,021,643 B raw /
+  // 1975 KiB raw is the smallest whole-KiB step that clears that reading and leaves 757 B; 619 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 852 B.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1975 * 1024, gzip: 619 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
@@ -558,7 +573,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 812,146 B gzip, and the reviewed Google-Drive-configured variant weighed
   // 2,679,490 B raw / 812,410 B gzip and sets both maxima. 2617 KiB raw would
   // have left 318 B and 794 KiB gzip would have left 646 B, both below the
-  // tripwire floor, so the 2618/795 KiB steps leave 1,342 / 1,670 B.
   //
   // Earlier readings of 2,713,496 B raw and 824,579 B gzip (canonical),
   // 2,713,501 B raw and 824,602 B gzip (Docker defaults), 2,713,574 B raw and
@@ -583,7 +597,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,718,361 B raw / 826,306 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,718,854 B raw /
   // 826,636 B gzip. 2656 KiB raw would have left 890 B and 808 KiB gzip would
-  // have left 756 B; the 2657/809 KiB steps leave 1,914 / 1,780 B.
   //
   // Re-measured after the product-audit repair. It is the first-party growth
   // described one ceiling above and nothing else; vendor code is unchanged.
@@ -615,7 +628,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,720,750 B raw / 827,193 B gzip;
   // and the reviewed Google-Drive-configured variant measures 2,721,243 B raw /
   // 827,427 B gzip. 2658 KiB raw would have left 549 B and 809 KiB gzip would
-  // have left 989 B; the 2659/809 KiB steps leave 1,573 / 989 B.
   //
   // Re-measured after conversations stopped substituting for one another. A click on a running conversation now switches to it, an addressed conversation is opened rather than replaced by a freshly minted one, and a plan made against a journal that has been replaced is withdrawn instead of pressed. The delta is the manifest that mint used to supply, held directly now, plus the sentence that says a conversation is opening and the comparison that withdraws a stale plan.
   // The canonical config-free artifact weighed 2,722,022 B raw / 827,647 B gzip;
@@ -623,7 +635,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 2,722,100 B raw / 827,692 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 2,722,593 B raw /
   // 827,945 B gzip. 2659 KiB raw would have left 223 B and 809 KiB gzip would
-  // have left 471 B; the 2659/809 KiB steps leave 223 / 471 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -631,13 +642,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // nobody answered stops being journaled as a decision a person made. The delta is `replayedRecord` and one head
   // helper in the merge primitive, one condition in the bundle reader, and one shared `approvalWasAnswered` predicate
   // that replaced four spellings of the same test — which is why the entry chunk got eight bytes smaller.
-  // The canonical config-free artifact measures 2,722,302 B raw / 827,764 B gzip;
+  // The canonical config-free artifact weighed 2,722,302 B raw / 827,764 B gzip;
+  // the reviewed Docker-defaults variant weighed 2,722,275 B raw / 827,811 B gzip;
+  // the reviewed Pages variant weighed 2,722,380 B raw / 827,805 B gzip;
+  // and the reviewed Google-Drive-configured variant weighed 2,722,748 B raw /
+  // 827,948 B gzip and set both maxima before the repair below.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 2,722,270 B raw / 827,756 B gzip;
   // the reviewed Docker-defaults variant measures 2,722,275 B raw / 827,811 B gzip;
-  // the reviewed Pages variant measures 2,722,380 B raw / 827,805 B gzip;
-  // and the reviewed Google-Drive-configured variant measures 2,722,748 B raw /
-  // 827,948 B gzip and sets both maxima.
-  // Both ceilings are already the smallest whole-KiB step that clears these readings: 2659 KiB raw leaves 68 B and 809 KiB gzip leaves 468 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2659 * 1024, gzip: 809 * 1024 }),
+  // the reviewed Pages variant measures 2,722,348 B raw / 827,814 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 2,722,841 B raw /
+  // 828,071 B gzip and sets both maxima.
+  // 2659 KiB raw would have left -25 B, so raw takes the 2660 KiB step and
+  // leaves 999 B; 2660 KiB raw is the smallest whole-KiB step that clears that reading and leaves 999 B; 809 KiB gzip is the smallest whole-KiB step that clears that reading and leaves 345 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2660 * 1024, gzip: 809 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -1138,7 +1157,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 17,724 B raw / 5,645 B gzip;
   // and the reviewed Google-Drive-configured variant measures 17,724 B raw /
   // 5,647 B gzip. 18 KiB raw would have left 708 B and 6 KiB gzip would
-  // have left 497 B; the 19/7 KiB steps leave 1,732 / 1,521 B.
   //
   // Re-measured after the pack learned to wait for the journal it writes into.
   // Bringing work in on a new device is the first thing a person does with this
@@ -1183,7 +1201,6 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the reviewed Pages variant weighed 19,127 B raw / 6,131 B gzip;
   // and the reviewed Google-Drive-configured variant weighed 19,127 B raw /
   // 6,129 B gzip. 19 KiB raw would have left 329 B and 6 KiB gzip would
-  // have left 13 B; the 19/7 KiB steps leave 329 / 1,037 B.
   //
   // Re-measured after the journal-integrity repair. An adoption a storage failure interrupted is finished on the next
   // attempt instead of being refused as a conflicting session forever; a bundle event carrying no payload is refused by
@@ -1198,6 +1215,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 6,137 B gzip; the Pages variant sets the gzip maximum and every variant
   // measures the same raw bytes.
   // 19 KiB raw is already the smallest whole-KiB step that clears the reading and leaves 311 B; 6 KiB gzip would have left 5 B, below the tripwire floor, so gzip keeps the 7 KiB step and leaves 1,029 B.
+  //
+  // Re-measured after adoption stopped stranding a conversation. A transient failure part-way through moving a journal into a Vault used to leave a genesis stub that every later attempt refused by name, forever; a replay is resumable now, and continues only a target that matches the exact record the replay would have produced at that point. A bundle event that omits its payload is refused where it arrives rather than killing an adoption later, and an approval that expired is no longer recorded as a decision a person made.
+  // The canonical config-free artifact measures 19,145 B raw / 6,137 B gzip;
+  // the reviewed Docker-defaults variant measures 19,145 B raw / 6,137 B gzip;
+  // the reviewed Pages variant measures 19,145 B raw / 6,138 B gzip;
+  // and the reviewed Google-Drive-configured variant measures 19,145 B raw /
+  // 19 KiB raw is the smallest whole-KiB step that clears that reading and leaves 311 B; 6 KiB gzip would have left 6 B, below the tripwire floor, so gzip keeps the 7 KiB step and leaves 1,030 B.
   optionalWorkBundle: Object.freeze({ raw: 19 * 1024, gzip: 7 * 1024 }),
   // The complete Skills route: resolved-set grid, profile/global controls,
   // authored-skill removal guard, and the exact adjacent profile-switch

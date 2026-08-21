@@ -107,10 +107,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Resolve the path this repository publishes at
+        id: base
+        env:
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # Pages serves a project site from https://<owner>.github.io/<repo>/,
+          # so the bundle has to be compiled against `/<repo>/`. This was written
+          # as the literal `/airship/`, which is only correct while the
+          # repository is named `airship`: a fork under any other name published
+          # a bundle whose every URL pointed one directory above the site, and
+          # the first thing a newcomer saw was a blank page and a wall of 404s.
+          # A user or organisation site (`<owner>.github.io`) is served from the
+          # origin root and takes `/` instead.
+          name="${REPOSITORY#*/}"
+          lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+          if [ "$(lower "$name")" = "$(lower "$OWNER").github.io" ]; then
+            base="/"
+          else
+            base="/$name/"
+          fi
+          echo "path=$base" >> "$GITHUB_OUTPUT"
+          echo "- Base path: \`$base\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build static release
         env:
-          AIRSHIP_PUBLIC_BASE_PATH: /airship/
-          VITE_AIRSHIP_PUBLIC_ORIGIN: ${{ vars.VITE_AIRSHIP_PUBLIC_ORIGIN }}
+          AIRSHIP_PUBLIC_BASE_PATH: ${{ steps.base.outputs.path }}
           # A Google OAuth *Web* client ID is a public deployment identifier, not
           # a secret, so it is a repository variable. Without it Vite strips the
           # entire Drive connect branch from the bundle and no runtime toggle can
@@ -131,6 +154,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Prove the Pages takeover and frame boundary
+        env:
+          # The gate must interrogate the artifact that was just built, at the
+          # path it was built for. Reading the same resolved value keeps the
+          # proof and the publication from testing two different URL spaces.
+          AIRSHIP_PUBLIC_BASE_PATH: ${{ steps.base.outputs.path }}
         run: npx playwright test --config=playwright.static-host.config.ts
 
       - name: Record the deployed artifact inventory

@@ -17,7 +17,6 @@ services:
       dockerfile: Dockerfile
       args:
         AIRSHIP_PUBLIC_BASE_PATH: ${AIRSHIP_PUBLIC_BASE_PATH:-/}
-        VITE_AIRSHIP_PUBLIC_ORIGIN: ${VITE_AIRSHIP_PUBLIC_ORIGIN:-}
         VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     container_name: airship
     environment:

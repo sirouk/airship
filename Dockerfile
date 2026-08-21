@@ -20,15 +20,16 @@ COPY . .
 # Where the app is served from. `/` for a domain root; a subpath needs the
 # trailing slash (`/airship/`) or the manifest and service worker resolve wrong.
 ARG AIRSHIP_PUBLIC_BASE_PATH=/
-# The origin the app tells providers to return to. OAuth redirects are compared
-# against this exactly, so it must match the domain Caddy answers on.
-ARG VITE_AIRSHIP_PUBLIC_ORIGIN=
 # Optional provider registrations. Absent is a supported configuration: Vite
 # strips the Drive connect branch entirely when the Google client ID is empty,
 # which is why the default vault provider below moves with it.
+#
+# There is no origin argument. Google Identity Services authorizes the page's
+# own origin, so the deployment origin is whatever the browser is on; an origin
+# baked in here would only be a second copy of it, free to disagree. Register
+# the real origin under the client ID's Authorized JavaScript origins instead.
 ARG VITE_GOOGLE_CLIENT_ID=
 ENV AIRSHIP_PUBLIC_BASE_PATH=${AIRSHIP_PUBLIC_BASE_PATH} \
-    VITE_AIRSHIP_PUBLIC_ORIGIN=${VITE_AIRSHIP_PUBLIC_ORIGIN} \
     VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
 
 # Fail closed on an unconfigured deployment: start in explicit page-memory mode

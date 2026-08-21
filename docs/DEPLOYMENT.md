@@ -46,12 +46,33 @@ an unrestricted worker.
 ## Values you should expect to configure
 
 - `AIRSHIP_PUBLIC_BASE_PATH`
-- `VITE_AIRSHIP_PUBLIC_ORIGIN`
 - `VITE_GOOGLE_CLIENT_ID` when enabling Drive
 - Caddy or host-specific listener/domain values
 
+Airship is never told its own origin. Google Identity Services authorizes the
+origin the page is served from, so the only place a deployment origin has to be
+written down is the client ID's Authorized JavaScript origins list.
+
 See the root `Dockerfile`, `docker-compose.yaml`, `.env.sample`, and
 `deploy.sh` for the exact repository templates currently shipped.
+
+## What the base path reaches, and what it does not
+
+`AIRSHIP_PUBLIC_BASE_PATH` is inlined into the bundle, so every URL the browser
+asks for carries it, and the files have to be laid down at the matching place:
+`/srv<base>` in the image, `<base>` in the Pages artifact. Two things also have
+to carry it, and one of them cannot:
+
+- The Caddyfile's matchers do. Each is written `{$AIRSHIP_PUBLIC_BASE_PATH:/}…`,
+  and `caddy-entrypoint.sh` supplies the trailing slash Caddy will not.
+- `public/_headers` does not, except for the Prime kernel worker rule, which is
+  written as a leading splat for that reason. `/assets/*`, `/sw.js`,
+  `/release-manifest.json` and `/semantic-pack/v1/*` are anchored at the origin
+  root and match nothing on a subpath deployment. On Netlify or Cloudflare
+  Pages, a subpath site keeps its security headers — those come from `/*` — and
+  silently loses its cache lifetimes and its `Service-Worker-Allowed` scope.
+  Add base-prefixed copies of those four rules before deploying to a subpath on
+  a host that reads this format. GitHub Pages and Caddy never read it.
 
 ## What a deployment must not add
 

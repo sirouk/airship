@@ -1,7 +1,8 @@
 import { expect, test, type Response } from "@playwright/test";
-
-const ORIGIN = "http://127.0.0.1:4193";
-const PUBLIC_BASE_PATH = "/airship/";
+// One reading of the deployed path, shared with the server that serves it and
+// the baseURL that addresses it. Two readings could disagree, and the one that
+// disagreed would fail as a boundary regression.
+import { ORIGIN, PUBLIC_BASE_PATH } from "../playwright.static-host.config";
 const LOAD_COUNTER = "airship.static-host-document-loads.v1";
 const EXACT_DOCUMENT_CONTENT_SECURITY_POLICY = "default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src https://stackblitz.com https://accounts.google.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:11434 http://127.0.0.1:11434 http://localhost:11435 http://127.0.0.1:11435 http://localhost:11436 http://127.0.0.1:11436 http://localhost:1234 http://127.0.0.1:1234 http://localhost:1235 http://127.0.0.1:1235 http://localhost:1236 http://127.0.0.1:1236; worker-src 'self' blob:; manifest-src 'self'; font-src 'self'; trusted-types default airship-static airship-worker airship-prime-kernel-worker airship-prime-kernel-worker-asset airship-semantic-worker airship-wasi-preview1-worker airship-opfs-worker airship-google-identity; require-trusted-types-for 'script'";
 
