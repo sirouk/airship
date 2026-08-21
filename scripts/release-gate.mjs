@@ -29,10 +29,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // races. In the candidate tree, the canonical config-free artifact measures
   // 385,247 B raw / 119,150 B gzip. The reviewed origin-inlined variant measures
   // 385,237 B raw / 119,147 B gzip, and the reviewed Pages variant measures
-  // 385,256 B raw / 119,143 B gzip. The Pages raw reading and config-free gzip
-  // reading set the margins. 376 KiB raw is 232 B below the larger artifact;
-  // 117 KiB gzip would have left 658 B in the config-free build, below the
-  // tripwire floor. The tight 377/118 KiB steps leave at least 792 / 1,682 B.
+  // 385,256 B raw / 119,143 B gzip. The Pages raw reading and largest recorded
+  // gzip reading set the documented maxima. 376 KiB raw is 232 B below the
+  // larger artifact; 117 KiB gzip would have left 612 B against the largest
+  // recorded gzip reading, below the tripwire floor. The tight 377/118 KiB
+  // steps leave at least 792 / 1,636 B.
   entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -454,7 +455,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // origin-inlined Docker variant measuring one raw byte and twenty-nine gzip
   // bytes under the config-free CI artifact, and its own reading wandering by
   // single bytes between runs.
-  // Raw takes two steps rather than one: 63 KiB raw would have left 120 B,
+  // Raw takes two steps rather than one: 63 KiB raw would have left 354 B,
   // inside a minifier rename of the reading. Gzip takes the smallest whole-KiB step
   // that clears 20.96 KiB, exactly the tripwire policy this file enforces
   // elsewhere when the margin crosses one whole kilobyte.
@@ -876,6 +877,40 @@ const MEASUREMENT_TIGHTNESS_EXEMPT_ROLES = Object.freeze({
   allJavaScriptAndWorkers: Object.freeze(["raw"]),
 });
 
+const RELEASE_BUDGET_ROLES = Object.freeze(["raw", "gzip"]);
+const TRIPWIRE_MARGIN_CLAIM =
+  /(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\s(raw|gzip)\swould have left\s(\d[\d,]*)\s(?:B|bytes)\b/gu;
+
+/** Select each role's largest claim without losing that claim's written precision. */
+function maximumDocumentedFigures(measured) {
+  return Object.fromEntries(RELEASE_BUDGET_ROLES.map((role) => {
+    const maximum = measured.reduce((largest, pair) => {
+      const candidate = { bytes: pair[role], written: pair.written[role] };
+      if (!largest || candidate.bytes > largest.bytes) return candidate;
+      // Equal byte claims keep the finer promise; choosing the coarser spelling
+      // would silently widen the lower-bucket tolerance.
+      if (candidate.bytes === largest.bytes && writtenTolerance(candidate.written) < writtenTolerance(largest.written)) {
+        return candidate;
+      }
+      return largest;
+    }, null);
+    return [role, maximum];
+  }));
+}
+
+function parseTripwireMarginClaims(prose) {
+  return [...prose.matchAll(TRIPWIRE_MARGIN_CLAIM)].map((match) => ({
+    ceiling: toBytes(match[1], match[2]),
+    role: match[3],
+    remaining: Number(match[4].replaceAll(",", "")),
+  }));
+}
+
+function writtenTolerance(written) {
+  // Half of the last digit the author actually wrote.
+  return (0.5 * unitScale(written.unit)) / 10 ** written.decimals;
+}
+
 /*
  * Every ceiling in RELEASE_BUDGETS is justified by a measurement written in the
  * comment above it, and that comment is the only place a reviewer can see what a
@@ -891,9 +926,10 @@ const MEASUREMENT_TIGHTNESS_EXEMPT_ROLES = Object.freeze({
  * shipped. The budgets above must each still state a measurement at all, so a raise
  * cannot be laundered by deleting the number it contradicts. And each ceiling must
  * be the smallest whole-KiB step that clears its measurement, unless the comment
- * says for that role what the tighter step would have left — the sentence this file
- * already writes when it declines a ceiling a minifier rename could breach. The
- * three ceilings raised against stale comments each granted 10–18% of new transfer
+ * names that exact step and the bytes it would leave against the role's maximum —
+ * the sentence this file already writes when it declines a ceiling a minifier
+ * rename could breach. The three ceilings raised against stale comments each
+ * granted 10–18% of new transfer
  * budget in silence; that last rule is what refuses it, because the extra step now
  * costs a sentence naming the bytes it bought.
  */
@@ -911,21 +947,28 @@ export function assertDocumentedBudgetMeasurements(source) {
       }
     }
     if (!MEASUREMENT_JUSTIFIED_BUDGETS.includes(entry.name)) continue;
-    // The largest pair a comment states is the one its ceilings have to clear; a
-    // comment may also quote a delta or the reading it grew from.
-    const documented = entry.measured.reduce((largest, pair) => (largest && largest.raw >= pair.raw ? largest : pair), null);
-    if (!documented) {
+    // Raw and gzip maxima can come from different supported build variants.
+    // Keep each winning figure whole so its written precision remains attached.
+    const documented = maximumDocumentedFigures(entry.measured);
+    if (RELEASE_BUDGET_ROLES.some((role) => !documented[role])) {
       failures.push(`${entry.name}: its comment no longer records a measured raw/gzip pair for the ceiling it sets`);
       continue;
     }
-    for (const role of ["raw", "gzip"]) {
+    const tripwireClaims = parseTripwireMarginClaims(entry.prose);
+    for (const role of RELEASE_BUDGET_ROLES) {
       if (MEASUREMENT_TIGHTNESS_EXEMPT_ROLES[entry.name]?.includes(role)) continue;
       const ceiling = entry.budget[role];
-      const steps = new RegExp(`${role} would have left \\d`, "u").test(entry.prose) ? 2 : 1;
-      const allowed = (Math.floor(documented[role] / 1024) + steps) * 1024;
+      const figure = documented[role];
+      const firstStep = (Math.floor(figure.bytes / 1024) + 1) * 1024;
+      const expectedRemaining = firstStep - figure.bytes;
+      const hasMatchingTripwire = tripwireClaims.some((claim) =>
+        claim.role === role
+        && claim.ceiling === firstStep
+        && Math.abs(claim.remaining - expectedRemaining) <= writtenTolerance(figure.written));
+      const allowed = firstStep + (hasMatchingTripwire ? 1024 : 0);
       if (ceiling > allowed) {
         failures.push(
-          `${entry.name}: the ${formatBytes(ceiling)} ${role} ceiling is above the smallest whole-KiB step that clears the documented ${formatBytes(documented[role])}; take the tighter step, or say in the comment what "<n> KiB ${role} would have left"`,
+          `${entry.name}: the ${formatBytes(ceiling)} ${role} ceiling is above the smallest whole-KiB step that clears the documented ${formatBytes(figure.bytes)}; take the tighter step, or record the matching tripwire arithmetic "${firstStep / 1024} KiB ${role} would have left ${expectedRemaining} B"`,
         );
       }
     }
@@ -958,11 +1001,11 @@ export function assertDocumentedBudgetMeasurements(source) {
  * The allowance is structurally bounded to less than one KiB; crossing a bucket
  * remains a failure and requires the comment and ceiling to be reviewed again.
  *
- * The largest pair a comment states is the one checked — the same selection
- * `assertDocumentedBudgetMeasurements` makes, so a comment that also quotes the
- * reading it grew from is unaffected. A figure is also held only to the precision
- * it was written at: "49.48 KiB raw" claims a hundredth of a KiB, and turning
- * that into a byte claim would enforce a promise its author never made.
+ * Raw and gzip are selected independently because supported variants can have
+ * crossed maxima. Each selected figure keeps its own written precision, so a
+ * comment that spells one role in bytes and the other in hundredths of a KiB is
+ * checked against exactly those claims rather than the precision of whichever
+ * variant happened to have the largest raw output.
  */
 export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
   const failures = [];
@@ -973,16 +1016,16 @@ export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
       failures.push(`${entry.name}: named as measurement-justified, but this run measured no artifact under that name`);
       continue;
     }
-    const documented = entry.measured.reduce((largest, pair) => (largest && largest.raw >= pair.raw ? largest : pair), null);
+    const documented = maximumDocumentedFigures(entry.measured);
     // Its absence is already a failure in the guard that runs before the build.
-    if (!documented) continue;
-    for (const role of ["raw", "gzip"]) {
-      const written = documented.written[role];
-      // Half of the last digit the author actually wrote.
-      const tolerance = (0.5 * unitScale(written.unit)) / 10 ** written.decimals;
-      const documentedBucket = Math.floor(documented[role] / 1024);
+    if (RELEASE_BUDGET_ROLES.some((role) => !documented[role])) continue;
+    for (const role of RELEASE_BUDGET_ROLES) {
+      const figure = documented[role];
+      const written = figure.written;
+      const tolerance = writtenTolerance(written);
+      const documentedBucket = Math.floor(figure.bytes / 1024);
       const measuredBucket = Math.floor(measured[role] / 1024);
-      if (documented[role] - measured[role] > tolerance && documentedBucket > measuredBucket) {
+      if (figure.bytes - measured[role] > tolerance && documentedBucket > measuredBucket) {
         failures.push(
           `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B), in a lower whole-KiB budget bucket. Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
         );

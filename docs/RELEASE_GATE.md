@@ -16,6 +16,15 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 
 The gate measures raw and gzip bytes. Slash-separated figures follow the budget names in the same order.
 
+For measurement-justified ceilings, raw and gzip are separate claims. The gate
+checks the largest documented raw and gzip readings independently against the
+current build and keeps the unit and decimal precision of each selected figure.
+For a role governed by the tight whole-KiB rule, its ceiling may take one
+tripwire step beyond the smallest clearing step only when the comment states
+matching `<n> KiB <role> would have left <m> B` arithmetic. Supported build variants therefore cannot hide crossed maxima or
+lend one role another role's precision or margin. These checks do not raise any
+ceiling.
+
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 377 KiB | 118 KiB |

@@ -337,6 +337,14 @@ describe("release gate", () => {
         new RegExp(`${name}: the [\\d.]+ KiB gzip ceiling is above the smallest whole-KiB step`, "u"),
       );
     }
+    const falseTripwire = source.replace(
+      "63 KiB raw would have left 354 B",
+      "63 KiB raw would have left 999 B",
+    );
+    expect(falseTripwire).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(falseTripwire))
+      .toThrow(/optionalMemoryView: .* matching tripwire arithmetic "63 KiB raw would have left 354 B"/u);
+
     expect(() => assertDocumentedBudgetMeasurements(source.replace(/^  optionalMemoryView: .*$/mu, "  optionalMemoryViewX: Object.freeze({ raw: 1, gzip: 1 }),")))
       .toThrow(/optionalMemoryView: named as measurement-justified but no such release budget was found/u);
   });
@@ -384,11 +392,34 @@ describe("release gate", () => {
     const asDocumented = Object.fromEntries(
       MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
         const entry = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
-        const largest = entry.measured.reduce((left, right) => (left && left.raw >= right.raw ? left : right), null);
-        return [name, { raw: largest.raw, gzip: largest.gzip }];
+        return [name, Object.fromEntries(["raw", "gzip"].map((role) => {
+          const largest = entry.measured.reduce(
+            (left, right) => (left && left[role] >= right[role] ? left : right),
+            null,
+          );
+          return [role, largest[role]];
+        }))];
       }),
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, asDocumented)).not.toThrow();
+
+    /*
+     * Supported variants can have crossed maxima: Pages currently wins raw while
+     * config-free wins gzip. A gzip claim in a higher bucket must not disappear
+     * merely because its paired raw value is nine bytes smaller. Writing this
+     * adversarial maximum in KiB also proves its own precision travels with it.
+     */
+    const crossedMaxima = source.replace(
+      "385,247 B raw / 119,150 B gzip",
+      "385,247 B raw / 117.68 KiB gzip",
+    );
+    expect(crossedMaxima).not.toBe(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
+      ...asDocumented,
+      entryJavaScript: { raw: 385247, gzip: 119150 },
+    })).toThrow(
+      /entryJavaScript: its comment claims 117\.68 KiB gzip, but this build measures only 116\.36 KiB \(119150 B\), in a lower whole-KiB budget bucket/u,
+    );
 
     // A legal build-time environment can move a shared aggregate by a handful
     // of bytes. The reading still justifies the same whole-KiB ceiling, so this
