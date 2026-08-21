@@ -30,48 +30,143 @@ The gate writes `release-manifest.json`, a deterministic inventory of the
 artifacts it measured, and prints that the manifest is explicitly unsigned. It
 is an inventory, not a signature, an attestation, or a provenance claim.
 
+## Two classes of ceiling
+
+Every ceiling is in one of two classes, and each budget's comment says which
+one and why.
+
+**Class 1 — what a person waits for before anything works.** The entry
+JavaScript, the entry stylesheet, the baseline JavaScript and workers including
+the chunks awaited before first render, and the service worker. These stay
+hard: the ceiling is the smallest whole-KiB step that clears the reading, one
+further step is available only against written `<n> KiB <role> would have left
+<m> B` arithmetic, and every reviewed build variant has to be recorded. Today
+that is about 163 KiB gzip of JavaScript and 25 KiB gzip of CSS, and it should
+stay there.
+
+**Class 2 — what a route or a feature costs when somebody opens it, plus the
+aggregates.** Nobody waits for these before the first screen. Their ceilings
+are set with deliberate headroom — the reading plus twice a stated headroom,
+rounded up — so ordinary honest work does not have to re-measure five builds to
+change a sentence. What replaces the tight step is stricter measurement rather
+than looser enforcement: every ceiling states a reading, every reading names
+the reviewed variant that reproduces it, a ceiling above three headrooms is
+refused, and a reading that grows by a quarter (or 16 KiB, whichever is
+smaller, never less than a kilobyte) has to be accompanied by a sentence naming
+what was added.
+
+## Reviewed build variants
+
+A reading nobody can rebuild is a number, not a measurement. These are the
+build shapes this release reviews; `scripts/release-gate.mjs` exports them as
+`REVIEWED_BUILD_VARIANTS` with the exact environment for each.
+
+| Variant | Environment |
+| --- | --- |
+| canonical config-free | `npm run build:static` |
+| Docker defaults | `AIRSHIP_PUBLIC_BASE_PATH=/ VITE_AIRSHIP_PUBLIC_ORIGIN= VITE_GOOGLE_CLIENT_ID= VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral` |
+| Pages | `AIRSHIP_PUBLIC_BASE_PATH=/airship/ VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=ephemeral` |
+| Google-Drive-configured | `VITE_GOOGLE_CLIENT_ID=<web client id> VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive` |
+| Pages Google-Drive-configured | `AIRSHIP_PUBLIC_BASE_PATH=/airship/ VITE_GOOGLE_CLIENT_ID=<web client id> VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER=google-drive` |
+
+The last row is the shape this repository's own Pages workflow publishes when
+the `VITE_GOOGLE_CLIENT_ID` repository variable is set, and until now no
+comment measured it. A base path is inlined beside every asset URL, so each of
+its characters costs about 9 raw bytes across the first-party aggregate, which
+makes it the largest of the five. `VITE_GOOGLE_CLIENT_ID` is listed even when
+empty because empty and absent are different builds: Vite inlines `""` for one
+and `undefined` for the other, and the first-party and installed aggregates
+measure 32 raw bytes more when it is absent. The Dockerfile's `ENV` line always
+defines it.
+
 ## Executable asset ceilings
 
-The gate measures raw and gzip bytes. Slash-separated figures follow the budget
-names in the same order. The baseline includes the HTML entry and preloads plus
-every dynamic chunk awaited before first render, including the
-controlled-navigation boundary.
+The gate measures raw and gzip bytes. The baseline includes the HTML entry and
+preloads plus every dynamic chunk awaited before first render, including the
+controlled-navigation boundary and the packs the shell mounts with.
 
-For measurement-justified ceilings, raw and gzip are separate claims. The gate
-checks the largest documented raw and gzip readings independently against the
-current build and keeps the unit and decimal precision of each selected figure.
-For a role governed by the tight whole-KiB rule, its ceiling may take one
-tripwire step beyond the smallest clearing step only when the comment states
-matching `<n> KiB <role> would have left <m> B` arithmetic. Supported build variants therefore cannot hide crossed maxima or
-lend one role another role's precision or margin. These checks do not raise any
-ceiling.
+Raw and gzip are separate claims. The gate checks the largest recorded raw and
+gzip readings independently against the current build, in both directions: a
+comment that overstates the artifact loses the ceiling it bought, and a comment
+that understates it reports headroom the build does not have.
 
-| Class | Raw ceiling | Gzip ceiling |
-| --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
-| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 491 KiB | 160 KiB |
-| Deferred advanced capability bundle | 229 KiB | 68 KiB |
-| First-party and other non-vendor JS/workers | 1975 KiB | 619 KiB |
-| Browser Git + Terminal vendor runtime aggregate | 686 KiB | 192 KiB |
-| Absolute installed JavaScript/worker backstop | 2659 KiB | 809 KiB |
-| Service worker | 12 KiB | 5 KiB |
-| Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
-| Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
-| Optional Node/WebContainer pack | 41 KiB | 15 KiB |
-| Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
-| Optional agent runtime / tool bundle | 57 KiB / 126 KiB | 18 KiB / 40 KiB |
-| Optional Workspace / Source Control / browser Git | 86 KiB / 40 KiB / 262 KiB | 28 KiB / 13 KiB / 80 KiB |
-| Optional folder on this device | 16 KiB | 6 KiB |
-| Optional move-work bundle pack | 19 KiB | 7 KiB |
-| Optional Sessions / Memory / Memory support | 66 KiB / 64 KiB / 3 KiB | 20 KiB / 21 KiB / 2 KiB |
-| Optional Skills route / skill editor | 8 KiB / 4 KiB | 4 KiB / 2 KiB |
-| Optional Terminal | 425 KiB | 113 KiB |
-| Optional semantic worker | 16 KiB | 6 KiB |
-| Optional inference/provider + Companion protocol packs | 141 KiB | 42 KiB |
-| Optional prime runtime pack | 236 KiB | 72 KiB |
-| Pinned same-origin Pyodide distribution | 16384 KiB | 8192 KiB |
-| HTML-referenced entry CSS | 144 KiB | 26 KiB |
-| General WASM excluding separately capped engine WASM | 1024 KiB / 1024 KiB | 350 KiB / 350 KiB |
+No gzip ceiling may sit within 512 bytes of the artifact it governs. Raw bytes
+are a byte count; gzip bytes are whatever this machine's deflate implementation
+produced, and compressing this build with Node 22.22.3's bundled compressor and
+with zlib 1.2.12 at the same level differs by up to 388 B on one artifact and
+431 B across the release. The tightest gzip margin used to be 35 B, so a
+colleague on a different Node could be handed a red gate for a tree nobody
+touched. Several gzip ceilings therefore take a further whole-KiB step with the
+arithmetic written beside them: that step is not slack, it is the width of the
+measuring instrument.
+
+A few roles are declared absolute backstops rather than headroom claims — entry
+and baseline raw bytes, which are parse cost rather than transfer cost; the
+pinned Pyodide distribution, which is a verified byte set; and the general WASM
+ceilings, which govern a class this build does not emit. They still record a
+reading and are still compared with the artifact.
+
+| Class | Tier | Raw ceiling | Gzip ceiling |
+| --- | ---: | ---: | ---: |
+| HTML-referenced entry JavaScript | 1 | 377 KiB | 118 KiB |
+| Baseline JavaScript/workers, including pre-render chunks | 1 | 491 KiB | 160 KiB |
+| Deferred advanced capability bundle | 2 | 292 KiB | 87 KiB |
+| First-party and other non-vendor JS/workers | 2 | 2039 KiB | 683 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 2 | 749 KiB | 248 KiB |
+| Absolute installed JavaScript/worker backstop | 2 | 2723 KiB | 873 KiB |
+| Service worker | 1 | 12 KiB | 5 KiB |
+| Companion install-hub script | 2 | 8 KiB | 6 KiB |
+| Optional execution broker | 2 | 6 KiB | 5 KiB |
+| Optional execution engine | 2 | 5 KiB | 5 KiB |
+| Optional execution support | 2 | 12 KiB | 7 KiB |
+| Optional execution tools | 2 | 61 KiB | 18 KiB |
+| Optional pinned WASI Preview 1 Worker | 2 | 33 KiB | 11 KiB |
+| Optional Node/WebContainer pack | 2 | 52 KiB | 19 KiB |
+| Optional first-party `airship-sh` shell pack | 2 | 124 KiB | 37 KiB |
+| Optional browser-Git client | 2 | 22 KiB | 8 KiB |
+| Optional shared route primitives | 2 | 23 KiB | 12 KiB |
+| Optional request-failure vocabulary | 2 | 9 KiB | 6 KiB |
+| Optional slash commands | 2 | 19 KiB | 9 KiB |
+| Optional agent runtime | 2 | 74 KiB | 22 KiB |
+| Optional agent runtime status | 2 | 6 KiB | 5 KiB |
+| Optional multimodal parts | 2 | 5 KiB | 5 KiB |
+| Optional context policy | 2 | 8 KiB | 6 KiB |
+| Optional agent tool bundle | 2 | 162 KiB | 52 KiB |
+| Optional Workspace workbench | 2 | 112 KiB | 36 KiB |
+| Optional workspace binding | 2 | 5 KiB | 5 KiB |
+| Optional workspace codec | 2 | 5 KiB | 5 KiB |
+| Optional folder on this device | 2 | 20 KiB | 10 KiB |
+| Optional Source Control | 2 | 50 KiB | 17 KiB |
+| Optional source selection store | 2 | 2 KiB | 1 KiB |
+| Optional browser Git engine | 2 | 326 KiB | 103 KiB |
+| Optional Sessions route | 2 | 84 KiB | 25 KiB |
+| Optional post-paint session metadata | 2 | 10 KiB | 7 KiB |
+| Optional favorite ordering | 2 | 5 KiB | 5 KiB |
+| Optional session fork | 2 | 18 KiB | 9 KiB |
+| Optional Capabilities route | 2 | 17 KiB | 9 KiB |
+| Optional browser capabilities | 2 | 23 KiB | 10 KiB |
+| Optional Memory route | 2 | 82 KiB | 28 KiB |
+| Optional Memory support | 2 | 7 KiB | 6 KiB |
+| Optional move-work bundle pack | 2 | 25 KiB | 10 KiB |
+| Optional Skills route | 2 | 12 KiB | 7 KiB |
+| Optional skill editor | 2 | 8 KiB | 6 KiB |
+| Optional shared confirm dialog | 2 | 6 KiB | 5 KiB |
+| Optional keyboard shortcut sheet | 2 | 7 KiB | 6 KiB |
+| Optional shell overlays | 2 | 12 KiB | 7 KiB |
+| Optional palette actions | 2 | 5 KiB | 5 KiB |
+| Optional lost-work report | 2 | 10 KiB | 7 KiB |
+| Optional message parts | 2 | 18 KiB | 9 KiB |
+| Optional approval dock | 2 | 17 KiB | 9 KiB |
+| Optional Terminal | 2 | 488 KiB | 145 KiB |
+| Optional semantic worker | 2 | 13 KiB | 8 KiB |
+| Optional inference/provider + Companion protocol packs | 2 | 182 KiB | 53 KiB |
+| Optional prime runtime pack | 2 | 291 KiB | 86 KiB |
+| Optional Companion observation | 2 | 7 KiB | 6 KiB |
+| Optional Local Device Vault | 2 | 76 KiB | 22 KiB |
+| Pinned same-origin Pyodide distribution | 2 | 16384 KiB | 8192 KiB |
+| HTML-referenced entry CSS | 1 | 144 KiB | 26 KiB |
+| Each general WASM artifact, excluding separately capped engine WASM | 2 | 1024 KiB | 350 KiB |
+| All general WASM, excluding separately capped engine WASM | 2 | 1024 KiB | 350 KiB |
 
 ## Main local commands
 

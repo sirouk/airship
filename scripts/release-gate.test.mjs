@@ -45,6 +45,11 @@ import {
   isOptionalSourceSelectionPath,
   resolveOptionalSourceSelectionDelivery,
   assertDocumentedBudgetMeasurements,
+  assertEveryArtifactIsClassified,
+  RELEASE_ARTIFACT_CLASSES,
+  RELEASE_BUDGET_CLASSES,
+  REVIEWED_BUILD_VARIANTS,
+  releaseBudgetClass,
   assertDocumentedMeasurementsMatchBuild,
   assertReleaseGateDocumentationMirrors,
   parseDocumentedBudgets,
@@ -387,210 +392,299 @@ describe("release gate", () => {
     expect(printer).not.toMatch(/optionalProofSurface|optionalEvidenceAcquisition|optionalChutesOAuth/u);
   });
 
-  it("rejects budget comments that contradict or abandon the ceilings they justify", () => {
-    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
-    expect(() => assertDocumentedBudgetMeasurements(source)).not.toThrow();
-    expect(MEASUREMENT_JUSTIFIED_BUDGETS.length).toBeGreaterThan(0);
-    for (const name of MEASUREMENT_JUSTIFIED_BUDGETS) expect(RELEASE_BUDGETS[name]).toBeDefined();
+  const gateSource = () => readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
 
-    // Every ceiling re-measured by the recovery-and-continuation pass must stay
-    // under the build comparison. Deriving this assertion from the exported
-    // list would let a future omission silently weaken the gate again.
-    for (const name of [
-      "entryJavaScript",
-      "allJavaScriptAndWorkers",
-      "firstPartyJavaScriptAndWorkers",
-      "optionalVendorRuntimeAggregate",
-      "totalJavaScriptAndWorkers",
-      "optionalExecutionTools",
-      "optionalInferenceProviders",
-      "optionalTerminal",
-    ]) {
+  /** Exactly what the gate would measure if every reviewed reading were the truth. */
+  const asRecorded = (source) => Object.fromEntries(
+    parseDocumentedBudgets(source)
+      .filter((entry) => entry.readings.length > 0)
+      .map((entry) => [entry.name, Object.fromEntries(["raw", "gzip"].map((role) => [
+        role,
+        entry.readings.reduce((largest, reading) => Math.max(largest, reading[role]), 0),
+      ]))]),
+  );
+
+  /** …plus the one module the bundler folded into its consumer in this build. */
+  const asBuilt = (source) => ({
+    ...asRecorded(source),
+    optionalSourceSelection: { inlinedInto: "assets/repository-admission-VdXZNZ78.js" },
+  });
+
+  it("rejects budget comments that contradict or abandon the ceilings they justify", () => {
+    const source = gateSource();
+    expect(() => assertDocumentedBudgetMeasurements(source)).not.toThrow();
+
+    /*
+     * Enforcement is no longer opt-in. It named sixteen of fifty-nine budgets,
+     * and an auditor raised a ceiling from 24 KiB to 64 KiB on a 12.5 KiB pack
+     * with a green gate because the name was not on the list.
+     */
+    expect(MEASUREMENT_JUSTIFIED_BUDGETS).toEqual(Object.keys(RELEASE_BUDGETS));
+    expect(MEASUREMENT_JUSTIFIED_BUDGETS.length).toBe(59);
+    for (const name of Object.keys(RELEASE_BUDGETS)) {
       expect(MEASUREMENT_JUSTIFIED_BUDGETS, name).toContain(name);
     }
 
     // A figure the ceiling beside it would reject describes a build nobody shipped.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
-      .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
-    /*
-     * …and a raise cannot be laundered by deleting the operative measurement.
-     *
-     * The claim is removed by the *word* that makes a figure a measurement,
-     * not by the figures: a comment may record several reviewed readings, so
-     * naming one of them here would let this pass while the others remained,
-     * and would break every time a rebuild moved a byte.
-     */
-    expect(() => assertDocumentedBudgetMeasurements(source
-      .replaceAll("Measured ", "Weighed ")
-      .replaceAll("measured ", "weighed ")
-      .replaceAll("measures ", "weighs ")))
-      .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
+    expect(() => assertDocumentedBudgetMeasurements(
+      source.replace("Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.", "Reviewed reading (Pages): 912,837 B raw / 4,574 B gzip."),
+    )).toThrow(/optionalApprovalDock: its reviewed reading of 912,837 B raw is above the 17\.00 KiB raw ceiling/u);
 
-    /*
-     * The gzip ceilings as the review found them: a whole KiB past the smallest step
-     * that clears the measurement recorded beside them, which is transfer budget
-     * granted by a comment that said nothing about it. (deferredCapabilities is shown
-     * at two steps, because its own ceiling is already the justified second step —
-     * the pair moves with it, which is the point: this row has to name the ceiling
-     * as it stands or it stops testing anything.) Any step
-     * beyond the first has to be paid for with the sentence naming what the tighter one
-     * would have left — which is why the raw ceilings beside these pass untouched.
-     */
-    for (const [name, ceiling, granted] of [
-      ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
-      ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
-      ["deferredCapabilities", "gzip: 68 * 1024", "gzip: 69 * 1024"],
-    ]) {
-      const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
-      expect(raised, name).not.toBe(source);
-      expect(() => assertDocumentedBudgetMeasurements(raised), name).toThrow(
-        new RegExp(`${name}: the [\\d.]+ KiB gzip ceiling is above the smallest whole-KiB step`, "u"),
-      );
-    }
-    const falseTripwire = source.replace(
-      "63 KiB raw would have left 276 B",
-      "63 KiB raw would have left 999 B",
-    );
-    expect(falseTripwire).not.toBe(source);
-    expect(() => assertDocumentedBudgetMeasurements(falseTripwire))
-      .toThrow(/optionalMemoryView: .* matching tripwire arithmetic "63 KiB raw would have left 276 B"/u);
+    // …and a raise cannot be laundered by deleting the number it contradicts.
+    expect(() => assertDocumentedBudgetMeasurements(source.replaceAll("Reviewed reading (", "Earlier reading (")))
+      .toThrow(/optionalApprovalDock: its comment records no "Reviewed reading/u);
 
-    expect(() => assertDocumentedBudgetMeasurements(source.replace(/^  optionalMemoryView: .*$/mu, "  optionalMemoryViewX: Object.freeze({ raw: 1, gzip: 1 }),")))
-      .toThrow(/optionalMemoryView: named as measurement-justified but no such release budget was found/u);
+    // A reading nobody can rebuild is a number, not a measurement.
+    expect(() => assertDocumentedBudgetMeasurements(
+      source.replace("Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.", "Reviewed reading (my laptop): 12,837 B raw / 4,574 B gzip."),
+    )).toThrow(/optionalApprovalDock: its comment attributes a reading to my laptop, which is not a reviewed build variant/u);
   });
 
   /*
-   * Which comment syntax a budget happens to use is a typographic accident, and
-   * it was deciding whether the budget was checked at all: the parser read `//`
-   * lines only and every other line reset the accumulator, so a ceiling
-   * justified in a `/* *\/` block reached the guard as empty prose — no figure
-   * to contradict a ceiling, no measurement to be too loose for.
+   * The two classes, in the file, with the rules that differ between them.
    */
-  it("reads a budget justified in a block comment, not only a slash-slash one", () => {
-    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
+  it("makes every budget declare its class, and holds Class 1 to every reviewed variant", () => {
+    const source = gateSource();
     const entries = parseDocumentedBudgets(source);
-    // `optionalConfirmDialog` is documented in block form and states its reading.
+    expect(entries).toHaveLength(59);
+    for (const entry of entries) {
+      expect(entry.declaredClass, entry.name).toBe(releaseBudgetClass(entry.name));
+    }
+    // The four things a person waits for, and nothing else.
+    expect(Object.keys(RELEASE_BUDGET_CLASSES).sort()).toEqual([
+      "allJavaScriptAndWorkers",
+      "entryCss",
+      "entryJavaScript",
+      "serviceWorker",
+    ]);
+
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Class 1 — startup: the one module a browser", "Class 2 — on demand: the one module a browser")))
+      .toThrow(/entryJavaScript: its comment declares Class 2, but RELEASE_BUDGET_CLASSES puts it in Class 1/u);
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Class 2 — on demand: fetched as the shell mounts", "Fetched as the shell mounts")))
+      .toThrow(/optionalApprovalDock: its comment does not say which class it is in/u);
+
+    /*
+     * The deployment shape this repository's own Pages workflow publishes — a
+     * sub-path and a client ID — was measured by nobody, and nothing could
+     * notice because no list said what a full set of variants was.
+     */
+    expect(REVIEWED_BUILD_VARIANTS.map((variant) => variant.name)).toContain("Pages Google-Drive-configured");
+    for (const variant of REVIEWED_BUILD_VARIANTS) {
+      expect(variant.environment, variant.name).toContain("npm run build:static");
+    }
+    const droppedFromEntry = source.replace(
+      "// Reviewed reading (Pages Google-Drive-configured): 386,011 B raw / 119,757 B gzip.\n",
+      "",
+    );
+    expect(droppedFromEntry).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(droppedFromEntry))
+      .toThrow(/entryJavaScript: Class 1, so every reviewed variant must be recorded; missing Pages Google-Drive-configured/u);
+
+    // Class 2 states one variant and that is enough; it is not held to five.
+    const approvalDock = entries.find((entry) => entry.name === "optionalApprovalDock");
+    expect(approvalDock.readings.length).toBeLessThan(REVIEWED_BUILD_VARIANTS.length);
+    expect(() => assertDocumentedBudgetMeasurements(source)).not.toThrow();
+  });
+
+  /*
+   * A Class 1 ceiling is still the smallest whole-KiB step, or one further step
+   * against written arithmetic. A Class 2 ceiling is roomy on purpose — and
+   * refused above three headrooms, which is the rule that closes the 24-to-64
+   * KiB raise a green gate once accepted.
+   */
+  it("keeps Class 1 tight and refuses a Class 2 ceiling outside its headroom band", () => {
+    const source = gateSource();
+    const raised = source.replace(
+      "  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),",
+      "  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 119 * 1024 }),",
+    );
+    expect(raised).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(raised))
+      .toThrow(/entryJavaScript: the 119\.00 KiB gzip ceiling is above the smallest whole-KiB step/u);
+
+    // Remove the arithmetic that pays for the step this file does take.
+    const untripped = source.replace("117 KiB gzip would have left 40 B", "117 KiB gzip would have left 999 B");
+    expect(untripped).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(untripped))
+      .toThrow(/entryJavaScript: .* record the matching tripwire arithmetic "117 KiB gzip would have left 40 B"/u);
+
+    for (const [ceiling, expected] of [
+      ["raw: 64 * 1024", /optionalApprovalDock: the 64\.00 KiB raw ceiling is outside the Class 2 headroom band/u],
+      ["raw: 24 * 1024", /optionalApprovalDock: the 24\.00 KiB raw ceiling is outside the Class 2 headroom band/u],
+      ["raw: 13 * 1024", /optionalApprovalDock: the 13\.00 KiB raw ceiling is outside the Class 2 headroom band/u],
+    ]) {
+      const moved = source.replace(
+        "  optionalApprovalDock: Object.freeze({ raw: 17 * 1024, gzip: 9 * 1024 }),",
+        `  optionalApprovalDock: Object.freeze({ ${ceiling}, gzip: 9 * 1024 }),`,
+      );
+      expect(moved, ceiling).not.toBe(source);
+      expect(() => assertDocumentedBudgetMeasurements(moved), ceiling).toThrow(expected);
+    }
+  });
+
+  /*
+   * Raw bytes are a byte count. Gzip bytes are whatever this machine's deflate
+   * produced: Node 22.22.3 and zlib 1.2.12 differ by up to 388 B on one
+   * artifact here, and the tightest gzip margin in this file was 35 B.
+   */
+  it("refuses a gzip ceiling closer to its artifact than a compressor change moves", () => {
+    const source = gateSource();
+    const shaved = source.replace(
+      "  optionalSessionManifest: Object.freeze({ raw: 10 * 1024, gzip: 7 * 1024 }),",
+      "  optionalSessionManifest: Object.freeze({ raw: 10 * 1024, gzip: 3 * 1024 }),",
+    );
+    expect(shaved).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(shaved))
+      .toThrow(/optionalSessionManifest: the gzip ceiling leaves the reviewed reading only 35 B, under the 512 B a compressor change moves/u);
+
+    const recorded = asBuilt(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, recorded)).not.toThrow();
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...recorded,
+      optionalSessionManifest: { raw: 5831, gzip: 7168 - 300 },
+    })).toThrow(/optionalSessionManifest: the gzip ceiling leaves this build only 300 B, under the 512 B/u);
+  });
+
+  /*
+   * What a ceiling never told anybody: which change spent the headroom.
+   */
+  it("refuses a reading that jumped without a sentence naming what was added", () => {
+    const source = gateSource();
+    const grown = source
+      .replace(
+        "// Reviewed reading (Pages): 12,837 B raw / 4,574 B gzip.",
+        "// Reviewed reading (Pages): 16,837 B raw / 4,574 B gzip.",
+      )
+      .replace(
+        "  optionalApprovalDock: Object.freeze({ raw: 17 * 1024, gzip: 9 * 1024 }),",
+        "  optionalApprovalDock: Object.freeze({ raw: 21 * 1024, gzip: 9 * 1024 }),",
+      );
+    expect(grown).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(grown))
+      .toThrow(/optionalApprovalDock: this reading is 4,000 B raw above the previous one, past the 3,209 B growth alarm\. Say what was added, as "Grew 4,000 B raw in one change: <what>\."/u);
+
+    // One sentence, and it has to state the bytes it is explaining.
+    const wrongFigure = grown.replace(
+      "// Previous reading: 12,837 B raw / 4,576 B gzip.",
+      "// Previous reading: 12,837 B raw / 4,576 B gzip. Grew 400 B raw in one change: a second decision row and the line that names it.",
+    );
+    expect(() => assertDocumentedBudgetMeasurements(wrongFigure)).toThrow(/past the 3,209 B growth alarm/u);
+    const declared = grown.replace(
+      "// Previous reading: 12,837 B raw / 4,576 B gzip.",
+      "// Previous reading: 12,837 B raw / 4,576 B gzip. Grew 4,000 B raw in one change: a second decision row and the line that names it.",
+    );
+    expect(() => assertDocumentedBudgetMeasurements(declared)).not.toThrow();
+
+    // And the ledger cannot be silenced by deleting the line it compares with.
+    const forgotten = source.replace("// Previous reading: 12,837 B raw / 4,576 B gzip.", "//");
+    expect(forgotten).not.toBe(source);
+    expect(() => assertDocumentedBudgetMeasurements(forgotten))
+      .toThrow(/optionalApprovalDock: its comment records no "Previous reading:" line/u);
+
+    // The build side names it too, before the reading has been re-taken at all.
+    const recorded = asBuilt(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...recorded,
+      optionalApprovalDock: { raw: 12837 + 5000, gzip: 4576 },
+    })).toThrow(/optionalApprovalDock: .* Re-take the reading, and say what added 5,000 B raw/u);
+  });
+
+  it("reads a budget justified in a block comment, not only a slash-slash one", () => {
+    const source = gateSource();
+    const entries = parseDocumentedBudgets(source);
+    // `optionalConfirmDialog` is documented in block form and states its class.
     const blockDocumented = entries.find((entry) => entry.name === "optionalConfirmDialog");
-    expect(blockDocumented.prose).toContain("Measured");
-    expect(blockDocumented.measured.length).toBeGreaterThan(0);
+    expect(blockDocumented.declaredClass).toBe(2);
+    expect(blockDocumented.readings.length).toBeGreaterThan(0);
     // …and it is held to the same rule as the slash-slash ones now that it is read.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 1,010 B raw / 594 B gzip", "Measured 9,010 B raw / 594 B gzip")))
-      .toThrow(/optionalConfirmDialog: its comment records 9,010 B raw, above the 2\.00 KiB raw ceiling/u);
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Weighed 1,010 B raw / 594 B gzip", "Measured 91,010 B raw / 594 B gzip")))
+      .toThrow(/optionalConfirmDialog: its comment records 91,010 B raw, above the 6\.00 KiB raw ceiling/u);
 
     // A comment may still quote another surface's figure — several exist
     // *because* the entry chunk breached its own ceiling, and saying so is the
-    // justification. Only what the comment presents as its own measurement is
-    // held to the ceiling beside it.
+    // justification.
     const overlays = entries.find((entry) => entry.name === "optionalShellOverlays");
     expect(overlays.prose).toContain("110.54 KiB gzip");
-    // The entry-chunk figure this comment quotes to explain *why* the overlays
-    // were moved out stays excluded; both of this budget's own readings — the
-    // original and the surface-repair re-measurement — are counted.
-    expect(overlays.figures.map((figure) => figure.text))
-      .toEqual(["6.23 KiB", "2.46 KiB", "7,219 B", "2,816 B"]);
   });
 
   /*
-   * Everything above compares a comment to a ceiling, and a ceiling is the one
-   * thing a stale-high figure keeps satisfying — which is why
-   * `optionalWorkspaceWorkbench`'s own comment records that this guard "did not
-   * catch it". Comparing its whole-KiB bucket with the artifact from the same run
-   * catches a material overstatement without rejecting harmless environment drift.
+   * Everything else compares a comment to a ceiling, and a ceiling is the one
+   * thing a stale-high figure keeps satisfying. This is the pass that sees the
+   * artifact, and it now sees every budget rather than sixteen of them.
    */
-  it("refuses a documented measurement that claims a higher whole-KiB bucket than the build", () => {
-    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
-    const asDocumented = Object.fromEntries(
-      MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
-        const entry = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
-        return [name, Object.fromEntries(["raw", "gzip"].map((role) => {
-          const largest = entry.measured.reduce(
-            (left, right) => (left && left[role] >= right[role] ? left : right),
-            null,
-          );
-          return [role, largest[role]];
-        }))];
-      }),
-    );
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, asDocumented)).not.toThrow();
+  it("refuses a recorded reading the build contradicts, in both directions", () => {
+    const source = gateSource();
+    expect(Object.keys(asRecorded(source))).toHaveLength(58); // every budget but the inlinable one
+    const recorded = asBuilt(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, recorded)).not.toThrow();
 
-    /*
-     * Supported variants can have crossed maxima. A gzip claim in a higher bucket
-     * must not disappear merely because its paired raw value is six bytes smaller
-     * than the raw winner. KiB also proves the selected claim keeps its precision.
-     */
-    const crossedMaxima = source.replace(
-      "384,925 B raw /\n  // 119,379 B gzip",
-      "384,925 B raw /\n  // 117.60 KiB gzip",
-    );
-    expect(crossedMaxima).not.toBe(source);
-    expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
-      ...asDocumented,
-      entryJavaScript: { raw: 384925, gzip: 119379 },
-    })).toThrow(
-      /entryJavaScript: its comment claims 117\.60 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
-    );
+    // A budget this run did not measure is a budget nobody is checking.
+    const { optionalMemoryView, ...missing } = recorded;
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, missing))
+      .toThrow(/optionalMemoryView: every ceiling states a measurement, but this run measured no artifact under that name/u);
 
-    // A legal build-time environment can move a shared aggregate by a handful
-    // of bytes. The reading still justifies the same whole-KiB ceiling, so this
-    // drift must not reject Docker's supported deployment variants.
-    const sameBucketDrift = {
-      ...asDocumented,
-      optionalMemoryView: { ...asDocumented.optionalMemoryView, gzip: asDocumented.optionalMemoryView.gzip - 1 },
-    };
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, sameBucketDrift)).not.toThrow();
-
-    // Crossing below the bucket named by the comment is materially different:
-    // that stale reading could justify an extra KiB of ceiling no build needs.
-    const documentedGzip = asDocumented.optionalMemoryView.gzip;
-    const lowerBucket = {
-      ...asDocumented,
-      optionalMemoryView: { ...asDocumented.optionalMemoryView, gzip: Math.floor(documentedGzip / 1024) * 1024 - 1 },
-    };
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, lowerBucket))
-      .toThrow(/optionalMemoryView: its comment claims .* gzip, but this build measures only .* in a lower whole-KiB budget bucket/u);
-
-    /*
-     * Byte-level growth is not a failure, and it must not be, or six comments
-     * change on every pull request that moves a shared chunk by a byte — which
-     * is how a rule gets deleted.
-     *
-     * Unbounded growth WAS accepted here, and that was wrong: four readings in
-     * this file ended up 78-647 B below the chunks they described, one leaving
-     * 94 B under a ceiling its comment implied was ~700 B away. The tightness
-     * rule cannot catch that — it pulls the ceiling toward the CLAIM, so an
-     * understated claim tightens nothing that reality needs. Growth is allowed
-     * up to the reviewed variant allowance and refused past it.
-     */
+    // Byte-level drift is not a failure, and must not be.
     const drifted = Object.fromEntries(
-      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 600, gzip: pair.gzip + 128 }]),
+      Object.entries(recorded).map(([name, pair]) => [
+        name,
+        pair.inlinedInto ? pair : { raw: pair.raw - 600, gzip: pair.gzip - 128 },
+      ]),
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, drifted)).not.toThrow();
 
-    const grown = Object.fromEntries(
-      Object.entries(asDocumented).map(([name, pair]) => [name, { raw: pair.raw + 1024, gzip: pair.gzip + 1024 }]),
-    );
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, grown))
-      .toThrow(/records at most .* but this build measures .* understates the artifact/u);
+    // Growth past the allowance is: the comment reports headroom nobody has.
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...recorded,
+      optionalMemoryView: { raw: recorded.optionalMemoryView.raw + 769, gzip: recorded.optionalMemoryView.gzip },
+    })).toThrow(/optionalMemoryView: its comment records at most .* Re-take the reading/u);
+
+    // And so is a comment a whole class of bytes above the build.
+    expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+      ...recorded,
+      optionalMemoryView: { raw: recorded.optionalMemoryView.raw - 769, gzip: recorded.optionalMemoryView.gzip },
+    })).toThrow(/optionalMemoryView: its comment claims .* Re-take the reading/u);
 
     /*
-     * A figure is held only to the precision it was written at, and same-bucket
-     * drift remains harmless at that precision. Crossing into the lower bucket
-     * is still material and still fails.
+     * Class 1 straddles whole-KiB lines legitimately: the unconfigured Docker
+     * build once landed 1 B below a line the Pages build sat above, and judging
+     * it by the Pages figure reported a supported deployment as stale.
      */
-    const coarse = source
-      .replaceAll("measures 4,002 B raw", "measures 3.91 KiB raw")
-      .replaceAll("/ 1,587 B gzip", "/ 1.55 KiB gzip");
-    expect(coarse).not.toBe(source);
-    const withinPrecision = { ...asDocumented, optionalSkillEditor: { raw: 4002, gzip: 1587 } };
-    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, withinPrecision)).not.toThrow();
-    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
-      ...withinPrecision,
-      optionalSkillEditor: { raw: 4002, gzip: 1500 },
-    })).not.toThrow();
-    expect(() => assertDocumentedMeasurementsMatchBuild(coarse, {
-      ...withinPrecision,
-      optionalSkillEditor: { raw: 4002, gzip: 1000 },
-    })).toThrow(/optionalSkillEditor: its comment claims 1\.55 KiB gzip, but this build measures only 0\.98 KiB .* lower whole-KiB budget bucket/u);
+    const entry = parseDocumentedBudgets(source).find((budget) => budget.name === "entryJavaScript");
+    expect(entry.readings.length).toBeGreaterThan(1);
+    for (const reading of entry.readings) {
+      expect(() => assertDocumentedMeasurementsMatchBuild(source, {
+        ...recorded,
+        entryJavaScript: { raw: reading.raw, gzip: reading.gzip },
+      }), reading.text).not.toThrow();
+    }
+  });
+
+  /*
+   * One gzip ceiling here was held up by nothing but a reading two passes old
+   * that had never been re-phrased as history, and no rule could see it because
+   * the budget was not on the opt-in list.
+   */
+  it("refuses a superseded figure that is still phrased as a measurement", () => {
+    const source = gateSource();
+    const recorded = asBuilt(source);
+    const revived = source.replace(
+      "// Re-weighed at 240,348 B raw / 72,441 B gzip after legacy execution was",
+      "// Re-measured at 240,348 B raw / 72,441 B gzip after legacy execution was",
+    );
+    expect(revived).not.toBe(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(revived, recorded))
+      .toThrow(/optionalPrimePack: a sentence still phrased as a measurement states 240,348 B raw, which is neither this build .* nor any reviewed reading it records/u);
+
+    // The other direction: prose that still claims to measure a smaller chunk.
+    const understated = source.replace(
+      "* Weighed 1,010 B raw / 594 B gzip",
+      "* Measured 1,010 B raw / 594 B gzip",
+    );
+    expect(understated).not.toBe(source);
+    expect(() => assertDocumentedMeasurementsMatchBuild(understated, {
+      ...recorded,
+      optionalConfirmDialog: { raw: 1010 + 769, gzip: 594 },
+    })).toThrow(/optionalConfirmDialog: the largest figure its prose still presents as a measurement is 1,010 B raw/u);
   });
 
   it("classifies only the current deferred route, download, and semantic stems", () => {
@@ -621,50 +715,6 @@ describe("release gate", () => {
       ["assets/request-state-A.js", "assets/turn-recovery.js"],
       required,
     )).toThrow(/Request failure chunks do not match the required stems/u);
-  });
-
-  it("judges staleness against the nearest reviewed variant, not the largest", () => {
-    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
-    const entry = parseDocumentedBudgets(source).find((budget) => budget.name === "allJavaScriptAndWorkers");
-    const asDocumented = Object.fromEntries(
-      MEASUREMENT_JUSTIFIED_BUDGETS.map((name) => {
-        const budget = parseDocumentedBudgets(source).find((candidate) => candidate.name === name);
-        return [name, Object.fromEntries(["raw", "gzip"].map((role) => [
-          role,
-          budget.measured.reduce((most, pair) => Math.max(most, pair[role]), 0),
-        ]))];
-      }),
-    );
-    const withGzip = (gzip) => ({
-      ...asDocumented,
-      allJavaScriptAndWorkers: { ...asDocumented.allJavaScriptAndWorkers, gzip },
-    });
-
-    /*
-     * Every recorded variant is a legal build of this commit, including ones a
-     * whole-KiB line apart: the unconfigured Docker build once landed 1 B below
-     * a line the Pages build sat above, and judging it by the Pages figure
-     * reported a supported deployment as stale and broke `./deploy.sh`.
-     */
-    const current = entry.measured.filter(
-      (pair) => asDocumented.allJavaScriptAndWorkers.gzip - pair.gzip <= 768,
-    );
-    expect(current.length).toBeGreaterThan(1);
-    for (const variant of current) {
-      expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(variant.gzip)), `${variant.gzip}`)
-        .not.toThrow();
-    }
-
-    // A build a bucket below every reading it could be is a comment nobody re-took.
-    const smallest = current.reduce((least, pair) => Math.min(least, pair.gzip), Number.POSITIVE_INFINITY);
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(Math.floor(smallest / 1024) * 1024 - 1)))
-      .toThrow(/allJavaScriptAndWorkers: its comment claims .* in a lower whole-KiB budget bucket/u);
-
-    // A build above every reading is a comment that reports headroom nobody has.
-    const largest = asDocumented.allJavaScriptAndWorkers.gzip;
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(largest + 769)))
-      .toThrow(/records at most .* but this build measures/u);
-    expect(() => assertDocumentedMeasurementsMatchBuild(source, withGzip(largest + 768))).not.toThrow();
   });
 
   /*
@@ -1018,6 +1068,100 @@ describe("release gate", () => {
    * must be present — a doc can drop the false claim and still leave the reader
    * with no way to know what the seed carries.
    */
+  /*
+   * A source map is what it contains, not what it is called. `index.js.map.txt`
+   * is a complete v3 map with its source contents; it passed every check here
+   * and was written into the manifest with a checksum, which reads as review.
+   */
+  it("rejects a source map payload whatever the file is called", () => {
+    const map = Buffer.from(JSON.stringify({
+      version: 3,
+      file: "index.js",
+      sources: ["../src/ui/app.tsx"],
+      sourcesContent: ["export const secretIntent = () => 'the unminified original';"],
+      names: [],
+      mappings: "AAAA,SAAS,CAAC",
+    }));
+    expect(inspectPayload("assets/index.js.map", map)).toContain("production source map");
+    expect(inspectPayload("assets/index.js.map.txt", map))
+      .toContain("production source map payload under another name");
+    expect(inspectPayload("assets/index.js.map.txt", map)).not.toContain("production source map");
+    // And ordinary artifacts are not source maps because they mention a word.
+    expect(inspectPayload("assets/index-A.js", Buffer.from('const mappings = { version: 3 };'))).toEqual([]);
+    expect(inspectPayload("execution-packs/pyodide/pyodide-lock.json", Buffer.from('{"version":"3","packages":{}}'))).toEqual([]);
+  });
+
+  /*
+   * Every file, not every document. A release could carry any non-document,
+   * non-JavaScript file at all and be inventoried into the manifest with a
+   * checksum, which reads as review.
+   */
+  it("refuses any shipped file no artifact class reviews", () => {
+    const shipped = [
+      "index.html",
+      "404.html",
+      "_headers",
+      "favicon.svg",
+      "manifest.webmanifest",
+      "release-manifest.json",
+      "semantic-pack-state.json",
+      "sw.js",
+      "assets/index-DEADBEEF.js",
+      "assets/index-DEADBEEF.css",
+      "assets/BBgPowaH.prime-kernel-worker.js",
+      "assets/tree-sitter-DEADBEEF.wasm",
+      "execution-packs/pyodide/pyodide.asm.wasm",
+      "semantic-pack/v1/model.onnx",
+      "extension/index.html",
+      "extension/install.js",
+      "extension/releases/SHA256SUMS",
+    ];
+    expect(() => assertEveryArtifactIsClassified(shipped)).not.toThrow();
+    expect(RELEASE_ARTIFACT_CLASSES.length).toBeGreaterThan(0);
+    for (const stray of [
+      "assets/index.js.map.txt",
+      "assets/index-DEADBEEF.js.bak",
+      "notes.txt",
+      ".env",
+      "assets/.DS_Store",
+      "backup/index.html",
+    ]) {
+      expect(() => assertEveryArtifactIsClassified([...shipped, stray]), stray)
+        .toThrow(/Release contains files no artifact class reviews/u);
+    }
+  });
+
+  /*
+   * The mirror ran one way: a row naming no ceiling failed, a ceiling named by
+   * no row did not, and twenty-six budgets were absent from the document a
+   * reviewer consults.
+   */
+  it("mirrors every ceiling and its class into the documentation, both ways", () => {
+    const doc = readFileSync(new URL("../docs/RELEASE_GATE.md", import.meta.url), "utf8");
+    expect(() => assertReleaseGateDocumentationMirrors(doc)).not.toThrow();
+    expect(DOCUMENTED_BUDGET_ROWS.flatMap((row) => row.budgets).sort())
+      .toEqual(Object.keys(RELEASE_BUDGETS).sort());
+
+    const dropped = doc.replace(/^\| Optional approval dock \|.*$\n/mu, "");
+    expect(dropped).not.toBe(doc);
+    expect(() => assertReleaseGateDocumentationMirrors(dropped))
+      .toThrow(/the table has no row for "Optional approval dock"/u);
+
+    const wrongTier = doc.replace("| Optional approval dock | 2 |", "| Optional approval dock | 1 |");
+    expect(wrongTier).not.toBe(doc);
+    expect(() => assertReleaseGateDocumentationMirrors(wrongTier))
+      .toThrow(/"Optional approval dock" tier: the table says 1, the class is 2/u);
+
+    const wrongCeiling = doc.replace("| Optional approval dock | 2 | 17 KiB |", "| Optional approval dock | 2 | 64 KiB |");
+    expect(wrongCeiling).not.toBe(doc);
+    expect(() => assertReleaseGateDocumentationMirrors(wrongCeiling))
+      .toThrow(/"Optional approval dock" raw: the table says 64\.00 KiB for optionalApprovalDock, the ceiling is 17\.00 KiB/u);
+
+    const noTierColumn = doc.replace("| Class | Tier | Raw ceiling | Gzip ceiling |", "| Class | Raw ceiling | Gzip ceiling |");
+    expect(() => assertReleaseGateDocumentationMirrors(noTierColumn))
+      .toThrow(/no longer carries a `Tier` column/u);
+  });
+
   it("rejects the pre-seed fork contract in the shipped session-library doc", () => {
     const doc = readFileSync(new URL("../docs/SESSION_LIBRARY.md", import.meta.url), "utf8");
     expect(() => assertForkContractDocumented(doc)).not.toThrow();
