@@ -8,6 +8,7 @@ import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { StatusMark, type StatusMarkState } from "./status-mark";
 import type { SourcesImportRequest } from "./sources-view";
+import type { LocalFolderWorkspacePort } from "../workspace/local-folder";
 import { WORKBENCH_SHARED_SURFACE_NOTE, workbenchIdentity } from "./workbench-model";
 import { WorkspaceView, workspaceWorkbenchScope } from "./workspace-view";
 import type { TerminalOpenRequest } from "./terminal-dock-state";
@@ -15,6 +16,7 @@ import { WorkspaceTerminalDock } from "./workspace-terminal-dock";
 import "./editor-view.css";
 
 type SourcesComponent = typeof import("./sources-view").SourcesView;
+type LocalFolderComponent = typeof import("./local-folder-panel").LocalFolderPanel;
 
 export type EditorViewProps = Readonly<{
   /** Active cockpit owner for all page-local workbench view state. */
@@ -44,6 +46,13 @@ export type EditorViewProps = Readonly<{
    * a same-document navigation back to it — must return to the tree.
    */
   destinationArrival?: number;
+  /**
+   * Publishes a folder the person opened from this device, so the shell can
+   * rebind the one workspace authority every consumer reads. Absent on a host
+   * that does not offer the tier at all; the panel itself decides whether this
+   * browser can open a folder and says so when it cannot.
+   */
+  onLocalFolderChanged?(folder: LocalFolderWorkspacePort | undefined): void | Promise<void>;
   /** The active profile's editor syntax palette, and its auto-save seam. */
   codeThemeId?: string | undefined;
   onCodeThemeChange?: ((codeThemeId: string) => void | Promise<void>) | undefined;
@@ -68,6 +77,8 @@ export function EditorView(props: EditorViewProps) {
   const [sourceToolsAuthorityOpen, setSourceToolsAuthorityOpen] = useState<string>();
   const sourceToolsOpen = sourceToolsAuthorityOpen === sourceToolsAuthority;
   const [Sources, setSources] = useState<SourcesComponent>();
+  const [LocalFolder, setLocalFolder] = useState<LocalFolderComponent>();
+  const [localFolderError, setLocalFolderError] = useState<string>();
   const [loadError, setLoadError] = useState<string>();
   const [hash, setHash] = useState(() => typeof location === "undefined" ? "" : location.hash);
   const identity = useMemo(() => workbenchIdentity(hash), [hash]);
@@ -89,6 +100,23 @@ export function EditorView(props: EditorViewProps) {
       window.removeEventListener("popstate", sync);
     };
   }, []);
+
+  /*
+   * The folder tier is fetched with the route, not with first paint, and not
+   * only when it is used: the panel is the one place that can tell a Firefox or
+   * Safari reader the truth in one sentence, and a control that only appears
+   * once it works cannot say anything at all.
+   */
+  useEffect(() => {
+    if (!props.onLocalFolderChanged || LocalFolder) return;
+    let current = true;
+    void import("./local-folder-panel").then((module) => {
+      if (current) setLocalFolder(() => module.LocalFolderPanel);
+    }).catch(() => {
+      if (current) setLocalFolderError("The folder controls could not be loaded. No file on this device was opened or changed.");
+    });
+    return () => { current = false; };
+  }, [props.onLocalFolderChanged, LocalFolder]);
 
   useEffect(() => {
     if (sourceToolsAuthorityOpen === undefined || sourceToolsOpen) return;
@@ -145,6 +173,10 @@ export function EditorView(props: EditorViewProps) {
       notes={<p class="route-header__about-description">{WORKBENCH_SHARED_SURFACE_NOTE}</p>}
       status={<WorkbenchDurabilityChip state={props.durability.state} detail={props.durability.detail} />}
     />
+    {props.onLocalFolderChanged ? LocalFolder
+      ? <LocalFolder onFolderChanged={props.onLocalFolderChanged} />
+      : <p class="editor-route__loading" role={localFolderError ? "alert" : "status"}>{localFolderError ?? "Loading the folder controls…"}</p>
+      : null}
     <div class="editor-route__panel" data-mode="files" role="group" aria-labelledby="workbench-route-title">
       <div class="editor-workbench-host" aria-hidden={sourceToolsOpen ? "true" : undefined}>
       <WorkspaceView

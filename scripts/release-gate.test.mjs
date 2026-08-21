@@ -412,11 +412,18 @@ describe("release gate", () => {
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
       .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
-    // …and a raise cannot be laundered by deleting the operative measurement.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace(
-      "Measured 86,877 B raw / 27,519 B gzip",
-      "Weighed 86,877 B and 27,519 B",
-    )))
+    /*
+     * …and a raise cannot be laundered by deleting the operative measurement.
+     *
+     * The claim is removed by the *word* that makes a figure a measurement,
+     * not by the figures: a comment may record several reviewed readings, so
+     * naming one of them here would let this pass while the others remained,
+     * and would break every time a rebuild moved a byte.
+     */
+    expect(() => assertDocumentedBudgetMeasurements(source
+      .replaceAll("Measured ", "Weighed ")
+      .replaceAll("measured ", "weighed ")
+      .replaceAll("measures ", "weighs ")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
@@ -512,13 +519,13 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "380,623 B raw / 117,807 B gzip",
-      "380,661 B raw / 116.30 KiB gzip",
+      "382,042 B raw /\n  // 118,288 B gzip",
+      "382,042 B raw /\n  // 116.30 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 380623, gzip: 117807 },
+      entryJavaScript: { raw: 382042, gzip: 118288 },
     })).toThrow(
       /entryJavaScript: its comment claims 116\.30 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );

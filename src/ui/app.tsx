@@ -139,7 +139,8 @@ import {
   type LocalDeviceVaultHandle,
   type LocalDeviceVaultStatus,
 } from "../vault/local-device";
-import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
+import { LOCAL_FOLDER_ATTACHMENT_KEY, isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
+import type { LocalFolderWorkspacePort } from "../workspace/local-folder";
 import { MemoryWorkspace } from "../workspace/memory";
 import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentity } from "../workspace/profile-scope";
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
@@ -4260,8 +4261,12 @@ export function App() {
       }]);
       const nextGitClient = new BrowserGitClient(gitAdapter);
       const journal = new EventJournal(new MemoryJournalBackend());
+      // Git and the bootstrap seed above own the page workspace; the runtime
+      // below owns the composed one, so a folder remembered from a previous
+      // visit is present for the agent before the Workspace route is opened.
+      const mountedWorkspace = await mountRememberedLocalFolder(workspace);
       const tools = await createAirshipToolRegistry({
-        workspace,
+        workspace: mountedWorkspace,
         journal,
         git: nextGitClient,
         webEgress: resolveProfileWebEgress(profile),
@@ -4277,7 +4282,7 @@ export function App() {
       const nextRuntime: Runtime = {
         storage,
         storageId,
-        workspace,
+        workspace: mountedWorkspace,
         workspaceId: profileWorkspaceIdentity(storageId, profile.profileId),
         profileId: profile.profileId,
         profiles,
@@ -4564,6 +4569,46 @@ export function App() {
       workspaceId: active.workspaceId,
       profileId: profileAuthorityId.current,
     });
+  }
+
+  /**
+   * Rebind every consumer to the workspace a folder was just added to or
+   * removed from.
+   *
+   * A folder is a change of *authority*, not of presentation — the same reason
+   * a Profile switch rebuilds the tool registry rather than reusing it. The
+   * agent's tools captured the previous port, so leaving them alone would let
+   * a turn read and write the tier the person just left. The cached Profile
+   * authority is dropped for the same reason: it holds the old port.
+   */
+  async function applyLocalFolderMount(folder: LocalFolderWorkspacePort | undefined): Promise<void> {
+    const active = runtime.current;
+    const git = gitClient;
+    if (!active || !git) return;
+    const base = unmountedWorkspace(active.workspace);
+    const workspace = folder
+      ? new (await import("../workspace/local-folder")).MountedLocalFolderWorkspace(base, folder)
+      : base;
+    if (workspace === active.workspace) return;
+    const profile = catalog?.profiles.find((candidate) => candidate.profileId === active.profileId);
+    const webEgress = profile ? resolveProfileWebEgress(profile) : "node-first";
+    const webBodies = profile ? resolveProfileWebBodies(profile) : "any";
+    const tools = await createAirshipToolRegistry({
+      workspace,
+      journal: active.journal,
+      git,
+      webEgress,
+      webBodies,
+      liveEnvironment: liveEnvironmentSource,
+      additionalTools: [requireProviderAvailabilityTool()],
+    });
+    if (runtime.current !== active) return;
+    const next: Runtime = { ...active, workspace, tools };
+    runtime.current = next;
+    profileAuthorities.current.delete(active.profileId);
+    rememberProfileAuthority(next, git, webEgress, webBodies);
+    workspaceRefreshCoordinator.invalidate();
+    await refreshWorkspacePresentation(next);
   }
 
   async function refreshWorkspacePresentation(
@@ -9484,6 +9529,7 @@ export function App() {
           review={reviewGitOperation}
           reviewImport={reviewSourceImport}
           onWorkspaceChanged={async () => { await refreshWorkspacePresentation(); }}
+          onLocalFolderChanged={applyLocalFolderMount}
           onOpenTerminalAt={(cwd) => {
             const activeWorkspace = runtime.current;
             if (!activeWorkspace) return;
@@ -10536,6 +10582,15 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
   const adoptedLegacyPaths = (await adoptLegacyRootWorkspace(input.storage, input.profile.profileId)).length;
   const workspace = new ProfileWorkspacePort(input.storage, input.profile.profileId);
   const { WorkspaceGitAdapter, BrowserGitClient, AIRSHIP_BOOTSTRAP_FILES } = await loadBrowserGit();
+  /*
+   * Git is opened on the Profile port, never on the composed one.
+   *
+   * Airship's browser Git owns the workspace Airship created — its object
+   * database, its worktree registry, its bootstrap seed. A folder the person
+   * attached from their own device is theirs, and the seeding path below reads
+   * every file it is given: composing first would have committed the whole
+   * folder into an Airship repository the first time a Profile opened it.
+   */
   const git = new BrowserGitClient(await WorkspaceGitAdapter.open(
     workspace,
     async () => {
@@ -10565,11 +10620,46 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
     },
   ));
   return Object.freeze({
-    workspace,
+    workspace: await mountRememberedLocalFolder(workspace),
     workspaceId: profileWorkspaceIdentity(input.storageId, input.profile.profileId),
     git,
     adoptedLegacyPaths,
   });
+}
+
+/**
+ * Reopen the folder this browser profile remembers, if the grant is still live.
+ *
+ * The marker is read synchronously so a person who has never opened a folder
+ * never fetches the pack that implements the tier. Nothing here prompts: a boot
+ * carries no user gesture, so Chromium would refuse the prompt and a person
+ * would be taught that Airship lost their folder. A grant that is no longer
+ * `granted` therefore returns the Profile workspace unchanged, and the
+ * Workspace route's panel — which asks the same question with a button behind
+ * it — is what states the refusal and offers Reconnect.
+ */
+async function mountRememberedLocalFolder(workspace: WorkspacePort): Promise<WorkspacePort> {
+  try {
+    if (globalThis.localStorage?.getItem(LOCAL_FOLDER_ATTACHMENT_KEY) !== "attached") return workspace;
+    const { MountedLocalFolderWorkspace, restoreLocalFolder } = await import("../workspace/local-folder");
+    const restored = await restoreLocalFolder();
+    if (restored.state !== "attached") return workspace;
+    // Read it once before binding it, for the reason `local-folder-panel.tsx`
+    // states: a folder past its listing bound, or one that moved, must not be
+    // able to take the whole Explorer down with it.
+    await restored.port.list();
+    return new MountedLocalFolderWorkspace(workspace, restored.port);
+  } catch {
+    // The workspace still opens without the folder, and the route says why.
+    // Failing the whole boot because a directory moved would be the worse of
+    // the two silences.
+    return workspace;
+  }
+}
+
+/** The Profile workspace underneath a composed one, or the port itself. */
+function unmountedWorkspace(workspace: WorkspacePort): WorkspacePort {
+  return (workspace as Partial<Readonly<{ backing: WorkspacePort }>>).backing ?? workspace;
 }
 
 

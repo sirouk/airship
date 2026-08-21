@@ -1,5 +1,5 @@
 import { sha256 } from "../core/hash";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspaceEntry, type WorkspacePort } from "../workspace/contracts";
+import { isLocalFolderMountPath, isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspaceEntry, type WorkspacePort } from "../workspace/contracts";
 import type {
   ClientIndex,
   EmbeddedChunk,
@@ -690,7 +690,22 @@ function rejectWaiters(run: RefreshRun, error: unknown): void {
 function normalizeSnapshot(entries: readonly WorkspaceEntry[]): NormalizedWorkspaceSnapshot {
   if (!Array.isArray(entries) || entries.length > MAX_SNAPSHOT_ENTRIES) throw new TypeError("The workspace revision snapshot is invalid or too large.");
   const seen = new Set<string>();
-  const normalized = entries.filter((entry) => !isWorkspaceControlPlanePath(entry.path)).map((entry) => {
+  /*
+   * Control-plane records are excluded because they are Airship's own private
+   * state. A folder the person attached from their own device is excluded for
+   * the opposite reason: it is entirely theirs. This index is page memory, but
+   * "Publish context" writes its chunks — file text included — into the Vault,
+   * and the tier that opened the folder promises it is copied nowhere. The
+   * folder stays fully reachable by path through `read_file`, `list_files`,
+   * `search_text` and the editor; it is only absent from the derived index.
+   *
+   * This is the single fence for both directions: `updateWorkspace` normalizes
+   * the entries it is handed here, and `assertWorkspaceSnapshot` normalizes its
+   * own re-listing here, so the two cannot disagree about what was indexed.
+   */
+  const normalized = entries
+    .filter((entry) => !isWorkspaceControlPlanePath(entry.path) && !isLocalFolderMountPath(entry.path))
+    .map((entry) => {
     const path = normalizeWorkspacePath(entry.path);
     if (path === "/workspace" || seen.has(path)) throw new TypeError("Workspace revision snapshots require unique file paths.");
     seen.add(path);

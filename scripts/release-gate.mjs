@@ -42,16 +42,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // literal, so a stock entry chunk now carries none of it — 4,276 raw and
   // 1,427 gzip bytes off the largest reviewed variant.
   //
-  // The canonical config-free artifact measures 380,623 B raw / 117,807 B gzip.
-  // The reviewed Docker-defaults variant measures 380,616 B raw / 117,812 B
-  // gzip, the reviewed Pages variant measures 380,639 B raw / 117,819 B gzip,
+  // The canonical config-free artifact weighed 380,623 B raw / 117,807 B gzip.
+  // The reviewed Docker-defaults variant weighed 380,616 B raw / 117,812 B
+  // gzip, the reviewed Pages variant weighed 380,639 B raw / 117,819 B gzip,
   // and the reviewed Google-Drive-configured variant measures 380,837 B raw /
   // 117,917 B gzip. A configured client ID is a supported deployment of both
   // Pages and Docker, and it is the largest of the four, so it sets both maxima.
   // 372 KiB raw would have left 91 B, far inside minifier jitter, so raw takes
   // the 373 KiB step and leaves 1,115 B. 116 KiB gzip clears the artifact by
   // 867 B, above the tripwire floor, so gzip takes that tight step.
-  entryJavaScript: Object.freeze({ raw: 373 * 1024, gzip: 116 * 1024 }),
+  //
+  // Re-measured after the development lab left the stock build and the local
+  // folder joined it. The canonical config-free artifact measures 382,042 B raw /
+  // 118,288 B gzip; the reviewed Docker-defaults variant measures 382,047 B raw /
+  // 118,273 B gzip; the reviewed Pages variant measures 382,063 B raw /
+  // 118,293 B gzip; and the reviewed Google-Drive-configured variant measures
+  // 382,268 B raw / 118,395 B gzip. 374 KiB raw would have left 708 B
+  // and 116 KiB gzip would have left 389 B, both below the tripwire floor, so the
+  // 375/117 KiB steps leave 1,732 / 1,413 B.
+  entryJavaScript: Object.freeze({ raw: 375 * 1024, gzip: 117 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
   // baseline while keeping the static workbench and its eager preloads.
@@ -66,14 +75,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // profile-storage chunk, which was the last thing pinning 4,969 raw bytes of
   // it into a stock artifact.
   //
-  // The canonical config-free artifact measures 496,015 B raw / 160,959 B gzip.
-  // The reviewed Docker-defaults variant measures 496,008 B raw / 160,974 B
-  // gzip, the reviewed Pages variant measures 496,031 B raw / 160,981 B gzip,
+  // The canonical config-free artifact weighed 496,015 B raw / 160,959 B gzip.
+  // The reviewed Docker-defaults variant weighed 496,008 B raw / 160,974 B
+  // gzip, the reviewed Pages variant weighed 496,031 B raw / 160,981 B gzip,
   // and the reviewed Google-Drive-configured variant measures 496,229 B raw /
   // 161,076 B gzip and sets both maxima. 485 KiB raw would have left 411 B, so
   // raw takes the 486 KiB step and leaves 1,435 B. 158 KiB gzip would have left
   // 716 B, below the tripwire floor, so gzip takes 159 KiB and leaves 1,740 B.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 486 * 1024, gzip: 159 * 1024 }),
+  //
+  // Re-measured after the development lab left the stock build and the local
+  // folder joined it. The canonical config-free artifact measures 497,739 B raw /
+  // 161,555 B gzip; the reviewed Docker-defaults variant measures 497,744 B raw /
+  // 161,542 B gzip; the reviewed Pages variant measures 497,760 B raw /
+  // 161,554 B gzip; and the reviewed Google-Drive-configured variant measures
+  // 497,965 B raw / 161,663 B gzip. 487 KiB raw would have left 723 B
+  // and 158 KiB gzip would have left 129 B, both below the tripwire floor, so the
+  // 488/159 KiB steps leave 1,747 / 1,153 B.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 488 * 1024, gzip: 159 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
   // Earlier readings of 251,691 B raw and 72,556 B gzip, then 250,266 B raw and
@@ -87,13 +105,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // because the lab's chunk was its second lazy importer. Net: 17,892 raw and
   // 5,164 gzip bytes off the largest reviewed variant.
   //
-  // The canonical config-free artifact measures 232,945 B raw / 68,182 B gzip.
-  // The reviewed Docker-defaults variant measures 232,945 B raw / 68,184 B gzip,
-  // the reviewed Pages variant measures 232,945 B raw / 68,181 B gzip, and the
+  // The canonical config-free artifact weighed 232,945 B raw / 68,182 B gzip.
+  // The reviewed Docker-defaults variant weighed 232,945 B raw / 68,184 B gzip,
+  // the reviewed Pages variant weighed 232,945 B raw / 68,181 B gzip, and the
   // reviewed Google-Drive-configured variant measures 233,017 B raw / 68,239 B
   // gzip and sets both maxima. 228 KiB raw would have left 455 B and 67 KiB gzip
   // would have left 369 B, both below the tripwire floor, so the 229/68 KiB
   // steps leave 1,479 / 1,393 B. None of this bundle is fetched on first paint.
+  //
+  // Re-measured after the development lab left the stock build and the local
+  // folder joined it. The canonical config-free artifact measures 232,945 B raw /
+  // 68,183 B gzip; the reviewed Docker-defaults variant measures 232,945 B raw /
+  // 68,182 B gzip; the reviewed Pages variant measures 232,945 B raw /
+  // 68,181 B gzip; and the reviewed Google-Drive-configured variant measures
+  // 233,017 B raw / 68,242 B gzip. 228 KiB raw would have left 455 B
+  // and 67 KiB gzip would have left 366 B, both below the tripwire floor, so the
+  // 229/68 KiB steps leave 1,479 / 1,390 B.
   deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -122,13 +149,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The canonical config-free artifact measures 1,978,258 B raw / 617,280 B
   // gzip. The reviewed Docker-defaults variant measures 1,978,231 B raw /
   // 617,320 B gzip, the reviewed Pages variant measures 1,978,331 B raw /
-  // 617,342 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 617,342 B gzip, and the reviewed Google-Drive-configured variant weighed
   // 1,978,793 B raw / 617,610 B gzip and sets both maxima — a configured client
   // ID is a supported deployment of both Pages and Docker. 1933 KiB raw would
   // have left 599 B, below the tripwire floor, so raw takes the 1934 KiB step
   // and leaves 1,623 B. 604 KiB gzip clears the artifact by 886 B, above that
   // floor, so gzip takes that tight step.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1934 * 1024, gzip: 604 * 1024 }),
+  //
+  // Re-measured after the development lab left the stock build and the local
+  // folder joined it. The canonical config-free artifact measures 1,994,856 B raw /
+  // 623,705 B gzip; the reviewed Docker-defaults variant measures 1,994,861 B raw /
+  // 623,702 B gzip; the reviewed Pages variant measures 1,994,934 B raw /
+  // 623,712 B gzip; and the reviewed Google-Drive-configured variant measures
+  // 1,995,423 B raw / 624,008 B gzip. 1949 KiB raw would have left 353 B
+  // and 610 KiB gzip would have left 632 B, both below the tripwire floor, so the
+  // 1950/611 KiB steps leave 1,377 / 1,656 B.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1950 * 1024, gzip: 611 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -177,11 +213,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The canonical config-free artifact measures 2,678,955 B raw / 812,079 B
   // gzip. The reviewed Docker-defaults variant measures 2,678,928 B raw /
   // 812,124 B gzip, the reviewed Pages variant measures 2,679,028 B raw /
-  // 812,146 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 812,146 B gzip, and the reviewed Google-Drive-configured variant weighed
   // 2,679,490 B raw / 812,410 B gzip and sets both maxima. 2617 KiB raw would
   // have left 318 B and 794 KiB gzip would have left 646 B, both below the
   // tripwire floor, so the 2618/795 KiB steps leave 1,342 / 1,670 B.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2618 * 1024, gzip: 795 * 1024 }),
+  //
+  // Re-measured after the development lab left the stock build and the local
+  // folder joined it. The canonical config-free artifact measures 2,695,560 B raw /
+  // 818,523 B gzip; the reviewed Docker-defaults variant measures 2,695,565 B raw /
+  // 818,518 B gzip; the reviewed Pages variant measures 2,695,638 B raw /
+  // 818,530 B gzip; and the reviewed Google-Drive-configured variant measures
+  // 2,696,127 B raw / 818,824 B gzip. 2633 KiB raw would have left 65 B
+  // and 800 KiB gzip would have left 376 B, both below the tripwire floor, so the
+  // 2634/801 KiB steps leave 1,089 / 1,400 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2634 * 1024, gzip: 801 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -366,6 +411,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Measured 86,877 B raw / 27,519 B gzip. 85 KiB raw would have left
   // 163 B and 27 KiB gzip would have left 129 B. The next steps leave
   // 1,187 / 1,153 B above the tripwire floor.
+  // Re-measured at 87,494 B raw / 27,689 B gzip after the route gained the
+  // deferred loader for the attached-folder panel and the one prop that
+  // publishes a folder to the shell. The panel itself is a separate chunk with
+  // its own ceiling; what landed here is the loader, its failure sentence and
+  // the seam. Both ceilings are unchanged and are already the smallest whole-KiB
+  // step that clears the new readings, leaving 570 B raw and 983 B gzip.
   optionalWorkspaceWorkbench: Object.freeze({ raw: 86 * 1024, gzip: 28 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
@@ -379,6 +430,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Workspace route or the agent's tool bundle binds, so first paint is untouched.
   optionalWorkspaceBinding: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  /*
+   * The folder-on-this-device storage tier: the `WorkspacePort` over a
+   * `FileSystemDirectoryHandle`, the IndexedDB record that lets one survive a
+   * reload, the permission query/request wrappers, the composition with the
+   * Profile workspace, and the Workspace panel that opens and revokes it.
+   *
+   * It is fetched in exactly two places, both after first paint: the Workspace
+   * route draws the panel, and a shell whose `localStorage` marker says a
+   * folder was attached restores it. A browser that has never opened a folder
+   * and never visits #workspace never fetches these bytes at all, which is why
+   * the tier gets its own ceiling instead of joining the workbench's.
+   *
+   * Measured 14,282 B raw / 5,616 B gzip across its two chunks — the port and
+   * the panel. 14 KiB raw would have left 54 B, far below the tripwire floor
+   * this file keeps, so raw takes 15 KiB and leaves 1,078 B; gzip takes its
+   * smallest clearing step, 6 KiB, and leaves 528 B.
+   */
+  optionalLocalFolder: Object.freeze({ raw: 15 * 1024, gzip: 6 * 1024 }),
   // The current Source Control presentation measures 39,337 B raw / 12,521 B
   // gzip. 39 KiB raw would have left 599 B; 40/13 KiB leave 1,623 / 791 B.
   optionalSourceControl: Object.freeze({ raw: 40 * 1024, gzip: 13 * 1024 }),
@@ -1119,6 +1188,7 @@ export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
   "optionalExecutionTools",
   "optionalInferenceProviders",
   "optionalWorkspaceWorkbench",
+  "optionalLocalFolder",
   "optionalCapabilitiesView",
   "optionalMemoryView",
   "optionalSkillsManagerView",
@@ -1765,6 +1835,7 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
     label: "Optional Workspace / Source Control / browser Git",
     budgets: Object.freeze(["optionalWorkspaceWorkbench", "optionalSourceControl", "optionalBrowserGit"]),
   }),
+  Object.freeze({ label: "Optional folder on this device", budgets: Object.freeze(["optionalLocalFolder"]) }),
   Object.freeze({
     label: "Optional Sessions / Memory / Memory support",
     budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport"]),
@@ -2096,6 +2167,20 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional workspace codec; found ${optionalWorkspaceCodecPacks.length}.`);
   }
   const optionalWorkspaceCodecMeasurement = measure(optionalWorkspaceCodecPacks[0].payload);
+  /*
+   * Exactly one, and only when the tier ships. It is a whole storage tier, so a
+   * build that silently stopped emitting it — or emitted it twice — is a
+   * release question, not a bundler detail.
+   */
+  const optionalLocalFolderPacks = javaScriptFiles.filter((file) => isOptionalLocalFolderPath(file.path));
+  // The panel's stem is a prefix extension of the port's, and the stem matcher
+  // takes the first entry that matches, so the longer name is listed first.
+  assertExactChunkStems(
+    "Local folder",
+    optionalLocalFolderPacks.map((file) => file.path),
+    ["local-folder-panel", "local-folder"],
+  );
+  const optionalLocalFolderMeasurement = sumMeasurements(optionalLocalFolderPacks.map((file) => measure(file.payload)));
   const optionalSourceControlPacks = javaScriptFiles.filter((file) => isOptionalSourceControlPath(file.path));
   if (optionalSourceControlPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional source-control pack; found ${optionalSourceControlPacks.length}.`);
@@ -2418,6 +2503,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "workspace-workbench", paths: optionalWorkspaceWorkbenchPacks.map((file) => file.path) },
       { name: "workspace-binding", paths: optionalWorkspaceBindingPacks.map((file) => file.path) },
       { name: "workspace-codec", paths: optionalWorkspaceCodecPacks.map((file) => file.path) },
+      { name: "local-folder", paths: optionalLocalFolderPacks.map((file) => file.path) },
       { name: "source-control", paths: optionalSourceControlPacks.map((file) => file.path) },
       { name: "source-selection", paths: optionalSourceSelectionPacks.map((file) => file.path) },
       { name: "browser-git-vendor", paths: optionalBrowserGitPacks.map((file) => file.path) },
@@ -2513,6 +2599,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalWorkspaceCodecMeasurement,
     RELEASE_BUDGETS.optionalWorkspaceCodec,
   );
+  assertWithinBudget("Optional local folder", optionalLocalFolderMeasurement, RELEASE_BUDGETS.optionalLocalFolder);
   assertWithinBudget("Optional source control", optionalSourceControlMeasurement, RELEASE_BUDGETS.optionalSourceControl);
   // Only a dedicated chunk has bytes of its own to hold to this ceiling. When the
   // module is inlined the ceiling has nothing to govern, and the honest move is to
@@ -2611,6 +2698,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalExecutionTools: optionalExecutionToolsMeasurement,
     optionalInferenceProviders: optionalInferenceProviderMeasurement,
     optionalWorkspaceWorkbench: optionalWorkspaceWorkbenchMeasurement,
+    optionalLocalFolder: optionalLocalFolderMeasurement,
     optionalCapabilitiesView: optionalCapabilitiesViewMeasurement,
     optionalMemoryView: optionalMemoryViewMeasurement,
     optionalSkillsManagerView: optionalSkillsManagerViewMeasurement,
@@ -2686,6 +2774,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalWorkspaceCodec: Object.freeze({
         path: optionalWorkspaceCodecPacks[0].path,
         ...optionalWorkspaceCodecMeasurement,
+      }),
+      optionalLocalFolder: Object.freeze({
+        paths: Object.freeze(optionalLocalFolderPacks.map((file) => file.path)),
+        ...optionalLocalFolderMeasurement,
       }),
       optionalSourceControl: Object.freeze({
         path: optionalSourceControlPacks[0].path,
@@ -2859,6 +2951,20 @@ export function isOptionalWorkspaceCodecPath(path) {
   return /^assets\/content-codec-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+/**
+ * The attached-folder tier: the port over a directory handle, and the panel
+ * that opens, reconnects and forgets one.
+ *
+ * Two chunks rather than one on purpose. Naming them into a single manual chunk
+ * made Rolldown hoist preact itself out of the entry and into the pack — 28 KiB
+ * where 14 KiB of first-party code belonged, for a surface almost nobody
+ * fetches. They split naturally, they are fetched in the same moment, and the
+ * ceiling governs their sum.
+ */
+export function isOptionalLocalFolderPath(path) {
+  return /^assets\/local-folder(?:-panel)?-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
 export function isOptionalSourceControlPath(path) {
   return /^assets\/sources-view-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
@@ -2929,6 +3035,7 @@ export function isBaselineJavaScriptPath(path) {
     && !isOptionalWorkspaceWorkbenchPath(path)
     && !isOptionalWorkspaceBindingPath(path)
     && !isOptionalWorkspaceCodecPath(path)
+    && !isOptionalLocalFolderPath(path)
     && !isOptionalSourceControlPath(path)
     && !isOptionalSourceSelectionPath(path)
     && !isOptionalBrowserGitPath(path)
@@ -3498,6 +3605,9 @@ function printResult(result) {
   );
   console.log(
     `Optional Workspace workbench ${formatBytes(measurements.optionalWorkspaceWorkbench.raw)} raw / ${formatBytes(measurements.optionalWorkspaceWorkbench.gzip)} gzip`,
+  );
+  console.log(
+    `Optional folder on this device ${formatBytes(measurements.optionalLocalFolder.raw)} raw / ${formatBytes(measurements.optionalLocalFolder.gzip)} gzip`,
   );
   console.log(
     `Optional source control ${formatBytes(measurements.optionalSourceControl.raw)} raw / ${formatBytes(measurements.optionalSourceControl.gzip)} gzip`,

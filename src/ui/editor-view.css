@@ -146,3 +146,79 @@
     margin: var(--sp-4);
   }
 }
+
+/*
+ * The folder tier, stated on the route it changes.
+ *
+ * It sits between the route header and the workbench because it is a storage
+ * decision, not a file operation: a person reading "Ephemeral" or "Local
+ * Device" on #vault needs the same six answers here, in the same order, before
+ * they hand a real directory to an agent.
+ */
+.local-folder {
+  margin: var(--sp-3) var(--sp-6) 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.local-folder__title {
+  margin: 0;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+.local-folder__note,
+.local-folder__status,
+.local-folder__notice {
+  margin: var(--sp-2) 0 0;
+  max-width: 68ch;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.local-folder__note { color: var(--ink-muted); }
+.local-folder__status { color: var(--ink); }
+.local-folder__notice { color: var(--danger); }
+
+.local-folder__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/*
+ * The floor is stated here rather than inherited, for the reason
+ * `workspace-view.css` records for the empty workbench: a route's own selector
+ * outranks the product-wide coarse-pointer rule in `tokens.css`, so a control
+ * that looks floored can still render 40px unless its own route says so.
+ */
+.local-folder__actions button {
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-3);
+}
+
+.local-folder__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--sp-1) var(--sp-4);
+  margin: var(--sp-3) 0 0;
+}
+
+.local-folder__fact {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-micro);
+}
+
+.local-folder__fact dt { color: var(--ink-faint); }
+.local-folder__fact dd { margin: 0; color: var(--ink-muted); text-align: right; }
+
+@media (max-width: 760px) {
+  .local-folder { margin: var(--sp-3) var(--sp-4) 0; }
+}
