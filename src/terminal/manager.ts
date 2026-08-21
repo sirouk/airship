@@ -746,7 +746,7 @@ export class BrowserTerminalManager {
     const available = this.canReconcile();
     if (available === this.reconcileAvailable) return;
     this.reconcileAvailable = available;
-    for (const listener of this.reconcileListeners) listener(available);
+    for (const listener of this.reconcileListeners) notifyTerminalObserver(listener, available);
   }
 
   /**
@@ -970,7 +970,7 @@ export class BrowserTerminalManager {
   private emitWorkspaceChanges(changed: readonly string[]): void {
     if (!changed.length) return;
     const stable = Object.freeze([...changed]);
-    for (const listener of this.workspaceListeners) listener(stable);
+    for (const listener of this.workspaceListeners) notifyTerminalObserver(listener, stable);
   }
 
   private async pumpOutput(session: MutableSession, process: WebContainerProcess, generation: number): Promise<void> {
@@ -1454,11 +1454,26 @@ export class BrowserTerminalManager {
 
   private emitSession(session: MutableSession): void {
     const value = snapshot(session);
-    for (const listener of this.sessionListeners.get(session.id) ?? []) listener(value);
+    for (const listener of this.sessionListeners.get(session.id) ?? []) notifyTerminalObserver(listener, value);
   }
 
   private emitList(): void {
-    for (const subscription of this.listListeners) subscription.listener(this.list(subscription.profileId));
+    for (const subscription of this.listListeners) {
+      notifyTerminalObserver(subscription.listener, this.list(subscription.profileId));
+    }
+  }
+}
+
+/**
+ * A view that throws while reading terminal state cannot be allowed to stop the
+ * terminal from reaching the rest of its subscribers, or to abort the session
+ * transition that is publishing this snapshot.
+ */
+function notifyTerminalObserver<T>(listener: (value: T) => void, value: T): void {
+  try {
+    listener(value);
+  } catch {
+    // A presentation observer cannot control terminal lifecycle.
   }
 }
 

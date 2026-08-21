@@ -1278,10 +1278,29 @@ export class PyodideKernelEngine {
     void this.killWorker("Pyodide kernel worker crashed; the Python namespace was reset.");
   }
 
+  /**
+   * An observer cannot decide whether a job settles.
+   *
+   * These calls used to run bare, so one throwing subscriber wedged `dispatch`
+   * before the exec frame and before the wall-clock timer: the job never
+   * settled, the host stayed `busy`, `cancel()` threw again before reaching
+   * `ready`, and every later job hung behind it. A listener that threw only on
+   * stdout turned a completed job into `crashed` with a worker-protocol
+   * violation — a host-side observer bug journaled as a worker crash and a
+   * namespace reset. Every other fan-out in this repo already contains its
+   * listeners; this one is now the same.
+   */
   private emit(event: KernelJobEvent, jobListeners?: ((event: KernelJobEvent) => void)[]): void {
-    for (const listener of this.globalListeners) listener(event);
+    const notify = (listener: (event: KernelJobEvent) => void): void => {
+      try {
+        listener(event);
+      } catch {
+        // A presentation observer cannot control job settlement.
+      }
+    };
+    for (const listener of this.globalListeners) notify(listener);
     const target = jobListeners ?? this.job?.listeners;
-    if (target) for (const listener of target) listener(event);
+    if (target) for (const listener of target) notify(listener);
   }
 }
 

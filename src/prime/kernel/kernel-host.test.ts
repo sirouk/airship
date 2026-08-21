@@ -444,6 +444,35 @@ describe("PrimeKernelHost (scripted worker)", () => {
     expect(events.map((e) => e.type)).toEqual(["started", "stdout", "completed"]);
   });
 
+  /*
+   * A subscriber is an observer, not a participant. These fan-outs used to run
+   * bare: one throwing listener wedged the dispatch before the exec frame and
+   * before the wall clock, so the job never settled, the host stayed busy, and
+   * every later job queued behind it forever.
+   */
+  it("settles a job even when every event subscriber throws", async () => {
+    const worker = makeScriptedWorker();
+    const { host } = makeHost(worker);
+    const boot = host.start();
+    worker.emit({ type: "ready", engine: "javascript" });
+    await boot;
+    const seen: string[] = [];
+    host.onEvent(() => { throw new Error("hostile global subscriber"); });
+    host.onEvent((event) => { seen.push(`global:${event.type}`); });
+
+    const first = await host.exec({ code: "true" }, () => { throw new Error("hostile job subscriber"); });
+    expect(first.outcome).toBe("completed");
+    // The queue is not poisoned: the host boots its next per-job worker and
+    // runs the next job, which a wedged dispatch would never reach.
+    const second = host.exec({ code: "true" });
+    await waitForPostedType(worker, "init");
+    worker.emit({ type: "ready", engine: "javascript" });
+    expect((await second).outcome).toBe("completed");
+    // A throwing subscriber does not silence the ones registered after it.
+    expect(seen).toContain("global:completed");
+    await host.terminate("throwing-subscriber test complete");
+  });
+
   it("snapshots caller-owned job fields before asynchronous boot admission", async () => {
     const worker = makeScriptedWorker(false);
     const host = new PrimeKernelHost({
