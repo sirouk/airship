@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import { RecoveryKeyGroups } from "./google-drive-setup";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import type { ConfigureVaultRequest } from "../vault/coordinator";
@@ -115,7 +114,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
     setRecovery(undefined);
     setRecoveryAcknowledged(false);
     try {
-      const { LocalLabRecoveryMaterial } = await loadDeferredCapabilities();
+      const { LocalLabRecoveryMaterial } = await import("../vault/local-lab");
       const material = await LocalLabRecoveryMaterial.generate();
       if (generation !== recoveryGeneration.current) {
         material.clear();
@@ -184,7 +183,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
     }
     let request: ConfigureVaultRequest;
     try {
-      const { createLocalLabConfigureRequest, importLocalLabRecoveryKey } = await loadDeferredCapabilities();
+      const { createLocalLabConfigureRequest, importLocalLabRecoveryKey } = await import("../vault/local-lab");
       const workspaceKey: WorkspaceRootKey = recoveryMode === "generate"
         ? recovery!.workspaceKey
         : await importLocalLabRecoveryKey(importedRecovery);
@@ -240,7 +239,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
     <section class="local-lab" aria-labelledby="local-lab-heading">
       <header class="local-lab__header">
         <div>
-          <p class="local-lab__eyebrow">Development harness</p>
+          <p class="eyebrow local-lab__eyebrow">Development harness</p>
           <h2 id="local-lab-heading">Connect your loopback S3 lab</h2>
         </div>
         <span>Memory only</span>
@@ -256,7 +255,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
 
       <form class="local-lab__form" autoComplete="off" onSubmit={submit} aria-describedby="local-lab-boundary">
         <fieldset>
-          <legend>Loopback object store</legend>
+          <legend class="eyebrow">Loopback object store</legend>
           <label class="local-lab__wide" data-invalid={fieldErrors.endpoint ? "true" : "false"}>
             <span>Endpoint</span>
             <input
@@ -335,7 +334,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
         </fieldset>
 
         <fieldset>
-          <legend>Disposable local credentials</legend>
+          <legend class="eyebrow">Disposable local credentials</legend>
           <label data-invalid={fieldErrors.accessKeyId ? "true" : "false"}>
             <span>Access key</span>
             <input
@@ -377,7 +376,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
         </fieldset>
 
         <fieldset>
-          <legend>Workspace recovery key</legend>
+          <legend class="eyebrow">Workspace recovery key</legend>
           <div class="local-lab__mode local-lab__wide" role="group" aria-label="Recovery key source">
             <button
               type="button"
@@ -465,7 +464,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
         </fieldset>
 
         <div class="local-lab__acknowledgements">
-          <p class="local-lab__eyebrow">Before handoff</p>
+          <p class="eyebrow local-lab__eyebrow">Before handoff</p>
           <label>
             <input
               type="checkbox"
@@ -528,7 +527,7 @@ function ProductionLabBoundary() {
     <section class="local-lab" aria-labelledby="local-lab-heading">
       <header class="local-lab__header">
         <div>
-          <p class="local-lab__eyebrow">Development harness</p>
+          <p class="eyebrow local-lab__eyebrow">Development harness</p>
           <h2 id="local-lab-heading">Loopback S3 is development-only</h2>
         </div>
         <span>Unavailable</span>

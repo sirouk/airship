@@ -6,6 +6,10 @@ Airship ships as a static client. `npm run build` therefore ends by validating
 ## The release gate blocks on
 
 - source maps or stray source-map directives;
+- any trace of the host-composed loopback storage lab. The lab is composed in
+  by `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` and out of every other build, so a stock
+  release must contain no lab chunk, no S3 request signing, no baked loopback
+  endpoint or disposable keys, and no copy that names the destination;
 - credential-shaped payloads in shipped artifacts, including decompressed
   Companion ZIP members. Vendor keys are matched on the literal each vendor
   issues; a key that is bare hex or bare base64 has no shape to match, and no
@@ -36,12 +40,12 @@ ceiling.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 377 KiB | 118 KiB |
-| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 494 KiB | 161 KiB |
-| Deferred advanced capability bundle | 246 KiB | 72 KiB |
-| First-party and other non-vendor JS/workers | 1962 KiB | 613 KiB |
+| HTML-referenced entry JavaScript | 373 KiB | 116 KiB |
+| Baseline JavaScript/workers including pre-render chunks, optional packs excluded | 486 KiB | 159 KiB |
+| Deferred advanced capability bundle | 229 KiB | 68 KiB |
+| First-party and other non-vendor JS/workers | 1934 KiB | 604 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 685 KiB | 191 KiB |
-| Absolute installed JavaScript/worker backstop | 2646 KiB | 803 KiB |
+| Absolute installed JavaScript/worker backstop | 2618 KiB | 795 KiB |
 | Service worker | 12 KiB | 5 KiB |
 | Optional execution broker / engine / support / tools | 32 KiB / 56 KiB / 10 KiB / 47 KiB | 10 KiB / 14 KiB / 4 KiB / 15 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -69,6 +73,12 @@ npm run test:e2e:static-host
 
 Use `npm run check` for the broader local gate and `npm run test:e2e:master`
 for the heavier browser matrix.
+
+`npm test` runs the unit suite as a lab build, because that is the build whose
+S3 and lab paths the suite exercises. `npm run test:stock` re-runs the
+storage-choice suites with the lab composed out, so the picker, its comparison
+table and every refusal are asserted in both build modes. `npm run check` runs
+both, then builds and gates a stock artifact.
 
 ## Why this matters
 

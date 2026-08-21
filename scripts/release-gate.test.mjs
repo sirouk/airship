@@ -5,6 +5,8 @@ import {
   RELEASE_BUDGETS,
   assertSinglePrimeKernelWorkerArtifact,
   assertNoSimulatedGitRuntime,
+  assertStockReleaseExcludesLocalLab,
+  LOCAL_LAB_RELEASE_SENTINELS,
   assertWithinBudget,
   assertExclusiveArtifactClassifications,
   assertExactChunkStems,
@@ -430,7 +432,7 @@ describe("release gate", () => {
     for (const [name, ceiling, granted] of [
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
-      ["deferredCapabilities", "gzip: 72 * 1024", "gzip: 73 * 1024"],
+      ["deferredCapabilities", "gzip: 68 * 1024", "gzip: 69 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
@@ -510,15 +512,15 @@ describe("release gate", () => {
      * than the raw winner. KiB also proves the selected claim keeps its precision.
      */
     const crossedMaxima = source.replace(
-      "384,870 B raw / 119,222 B gzip",
-      "384,908 B raw / 117.68 KiB gzip",
+      "380,623 B raw / 117,807 B gzip",
+      "380,661 B raw / 116.30 KiB gzip",
     );
     expect(crossedMaxima).not.toBe(source);
     expect(() => assertDocumentedMeasurementsMatchBuild(crossedMaxima, {
       ...asDocumented,
-      entryJavaScript: { raw: 384870, gzip: 119222 },
+      entryJavaScript: { raw: 380623, gzip: 117807 },
     })).toThrow(
-      /entryJavaScript: its comment claims 117\.68 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
+      /entryJavaScript: its comment claims 116\.30 KiB gzip, but no reviewed variant it records comes within 768 B of that figure/u,
     );
 
     // A legal build-time environment can move a shared aggregate by a handful
@@ -761,6 +763,37 @@ describe("release gate", () => {
     expect(() => assertNoSimulatedGitRuntime([
       { path: "assets/deferred-capabilities-A.js", payload: Buffer.from("airship-memory-git") },
     ])).toThrow(/simulated browser-Git runtime.*deferred-capabilities-A\.js/iu);
+  });
+
+  it("refuses a release that carries the host-composed loopback lab", () => {
+    const clean = [
+      { path: "assets/index-A.js", payload: Buffer.from("export const airship = 1;") },
+      { path: "assets/deferred-capabilities-A.js", payload: Buffer.from("Google Drive") },
+      { path: "assets/local-device-vault-setup-A.js", payload: Buffer.from("Local Device") },
+    ];
+    expect(() => assertStockReleaseExcludesLocalLab(clean)).not.toThrow();
+
+    // Every sentinel, one at a time, in the artifact class that can carry it.
+    for (const [label, sentinel] of LOCAL_LAB_RELEASE_SENTINELS) {
+      const planted = typeof sentinel === "string"
+        ? [...clean, { path: "assets/index-A.js", payload: Buffer.from(`x${sentinel}y`) }]
+        : [...clean, { path: "assets/local-lab-setup-A.js", payload: Buffer.from("x") }];
+      expect(() => assertStockReleaseExcludesLocalLab(planted), label)
+        .toThrow(/must not contain the host-composed loopback storage lab/iu);
+    }
+
+    // The orphan chunk that started this: emitted, referenced by nothing, and
+    // shipped anyway. A path match alone has to fail the release.
+    expect(() => assertStockReleaseExcludesLocalLab([
+      { path: "assets/local-lab-vault-A.js", payload: Buffer.from("") },
+    ])).toThrow(/lab chunk/iu);
+    expect(() => assertStockReleaseExcludesLocalLab([
+      { path: "assets/local-lab-setup-A.css", payload: Buffer.from("") },
+    ])).toThrow(/lab chunk/iu);
+    // A same-prefixed name that is not the lab must still pass.
+    expect(() => assertStockReleaseExcludesLocalLab([
+      { path: "assets/local-device-keyring-A.js", payload: Buffer.from("") },
+    ])).not.toThrow();
   });
 
   it("recognizes only the hashed execution pack and forbids optional-pack preloads", () => {

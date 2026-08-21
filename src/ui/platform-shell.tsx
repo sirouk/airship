@@ -6,6 +6,7 @@ import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTIN
 import { StatusMark, type StatusMarkState } from "./status-mark";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import { Icon } from "./icons";
 import {
@@ -424,14 +425,16 @@ export type PreferenceOverrides = Readonly<{
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
-/** Exact opt-in for the host-composed loopback storage lab. */
-export function localLabEnabledInBuild(value: string | undefined): boolean {
-  return value === "1";
-}
-
-const BUILD_LOCAL_LAB_ENABLED = localLabEnabledInBuild(
-  import.meta.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB as string | undefined,
-);
+/*
+ * The build's own answer, folded at compile time by `LOCAL_LAB_BUILD`.
+ *
+ * Every `LOCAL_LAB_BUILD &&` below is what removes the lab from a stock
+ * artifact rather than merely refusing it: with the constant folded to `false`
+ * the bundler drops the branch, the copy inside it, and the modules it reaches.
+ * The `localLabEnabled` argument survives beside it because a *lab* build still
+ * has to answer for an origin that is not loopback.
+ */
+const BUILD_LOCAL_LAB_ENABLED = LOCAL_LAB_BUILD;
 
 export type VaultBackendSelectorAvailability = Readonly<{
   googleClientId?: string | null;
@@ -459,7 +462,7 @@ function availableVaultBackend(
   if (value === "google-drive") {
     return isDeployableGoogleOAuthClientId(googleClientId) ? value : undefined;
   }
-  if (value === "local-lab") {
+  if (LOCAL_LAB_BUILD && value === "local-lab") {
     return localLabEnabled && location && isLoopbackVaultOrigin(location) ? value : undefined;
   }
   return value === "local-device" || value === "ephemeral" ? value : undefined;
@@ -474,6 +477,7 @@ function availableVaultBackend(
  * loopback spellings `local-lab-namespace.test.ts` asserts of the original.
  */
 function isLoopbackVaultOrigin(location: Pick<Location, "hostname">): boolean {
+  if (!LOCAL_LAB_BUILD) return false;
   const hostname = location.hostname.trim().toLocaleLowerCase();
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
@@ -510,10 +514,19 @@ export function resolveDefaultVaultBackend(
  * the label is also the collapsed trigger, and "Encrypted Google Driv…"
  * truncating with 210px of void beside it is what a four-word label buys.
  */
-const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, consequence: string]>> = Object.freeze({
+/*
+ * `Partial` rather than a total record, because one destination is not a
+ * destination in every build. The lab's row is composition, so a stock artifact
+ * carries neither its name nor its sentence; `vaultBackendsForSelector` is the
+ * only producer of the keys this table is read with, and it never yields
+ * `local-lab` in a build that has no row for it.
+ */
+const DURABILITY: Readonly<Partial<Record<VaultBackend, readonly [destination: string, consequence: string]>>> = Object.freeze({
   "local-device": Object.freeze(["This device", "Encrypted here. Not on your other devices."] as const),
   "google-drive": Object.freeze(["Google Drive", "Encrypted in your own Drive, on every device."] as const),
-  "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const),
+  ...(LOCAL_LAB_BUILD
+    ? { "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const) }
+    : {}),
   /*
    * "Nothing survives closing this tab" was not true, and this is the whole of
    * the correction.
@@ -540,11 +553,16 @@ export const STOCK_VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
   "google-drive",
 ] as const);
 
-/** Recognized persisted values. `local-lab` is host-composed, not stock. */
+/**
+ * Recognized persisted values. `local-lab` is host-composed, not stock, so a
+ * stock build does not list it at all: there is nothing it could recognise it
+ * *as*, and `loadPreferenceOverrides` rewrites the stale value to the
+ * available default either way.
+ */
 export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze([
   ...STOCK_VAULT_BACKENDS,
-  "local-lab",
-] as const);
+  ...(LOCAL_LAB_BUILD ? (["local-lab"] as const) : []),
+]);
 
 /** The destinations this build and page origin may advertise in a selector. */
 export function vaultBackendsForSelector(
@@ -556,7 +574,7 @@ export function vaultBackendsForSelector(
     availableVaultBackend(backend, input.googleClientId, location, localLabEnabled));
   return Object.freeze([
     ...stock,
-    ...(availableVaultBackend("local-lab", input.googleClientId, location, localLabEnabled)
+    ...(LOCAL_LAB_BUILD && availableVaultBackend("local-lab", input.googleClientId, location, localLabEnabled)
       ? ["local-lab" as const]
       : []),
   ]);
@@ -573,7 +591,11 @@ export function vaultBackendsForSelector(
 export type DurabilityAdoption = "connected" | "not-connected" | undefined;
 
 export function durabilityOptionLabel(backend: VaultBackend, adoption: DurabilityAdoption): string {
-  const destination = DURABILITY[backend][0];
+  // Total by construction rather than by luck: the table is `Partial`, and this
+  // is the arm for a value this build has no destination for. It claims nothing
+  // and names nothing. `vaultBackendsForSelector` never yields such a value, so
+  // it is unreachable in both builds — but a label may not print a raw id.
+  const destination = DURABILITY[backend]?.[0] ?? "Unavailable destination";
   // Page memory has no adoption axis: it is the absence of a vault, and
   // "Page memory only · not connected" would invent a failure out of a choice.
   if (backend === "ephemeral" || adoption === undefined) return destination;
@@ -616,7 +638,7 @@ export function durabilityOptions(input: Readonly<{
     return Object.freeze({
       value: backend,
       label: durabilityOptionLabel(backend, adoption),
-      description: DURABILITY[backend][1],
+      description: DURABILITY[backend]?.[1] ?? "",
     });
   }));
 }
@@ -630,6 +652,13 @@ export function vaultBackendUnavailableReason(
 ): string | undefined {
   if (availableVaultBackend(backend, googleClientId, location, localLabEnabled)) return undefined;
   if (backend === "google-drive") return "Unavailable: this build has no Google OAuth client ID, so Drive authorization cannot be opened.";
+  /*
+   * A stock build has no lab to name, so it says what is true of it without
+   * advertising a destination it does not carry. Only a lab build distinguishes
+   * "not composed into this build" from "composed, but this origin is not
+   * loopback", because only a lab build can be in the second state.
+   */
+  if (!LOCAL_LAB_BUILD) return "Unavailable: this build does not include that storage destination.";
   if (!localLabEnabled) return "Unavailable: this build does not include the host-composed local MinIO lab.";
   return "Unavailable: the local MinIO lab is reachable only from an exact loopback origin.";
 }

@@ -9,6 +9,7 @@ import type { CiphertextCacheCapability } from "../storage/client-ciphertext-cac
 import type { EncryptedProfileCatalogStore } from "../profiles/persistence";
 import type { VaultContextFabricPort } from "./context-fabric-port";
 import type { GoogleDriveWorkspace } from "../storage/google-drive-workspace";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import type { S3CredentialProvider, S3ObjectStore } from "../storage/s3-object-store";
 import {
   validateVaultS3Configuration,
@@ -192,7 +193,12 @@ export type ProbeVaultRequest = {
 type Listener = (snapshot: VaultSnapshot) => void;
 type WithoutRevision<T> = T extends unknown ? Omit<T, "revision"> : never;
 type VaultRuntimeModules = Readonly<{
-  S3ObjectStore: typeof import("../storage/s3-object-store").S3ObjectStore;
+  /**
+   * Present only in a lab build. The S3 object store is reachable through one
+   * destination — the host-composed loopback lab — so a stock build fetches
+   * neither this module nor the AWS request signing inside it.
+   */
+  S3ObjectStore?: typeof import("../storage/s3-object-store").S3ObjectStore;
   runObjectStoreConformance: typeof import("../storage/conformance").runObjectStoreConformance;
   EncryptedObjectJournalBackend: typeof import("../storage/encrypted-object-journal").EncryptedObjectJournalBackend;
   EncryptedProfileCatalogStore: typeof import("../profiles/persistence").EncryptedProfileCatalogStore;
@@ -345,6 +351,14 @@ export class VaultCoordinator {
   }
 
   configure(request: ConfigureVaultRequest): VaultSnapshot {
+    /*
+     * The S3 configuration path exists for one destination — the host-composed
+     * loopback lab — so a stock build refuses it here rather than carrying the
+     * S3 configuration grammar, its validator and its provider-requirement
+     * table. Nothing in a stock build calls this: the selector never offers the
+     * destination and `loadPreferenceOverrides` never restores it.
+     */
+    if (!LOCAL_LAB_BUILD) throw new Error("This build has no S3-compatible vault destination to configure.");
     const config = validateVaultS3Configuration(request.configuration);
     this.invalidateProbe("Vault configuration was replaced.");
     this.resetProvider();
@@ -526,7 +540,8 @@ export class VaultCoordinator {
     try {
       const modules = await loadVaultRuntimeModules();
       if (generation !== this.generation || controller.signal.aborted) throw abortReason(controller.signal);
-      const store = this.directStore ?? this.store ?? (!isGoogleDriveConfiguration(config) && provider
+      const store = this.directStore ?? this.store ?? (LOCAL_LAB_BUILD && modules.S3ObjectStore
+        && !isGoogleDriveConfiguration(config) && provider
         ? new modules.S3ObjectStore({
             endpoint: config.endpoint,
             region: config.region,
@@ -932,10 +947,13 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: O
 let runtimeModulesPromise: Promise<VaultRuntimeModules> | undefined;
 
 function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
-  runtimeModulesPromise ??= import("../load-deferred-capabilities")
-    .then(({ loadDeferredCapabilities }) => loadDeferredCapabilities())
-    .then((capabilities) => Object.freeze({
-    S3ObjectStore: capabilities.S3ObjectStore,
+  runtimeModulesPromise ??= Promise.all([
+    import("../load-deferred-capabilities").then(({ loadDeferredCapabilities }) => loadDeferredCapabilities()),
+    // Folded away in a stock build, which takes the dynamic import with it.
+    LOCAL_LAB_BUILD ? import("../storage/s3-object-store") : undefined,
+  ])
+    .then(([capabilities, s3]) => Object.freeze({
+    S3ObjectStore: s3?.S3ObjectStore,
     runObjectStoreConformance: capabilities.runObjectStoreConformance,
     EncryptedObjectJournalBackend: capabilities.EncryptedObjectJournalBackend,
     EncryptedProfileCatalogStore: capabilities.EncryptedProfileCatalogStore,
@@ -1073,7 +1091,7 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
       recordedAt,
     });
   }
-  if (isCognitoIdentityError(error)) {
+  if (LOCAL_LAB_BUILD && isCognitoIdentityError(error)) {
     const throttled = error.code === "TooManyRequestsException" || error.code === "InternalErrorException";
     return Object.freeze({
       code: throttled ? "credential-throttled" : "credential-denied",
@@ -1142,11 +1160,17 @@ function redactVaultError(error: unknown, recordedAt: string): VaultDiagnostic {
   });
 }
 
+/**
+ * A temporary-credential authority is an S3 concept, and S3 is reachable only
+ * from the host-composed loopback lab. A stock build folds this predicate and
+ * the diagnostic above it away rather than shipping a branch nothing can enter.
+ */
 function isCognitoIdentityError(error: unknown): error is Error & {
   code: string;
   retryable: boolean;
   requestId?: string;
 } {
+  if (!LOCAL_LAB_BUILD) return false;
   if (!(error instanceof Error) || error.name !== "CognitoIdentityError") return false;
   const value = error as Error & { code?: unknown; retryable?: unknown; requestId?: unknown };
   return typeof value.code === "string" &&

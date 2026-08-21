@@ -14,7 +14,8 @@
     "preview:lan": "vite preview --host 0.0.0.0 --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
     "typecheck:extension": "tsc -p extension/tsconfig.json --noEmit",
-    "test": "vitest run --maxWorkers=4 --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
+    "test": "VITE_AIRSHIP_ENABLE_LOCAL_LAB=1 vitest run --maxWorkers=4 --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
+    "test:stock": "VITE_AIRSHIP_ENABLE_LOCAL_LAB=0 vitest run --maxWorkers=4 src/ui/storage-destinations.test.ts src/ui/vault-view.test.ts src/ui/platform-shell.test.ts src/ui/vault-provider-feasibility.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:master": "AIRSHIP_LIVE_WEBCONTAINER=1 playwright test --config=playwright.master.config.ts",
     "test:e2e:static-host": "npm run build:extension && AIRSHIP_DISABLE_SEMANTIC_PACK=1 AIRSHIP_PUBLIC_BASE_PATH=/airship/ npm run build:static && npm run check:release && playwright test --config=playwright.static-host.config.ts",
@@ -24,7 +25,7 @@
     "test:e2e:google-drive": "playwright test --config=playwright.google-drive.config.ts",
     "test:vault:live": "AIRSHIP_LIVE_LOCAL_S3=1 vitest run src/vault/local-lab-live.test.ts src/core/agent-vault-context.live.test.ts --reporter=verbose",
     "test:pyodide:live": "PRIME_PYODIDE_LIVE=1 vitest run src/prime/kernel/pyodide-engine.test.ts --reporter=verbose",
-    "test:watch": "vitest --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
+    "test:watch": "VITE_AIRSHIP_ENABLE_LOCAL_LAB=1 vitest --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude 'references/**' --exclude '**/*.live.test.ts'",
     "lab:start": "node scripts/local-lab.mjs start",
     "lab:storage": "node scripts/local-lab.mjs storage",
     "lab:status": "node scripts/local-lab.mjs status",
@@ -39,7 +40,7 @@
     "build:extension": "npm run typecheck:extension && node extension/package.mjs",
     "semantic:prepare": "node scripts/prepare-semantic-pack.mjs",
     "build": "npm run typecheck && npm run check:security && npm run build:extension && npm run build:static && npm run check:release",
-    "check": "npm run typecheck && npm run typecheck:extension && npm run check:security && npm run test && npm run build:extension && npm run build:static && npm run check:release && npm run check:browser"
+    "check": "npm run typecheck && npm run typecheck:extension && npm run check:security && npm run test && npm run test:stock && npm run build:extension && npm run build:static && npm run check:release && npm run check:browser"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",

@@ -42,6 +42,21 @@ export function inspectAirshipHtml(html) {
   });
 }
 
+/**
+ * The environment the *release* half of `lab:test` must run in.
+ *
+ * `npm run check` builds and gates the artifact this project ships, and that
+ * artifact is a stock one: `assertStockReleaseExcludesLocalLab` refuses a
+ * release that carries the loopback lab at all. An operator who exported
+ * `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` in their shell would otherwise have
+ * `lab:test` build a lab bundle and fail its own gate on the difference. The
+ * unit suite still runs as a lab build — `npm test` sets the flag itself — so
+ * this clears only what the build and the gate read.
+ */
+export function stockBuildEnvironment(base = process.env) {
+  return Object.freeze({ ...base, VITE_AIRSHIP_ENABLE_LOCAL_LAB: "0" });
+}
+
 export function labEnvironment(base = process.env) {
   return Object.freeze({
     ...base,
@@ -163,7 +178,7 @@ async function test() {
   }
 
   console.log("\n[1/2] Airship TypeScript, security, unit, build, and release gates");
-  await run("npm", ["run", "check"], { cwd: root });
+  await run("npm", ["run", "check"], { cwd: root, env: stockBuildEnvironment() });
 
   console.log("\n[2/2] Live disposable S3 + encrypted journal/workspace conformance");
   await run("npm", ["run", "test:vault:live"], { cwd: root, env: labEnvironment() });

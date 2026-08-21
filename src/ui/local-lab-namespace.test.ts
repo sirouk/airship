@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLoopbackAirshipLocation, localLabVaultConfiguration } from "./app";
+import { isLoopbackAirshipLocation, localLabVaultConfiguration } from "./local-lab-vault";
 
 describe("local lab browser namespace isolation", () => {
   it("allows baked MinIO auto-connect only on loopback", () => {

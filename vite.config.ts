@@ -217,11 +217,69 @@ const VERIFIED_SEMANTIC_PACK = process.env.AIRSHIP_DISABLE_SEMANTIC_PACK === "1"
   ? null
   : readVerifiedSemanticPack();
 const SEMANTIC_PACK_AVAILABLE = VERIFIED_SEMANTIC_PACK !== null;
+/*
+ * The loopback storage lab is host composition, not a product feature, so it is
+ * replaced with a literal rather than read at runtime: `"0" === "1"` folds, and
+ * a folded `false` takes the lab's modules, dynamic imports, copy and stylesheet
+ * out of the graph instead of shipping them behind a refusal. `.env.sample` and
+ * `scripts/local-lab.mjs` already speak the exact `1`; anything else is off.
+ */
+const LOCAL_LAB_ENABLED = process.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB === "1";
+
+/**
+ * The modules only a lab build may contain.
+ *
+ * Folding `LOCAL_LAB_BUILD` deletes every branch that *calls* these dynamic
+ * imports, but the bundler still walks a dynamic import it has parsed and emits
+ * a chunk for its target — four orphan files, 21 KiB of them, referenced by
+ * nothing and shipped anyway. Marking the specifiers external in a stock build
+ * removes the targets from the graph, so no chunk is created and the release
+ * gate's own inventory has nothing to classify.
+ *
+ * If a lab-only import ever escapes its branch, the artifact carries the literal
+ * below and `assertStockReleaseExcludesLocalLab` fails the release rather than
+ * shipping an import that resolves to nothing.
+ */
+export const LOCAL_LAB_ONLY_MODULES: readonly string[] = Object.freeze([
+  "/src/storage/s3-object-store.ts",
+  "/src/ui/local-lab-setup.tsx",
+  "/src/ui/local-lab-vault.ts",
+  "/src/vault/local-lab.ts",
+]);
+export const LOCAL_LAB_ABSENT_MODULE = "airship:local-lab-is-not-in-this-build";
+
+export function isLocalLabOnlyModule(resolvedId: string): boolean {
+  const path = resolvedId.split("?")[0].split("\\").join("/");
+  return LOCAL_LAB_ONLY_MODULES.some((suffix) => path.endsWith(suffix));
+}
+
+function airshipLocalLabComposition(enabled: boolean) {
+  return {
+    name: "airship-local-lab-composition",
+    apply: "build" as const,
+    // Ahead of `vite:resolve`, which would otherwise answer for these relative
+    // specifiers before this plugin is consulted at all.
+    enforce: "pre" as const,
+    async resolveId(source: string, importer: string | undefined, options: Record<string, unknown>) {
+      if (enabled || !importer || source.startsWith("\0")) return null;
+      const resolved = await (this as unknown as {
+        resolve: (
+          source: string,
+          importer: string,
+          options: Record<string, unknown>,
+        ) => Promise<{ id: string } | null>;
+      }).resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved || !isLocalLabOnlyModule(resolved.id)) return null;
+      return { id: LOCAL_LAB_ABSENT_MODULE, external: true };
+    },
+  };
+}
 
 export default defineConfig({
   base: PUBLIC_BASE_PATH,
   define: {
     "import.meta.env.VITE_AIRSHIP_SEMANTIC_PACK_AVAILABLE": JSON.stringify(SEMANTIC_PACK_AVAILABLE ? "true" : "false"),
+    "import.meta.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB": JSON.stringify(LOCAL_LAB_ENABLED ? "1" : "0"),
   },
   optimizeDeps: {
     entries: [...DEVELOPMENT_OPTIMIZE_ENTRIES],
@@ -238,6 +296,7 @@ export default defineConfig({
     preact(),
     airshipPyodideAssets(),
     airshipSemanticPackAssets(VERIFIED_SEMANTIC_PACK),
+    airshipLocalLabComposition(LOCAL_LAB_ENABLED),
     {
       name: "airship-local-development-csp",
       apply: "serve",
@@ -295,11 +354,17 @@ export default defineConfig({
            * entry stays a bounded coordinator and these stable persistence
            * primitives retain their own cache unit. This chunk is still an
            * eager dependency; it is not excluded from HTML module preloads.
+           *
+           * `src/vault/config.ts` used to be named here too, and naming it was
+           * what kept it in a stock artifact: the S3 configuration grammar is
+           * reachable from one destination only — the host-composed loopback lab
+           * — so once `configure()` refuses in a stock build nothing references
+           * it, and only this list was still pinning 4,969 raw bytes of it into
+           * an eager chunk. A lab build places it with the code that uses it.
            */
           if (
             id.includes("/src/profiles/catalog.ts")
             || id.includes("/src/profiles/persistence.ts")
-            || id.includes("/src/vault/config.ts")
             || id.includes("/src/storage/encrypted-envelope.ts")
           ) return "profile-storage-foundations";
           /*

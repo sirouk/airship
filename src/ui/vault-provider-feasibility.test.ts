@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import { VAULT_BACKENDS, vaultBackendUnavailableReason } from "./platform-shell";
 
 const appSource = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
@@ -20,12 +21,24 @@ const changeVaultProvider = appSource.match(
 describe("unopenable vault destinations are not selectable", () => {
   it("names the reason for every destination this deployment cannot reach", () => {
     expect(vaultBackendUnavailableReason("google-drive", undefined)).toContain("no Google OAuth client ID");
-    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, false))
-      .toContain("host-composed local MinIO lab");
-    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }, true))
-      .toContain("loopback origin");
-    expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, true))
-      .toBeUndefined();
+    if (LOCAL_LAB_BUILD) {
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, false))
+        .toContain("host-composed local MinIO lab");
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }, true))
+        .toContain("loopback origin");
+      expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, true))
+        .toBeUndefined();
+    } else {
+      // Unreachable *and* unnamed: a stock build states the refusal without
+      // describing a destination it does not carry.
+      for (const location of [{ hostname: "localhost" }, { hostname: "airship.example" }]) {
+        for (const enabled of [false, true]) {
+          const reason = vaultBackendUnavailableReason("local-lab", undefined, location, enabled);
+          expect(reason).toContain("does not include that storage destination");
+          expect(reason).not.toMatch(/minio|loopback|s3/iu);
+        }
+      }
+    }
     for (const backend of ["local-device", "ephemeral"] as const) {
       expect(vaultBackendUnavailableReason(backend, undefined, { hostname: "airship.example" }, false)).toBeUndefined();
     }

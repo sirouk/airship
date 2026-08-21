@@ -26,103 +26,109 @@ export const RELEASE_BUDGETS = Object.freeze({
   // also removed secondary importers that had kept stable profile-storage
   // modules outside the entry. The named eager profile-storage cache unit in
   // vite.config.ts restores a bounded coordinator without making code lazy.
-  // Measured 380,222 B raw / 117,816 B gzip after the dead OAuth and
-  // WASIX surfaces left the startup graph. Re-measured at 384,641 B raw /
-  // 119,196 B gzip after the JavaScript kernel gained boot-epoch fencing, a
-  // hard per-job worker boundary, and truthful job-scoped prompt copy.
-  // An earlier artifact weighed 386,146 B raw / 119,594 B gzip after exact
-  // inference-route admission and post-turn naming removed the last authority
-  // races. After charging the pre-render navigation boundary to startup and
-  // compacting duplicated UI policy, the canonical config-free artifact measures
-  // 384,870 B raw / 119,222 B gzip. The reviewed Docker-defaults variant measures
-  // 384,872 B raw / 119,219 B gzip, the reviewed Pages variant measures
-  // 384,888 B raw / 119,233 B gzip, and the reviewed Google-Drive-configured
-  // variant measures 385,096 B raw / 119,341 B gzip. A configured client ID is
-  // a supported deployment of both Pages and Docker, and it is the largest of
-  // the four, so it sets both maxima. 376 KiB raw is 72 B below that artifact,
-  // so raw takes the tight 377 KiB step and leaves 952 B. 117 KiB gzip would
-  // have left 467 B, below the tripwire floor, so gzip keeps 118 KiB and leaves
-  // 1,491 B.
   //
-  // Parallel conversations then took the shell's page-wide `busy` gate apart:
-  // the rail's new-conversation control, the profile switchers, rename, retry,
-  // fork and branch no longer refuse while a turn runs, and the shell asks the
-  // approval broker about the conversation on screen rather than about the
-  // page. Net of the refusal sentences and disabled props that left, this tree
-  // re-measures the reviewed Pages variant at 385,026 B raw / 119,295 B gzip,
-  // inside both ceilings above; neither moves.
-  entryJavaScript: Object.freeze({ raw: 377 * 1024, gzip: 118 * 1024 }),
+  // Earlier readings of 380,222 B raw and 117,816 B gzip, then 384,641 B raw and
+  // 119,196 B gzip, then 386,146 B raw and 119,594 B gzip, then 385,096 B raw and
+  // 119,341 B gzip are kept as history only, and deliberately not phrased as
+  // measurements: this file's parser takes the largest figure any "measured"
+  // sentence states, and a superseded reading above a lowered ceiling reads as a
+  // raise nobody reviewed.
+  //
+  // The host-composed loopback storage lab left the startup graph. It was never
+  // usable without `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` and an exact loopback
+  // origin, and it shipped in every build anyway: the baked MinIO endpoint and
+  // its disposable keys, the auto-connect effect, the S3/Cognito diagnostics,
+  // the selector copy that names the destination. `LOCAL_LAB_BUILD` folds to a
+  // literal, so a stock entry chunk now carries none of it — 4,276 raw and
+  // 1,427 gzip bytes off the largest reviewed variant.
+  //
+  // The canonical config-free artifact measures 380,623 B raw / 117,807 B gzip.
+  // The reviewed Docker-defaults variant measures 380,616 B raw / 117,812 B
+  // gzip, the reviewed Pages variant measures 380,639 B raw / 117,819 B gzip,
+  // and the reviewed Google-Drive-configured variant measures 380,837 B raw /
+  // 117,917 B gzip. A configured client ID is a supported deployment of both
+  // Pages and Docker, and it is the largest of the four, so it sets both maxima.
+  // 372 KiB raw would have left 91 B, far inside minifier jitter, so raw takes
+  // the 373 KiB step and leaves 1,115 B. 116 KiB gzip clears the artifact by
+  // 867 B, above the tripwire floor, so gzip takes that tight step.
+  entryJavaScript: Object.freeze({ raw: 373 * 1024, gzip: 116 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
   // baseline while keeping the static workbench and its eager preloads.
-  // Re-measured at 504,247 B raw / 163,264 B gzip after exact inference-route
-  // admission and post-turn naming removed the last authority races. With the
-  // pre-render controlled-navigation chunk now counted, the canonical config-free
-  // artifact measures 505,231 B raw / 163,941 B gzip. The reviewed Docker-defaults
-  // variant measures 505,233 B raw / 163,937 B gzip, the reviewed Pages variant
-  // measures 505,249 B raw / 163,954 B gzip, and the reviewed
-  // Google-Drive-configured variant measures 505,457 B raw / 164,062 B gzip and
-  // sets both maxima. 493 KiB raw is 625 B below that artifact and 160 KiB gzip
-  // is 222 B below it. The tight 494/161 KiB steps leave 399 / 802 B.
   //
-  // This aggregate is where the parallel-conversation work is charged, because
-  // the approval dock is fetched as the shell mounts and is therefore counted
-  // here as well as under its own ceiling. What it bought: an approval names
-  // the conversation that raised it, a request from a background conversation
-  // reaches the existing non-modal bar instead of making the whole shell inert,
-  // and the rail states which conversations are working. The reviewed Pages
-  // variant re-measures 505,518 B raw / 164,079 B gzip — 242 raw bytes above
-  // the reading it replaces, 338 B under the unchanged raw ceiling and 785 B
-  // under the unchanged gzip one. Neither ceiling moves. This row is the
-  // tightest one this change touches, and the next feature that needs it has
-  // to shrink something inside it rather than take a step.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 494 * 1024, gzip: 161 * 1024 }),
+  // Earlier readings of 504,247 B raw and 163,264 B gzip, then 505,457 B raw and
+  // 164,062 B gzip, are history and are not phrased as measurements: a
+  // superseded figure above a lowered ceiling reads as a raise nobody reviewed.
+  //
+  // The loopback storage lab left this class twice over: the entry chunk shed
+  // its lab branches, and `src/vault/config.ts` — the S3 configuration grammar,
+  // reachable from that one destination — stopped being named in the eager
+  // profile-storage chunk, which was the last thing pinning 4,969 raw bytes of
+  // it into a stock artifact.
+  //
+  // The canonical config-free artifact measures 496,015 B raw / 160,959 B gzip.
+  // The reviewed Docker-defaults variant measures 496,008 B raw / 160,974 B
+  // gzip, the reviewed Pages variant measures 496,031 B raw / 160,981 B gzip,
+  // and the reviewed Google-Drive-configured variant measures 496,229 B raw /
+  // 161,076 B gzip and sets both maxima. 485 KiB raw would have left 411 B, so
+  // raw takes the 486 KiB step and leaves 1,435 B. 158 KiB gzip would have left
+  // 716 B, below the tripwire floor, so gzip takes 159 KiB and leaves 1,740 B.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 486 * 1024, gzip: 159 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
-  // The remaining provider-neutral route and runtime capabilities weighed
-  // 251,691 B raw / 72,556 B gzip in an earlier integrated edge-workbench build.
-  // In the candidate tree, the canonical config-free artifact measures 250,266 B
-  // raw / 73,215 B gzip. The reviewed origin-inlined variant measures 250,266 B
-  // raw / 73,214 B gzip. 245 KiB raw would have left 614 B, below the tripwire
-  // floor, so the tight 246 KiB step leaves 1,638 B. The config-free artifact is
-  // 511 B over 71 KiB gzip; the unchanged 72 KiB ceiling leaves 513 B. None of
-  // this bundle is fetched on first paint.
-  deferredCapabilities: Object.freeze({ raw: 246 * 1024, gzip: 72 * 1024 }),
+  // Earlier readings of 251,691 B raw and 72,556 B gzip, then 250,266 B raw and
+  // 73,215 B gzip, are history and are not phrased as measurements.
+  //
+  // This is where the loopback lab was heaviest. The pack exported the S3
+  // object store with its AWS request signing, the lab's configure request, and
+  // the lab setup panel with its stylesheet — none of it reachable in a stock
+  // build, all of it downloaded by the first advanced surface. The pack also
+  // absorbed `vault/recovery.ts`, which used to be its own 1,221-byte chunk
+  // because the lab's chunk was its second lazy importer. Net: 17,892 raw and
+  // 5,164 gzip bytes off the largest reviewed variant.
+  //
+  // The canonical config-free artifact measures 232,945 B raw / 68,182 B gzip.
+  // The reviewed Docker-defaults variant measures 232,945 B raw / 68,184 B gzip,
+  // the reviewed Pages variant measures 232,945 B raw / 68,181 B gzip, and the
+  // reviewed Google-Drive-configured variant measures 233,017 B raw / 68,239 B
+  // gzip and sets both maxima. 228 KiB raw would have left 455 B and 67 KiB gzip
+  // would have left 369 B, both below the tripwire floor, so the 229/68 KiB
+  // steps leave 1,479 / 1,393 B. None of this bundle is fetched on first paint.
+  deferredCapabilities: Object.freeze({ raw: 229 * 1024, gzip: 68 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
-  // storage, provider, Git, terminal, and extension surfaces. An earlier
-  // artifact weighed 2,016,426 B raw / 629,378 B gzip after the kernel,
-  // provider, and Git security boundaries landed. Its tight 1970/616 KiB steps
-  // left 854 / 1,406 B above the aggregate tripwire floor.
-  // A later integrated artifact weighed 2,024,242 B raw / 632,111 B gzip after
-  // the reviewed kernel became an independently cached worker counted here
-  // rather than hidden behind a new aggregate. The hard job boundary, exact
-  // redirect provenance checks, and truthful prompt copy took that artifact to
-  // 2,038,267 B raw / 635,875 B gzip. Exact inference-route admission and
-  // post-turn naming then took it to 2,039,794 B raw / 636,299 B gzip. Its tight
-  // 1993/623 KiB steps left 1,038 / 1,653 B. Vendor code was unchanged.
-  // The strict shared execution worker and bridge-drain boundary later took the
-  // artifact to 2,047,153 B raw / 639,045 B gzip, with vendor code still
-  // unchanged. After charging the pre-render navigation chunk and compacting
-  // duplicated UI policy, the canonical config-free artifact measures 2,007,999 B
-  // raw / 626,872 B gzip. The reviewed Docker-defaults variant measures 2,007,998 B
-  // raw / 626,880 B gzip, the reviewed Pages variant measures 2,008,071 B raw /
-  // 626,897 B gzip, and the reviewed Google-Drive-configured variant measures
-  // 2,008,572 B raw / 627,184 B gzip.
+  // storage, provider, Git, terminal, and extension surfaces.
   //
-  // That fourth variant is why raw reads 1962 KiB again. A configured client ID
-  // is a supported deployment — GitHub Pages builds one when the repository
-  // variable is set, and `./deploy.sh` builds one from `.env` — and it was never
-  // measured, so 1961 KiB was a ceiling justified by three variants out of four
-  // and it refused an honest build of the fourth. 1961 KiB raw is 508 B below
-  // that artifact; the tight 1962 KiB step leaves 516 B. 612 KiB gzip is 496 B
-  // below it, so gzip keeps its tight 613 KiB step and leaves 528 B.
+  // Earlier readings of 2,016,426 B raw and 629,378 B gzip, then 2,024,242 B raw
+  // and 632,111 B gzip, then 2,038,267 B raw and 635,875 B gzip, then
+  // 2,039,794 B raw and 636,299 B gzip, then 2,047,153 B raw and 639,045 B gzip,
+  // then 2,008,572 B raw and 627,184 B gzip are history and are deliberately not
+  // phrased as measurements: this file's parser takes the largest figure any
+  // "measured" sentence states, and a superseded reading above a lowered ceiling
+  // is exactly what the rules below read as a raise nobody reviewed. Vendor code
+  // was unchanged across all of them.
   //
-  // With per-conversation shell state and a conversation-scoped approval dock,
-  // the reviewed Pages variant re-measures 2,008,272 B raw / 626,981 B gzip:
-  // 151 raw bytes above the reading it replaces, still under the largest
-  // reviewed variant recorded above, and 816 B under the unchanged ceiling.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1962 * 1024, gzip: 613 * 1024 }),
+  // The host-composed loopback storage lab now leaves a stock build entirely
+  // rather than shipping behind a runtime refusal. What went: the S3 object
+  // store and its request signing, the lab configure request, the lab setup
+  // panel and its stylesheet, the baked MinIO endpoint and disposable keys, the
+  // S3 configuration grammar, the Cognito diagnostic, and the selector,
+  // Preferences and Vault copy that named the destination — 29,796 raw and
+  // 9,601 gzip bytes off the largest reviewed variant. A lab build is
+  // byte-for-byte what it was; `VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` still composes
+  // all of it back in, and `assertStockReleaseExcludesLocalLab` is what keeps
+  // the two apart.
+  //
+  // The canonical config-free artifact measures 1,978,258 B raw / 617,280 B
+  // gzip. The reviewed Docker-defaults variant measures 1,978,231 B raw /
+  // 617,320 B gzip, the reviewed Pages variant measures 1,978,331 B raw /
+  // 617,342 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 1,978,793 B raw / 617,610 B gzip and sets both maxima — a configured client
+  // ID is a supported deployment of both Pages and Docker. 1933 KiB raw would
+  // have left 599 B, below the tripwire floor, so raw takes the 1934 KiB step
+  // and leaves 1,623 B. 604 KiB gzip clears the artifact by 886 B, above that
+  // floor, so gzip takes that tight step.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1934 * 1024, gzip: 604 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -157,30 +163,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The tight 685/191 KiB ceilings leave 792 B raw and at least 789 B gzip.
   optionalVendorRuntimeAggregate: Object.freeze({ raw: 685 * 1024, gzip: 191 * 1024 }),
   // This absolute installed-JavaScript backstop follows the smaller first-party
-  // graph plus the reviewed browser-Git and Terminal packs. An earlier artifact
-  // weighed 2,716,996 B raw / 823,700 B gzip; its tight 2655/806 KiB steps left
-  // 1,724 / 1,644 B. Exact inference-route admission and post-turn naming later
-  // took it to 2,740,364 B raw / 830,617 B gzip, with tight 2677/812 KiB steps
-  // leaving 884 / 871 B. The strict shared execution worker then took it to
-  // 2,747,723 B raw / 833,366 B gzip; its tight 2685/815 KiB steps left
-  // 1,717 / 1,194 B.
-  // After charging the pre-render navigation chunk and compacting duplicated UI
-  // policy, the canonical config-free artifact measures 2,708,691 B raw /
-  // 821,667 B gzip. The reviewed Docker-defaults variant measures 2,708,690 B raw /
-  // 821,675 B gzip, the reviewed Pages variant measures 2,708,763 B raw /
-  // 821,688 B gzip, and the reviewed Google-Drive-configured variant measures
-  // 2,709,264 B raw / 821,976 B gzip and sets both maxima. Raw reads 2646 KiB
-  // for the same reason as the first-party graph above: the configured-client-ID
-  // deployment is supported, larger, and was never measured. 2645 KiB raw is
-  // 784 B below that artifact; the tight 2646 KiB step leaves 240 B. 802 KiB
-  // gzip is 728 B below the artifact, so gzip keeps its tight 803 KiB step and
-  // leaves 296 B.
+  // graph plus the reviewed browser-Git and Terminal packs.
   //
-  // The parallel-conversation work adds no vendor code, so this backstop moves
-  // by exactly what the first-party graph moved: the reviewed Pages variant
-  // re-measures 2,708,964 B raw / 821,774 B gzip, under both unchanged
-  // ceilings and under the largest reviewed variant recorded above.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2646 * 1024, gzip: 803 * 1024 }),
+  // Earlier readings of 2,716,996 B raw and 823,700 B gzip, then 2,740,364 B raw
+  // and 830,617 B gzip, then 2,747,723 B raw and 833,366 B gzip, then
+  // 2,709,264 B raw and 821,976 B gzip are history and are not phrased as
+  // measurements, so the parser reads the current pairs below.
+  //
+  // The whole movement is the loopback storage lab leaving a stock artifact;
+  // vendor code is unchanged and the browser-Git and Terminal packs are
+  // byte-identical to the readings they carry.
+  //
+  // The canonical config-free artifact measures 2,678,955 B raw / 812,079 B
+  // gzip. The reviewed Docker-defaults variant measures 2,678,928 B raw /
+  // 812,124 B gzip, the reviewed Pages variant measures 2,679,028 B raw /
+  // 812,146 B gzip, and the reviewed Google-Drive-configured variant measures
+  // 2,679,490 B raw / 812,410 B gzip and sets both maxima. 2617 KiB raw would
+  // have left 318 B and 794 KiB gzip would have left 646 B, both below the
+  // tripwire floor, so the 2618/795 KiB steps leave 1,342 / 1,670 B.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2618 * 1024, gzip: 795 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It measures 6,216 B raw / 2,337 B gzip after credential and
   // no-store cache bypasses. 7 KiB raw leaves 952 B; gzip stays at 4 KiB
@@ -437,10 +438,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 305 B this file has already declined once, so both take the next step: raw
   // to 64 KiB (1,125 B) and gzip to 20 KiB (1,188 B).
   //
-  // Re-measured at 63,885 B raw / 18,972 B gzip after the shared Run details
-  // renderer and local naming path replaced duplicate route work. 63 KiB raw
-  // would have left 623 B, so raw takes 64 KiB and leaves 1,651 B; gzip stays
-  // inside 20 KiB with 1,508 B.
+  // An earlier reading of 63,885 B raw and 18,972 B gzip followed the shared Run
+  // details renderer and local naming path replacing duplicate route work.
+  //
+  // The Vault route travels in this pack, so the loopback lab's provider column
+  // — its title, description, note and six comparison facts — left with the
+  // rest of the lab. The canonical config-free artifact measures 64,880 B raw /
+  // 19,224 B gzip, the reviewed Docker-defaults variant measures 64,868 B raw /
+  // 19,228 B gzip, the reviewed Pages variant measures 64,880 B raw / 19,227 B
+  // gzip, and the reviewed Google-Drive-configured variant measures 64,940 B raw
+  // / 19,287 B gzip. Neither ceiling can move: 64 KiB raw would have left 596 B
+  // and 19 KiB gzip would have left 169 B, both below the tripwire floor, so the
+  // existing 64/20 KiB ceilings stand and leave 596 / 1,193 B. None of it is in
+  // first paint.
   optionalSessionLibrary: Object.freeze({ raw: 64 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,
@@ -853,16 +863,32 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Local Device setup and its OPFS/IndexedDB key-custody runtime load only
   // after the user selects that Vault provider.
   //
-  // Re-measured at 61,735 B raw / 18,163 B gzip after the storage-choice
-  // simplification. 61 KiB raw would have left 726 B and 18 KiB gzip would
-  // have left 266 B; 62/19 KiB leave 1,753 / 1,293 B. All of it is fetched
-  // after the person picks Local Device, never at first paint.
-  optionalLocalDeviceVault: Object.freeze({ raw: 62 * 1024, gzip: 19 * 1024 }),
+  // An earlier reading of 61,735 B raw and 18,163 B gzip is history. The
+  // loopback lab's own 2,067-byte chunk was charged to this class and is gone
+  // from a stock build; `vault/recovery.ts` lost the lab as its second lazy
+  // importer and folded into the keyring pack, which is why the pack count
+  // fell from four to two and the class still shrank.
+  //
+  // Measured 59,284 B raw / 16,707 B gzip: raw is identical in all four
+  // reviewed variants and gzip moves by one byte between them. 58 KiB raw would
+  // have left 108 B and 17 KiB gzip would have left 701 B, both below the
+  // tripwire floor, so the 59/18 KiB steps leave 1,132 / 1,725 B.
+  // All of it is fetched after the person picks Local Device,
+  // never at first paint.
+  optionalLocalDeviceVault: Object.freeze({ raw: 59 * 1024, gzip: 18 * 1024 }),
   optionalPythonPack: Object.freeze({ raw: 16 * 1024 * 1024, gzip: 8 * 1024 * 1024 }),
   // First-paint CSS blocks render. After obsolete feature rules, selector
   // branches, and duplicates were removed from the shipped cascade, it measures
-  // 145,278 B raw / 24,949 B gzip. 142 KiB raw would have left 130 B and 25 KiB
-  // gzip would have left 651 B; 143/26 KiB leave 1,154 / 1,675 B.
+  // 146,266 B raw / 25,116 B gzip in all four reviewed variants.
+  //
+  // The loopback lab's own stylesheet was never in this class — it travels with
+  // the lazily fetched setup panel — and a previous analysis that charged
+  // 1,088 B of `.local-lab` rules to this budget was wrong. What was here is the
+  // two lab selectors inside the shared `.eyebrow` recipe, 38 raw and 11 gzip
+  // bytes, now taken by class from the panel instead. That is real and it is
+  // small: neither ceiling can move, because 142 KiB raw is 858 B below the
+  // artifact and 25 KiB gzip is 484 B below the tripwire floor. 143/26 KiB
+  // leave 166 / 1,508 B.
   entryCss: Object.freeze({ raw: 143 * 1024, gzip: 26 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
@@ -1621,6 +1647,63 @@ export function assertExclusiveArtifactClassifications(paths, classifications) {
   }
 }
 
+/*
+ * Every literal that only the host-composed loopback storage lab can produce.
+ *
+ * `VITE_AIRSHIP_ENABLE_LOCAL_LAB` has gated the lab's *reachability* for some
+ * time, and the lab was shipped anyway: a stock artifact carried the S3 object
+ * store with its AWS request signing, the lab's configure request, the setup
+ * panel's stylesheet, the Cognito diagnostic and the selector copy that names
+ * the destination. A build flag that only decides what a person may click is
+ * not a build flag; this is the check that makes it one.
+ *
+ * Each sentinel is a string the lab alone emits, taken from the module that
+ * emits it, and each was verified to be absent from a stock build and present
+ * in a lab build. `airship:local-lab-is-not-in-this-build` is the specifier the
+ * stock build externalizes the lab's modules to: it can only appear if a lab
+ * import escaped its `LOCAL_LAB_BUILD` branch, which would ship an import that
+ * resolves to nothing.
+ */
+export const LOCAL_LAB_RELEASE_SENTINELS = Object.freeze([
+  ["lab module specifier", "airship:local-lab-is-not-in-this-build"],
+  ["lab chunk", /(?:^|\/)local-lab(?:-setup|-vault)?-[A-Za-z0-9_-]+\.(?:js|css)$/u],
+  ["baked lab credentials", "airship-vault-probe-only-2026"],
+  ["lab namespace parameter", "airshipLabNamespace"],
+  ["S3 request signing", "AWS4-HMAC-SHA256"],
+  ["S3 configuration grammar", "Local-development vaults require a loopback S3 endpoint."],
+  ["Cognito credential diagnostic", "CognitoIdentityError"],
+  ["lab storage destination", "Local MinIO lab"],
+  ["lab provider profile", "Loopback development lab"],
+  ["lab setup panel", "local-lab__boundary"],
+]);
+
+/**
+ * A stock release carries none of the loopback lab.
+ *
+ * The path is checked as well as the payload because an orphan chunk is the
+ * failure that started this: folding the branch that *calls* a dynamic import
+ * still left the bundler emitting its target, four files and 21 KiB of them,
+ * referenced by nothing and shipped anyway.
+ */
+export function assertStockReleaseExcludesLocalLab(files) {
+  const findings = [];
+  for (const file of files) {
+    if (isOptionalSemanticPackPath(file.path) || isOptionalPythonPackPath(file.path)) continue;
+    for (const [label, sentinel] of LOCAL_LAB_RELEASE_SENTINELS) {
+      const matched = typeof sentinel === "string"
+        ? file.path.includes(sentinel) || file.payload.includes(sentinel)
+        : sentinel.test(file.path);
+      if (matched) findings.push(`${file.path}: ${label}`);
+    }
+  }
+  if (findings.length > 0) {
+    throw new Error(
+      "A stock release must not contain the host-composed loopback storage lab. "
+      + `Build without VITE_AIRSHIP_ENABLE_LOCAL_LAB=1, or review these artifacts:\n- ${findings.join("\n- ")}`,
+    );
+  }
+}
+
 /**
  * The in-memory Git adapter is a deterministic test fixture, not a production
  * runtime. Keep a literal sentinel in that adapter and fail the release if a
@@ -1888,6 +1971,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   assertExtensionReleaseMetadata(fileMap);
   assertExactDocumentInventory(releasableFiles.map((file) => file.path));
   assertFallbackDocumentIsIndex(fileMap);
+  assertStockReleaseExcludesLocalLab(releasableFiles);
 
   await validatePublicCopies(
     output,
@@ -2221,19 +2305,36 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
   const optionalExtensionObservationMeasurement = measure(optionalExtensionObservationPacks[0].payload);
   const optionalLocalDeviceVaultPacks = javaScriptFiles.filter((file) => isOptionalLocalDeviceVaultPath(file.path));
-  const localVaultRequiredStems = ["local-device-keyring", "local-device-vault-setup", "local-lab", "recovery"];
+  /*
+   * `local-lab` used to be required here, which made the loopback lab's chunk a
+   * condition of shipping. It is host composition, not a product surface: a
+   * stock release must contain no such chunk at all, and
+   * `assertStockReleaseExcludesLocalLab` below states that as its own rule
+   * rather than leaving it to a stem list that could only ever demand the
+   * opposite.
+   */
+  const localVaultRequiredStems = ["local-device-keyring", "local-device-vault-setup"];
+  /*
+   * `encrypted-envelope` also serves durable storage, and `recovery` is the
+   * workspace-recovery authority every provider shares; either may be folded
+   * into its static importers, and both are lazy wherever they land. `recovery`
+   * joined this list when the lab left: it had two lazy importers, one of which
+   * was the lab's own chunk, so a stock build now folds it into the deferred
+   * capability pack rather than emitting a 1,221-byte chunk for one consumer.
+   * The two route/runtime packs above stay independently lazy.
+   */
+  const localVaultFoldableStems = ["encrypted-envelope", "recovery"];
   const localVaultObservedStems = optionalLocalDeviceVaultPacks
     .map((file) => localVaultRequiredStems.find((stem) => file.path.startsWith(`assets/${stem}-`)))
     .filter((stem) => stem !== undefined)
     .sort();
-  const splitEncryptedEnvelopes = optionalLocalDeviceVaultPacks
-    .filter((file) => file.path.startsWith("assets/encrypted-envelope-"));
-  // encrypted-envelope also serves durable storage and may be folded into its
-  // static importers. The four route/runtime packs stay independently lazy.
+  const foldableLocalVaultPacks = localVaultFoldableStems.map((stem) =>
+    optionalLocalDeviceVaultPacks.filter((file) => file.path.startsWith(`assets/${stem}-`)));
   if (
     localVaultObservedStems.join("\n") !== [...localVaultRequiredStems].sort().join("\n")
-    || optionalLocalDeviceVaultPacks.length !== localVaultRequiredStems.length + splitEncryptedEnvelopes.length
-    || splitEncryptedEnvelopes.length > 1
+    || foldableLocalVaultPacks.some((packs) => packs.length > 1)
+    || optionalLocalDeviceVaultPacks.length
+      !== localVaultRequiredStems.length + foldableLocalVaultPacks.reduce((total, packs) => total + packs.length, 0)
   ) {
     throw new Error(
       "Production local-storage packs do not match the required lazy chunk family: "

@@ -1,9 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  LOCAL_LAB_ABSENT_MODULE,
+  LOCAL_LAB_ONLY_MODULES,
   applyLocalDevelopmentPolicy,
   DEVELOPMENT_OPTIMIZE_ENTRIES,
   DEVELOPMENT_WATCH_IGNORES,
+  isLocalLabOnlyModule,
   isPrimeKernelWorkerRequest,
   PRIME_KERNEL_WORKER_ASSET_SUFFIX,
   PRIME_KERNEL_WORKER_CONTENT_SECURITY_POLICY,
@@ -82,6 +85,46 @@ describe("local development CSP", () => {
   });
 });
 
+
+describe("host-composed loopback lab", () => {
+  /*
+   * A stock build externalizes these four so the bundler emits no chunk for
+   * them. Suffix matching has to be exact: `local-lab-live.ts` is the live test
+   * harness and `local-lab.test.ts` is its unit test, and externalizing either
+   * would break a suite rather than shrink a bundle.
+   */
+  it("names exactly the modules a stock build must not contain", () => {
+    expect([...LOCAL_LAB_ONLY_MODULES]).toEqual([
+      "/src/storage/s3-object-store.ts",
+      "/src/ui/local-lab-setup.tsx",
+      "/src/ui/local-lab-vault.ts",
+      "/src/vault/local-lab.ts",
+    ]);
+    expect(Object.isFrozen(LOCAL_LAB_ONLY_MODULES)).toBe(true);
+    expect(LOCAL_LAB_ABSENT_MODULE).toBe("airship:local-lab-is-not-in-this-build");
+  });
+
+  it("matches a resolved lab module and nothing that merely looks like one", () => {
+    for (const id of [
+      "/repo/src/vault/local-lab.ts",
+      "/repo/src/ui/local-lab-setup.tsx?used",
+      "C:\\repo\\src\\ui\\local-lab-vault.ts",
+      "/repo/src/storage/s3-object-store.ts",
+    ]) {
+      expect(isLocalLabOnlyModule(id), id).toBe(true);
+    }
+    for (const id of [
+      "/repo/src/vault/local-lab-live.ts",
+      "/repo/src/vault/local-lab.test.ts",
+      "/repo/src/ui/local-lab-namespace.test.ts",
+      "/repo/src/vault/local-device.ts",
+      "/repo/src/storage/local-device-object-store.ts",
+      "/repo/node_modules/evil/src/vault/local-lab.ts.js",
+    ]) {
+      expect(isLocalLabOnlyModule(id), id).toBe(false);
+    }
+  });
+});
 
 describe("Prime kernel worker asset", () => {
   it("keeps the Vite content hash and a base-independent dedicated suffix", () => {

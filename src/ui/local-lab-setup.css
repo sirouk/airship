@@ -25,8 +25,10 @@
   font-weight: var(--fw-title);
 }
 
-/* Type comes from the shared `.eyebrow` recipe in shell.css; only the box is
-   local. This label was one of 48 copies of that recipe. */
+/* Type comes from the shared `.eyebrow` recipe in shell.css, taken by class
+   rather than by joining its grouped selector: this panel exists only in a lab
+   build, and a selector for it in the always-loaded cascade is entry-CSS weight
+   a stock build pays for a rule it can never match. Only the box is local. */
 .local-lab__eyebrow {
   margin: 0;
 }

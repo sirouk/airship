@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
 import {
-  LOCAL_LAB_PROVIDER_PROFILE,
   PROVIDER_FACT_ROWS,
   STOCK_PROVIDER_PROFILES,
   VAULT_RELEASE_ACTION_LABEL,
@@ -10,18 +10,21 @@ import {
   attachedRows,
   attachedSummary,
   googleDriveAvailableInBuild,
+  localLabProviderProfile,
   providerProfilesForSelector,
   readinessTally,
   statusMarkForState,
   vaultPhaseLabel,
   vaultReleaseNote,
   vaultState,
+  type ProviderProfile,
 } from "./vault-view";
 import { resolveDefaultVaultBackend } from "./platform-shell";
 import type { VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 
-const ALL_PROVIDER_PROFILES = Object.freeze([
+const LOCAL_LAB_PROVIDER_PROFILE = localLabProviderProfile();
+const ALL_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
   ...STOCK_PROVIDER_PROFILES,
   LOCAL_LAB_PROVIDER_PROFILE,
 ]);
@@ -274,9 +277,12 @@ describe("provider comparison", () => {
     expect(ids({ location: loopback, localLabEnabled: false, googleClientId })).toEqual([
       "ephemeral", "local-device", "google-drive",
     ]);
-    expect(ids({ location: loopback, localLabEnabled: true })).toEqual([
-      "ephemeral", "local-device", "local-lab",
-    ]);
+    // The lab column exists only where the lab does. A stock build offers the
+    // same three destinations on loopback as anywhere else, whatever a caller
+    // asks for, because the profile is not in the artifact to offer.
+    expect(ids({ location: loopback, localLabEnabled: true })).toEqual(LOCAL_LAB_BUILD
+      ? ["ephemeral", "local-device", "local-lab"]
+      : ["ephemeral", "local-device"]);
     expect(ids({ location: publicOrigin, localLabEnabled: true })).toEqual(["ephemeral", "local-device"]);
     expect(ids({ location: loopback, localLabEnabled: false }).join(" ")).not.toMatch(/s3|minio|walrus/iu);
   });
@@ -539,6 +545,11 @@ describe("releasing the Vault is one act with one name", () => {
       if (profile.id === "ephemeral") {
         // There is no durable store to leave behind, and a sentence about
         // "your encrypted Ephemeral data" would describe one that never existed.
+        expect(note).toContain("No durable store is attached");
+        continue;
+      }
+      if (profile.id === "local-lab" && !LOCAL_LAB_BUILD) {
+        // A stock build has no such destination, so the note may not name one.
         expect(note).toContain("No durable store is attached");
         continue;
       }

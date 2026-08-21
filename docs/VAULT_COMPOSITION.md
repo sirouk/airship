@@ -175,13 +175,33 @@ isolation-test prefix as possible residue with `inventory: "unknown-after-failed
 
 ## Local S3-compatible development
 
-A MinIO/LocalStack-style service is supported only as an explicit lab:
+A MinIO/LocalStack-style service is supported only as an explicit lab, and only
+a build that asked for it contains one:
 
 ```ts
 import { LocalLabSetup } from "../src/ui/local-lab-setup";
 
 <LocalLabSetup onConfigure={(request) => vault.configure(request)} />
 ```
+
+`VITE_AIRSHIP_ENABLE_LOCAL_LAB=1` is a *composition* switch, not a permission
+switch. `src/local-lab-build.ts` reads it as a build-time literal, and
+`vite.config.ts` externalizes `s3-object-store.ts`, `vault/local-lab.ts`,
+`ui/local-lab-setup.tsx` and `ui/local-lab-vault.ts` in a build that did not set
+it, so a stock artifact carries none of them — no S3 request signing, no baked
+MinIO endpoint or disposable keys, no lab setup panel or stylesheet, no S3
+configuration grammar, no Cognito diagnostic, and no selector, Preferences or
+Vault copy that names the destination. `VaultCoordinator.configure()` refuses in
+a stock build for the same reason. `assertStockReleaseExcludesLocalLab` in
+`scripts/release-gate.mjs` fails the release if any of it reappears, matching
+both artifact paths and payload sentinels; the orphan chunk it was written for
+is a dynamic-import target the bundler emits even after the branch that called
+it is folded away.
+
+A stock build still states plainly which destinations exist — Ephemeral, Local
+Device, and Google Drive where a client ID is configured — and names no fourth.
+`npm test` runs the unit suite as a lab build; `npm run test:stock` re-runs the
+storage-choice suites as a stock build, so both modes are asserted.
 
 HTTP, path-style addressing, and non-expiring credentials are enabled only for
 `localhost`, `127.0.0.1`, or `[::1]` in this mode. Passing the same credential

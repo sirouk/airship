@@ -4,7 +4,8 @@ import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configu
 import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
-import { localLabEnabledInBuild, vaultBackendUnavailableReason, vaultBackendsForSelector, type VaultBackend, type VaultBackendSelectorAvailability } from "./platform-shell";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
+import { vaultBackendUnavailableReason, vaultBackendsForSelector, type VaultBackend, type VaultBackendSelectorAvailability } from "./platform-shell";
 import { BrandLogo } from "./brand-icons";
 import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
@@ -178,7 +179,19 @@ export const STOCK_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze
   }),
 ] as const);
 
-export const LOCAL_LAB_PROVIDER_PROFILE: ProviderProfile = Object.freeze({
+/**
+ * The lab's column, carried by a lab build alone.
+ *
+ * `LOCAL_LAB_BUILD` folds to `false` in a stock artifact, so the factory below
+ * is never called and the copy inside it never reaches the bundle. It is a
+ * function rather than a frozen constant for exactly that reason: a frozen
+ * module-level object is a side effect the bundler must keep.
+ */
+export function localLabProviderProfile(): ProviderProfile {
+  return LOCAL_LAB_PROVIDER_PROFILE;
+}
+
+const LOCAL_LAB_PROVIDER_PROFILE: ProviderProfile = /* @__PURE__ */ Object.freeze({
   id: "local-lab",
   title: "S3-compatible / MinIO",
   // This profile describes only the host-composed loopback lab. It makes no
@@ -197,7 +210,7 @@ export const LOCAL_LAB_PROVIDER_PROFILE: ProviderProfile = Object.freeze({
 
 const KNOWN_PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
   ...STOCK_PROVIDER_PROFILES,
-  LOCAL_LAB_PROVIDER_PROFILE,
+  ...(LOCAL_LAB_BUILD ? [LOCAL_LAB_PROVIDER_PROFILE] : []),
 ]);
 
 function providerProfileForBackend(backend: VaultBackend): ProviderProfile {
@@ -280,13 +293,11 @@ export function VaultView({
     && !isGoogleDriveConfiguration(snapshot.config)
     ? snapshot.config
     : undefined;
-  const localObjectStore = s3Configuration?.mode === "local-development";
+  const localObjectStore = LOCAL_LAB_BUILD && s3Configuration?.mode === "local-development";
   const adoptedDrive = runtimeAdopted && googleDrive;
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const location = typeof window === "undefined" ? undefined : window.location;
-  const localLabEnabled = localLabEnabledInBuild(
-    import.meta.env.VITE_AIRSHIP_ENABLE_LOCAL_LAB as string | undefined,
-  );
+  const localLabEnabled = LOCAL_LAB_BUILD;
   const selectorAvailability = { googleClientId, location, localLabEnabled };
   const providerProfiles = providerProfilesForSelector(selectorAvailability);
   const driveInBuild = googleDriveAvailableInBuild(googleClientId);

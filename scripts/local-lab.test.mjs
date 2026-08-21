@@ -6,6 +6,7 @@ import {
   inspectAirshipHtml,
   labCorsAllows,
   labEnvironment,
+  stockBuildEnvironment,
 } from "./local-lab.mjs";
 
 describe("local full-system lab contract", () => {
@@ -32,6 +33,18 @@ describe("local full-system lab contract", () => {
       VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "google-drive",
       VITE_GOOGLE_CLIENT_ID: LOCAL_LAB_GOOGLE_CLIENT_ID,
     });
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("gates the release half of the suite on a stock build, whatever the shell exported", () => {
+    // `npm run check` builds and gates the artifact this project ships, and the
+    // gate refuses one that carries the lab. An exported opt-in must not make
+    // `lab:test` fail on a bundle nobody releases.
+    const source = { PATH: "/test/bin", VITE_AIRSHIP_ENABLE_LOCAL_LAB: "1" };
+    const result = stockBuildEnvironment(source);
+    expect(source.VITE_AIRSHIP_ENABLE_LOCAL_LAB).toBe("1");
+    expect(result).toMatchObject({ PATH: "/test/bin", VITE_AIRSHIP_ENABLE_LOCAL_LAB: "0" });
+    expect(stockBuildEnvironment({}).VITE_AIRSHIP_ENABLE_LOCAL_LAB).toBe("0");
     expect(Object.isFrozen(result)).toBe(true);
   });
 

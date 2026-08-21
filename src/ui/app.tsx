@@ -159,6 +159,7 @@ import {
   type AccessReconnectIntent,
 } from "./access-intent";
 import { useBottomFloor } from "./bottom-floor";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
 import { loadRetryableChunk } from "./chunk-recovery";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
@@ -759,41 +760,13 @@ async function loadDeferredCapabilities() {
   return broker.loadDeferredCapabilities();
 }
 
-/**
- * Baked loopback MinIO vault (compose.local-lab.yaml). The "local-lab" storage
- * preference auto-connects this; flip Preferences → Storage to "Ephemeral" to
- * run fully in page memory even while this S3 is available. Dev-only; the fixed
- * key keeps the throwaway local vault decryptable across reloads.
+/*
+ * The baked loopback MinIO vault, its disposable credentials and its fixed
+ * development workspace key now live in `./local-lab-vault`, reached through
+ * one dynamic import inside a `LOCAL_LAB_BUILD` branch. A stock build folds
+ * that branch away and never carries the module, its endpoint or its keys.
  */
-const LOCAL_LAB_VAULT = Object.freeze({
-  endpoint: "http://127.0.0.1:9900",
-  region: "us-east-1",
-  bucket: "airship-dev",
-  namespace: "airship-live-v2/local-user",
-  accessKeyId: "airship-vault-probe",
-  secretAccessKey: "airship-vault-probe-only-2026",
-});
-const LOCAL_LAB_TEST_NAMESPACE_PARAMETER = "airshipLabNamespace";
 const LOCAL_DEVICE_PARTITION = "airship-workspace-v1";
-
-export function isLoopbackAirshipLocation(location?: Pick<Location, "hostname">): boolean {
-  const hostname = location?.hostname.trim().toLocaleLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-}
-
-/** Keep automated browser work out of the operator's visible local-user vault. */
-export function localLabVaultConfiguration(location?: Pick<Location, "hostname" | "search">) {
-  if (!location || !isLoopbackAirshipLocation(location)) {
-    throw new TypeError("Baked MinIO configuration is available only on an exact loopback Airship origin.");
-  }
-  const candidate = new URLSearchParams(location.search).get(LOCAL_LAB_TEST_NAMESPACE_PARAMETER) ?? "";
-  if (!/^airship-live-v2\/e2e\/[a-z0-9][a-z0-9-]{0,80}$/u.test(candidate)) return LOCAL_LAB_VAULT;
-  return Object.freeze({ ...LOCAL_LAB_VAULT, namespace: candidate });
-}
-const LOCAL_LAB_DEV_KEY = Object.freeze([
-  0xa1, 0x25, 0x7f, 0x0c, 0x93, 0x4e, 0xd8, 0x62, 0x1b, 0xf4, 0x30, 0xa9, 0x57, 0x8e, 0x6d, 0x14,
-  0xc2, 0x0b, 0x9a, 0x46, 0xe3, 0x71, 0x58, 0xbd, 0x2f, 0x84, 0xd0, 0x6a, 0x39, 0xf7, 0x1c, 0x50,
-]);
 
 /**
  * The rail owns the destination glyphs now (`navigation-model.ts`), so the
@@ -1774,7 +1747,7 @@ export function App() {
     // (Drive's consent gesture) or on a service that answered "not here"
     // (the loopback lab). Neither arrives on its own, so the address may be
     // answered now rather than held open forever.
-    || ((preferences.vaultBackend === "google-drive" || preferences.vaultBackend === "local-lab")
+    || ((preferences.vaultBackend === "google-drive" || (LOCAL_LAB_BUILD && preferences.vaultBackend === "local-lab"))
       && (vaultSnapshot.phase === "disconnected" || vaultSnapshot.phase === "degraded"));
   /**
    * Work this browser profile held that the journal did not give back.
@@ -3492,22 +3465,24 @@ export function App() {
   // for an explicit user gesture; ephemeral remains entirely page-memory.
   // ephemeral (page memory only) when Preferences → Storage is "Ephemeral".
   useEffect(() => {
+    if (!LOCAL_LAB_BUILD) return;
     if (preferences.vaultBackend !== "local-lab") return;
     if (!online || vault.snapshot.phase !== "disconnected") return;
-    if (!isLoopbackAirshipLocation(window.location)) {
-      setRuntimeStatus("Loopback MinIO auto-connect is disabled on this deployment; configure an S3-compatible provider explicitly in Vault.");
-      return;
-    }
     let cancelled = false;
     void (async () => {
       try {
-        const [{ createLocalLabConfigureRequest }, { WorkspaceRootKey }] = await Promise.all([
+        const [{ createLocalLabConfigureRequest }, { WorkspaceRootKey }, lab] = await Promise.all([
           import("../vault/local-lab"),
           import("../storage/encrypted-envelope"),
+          import("./local-lab-vault"),
         ]);
-        const workspaceKey = await WorkspaceRootKey.import(Uint8Array.from(LOCAL_LAB_DEV_KEY));
+        if (!lab.isLoopbackAirshipLocation(window.location)) {
+          setRuntimeStatus("Loopback MinIO auto-connect is disabled on this deployment; configure an S3-compatible provider explicitly in Vault.");
+          return;
+        }
+        const workspaceKey = await WorkspaceRootKey.import(Uint8Array.from(lab.LOCAL_LAB_DEV_KEY));
         const request = createLocalLabConfigureRequest({
-          ...localLabVaultConfiguration(window.location),
+          ...lab.localLabVaultConfiguration(window.location),
           workspaceKey,
           recoveryKeySavedAcknowledged: true,
           ownLoopbackServiceAcknowledged: true,
@@ -3619,7 +3594,7 @@ export function App() {
   // page-memory runtime. This effect waits for both halves, then adopts once.
   useEffect(() => {
     if (
-      (preferences.vaultBackend !== "google-drive" && preferences.vaultBackend !== "local-lab") ||
+      (preferences.vaultBackend !== "google-drive" && !(LOCAL_LAB_BUILD && preferences.vaultBackend === "local-lab")) ||
       vaultSnapshot.phase !== "ready" ||
       !runtime.current ||
       runtime.current.storageId.startsWith("vault+") ||
@@ -3742,13 +3717,17 @@ export function App() {
   }, [view, SessionsScreen, VaultScreen, deferredChunkAttempt]);
 
   useEffect(() => {
-    if (view !== "vault" || (GoogleDriveSetupScreen && LocalLabSetupScreen)) return;
+    if (view !== "vault" || (GoogleDriveSetupScreen && (LocalLabSetupScreen || !LOCAL_LAB_BUILD))) return;
     let current = true;
-    void loadDeferredCapabilities().then((module) => {
-      if (current) {
-        setGoogleDriveSetupScreen(() => module.GoogleDriveSetup);
-        setLocalLabSetupScreen(() => module.LocalLabSetup);
-      }
+    void Promise.all([
+      loadDeferredCapabilities(),
+      // Composition, not a product surface: a stock build folds this away and
+      // never fetches — or ships — the lab's setup panel or its stylesheet.
+      LOCAL_LAB_BUILD ? import("./local-lab-setup") : undefined,
+    ]).then(([module, lab]) => {
+      if (!current) return;
+      setGoogleDriveSetupScreen(() => module.GoogleDriveSetup);
+      if (lab) setLocalLabSetupScreen(() => lab.LocalLabSetup);
     }).catch(() => {
       if (current) setRuntimeStatus("Google Drive setup could not be loaded; no vault state changed");
     });
@@ -7563,7 +7542,7 @@ export function App() {
       setVaultSetupOpen(next !== "ephemeral");
       setRuntimeStatus(next === "google-drive"
         ? "Google Drive selected · connect your workspace"
-        : next === "local-lab"
+        : LOCAL_LAB_BUILD && next === "local-lab"
           ? "S3-compatible storage selected · configure the provider"
           : next === "local-device"
             ? "Local Device selected · opening encrypted offline workspace"
@@ -9723,11 +9702,11 @@ export function App() {
                       ? "Google Drive storage contract passed; adoption pending"
                       : result.phase === "degraded" ? `Google Drive vault blocked: ${result.diagnostic.publicMessage}` : result.message);
                   }).catch((error) => setRuntimeStatus(error instanceof Error ? error.message : "Google Drive verification stopped safely"));
-                }} /> : <RouteSkeleton label="Loading Google Drive connection" /> : LocalLabSetupScreen ? <LocalLabSetupScreen onConfigure={(request) => {
+                }} /> : <RouteSkeleton label="Loading Google Drive connection" /> : LOCAL_LAB_BUILD ? LocalLabSetupScreen ? <LocalLabSetupScreen onConfigure={(request) => {
                     vault.configure(request);
                     setVaultSetupOpen(false);
                     setRuntimeStatus("Local S3 lab configured in page memory; live probe still required");
-                  }} /> : <RouteSkeleton label="Loading local S3 lab setup" />}
+                  }} /> : <RouteSkeleton label="Loading local S3 lab setup" /> : null}
               </div>
             ) : null}
           </div>

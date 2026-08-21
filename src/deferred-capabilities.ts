@@ -5,13 +5,18 @@
  *
  * Keep this module free of side effects. Its exports are the reviewed lazy
  * capabilities used by route wrappers and runtime coordinators.
+ *
+ * The loopback storage lab is deliberately absent from this list. Everything a
+ * stock build cannot use — the S3 object store, the lab's configure request,
+ * its setup panel and that panel's stylesheet — is reached instead through the
+ * `LOCAL_LAB_BUILD` branches in `vault/coordinator.ts` and `ui/app.tsx`, so a
+ * stock artifact does not carry it in this pack or anywhere else.
  */
 export { auditSessionHistory } from "./core/session-audit";
 export { CanvasMemoryGraphSurface } from "./memory-graph/canvas-renderer";
 export { EncryptedObjectJournalBackend } from "./storage/encrypted-object-journal";
 export { EncryptedProfileCatalogStore } from "./profiles/persistence";
 export { runObjectStoreConformance } from "./storage/conformance";
-export { S3ObjectStore } from "./storage/s3-object-store";
 export {
   GOOGLE_ACCOUNT_SCOPES,
   GOOGLE_DRIVE_FILE_SCOPE,
@@ -35,17 +40,11 @@ export {
 export { createClientCiphertextCache } from "./storage/client-ciphertext-cache";
 export { CiphertextCachingObjectStore } from "./storage/caching-object-store";
 export { GoogleDriveSetup } from "./ui/google-drive-setup";
-export { LocalLabSetup } from "./ui/local-lab-setup";
 export {
   describeSessionPresentationFault,
   presentSessionMessages,
 } from "./ui/chat/session-message-presentation";
 export { ContextView } from "./ui/context-view";
-export {
-  LocalLabRecoveryMaterial,
-  createLocalLabConfigureRequest,
-  importLocalLabRecoveryKey,
-} from "./vault/local-lab";
 export {
   WorkspaceRecoveryMaterial,
   importWorkspaceRecoveryKey,

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, localLabEnabledInBuild, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, STOCK_VAULT_BACKENDS, VAULT_BACKENDS, vaultBackendUnavailableReason, vaultBackendsForSelector, savePreferenceOverrides } from "./platform-shell";
+import { LOCAL_LAB_BUILD } from "../local-lab-build";
+import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, STOCK_VAULT_BACKENDS, VAULT_BACKENDS, vaultBackendUnavailableReason, vaultBackendsForSelector, savePreferenceOverrides } from "./platform-shell";
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
@@ -30,19 +31,22 @@ describe("platform shell contracts", () => {
     expect(resolveDefaultVaultBackend(undefined, undefined)).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("google-drive", "malformed")).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("local-lab", undefined, false, { hostname: "localhost" })).toBe("ephemeral");
-    expect(resolveDefaultVaultBackend("local-lab", undefined, true, { hostname: "localhost" })).toBe("local-lab");
+    // A stock build has no lab to restore to, whatever the caller passes: the
+    // destination is composed out of the artifact, not merely refused in it.
+    expect(resolveDefaultVaultBackend("local-lab", undefined, true, { hostname: "localhost" }))
+      .toBe(LOCAL_LAB_BUILD ? "local-lab" : "ephemeral");
     expect(resolveDefaultVaultBackend("local-lab", undefined, true, { hostname: "airship.example" })).toBe("ephemeral");
     expect(resolveDefaultVaultBackend("unexpected", configuredClientId)).toBe("google-drive");
     expect(resolveDefaultVaultBackend("unexpected", undefined)).toBe("ephemeral");
   });
 
-  it("requires the exact host-composition flag and keeps stock values separate", () => {
-    expect(localLabEnabledInBuild("1")).toBe(true);
-    for (const value of [undefined, "", "0", "true", "yes", " 1 "]) {
-      expect(localLabEnabledInBuild(value), value ?? "undefined").toBe(false);
-    }
+  it("keeps stock destinations separate from the host-composed one", () => {
+    // The exact opt-in value is decided at build time now — `vite.config.ts`
+    // replaces the environment read with a literal and `src/local-lab-build.ts`
+    // compares it with `"1"` — so `storage-destinations.test.ts` asserts those
+    // two literals and this file asserts what the vocabulary looks like here.
     expect(STOCK_VAULT_BACKENDS).toEqual(["ephemeral", "local-device", "google-drive"]);
-    expect(VAULT_BACKENDS).toEqual([...STOCK_VAULT_BACKENDS, "local-lab"]);
+    expect(VAULT_BACKENDS).toEqual(LOCAL_LAB_BUILD ? [...STOCK_VAULT_BACKENDS, "local-lab"] : [...STOCK_VAULT_BACKENDS]);
     expect(VAULT_BACKENDS.join(" ")).not.toMatch(/walrus/iu);
   });
 
@@ -285,7 +289,7 @@ describe("platform shell contracts", () => {
       defaultVaultBackend: "local-device",
       localLabEnabled: true,
       location: { hostname: "localhost" },
-    }).vaultBackend).toBe("local-lab");
+    }).vaultBackend).toBe(LOCAL_LAB_BUILD ? "local-lab" : "local-device");
     expect(loadPreferenceOverrides(storage, {
       defaultVaultBackend: "local-device",
       localLabEnabled: true,
@@ -369,7 +373,9 @@ describe("the Durability row states a destination and its state, never one as th
 
     for (const hostname of ["localhost", "127.0.0.1", "::1", "[::1]"] as const) {
       const availability = { location: { hostname }, localLabEnabled: true };
-      expect(values(availability), hostname).toEqual(["ephemeral", "local-device", "local-lab"]);
+      expect(values(availability), hostname).toEqual(LOCAL_LAB_BUILD
+        ? ["ephemeral", "local-device", "local-lab"]
+        : ["ephemeral", "local-device"]);
       expect(values(availability), hostname).toEqual([...vaultBackendsForSelector(availability)]);
     }
     expect(values({ location: { hostname: "airship.example" }, localLabEnabled: true }))
@@ -386,10 +392,18 @@ describe("the Durability row states a destination and its state, never one as th
     expect(historicalDrive.map((option) => option.value)).toEqual(["ephemeral", "local-device"]);
     expect(vaultBackendUnavailableReason("google-drive", undefined, { hostname: "localhost" }, false))
       .toMatch(/no Google OAuth client ID/iu);
+    // A lab build separates "not composed in" from "composed, wrong origin".
+    // A stock build says neither: it has no lab, so it names no lab.
     expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "localhost" }, false))
-      .toMatch(/host-composed local MinIO lab/iu);
+      .toMatch(LOCAL_LAB_BUILD ? /host-composed local MinIO lab/iu : /does not include that storage destination/iu);
     expect(vaultBackendUnavailableReason("local-lab", undefined, { hostname: "airship.example" }, true))
-      .toMatch(/exact loopback origin/iu);
+      .toMatch(LOCAL_LAB_BUILD ? /exact loopback origin/iu : /does not include that storage destination/iu);
+    if (!LOCAL_LAB_BUILD) {
+      for (const backend of ["local-lab"] as const) {
+        expect(vaultBackendUnavailableReason(backend, undefined, { hostname: "localhost" }, true))
+          .not.toMatch(/minio|loopback|s3/iu);
+      }
+    }
   });
 
   it("keeps the destination's consequence as its description while it is reachable", () => {
@@ -401,7 +415,8 @@ describe("the Durability row states a destination and its state, never one as th
     });
     // Every other destination is reported against the vault state the host did
     // supply, which is the same under-claiming rule `durabilityOptionLabel` has.
-    expect(options.find((option) => option.value === "local-lab")?.label).toBe("Local MinIO lab · not connected");
+    expect(options.find((option) => option.value === "local-lab")?.label)
+      .toBe(LOCAL_LAB_BUILD ? "Local MinIO lab · not connected" : undefined);
   });
 
   it("says what is attached in the state the row is actually in", () => {
@@ -422,7 +437,11 @@ describe("the Durability row states a destination and its state, never one as th
     // so an unqualified "page memory only" / "nothing survives" was a claim the
     // product does not honour. See `EPHEMERAL_RETENTION_DISCLOSURE`.
     expect(dialog).toContain("Your writing dies with the tab. One line per conversation stays, so a return can tell you.");
-    expect(dialog).toContain("DURABILITY[backend][1]");
+    // Read through the table rather than restated: the table is `Partial`
+    // because the lab's row exists only in a lab build, so the option's
+    // description is still the destination's own sentence and never a second
+    // copy of it.
+    expect(dialog).toContain('DURABILITY[backend]?.[1] ?? ""');
     // The row's own divider, so a claim about the world is not read as the
     // ninth in a run of presentation rows.
     expect(dialog).toContain('<p class="preferences-dialog__divider">Storage</p>');
