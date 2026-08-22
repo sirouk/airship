@@ -10,6 +10,16 @@ import {
 } from "../memory-graph";
 import { stableMemoryContentHash } from "../memory-graph/derive";
 import { findDuplicateClusters } from "../retrieval/dedup";
+import {
+  RECALL_PATH,
+  RECALL_TURN_BYTES,
+  RECALL_TURN_HITS,
+  emptyRecallDocument,
+  parseRecallDocument,
+  recallProvenance,
+  serializeRecallDocument,
+  type RecallDocument,
+} from "../retrieval/recall-document";
 import type { ProfileCatalog } from "../profiles/catalog";
 import type { ProfileRevision } from "../profiles/domain";
 import type { ClientEncryptedWorkspacePort, WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
@@ -1020,6 +1030,8 @@ export function MemoryView({
         />
       ) : null}
 
+      {workspace ? <AmbientRecallPanel workspace={workspace} expanded={!phone} /> : null}
+
       <details
         id="memory-relationships"
         class="memory-disclosure"
@@ -1521,6 +1533,105 @@ export function memoryOutcomeSentence(
     ? "The record was not written. Nothing changed in this profile's memory."
     : "The record was not removed. Nothing changed in this profile's memory.";
 }
+
+
+/**
+ * Ambient recall, listed — and the switch that stops it.
+ *
+ * The turn lane distils this Profile's own conversations into verbatim
+ * excerpts at `RECALL_PATH` and offers at most two of them to a turn. A person
+ * is entitled to see exactly what that corpus holds, in the same provenance
+ * sentence the agent is handed, and to switch it off. Both are done here
+ * against the ordinary `WorkspacePort` the route already has, so the panel
+ * costs the shell no wiring and pulls no part of the indexer.
+ *
+ * Switching it off empties the corpus in the same write. "Off" that left the
+ * excerpts sitting in storage would be a claim the file contradicts.
+ */
+function AmbientRecallPanel({ workspace, expanded: initiallyExpanded }: Readonly<{
+  workspace: WorkspacePort;
+  expanded: boolean;
+}>) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
+  const [document, setDocument] = useState<RecallDocument>();
+  const [notice, setNotice] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const file = await workspace.read(RECALL_PATH);
+        if (live) setDocument(parseRecallDocument(file?.content));
+      } catch {
+        if (live) setNotice("This profile's storage did not answer, so what is indexed is unknown.");
+      }
+    })();
+    return () => { live = false; };
+  }, [workspace, attempt]);
+  const excerpts = document?.excerpts ?? [];
+  const enabled = document?.enabled !== false;
+  const conversations = new Set(excerpts.map((excerpt) => excerpt.sessionId)).size;
+  const toggle = async () => {
+    setBusy(true);
+    setNotice(undefined);
+    try {
+      const file = await workspace.read(RECALL_PATH);
+      const next = emptyRecallDocument(!enabled);
+      await workspace.write(RECALL_PATH, serializeRecallDocument(next), {
+        expectedRevision: file?.revision ?? null,
+      });
+      setDocument(next);
+      setNotice(enabled
+        ? "Ambient recall is off. The excerpts were deleted, no conversation is indexed, and no turn carries one."
+        : "Ambient recall is on. Your next turn indexes this profile's conversations again.");
+    } catch {
+      setNotice("The switch did not change. Nothing was written.");
+    } finally {
+      setBusy(false);
+      setAttempt((value) => value + 1);
+    }
+  };
+  return (
+    <details id="memory-ambient-recall" class="memory-disclosure" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>
+        <span><Icon name="memory" size={18} /><span><small>Ambient recall</small><strong>What your conversations can recall</strong></span></span>
+        <span class="memory-summary-meta"><b>{document ? excerpts.length : "—"}</b><small>excerpt{excerpts.length === 1 ? "" : "s"}</small><i aria-hidden="true" /></span>
+      </summary>
+      <div class="memory-disclosure-body memory-records">
+        <p>
+          Each turn ranks this profile's own conversations and may add at most {RECALL_TURN_HITS} excerpts,
+          {" "}{RECALL_TURN_BYTES} bytes in total, inside the context budget the turn already had. A turn with no
+          {" "}lexical overlap adds nothing. Excerpts are verbatim and always carry the line below them.
+        </p>
+        <p role="status">{notice ?? (document
+          ? enabled
+            ? `${excerpts.length} excerpt${excerpts.length === 1 ? "" : "s"} from ${conversations} conversation${conversations === 1 ? "" : "s"} in this profile.`
+            : "Ambient recall is off. Nothing is indexed and no turn carries an excerpt."
+          : "Reading what is indexed…")}</p>
+        <button class="small-button memory-recall-switch" type="button" aria-pressed={enabled} disabled={busy || !document} onClick={() => void toggle()}>
+          {enabled ? "Turn ambient recall off" : "Turn ambient recall on"}
+        </button>
+        {excerpts.length ? (
+          <ul class="memory-records__list memory-recall-list">
+            {[...excerpts].reverse().slice(0, AMBIENT_RECALL_LISTED).map((excerpt) => (
+              <li key={`${excerpt.sessionId}:${excerpt.sequence}:${excerpt.text.slice(0, 24)}`}>
+                <p>{excerpt.text}</p>
+                <small>{recallProvenance(excerpt)}</small>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {excerpts.length > AMBIENT_RECALL_LISTED
+          ? <p><small>Showing the {AMBIENT_RECALL_LISTED} most recent of {excerpts.length}.</small></p>
+          : null}
+      </div>
+    </details>
+  );
+}
+
+/** Newest excerpts listed. The corpus is bounded; the page does not have to be. */
+const AMBIENT_RECALL_LISTED = 12;
 
 /**
  * The corpus, listed — and the two verbs that change it.

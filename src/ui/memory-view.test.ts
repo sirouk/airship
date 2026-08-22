@@ -58,7 +58,7 @@ describe("unified Memory surface", () => {
     // when it has something to say, and it is the control that lifts what it
     // reports. The corpus itself is the third section, open by default: a list
     // of what a profile remembers is the route's subject, not a detail.
-    expect(source.match(/<details/gu)).toHaveLength(5);
+    expect(source.match(/<details/gu)).toHaveLength(6);
     expect(source).toContain('id="memory-relationships"');
     expect(source).toContain('id="memory-index"');
     expect(source).toContain('<details id="memory-records" class="memory-disclosure" open={expanded}');
@@ -907,5 +907,37 @@ describe("the graph canvas's height floor", () => {
     // A losing `min-height` left beside the property would read as the rule in
     // force, which is exactly how this defect survived four waves.
     expect(compact).not.toMatch(/\.memory-view \.memory-canvas \{\s*min-height:/u);
+  });
+});
+
+describe("the ambient recall panel", () => {
+  it("says what is indexed, what a turn may spend, and carries the switch", () => {
+    // The panel reads and writes the same document the turn lane does, through
+    // the WorkspacePort the route already has — no new shell wiring, and
+    // nothing of the indexer is pulled into the Memory route.
+    expect(source).toContain('<details id="memory-ambient-recall" class="memory-disclosure"');
+    expect(source).toContain('{workspace ? <AmbientRecallPanel workspace={workspace} expanded={!phone} /> : null}');
+    expect(source).toContain('const file = await workspace.read(RECALL_PATH);');
+    expect(source).toContain("may add at most {RECALL_TURN_HITS} excerpts");
+    expect(source).toContain("{RECALL_TURN_BYTES} bytes in total, inside the context budget the turn already had");
+    expect(source).toContain("A turn with no");
+    // The switch is a real toggle with a 44px floor: `.small-button` is one of
+    // the four classes `tokens.css` floors under `(pointer: coarse)`.
+    expect(source).toContain('<button class="small-button memory-recall-switch" type="button" aria-pressed={enabled}');
+    expect(styles).toContain(".memory-recall-switch {");
+    expect(styles).toContain("min-height: 44px;");
+    expect(source).toContain('{enabled ? "Turn ambient recall off" : "Turn ambient recall on"}');
+    // Off means off: the excerpts are deleted in the same write.
+    expect(source).toContain("const next = emptyRecallDocument(!enabled);");
+    expect(source).toContain("The excerpts were deleted, no conversation is indexed, and no turn carries one.");
+    // Every listed excerpt carries the same provenance sentence the agent gets.
+    expect(source).toContain("<small>{recallProvenance(excerpt)}</small>");
+    expect(source).toContain('<p role="status">{notice ?? (document');
+  });
+
+  it("never pulls the indexer into the route", () => {
+    expect(source).not.toContain('from "../retrieval/ambient-recall"');
+    expect(source).not.toContain("refreshRecallIndex");
+    expect(source).toContain('} from "../retrieval/recall-document";');
   });
 });

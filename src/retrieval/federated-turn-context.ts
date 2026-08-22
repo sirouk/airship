@@ -1,4 +1,6 @@
 import { boundChunkTextToBytes } from "./codec";
+import { refreshRecallIndex, selectRecalledLines } from "./ambient-recall";
+import { RECALL_TURN_HITS, serializeRecallDocument } from "./recall-document";
 import {
   sealContextSelection,
   type CanonicalContextGeneration,
@@ -23,6 +25,15 @@ const MAX_PROFILE_MEMORY_HITS = 3;
  * the shared bounded BM25 lane and workspace/source material uses the active on-device embedding
  * generation. Scores never cross corpus boundaries; the bounded memory lane is
  * placed first, followed by workspace results in their native rank order.
+ *
+ * Ambient recall sits between them, and its position is the token argument: it
+ * is bounded to two lines and 1,024 bytes, while workspace hits are neither, so
+ * putting recall after them would mean a large file silently spends the budget
+ * a person's own sentence needed. All three lanes share the one `maxHits` /
+ * `maxBytes` the turn already had, so no corpus can grow a turn past what it
+ * cost before this existed — and a turn with nothing relevant to recall pays
+ * nothing at all, because an empty lane contributes neither a hit nor a
+ * lineage generation.
  */
 export class FederatedTurnContextProvider implements TurnContextProvider {
   constructor(
@@ -57,6 +68,16 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
       ? await memoryLineage(memoryFile.revision, memoryFile.content)
       : undefined;
 
+    const recallState = profile
+      ? await refreshRecallIndex(this.workspace, this.journal, profile.profileId, request.signal)
+      : undefined;
+    const recalled = recallState?.file
+      ? selectRecalledLines(recallState.document, query, session.id)
+      : [];
+    const recallGeneration = recalled.length && recallState?.file
+      ? await conversationLineage(recallState.file.revision, serializeRecallDocument(recallState.document))
+      : undefined;
+
     const candidates: CanonicalContextHit[] = [];
     if (memoryGeneration) {
       for (const candidate of memoryCandidates.slice(0, Math.min(MAX_PROFILE_MEMORY_HITS, maxHits))) {
@@ -72,6 +93,24 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
           corpus: "profile-memory",
           sourceId: candidate.record.id,
           lineageRef: memoryGeneration.id,
+        }));
+      }
+    }
+    if (recallGeneration && recallState?.file) {
+      for (const line of recalled.slice(0, Math.min(RECALL_TURN_HITS, maxHits))) {
+        const textDigest = await sha256(line.text);
+        candidates.push(Object.freeze({
+          path: `conversation://${encodeURIComponent(line.excerpt.sessionId)}/${line.excerpt.sequence}`,
+          revision: recallState.file.revision,
+          contentDigest: await sha256(line.excerpt.text),
+          chunkId: await sha256(`${line.excerpt.sessionId}\0${line.excerpt.sequence}\0${textDigest}`),
+          chunkIndex: 0,
+          score: line.score,
+          text: line.text,
+          textDigest,
+          corpus: "conversation",
+          sourceId: line.excerpt.sessionId,
+          lineageRef: recallGeneration.id,
         }));
       }
     }
@@ -100,6 +139,7 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
     const workspaceGenerations = workspaceSelection.lineage?.generations ?? [];
     const generations = Object.freeze([
       ...(memoryGeneration ? [memoryGeneration] : []),
+      ...(recallGeneration ? [recallGeneration] : []),
       ...workspaceGenerations,
     ]);
     const scope = Object.freeze({
@@ -144,6 +184,36 @@ async function rankMemories(records: readonly MemoryRecord[], query: string) {
     score: candidate.score,
     contentDigest: await sha256(candidate.record.content),
   })));
+}
+
+/**
+ * The conversation corpus's lineage.
+ *
+ * `persistence` makes the same claim `memoryLineage` makes about a `memory.json`
+ * that may well be sitting in a Vault: it describes the ranking structure this
+ * turn scored against, which is built in this page and published nowhere. Where
+ * the excerpt document itself lives is the Profile's storage choice — page
+ * memory for Ephemeral, the same encrypted objects as the conversations for a
+ * Vault — and the Memory panel is where a person is told which.
+ */
+async function conversationLineage(revision: string, content: string): Promise<CanonicalContextGeneration> {
+  const sourceDigest = await sha256(content);
+  const id = await sha256(stableStringify({
+    corpus: "conversation",
+    revision,
+    sourceDigest,
+    extractor: "airship-conversation-excerpt-v1",
+  }));
+  return Object.freeze({
+    id,
+    corpus: "conversation",
+    sourceRevision: revision,
+    sourceDigest,
+    extractor: "airship-conversation-excerpt-v1",
+    chunker: "message-window-v1",
+    indexFormat: "bounded-bm25-recent-v1",
+    persistence: "memory-only",
+  });
 }
 
 /** Shared with the agent-facing memory tools so tool lineage matches turn lineage. */
