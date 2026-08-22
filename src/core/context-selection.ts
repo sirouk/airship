@@ -31,14 +31,23 @@ export type CanonicalContextHit = Readonly<{
   text: string;
   textDigest: string;
   /** v2 selections point at one shared generation instead of repeating its metadata per hit. */
-  corpus?: "workspace" | "profile-memory";
+  corpus?: ContextCorpus;
   sourceId?: string;
   lineageRef?: string;
 }>;
 
+/**
+ * `conversation` is ambient recall: verbatim excerpts of what a person wrote
+ * and what the agent answered, in this Profile's own conversations. It is a
+ * separate corpus rather than a widening of `profile-memory` because the two
+ * make different claims — a memory record is something somebody chose to pin,
+ * a conversation line is only ever evidence that it was said.
+ */
+export type ContextCorpus = "workspace" | "profile-memory" | "conversation";
+
 export type CanonicalContextGeneration = Readonly<{
   id: string;
-  corpus: "workspace" | "profile-memory";
+  corpus: ContextCorpus;
   sourceRevision: string;
   sourceDigest: string;
   extractor: string;
@@ -338,7 +347,7 @@ export function injectContextSelection(userContent: string, selection?: Canonica
 
 function contextHitReference(value: Record<string, unknown>): Pick<CanonicalContextHit, "corpus" | "sourceId" | "lineageRef"> | undefined {
   if (
-    (value.corpus !== "workspace" && value.corpus !== "profile-memory") ||
+    !isContextCorpus(value.corpus) ||
     !boundedString(value.sourceId, 4_096) ||
     !digest(value.lineageRef)
   ) return undefined;
@@ -397,9 +406,12 @@ function canonicalScope(value: Record<string, unknown>): CanonicalContextLineage
   });
 }
 
+function isContextCorpus(value: unknown): value is ContextCorpus {
+  return value === "workspace" || value === "profile-memory" || value === "conversation";
+}
+
 function canonicalGeneration(value: unknown): CanonicalContextGeneration | undefined {
-  if (!isRecord(value) || !digest(value.id) ||
-      (value.corpus !== "workspace" && value.corpus !== "profile-memory") ||
+  if (!isRecord(value) || !digest(value.id) || !isContextCorpus(value.corpus) ||
       !boundedString(value.sourceRevision, 2_048) || !digest(value.sourceDigest) ||
       !boundedString(value.extractor, 256) || !boundedString(value.chunker, 256) ||
       !boundedString(value.indexFormat, 256) ||

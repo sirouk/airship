@@ -407,6 +407,30 @@ export default defineConfig({
            */
           if (id.includes("/src/workspace/content-codec")) return "content-codec";
           /*
+           * The two documents Memory owns: `memory.json`'s schema and ambient
+           * recall's excerpt schema. Both are read by the Memory route's panels
+           * and written by the turn lane inside the agent tool bundle, so they
+           * have the same importers and every surface that fetches one fetches
+           * the other.
+           *
+           * Named as one chunk rather than left to Rollup, and the reason is
+           * measured. Unnamed, the recall schema shared its importer signature
+           * with `dedup`, and Rollup emitted the pair under the name
+           * `recall-document` — a stem the release gate can attribute to no
+           * owner, while `optionalRoutePrimitives` lost the `dedup` artifact it
+           * requires by name. Giving it a chunk of its own instead cost the
+           * entry 43 raw bytes of modulepreload manifest for a file first paint
+           * never fetches, and `allJavaScriptAndWorkers` has under 200 B of raw
+           * headroom. Folding it into the chunk `memory-document` already emits
+           * costs the startup path one dependency index — three bytes — and
+           * keeps both schemas inside `optionalMemorySupport`, which is where
+           * the gate already measures the Memory route's shared documents.
+           */
+          if (
+            id.includes("/src/tools/memory-document")
+            || id.includes("/src/retrieval/recall-document")
+          ) return "memory-document";
+          /*
            * Wiring prime's tool vocabulary gave the tool registry, its schema
            * compiler and the workspace content search a second importer: the
            * lazy prime runtime chunk, alongside the eager path they already

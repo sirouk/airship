@@ -116,6 +116,113 @@ describe("FederatedTurnContextProvider", () => {
     expect(memoryHits[0]?.sourceId).toBe("owned");
     expect(JSON.stringify(selection)).not.toContain("session quartz sibling");
   });
+
+  it("recalls another conversation in this profile, and only inside the turn's own budget", async () => {
+    const workspace = new MemoryWorkspace();
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const digest = await sha256("ambient-profile");
+    const profile = {
+      version: 2 as const, profileId: "ambient", profileRevision: digest, themeId: "plain",
+      themeDigest: digest, resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
+      workspaceBinding: { kind: "active-workspace" as const }, memoryScope: "profile" as const,
+      approvalMode: "ask-first" as const,
+    };
+    const manifest = await createSessionManifest({
+      systemPrompt: "Be useful.", providerId: "test", model: "test", tools: [],
+      workspaceId: "memory://ambient-recall", profile,
+    });
+    const earlier = await journal.createSession("Drinks", manifest);
+    await journal.append(earlier.id, [{
+      type: "turn.requested", turnId: "t1",
+      payload: { content: "I like unicorn milk and I want it to be blue" },
+    }]);
+    const current = await journal.createSession("Later", manifest);
+    const provider = new FederatedTurnContextProvider(
+      new ClientContextRuntime(workspace, { dimensions: 64 }), workspace, journal,
+    );
+
+    const selection = await provider.selectForTurn("what kind of milk do I like most?", {
+      sessionId: current.id, maxHits: 4, maxBytes: 4_096,
+    });
+
+    expect(await verifyContextSelection(selection)).toBe(true);
+    const recalled = selection.hits.filter((hit) => hit.corpus === "conversation");
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0]?.text).toContain('You said, in "Drinks" (turn 2');
+    expect(recalled[0]?.text).toContain("I like unicorn milk and I want it to be blue");
+    expect(recalled[0]?.sourceId).toBe(earlier.id);
+    expect(selection.lineage?.generations.map((generation) => generation.corpus)).toContain("conversation");
+    for (const hit of recalled) {
+      expect(selection.lineage?.generations.some((generation) => generation.id === hit.lineageRef)).toBe(true);
+    }
+    expect(selection.selectedBytes).toBeLessThanOrEqual(4_096);
+  });
+
+  it("adds no hit and no generation when nothing said before is relevant", async () => {
+    const workspace = new MemoryWorkspace();
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const digest = await sha256("ambient-profile");
+    const manifest = await createSessionManifest({
+      systemPrompt: "Be useful.", providerId: "test", model: "test", tools: [],
+      workspaceId: "memory://ambient-quiet",
+      profile: {
+        version: 2, profileId: "ambient", profileRevision: digest, themeId: "plain",
+        themeDigest: digest, resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
+        workspaceBinding: { kind: "active-workspace" }, memoryScope: "profile", approvalMode: "ask-first",
+      },
+    });
+    const earlier = await journal.createSession("Drinks", manifest);
+    await journal.append(earlier.id, [{
+      type: "turn.requested", turnId: "t1",
+      payload: { content: "I like unicorn milk and I want it to be blue" },
+    }]);
+    const current = await journal.createSession("Keys", manifest);
+    const provider = new FederatedTurnContextProvider(
+      new ClientContextRuntime(workspace, { dimensions: 64 }), workspace, journal,
+    );
+
+    const selection = await provider.selectForTurn("how do I rotate a private key?", {
+      sessionId: current.id, maxHits: 4, maxBytes: 4_096,
+    });
+
+    expect(selection.hits).toEqual([]);
+    expect(selection.selectedBytes).toBe(0);
+    expect(selection.lineage?.generations.map((generation) => generation.corpus)).not.toContain("conversation");
+  });
+
+  it("cannot recall a conversation that belongs to another profile", async () => {
+    const workspace = new MemoryWorkspace();
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const digest = await sha256("two-profiles");
+    const binding = (profileId: string) => ({
+      version: 2 as const, profileId, profileRevision: digest, themeId: "plain",
+      themeDigest: digest, resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
+      workspaceBinding: { kind: "active-workspace" as const }, memoryScope: "profile" as const,
+      approvalMode: "ask-first" as const,
+    });
+    const theirs = await journal.createSession("Theirs", await createSessionManifest({
+      systemPrompt: "Be useful.", providerId: "test", model: "test", tools: [],
+      workspaceId: "memory://ambient-other", profile: binding("other"),
+    }));
+    await journal.append(theirs.id, [{
+      type: "turn.requested", turnId: "t1",
+      payload: { content: "I like unicorn milk and I want it to be blue" },
+    }]);
+    const mine = await journal.createSession("Mine", await createSessionManifest({
+      systemPrompt: "Be useful.", providerId: "test", model: "test", tools: [],
+      workspaceId: "memory://ambient-mine", profile: binding("mine"),
+    }));
+    const provider = new FederatedTurnContextProvider(
+      new ClientContextRuntime(workspace, { dimensions: 64 }), workspace, journal,
+    );
+
+    const selection = await provider.selectForTurn("what kind of milk do I like most?", {
+      sessionId: mine.id, maxHits: 4, maxBytes: 4_096,
+    });
+
+    expect(selection.hits).toEqual([]);
+    expect(JSON.stringify(selection)).not.toContain("unicorn");
+  });
 });
 
 function memory(id: string, content: string, sessionId: string, profileRevision: string) {

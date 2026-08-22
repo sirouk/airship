@@ -71,8 +71,18 @@ async function mockEndpoint(context: BrowserContext): Promise<Held> {
       return;
     }
     if (path.endsWith("/chat/completions")) {
-      const body = request.postData() ?? "";
-      const slow = body.includes(SLOW_PROMPT);
+      const body = request.postDataJSON() as {
+        messages?: readonly { role?: unknown; content?: unknown }[];
+      };
+      const latest = body.messages?.at(-1);
+      // Selected context can repeat Alpha's prompt earlier in Bravo's message.
+      // Only the terminal current prompt controls this endpoint.
+      const prompt = latest?.role === "user" && typeof latest.content === "string"
+        ? latest.content.trimEnd()
+        : "";
+      const slow = prompt.endsWith(SLOW_PROMPT);
+      const fast = prompt.endsWith(FAST_PROMPT);
+      if (slow === fast) throw new Error("The held endpoint received an unexpected current prompt.");
       if (slow) await held;
       await route.fulfill({
         status: 200,

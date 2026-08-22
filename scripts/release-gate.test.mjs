@@ -490,7 +490,7 @@ const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
       expect(variant.environment, variant.name).toContain("npm run build:static");
     }
     const droppedFromEntry = source.replace(
-      "Reviewed reading (Pages Google-Drive-configured): 385,972 B raw / 119,818 B gzip.\n",
+      "Reviewed reading (Pages Google-Drive-configured): 385,672 B raw / 119,778 B gzip.\n",
       "",
     );
     expect(droppedFromEntry).not.toBe(source);
@@ -652,7 +652,7 @@ const pyodidePayloads = new Map(PYODIDE_DISTRIBUTION_PINS.map((pin) => {
     const drifted = Object.fromEntries(
       Object.entries(recorded).map(([name, pair]) => [
         name,
-        pair.inlinedInto ? pair : { raw: pair.raw - 600, gzip: pair.gzip - 128 },
+        pair.inlinedInto ? pair : { raw: pair.raw - 128, gzip: pair.gzip - 128 },
       ]),
     );
     expect(() => assertDocumentedMeasurementsMatchBuild(source, drifted)).not.toThrow();

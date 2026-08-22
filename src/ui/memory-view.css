@@ -352,6 +352,47 @@
 }
 
 /*
+ * Ambient recall's excerpts: the person's own words, then the sentence that
+ * says where they were said. The list reuses the records panel's frame — one
+ * bordered stack, one row per item — so the two Memory corpora read the same
+ * way and this route adds no second look for the same shape.
+ */
+/* The switch is a control, not a field: sized to its words inside the panel's
+   grid, and floored at 44px like every other button a finger has to hit. */
+.memory-recall-switch {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+}
+
+.memory-recall-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-recall-list > li {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+}
+
+.memory-recall-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.memory-recall-list p {
+  margin: 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.memory-recall-list small {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+/*
  * Destructive, and sized like the two verbs beside it: forgetting a record is
  * a peer of opening and citing it, not a smaller act. The approval dock is the
  * confirmation, so this control never carries a second one.
