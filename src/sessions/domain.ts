@@ -966,10 +966,14 @@ export function decideSessionResume(
     } else if (partiallyInspected) {
       add({ code: "HISTORY_INCOMPLETE", severity: "warning", message: `Only ${assessment.checkedEvents} of ${assessment.totalEvents} events were inspected; fork before continuing.` });
     } else {
+      // "on a fully inspected, fully terminated history" is printed 60px above
+      // this line by the integrity row's own detail — `N of N events inspected
+      // · last turn completed` — and repeating a fact the surface already
+      // states is what made these rows unreadable when five of them stacked.
       add({
         code: "HISTORY_OBSERVED",
         severity: "info",
-        message: `${assessment.issues.length} structural observation${assessment.issues.length === 1 ? "" : "s"} on a fully inspected, fully terminated history. Fork not required.`,
+        message: `${assessment.issues.length} structural observation${assessment.issues.length === 1 ? "" : "s"}. Fork not required.`,
       });
     }
   }
@@ -984,29 +988,54 @@ export function decideSessionResume(
   const providerMatches = historicalBinding
     ? historicalUpgrade && pins.inferenceBinding?.providerId === runtime.providerId
     : pins.providerId === runtime.providerId;
+  /*
+   * Where a conversation last ran is a fact about this tab, not about the
+   * record — and each of these was a reason a person could not open their own
+   * thread.
+   *
+   * `requiresFork` was `reasons.some(severity === "warning")`, so quitting LM
+   * Studio, connecting it again on a fresh generation, editing a tool
+   * description, or opening the same journal from another workspace each
+   * withdrew the Resume button and left `Fork to continue` — which the same
+   * panel defines as a new identity carrying none of this transcript — as the
+   * only enabled verb. Nothing about the journal moved in any of those cases,
+   * and a fork does not put the old provider back; it only abandons the
+   * transcript.
+   *
+   * They stay `warning`, because a pin that differs is a difference and the
+   * surfaces colour it as one. What changed is that they no longer require a
+   * fork: `moved` counts them, and `requiresFork` below is the warnings a
+   * re-pin cannot cure. Two rules are deliberately untouched — a conversation
+   * that arrived in a bundle still asks for a fork (`ARRIVED_IN_A_BUNDLE`),
+   * and a journal that cannot be appended to still blocks
+   * (`HISTORY_SUSPECT`).
+   */
+  // Counted, not collected: the surfaces name each of these individually and
+  // `sessions-presentation.ts` composes the one sentence that summarises them.
+  let rePinnable = 0;
+  const drifted = (code: string, message: string) => {
+    rePinnable += 1;
+    add({ code, severity: "warning", message });
+  };
   if (!providerMatches) {
-    add({ code: "PROVIDER_MISMATCH", severity: "warning", message: `Pinned provider ${pins.providerId} differs from active provider ${runtime.providerId}.` });
+    drifted("PROVIDER_MISMATCH", `Pinned provider ${pins.providerId} differs from active provider ${runtime.providerId}.`);
   }
   if (pins.model !== runtime.model) {
-    add({ code: "MODEL_MISMATCH", severity: "warning", message: `Pinned model ${pins.model} differs from active model ${runtime.model}.` });
+    drifted("MODEL_MISMATCH", `Pinned model ${pins.model} differs from active model ${runtime.model}.`);
   }
   if (!inferenceBindingMatches) {
-    add({
-      code: "INFERENCE_CONNECTION_MISMATCH",
-      severity: "warning",
-      message: "The active inference account, credential generation, provider revision, transport boundary, or model binding differs from this session pin.",
-    });
+    drifted("INFERENCE_CONNECTION_MISMATCH", "The active inference connection differs from this session pin.");
   }
   if (pins.toolManifestDigest !== runtime.toolManifestDigest) {
-    add({ code: "TOOL_MANIFEST_MISMATCH", severity: "warning", message: "The active tool manifest differs from the session pin." });
+    drifted("TOOL_MANIFEST_MISMATCH", "The active tool manifest differs from the session pin.");
   }
   if (runtime.workspaceId !== undefined && pins.workspaceId !== runtime.workspaceId) {
-    add({ code: "WORKSPACE_MISMATCH", severity: "warning", message: "The active workspace differs from the session pin." });
+    drifted("WORKSPACE_MISMATCH", "The active workspace differs from the session pin.");
   }
   if (pins.posture.mixed) {
-    add({ code: "POSTURE_AMBIGUOUS", severity: "error", message: "The history does not establish one coherent inference path." });
+    drifted("POSTURE_AMBIGUOUS", "The history does not establish one coherent inference path.");
   } else if (pins.posture.value && pins.posture.value !== runtime.posture) {
-    add({ code: "POSTURE_MISMATCH", severity: "warning", message: `Session posture ${pins.posture.value} differs from active posture ${runtime.posture}.` });
+    drifted("POSTURE_MISMATCH", `Session posture ${pins.posture.value} differs from active posture ${runtime.posture}.`);
   } else if (pins.posture.basis === "not-recorded") {
     add({ code: "POSTURE_NOT_RECORDED", severity: "info", message: "No prior inference posture is recorded; the next session should pin the active posture." });
   } else if (pins.posture.basis === "event-observation") {
@@ -1027,7 +1056,14 @@ export function decideSessionResume(
   // "incomplete"` used to force a fork independently of whether any reason
   // above had survived — so a conversation could be told "Fork required" while
   // the list of why was empty or said "fork not required".
-  const requiresFork = reasons.some((reason) => reason.severity === "warning");
+  //
+  // And it is the warnings a fork is the remedy for. `rePinnable` counted the
+  // environment differences reported above — exactly one per warning that a
+  // re-pin cures — so the subtraction leaves the warnings it does not: an
+  // imported bundle, an unfinished turn, a profile boundary that moved. A
+  // reason added later without going through `drifted` requires a fork, which
+  // is the safe direction for a rule nobody has thought about yet.
+  const requiresFork = reasons.filter((reason) => reason.severity === "warning").length > rePinnable;
   const action = blocked ? "blocked" : requiresFork ? "fork-required" : "resume";
   return deepFreeze({
     action,

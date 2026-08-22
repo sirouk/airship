@@ -706,6 +706,13 @@ export const SESSION_BOOKKEEPING_EVENT_TYPES: ReadonlySet<string> = new Set([
   // library re-deriving the timestamp from the very record they had stopped
   // counting.
   "session.favorite.changed",
+  /*
+   * Continuing a conversation somewhere else is a statement about this tab,
+   * not work done in the thread. It is journaled so the re-pin can be audited
+   * later; floating the thread to the top of "recently active" for it would
+   * repeat the mistake the two records above exist to correct.
+   */
+  "session.re-pinned",
 ]);
 
 /**

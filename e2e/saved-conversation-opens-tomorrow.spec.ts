@@ -233,7 +233,7 @@ async function sendOneTurn(page: Page, prompt: string, answer: string): Promise<
   await expect(run).toBeVisible({ timeout: 40_000 });
 }
 
-test("a saved conversation opens at its own address the next day, and says why it cannot continue", async ({}, testInfo) => {
+test("a saved conversation opens at its own address the next day, and continues", async ({}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "One persistent-profile restart journey is sufficient.");
   test.setTimeout(360_000);
   const userDataDir = testInfo.outputPath("overnight-profile");
@@ -304,12 +304,18 @@ test("a saved conversation opens at its own address the next day, and says why i
     await expect(page.locator(".message.user").filter({ hasText: PROMPT }))
       .toBeVisible({ timeout: 90_000 });
 
-    // The refusal is already on screen in the same commit as that transcript,
-    // not eight seconds later behind a chunk fetch.
-    await expect(refusal(page)).toBeVisible({ timeout: 1_000 });
-    await expect(refusal(page)).toContainText("It cannot continue on this route.");
-    await expect(refusal(page)).toContainText("inference binding");
-    const firstWords = (await refusal(page).innerText()).trim();
+    /*
+     * And it continues.
+     *
+     * This block used to assert the opposite — "It cannot continue on this
+     * route … inference binding" — and that sentence was the whole complaint:
+     * a conversation whose journal audits perfectly, opened at its own address,
+     * with its own transcript on screen, and one enabled verb that throws the
+     * transcript away. An inference binding is where the thread last ran, not
+     * something about the record. `decideSessionResume` re-pins it now, says so
+     * once, and journals `session.re-pinned` before the transcript is read.
+     */
+    await expect(refusal(page)).toHaveCount(0);
 
     // Its receipts and provenance came back with it: the finalized local run
     // record for yesterday's turn is on the answer that was read from the vault.
@@ -322,21 +328,17 @@ test("a saved conversation opens at its own address the next day, and says why i
     await expect(panel.locator('[data-field="model"] code')).toHaveText(ENDPOINT.model);
     await panel.getByRole("button", { name: "Done" }).click();
 
-    // The composer refuses in its own words rather than looking armed.
-    await composer(page).fill("this must not be sendable");
+    // The composer is armed, because the conversation really can go on.
+    await composer(page).fill("this is sendable");
     const send = page.getByRole("button", { name: /^Send/u });
-    await expect(send).toBeDisabled();
-    await expect(send).toHaveAccessibleName("Send unavailable: this conversation cannot continue here");
+    await expect(send).toBeEnabled();
     await composer(page).fill("");
 
-    // Nothing rewrote the sentence eight seconds later, and no conversation
-    // other than the one addressed was ever announced as resumed.
+    // Nothing rewrote the screen eight seconds later, and no conversation other
+    // than the one addressed was ever announced.
     await page.waitForTimeout(9_000);
-    expect((await refusal(page).innerText()).trim()).toBe(firstWords);
-    const sentences = await runtimeSentences(page);
-    expect(sentences.join(" | ")).not.toMatch(/audited session resumed/iu);
-    // The one live region says exactly what the composer band says.
-    expect(sentences.join(" | ")).toMatch(/reading a saved conversation/iu);
+    await expect(refusal(page)).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`#chat/${saved}$`, "u"));
 
     // "Open" from All conversations reaches the same conversation, at the same
     // address, with the same answer. Step off it first, so the row really is
@@ -351,23 +353,30 @@ test("a saved conversation opens at its own address the next day, and says why i
     await row.getByRole("button", { name: /^Open / }).click();
     await expect(page).toHaveURL(new RegExp(`#chat/${saved}$`, "u"), { timeout: 60_000 });
     await expect(page.locator(".message.user").filter({ hasText: PROMPT })).toBeVisible({ timeout: 60_000 });
-    await expect(refusal(page)).toBeVisible();
+    await expect(refusal(page)).toHaveCount(0);
 
-    // Reconnecting the identical endpoint with the identical key does not make
-    // it continuable, and the product does not pretend otherwise: the pin
-    // records a connection generation this page cannot mint again.
+    // Reconnecting the identical endpoint mints a connection generation this
+    // pin has never seen, which used to make the conversation permanently
+    // unresumable. It re-pins instead.
     await connectEndpointAndPin(page);
     await page.goto(`/#chat/${saved}`);
     await expect(page.locator(".message.user").filter({ hasText: PROMPT })).toBeVisible({ timeout: 60_000 });
-    await expect(refusal(page)).toContainText("What no longer matches: inference binding.");
-
-    // Fork is one button, and it works.
-    await refusal(page).getByRole("button", { name: "Fork to continue" }).click();
-    await expect(page).not.toHaveURL(new RegExp(`#chat/${saved}$`, "u"), { timeout: 60_000 });
-    await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
     await expect(refusal(page)).toHaveCount(0);
+
+    /*
+     * The composer is armed on the conversation that was read, at its own
+     * address, on a connection generation this pin has never seen.
+     *
+     * Deliberately not a full turn here: this journey's mocked endpoint is
+     * bound to the day-one page, and re-driving it after a second connect
+     * measures the harness rather than the product. What the turn admission
+     * does with the record this navigation wrote is pinned directly, against
+     * the journal, in `src/sessions/session-repin.test.ts`.
+     */
     await expect(composer(page)).toBeEnabled({ timeout: 30_000 });
-    await sendOneTurn(page, FORK_PROMPT, ANSWER);
+    await composer(page).fill(FORK_PROMPT);
+    await expect(page.getByRole("button", { name: /^Send/u })).toBeEnabled();
+    await composer(page).fill("");
 
     // The conversation that was read is untouched and still reachable.
     await page.goto("/#sessions");

@@ -3,10 +3,21 @@ import type { SessionAuditReport } from "./session-audit";
 /**
  * Whether an audit refuses to hand this history back to the reader.
  *
- * Only `invalid` does. That status means an error-severity finding: the
- * journal contradicts itself — a broken digest chain, a protocol violation, a
- * head that does not match its commitment. That is the integrity claim this
- * product actually makes, and it is worth refusing a resume over.
+ * Only an `error` finding does, and `error` now means one thing: this record
+ * cannot be appended to. The chain does not link, an event is not the event
+ * its digest says it is, or the head does not match the events under it — so
+ * the next turn would anchor itself to something that is not there. That is
+ * the integrity claim this product actually makes, and it is worth refusing a
+ * resume over.
+ *
+ * This used to read `report.status === "invalid"`, which was a much wider net
+ * than the paragraph above described. `status` is still exactly as strict as
+ * it ever was and every path that *copies* a journal — seeding a fork, taking
+ * an audited prefix, adopting a vault's latest conversation — still reads it
+ * and still refuses the same journals. But a manifest whose tool digest moved,
+ * a rename event with a malformed title, an approval whose provenance is thin:
+ * those are contradictions to show, not reasons to take a finished
+ * conversation away from the person who had it. Reading is not copying.
  *
  * `incomplete` is not that claim and never was. It means the audit met records
  * it does not interpret: an event type from a newer build, an operation whose
@@ -31,6 +42,6 @@ import type { SessionAuditReport } from "./session-audit";
  * erased at build time, so this file costs the bundle nothing while keeping
  * one definition of the rule.
  */
-export function sessionAuditRefusesResume(report: Pick<SessionAuditReport, "status">): boolean {
-  return report.status === "invalid";
+export function sessionAuditRefusesResume(report: Pick<SessionAuditReport, "appendable">): boolean {
+  return !report.appendable;
 }
