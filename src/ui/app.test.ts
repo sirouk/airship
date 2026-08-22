@@ -160,9 +160,18 @@ describe("the deferred message-parts renderer", () => {
     expect(body).toContain("messagePlainText(props.parts)");
   });
 
-  it("terminates the idle warms so a background prefetch is not an unhandled rejection", () => {
-    expect(functionBody("function warmMessageParts()")).toContain("loadMessageParts().catch(() => undefined)");
-    expect(functionBody("function warmAgentRuntimeStatus()")).toContain("loadAgentRuntimeStatus().catch(() => undefined)");
+  it("terminates both chunk warms inside the shared idle callback", () => {
+    const start = app.indexOf("    const warm = () => {");
+    const warm = app.slice(start, app.indexOf("    };", start));
+    expect(start, "the shared post-paint warm exists").toBeGreaterThan(-1);
+    expect(warm).toContain("loadMessageParts().catch(() => undefined)");
+    expect(warm).toContain("loadAgentRuntimeStatus().catch(() => undefined)");
+    expect(warm, "the overlays keep the same post-paint fetch timing")
+      .toContain("beginPlatformOverlaysLoad();");
+    expect(app, "the idle callback keeps its bounded fallback")
+      .toContain('requestIdleCallback(warm, { timeout: 2_000 });\n    else setTimeout(warm, 0);');
+    expect(app).not.toContain("function warmMessageParts()");
+    expect(app).not.toContain("function warmAgentRuntimeStatus()");
   });
 });
 

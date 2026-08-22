@@ -600,44 +600,10 @@ function loadMessageParts() {
   );
 }
 
-/**
- * Warms the message-part chunk once the shell is up.
- *
- * Deferring it keeps 32 KiB of source out of first paint, and fetching it only
- * when a message first has parts made that fetch a network dependency at the
- * worst possible moment: this product is local-first, and the offline-reload
- * journey failed with "Failed to fetch dynamically imported module" — a
- * restored conversation that could not render its own tool calls because the
- * renderer was still on the far side of a connection that had gone away.
- *
- * So the split stays and the fetch moves: after the first paint, while nothing
- * is waiting on it, and long before anyone goes offline.
- */
-function warmMessageParts(): void {
-  // The rejection is terminated here because nobody is waiting on this fetch:
-  // `loadRetryableChunk` reports a terminal failure by throwing, and from an
-  // idle prefetch that is an unhandled rejection in the console rather than a
-  // fact anyone can act on. The card that needs the chunk reports its own.
-  const warm = () => { void loadMessageParts().catch(() => undefined); };
-  if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
-  else setTimeout(warm, 0);
-}
-
 /*
- * Same offline reality as the parts view: any route that lands cold on an
- * already-offline tab fetches this chunk twice and loses both times, and the
- * status tag is the W6 surface every fresh cockpit's chat stage takes.
- */
-function warmAgentRuntimeStatus(): void {
-  // Same unwatched prefetch, same reason it must not reject into the console.
-  const warm = () => { void loadAgentRuntimeStatus().catch(() => undefined); };
-  if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
-  else setTimeout(warm, 0);
-}
-
-/*
- * The agent-runtime status tag, deferred — same mount-once shape as the
- * message parts above.
+ * The agent-runtime status tag is deferred beside message parts. Both are
+ * warmed after first paint because a route that lands cold in an already
+ * offline tab cannot fetch either renderer when it first needs it.
  *
  * Nothing asks which engine owns the session before the shell exists, and the
  * answer is an async journal read anyway, so the question's whole surface —
@@ -811,6 +777,8 @@ const PROFILE_DRAFT_DISCARD_PROMPT = "Discard unsaved profile edits?";
  * this one string so the three surfaces cannot drift.
  */
 const COMPOSER_TRANSITION_WAIT = "Wait for the active model or storage transition. Your prompt remains in the composer.";
+// The stale success and stale failure exits report the same operation outcome.
+const PROFILE_OPERATION_REPLACED = "A newer profile operation replaced this switch.";
 
 /**
  * The resting word for a lifecycle whose full label is too long for a chip.
@@ -1988,13 +1956,26 @@ export function App() {
     profiles?: readonly Readonly<{ name: string }>[];
     onClose(): void;
   }) => VNode | null>();
+  /*
+   * The approval dock still starts immediately: a request may need it as soon
+   * as a turn runs. The three post-paint warmups share one idle callback. They
+   * used to carry two one-use wrappers and a second effect that scheduled the
+   * same work independently.
+   */
   useEffect(() => {
     approvalDockOwnerLive.current = true;
     beginApprovalDockLoad();
-    warmMessageParts();
-    warmAgentRuntimeStatus();
+    const warm = () => {
+      // A failed unwatched prefetch must not reject into the console. The
+      // surface that needs either chunk reports its own terminal failure.
+      void loadMessageParts().catch(() => undefined);
+      void loadAgentRuntimeStatus().catch(() => undefined);
+      beginPlatformOverlaysLoad();
+    };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+    else setTimeout(warm, 0);
     return () => { approvalDockOwnerLive.current = false; };
-  }, [beginApprovalDockLoad]);
+  }, [beginApprovalDockLoad, beginPlatformOverlaysLoad]);
   /* Same deferral, same reason: a sheet nobody has asked for yet is not
      first-paint JavaScript. Fetched the first time `?` (or the palette's own
      footer row) asks for it, and resident from then on. */
@@ -4574,13 +4555,6 @@ export function App() {
   // frame after both a shortcut and a viewport-band transition.
   useLayoutEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
 
-  useEffect(() => {
-    if (Overlays) return;
-    const warm = () => beginPlatformOverlaysLoad();
-    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
-    else setTimeout(warm, 0);
-  }, [Overlays, beginPlatformOverlaysLoad]);
-
   /*
    * J151: tell the service-worker listener what a reload would cost.
    *
@@ -4999,7 +4973,7 @@ export function App() {
       if (!profile || !nextSession || !switched) throw new Error("The profile session was not created.");
       if (runtime.current !== active) throw new Error("The runtime changed before the profile cockpit could be restored.");
       if (operation !== profileOperation.current) {
-        return "A newer profile operation replaced this switch.";
+        return PROFILE_OPERATION_REPLACED;
       }
       // Authority and identity, adjacent. Nothing that can fail sits between
       // them, so `profileId` and `runtime.current` can no longer disagree.
@@ -5065,7 +5039,7 @@ export function App() {
         setRuntimeStatus(message);
         return message;
       }
-      return "A newer profile operation replaced this switch.";
+      return PROFILE_OPERATION_REPLACED;
     } finally {
       sessionNavigationChanging.current = false;
       setProfileCockpitTransition(undefined);
