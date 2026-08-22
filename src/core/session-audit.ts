@@ -13,6 +13,7 @@ import {
   assertValidSessionInferenceBinding,
   sessionInferenceProviderIdMatches,
 } from "./inference-binding";
+import { SESSION_RE_PINNED_EVENT_TYPE } from "./session-repin-record";
 import { lastRecencyAdvancingEvent } from "./journal";
 import type { DurableEvent, SessionRecord } from "./journal";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal-contract";
@@ -64,6 +65,14 @@ export const KNOWN_EVENT_TYPES = new Set([
   "session.favorite.changed",
   "session.approval-policy-changed",
   "session.model-changed",
+  /*
+   * Where this conversation was continued, when that was not where it last
+   * ran. Written once, by `journalSessionRePin`, at the moment somebody opens
+   * a thread whose provider, model, tool set, workspace or transport posture
+   * has moved — because `decideSessionResume` now re-pins instead of refusing,
+   * and a re-pin nobody journaled would be a change nobody could audit.
+   */
+  SESSION_RE_PINNED_EVENT_TYPE,
   "profile.favorite-order.moved",
   "profile.active-conversation.selected",
   FORK_CONTEXT_EVENT_TYPE,
@@ -171,6 +180,54 @@ const FINISH_REASONS = new Set(["stop", "tool-calls", "length"]);
 const encoder = new TextEncoder();
 
 export type SessionAuditSeverity = "error" | "warning" | "info";
+
+/**
+ * The only findings that may take a conversation away from the person in it.
+ *
+ * `add` below used to default to `"error"`, so every observation anyone ever
+ * added to this file silently became a reason a finished thread could not be
+ * continued. One error finding makes the whole history `suspect`, which makes
+ * `decideSessionResume` answer `Resume blocked`, which leaves `Fork to
+ * continue` — a new identity with an empty transcript — as the only enabled
+ * verb. A tool description that had been edited, a workspace that had moved,
+ * a provider spelled a second way: each of those was, by omission, a locked
+ * door.
+ *
+ * Error now states one claim and states it here: the audit could not establish
+ * that this journal is a single intact chain ending at the head the record
+ * commits to, so appending to it would anchor new events to something that is
+ * not there. That is the only claim worth refusing a resume over, and it is
+ * exactly the claim `sessionAuditRefusesResume` documents. Everything else is
+ * still found, still counted, still rendered beside the conversation, and does
+ * not take the door away.
+ *
+ * Adding a code here is a deliberate act with a test that says why; adding a
+ * finding anywhere else in this file can no longer reach `error` by accident.
+ */
+const APPEND_UNSAFE_FINDINGS: ReadonlySet<string> = new Set([
+  // The chain itself: links, order, identity, and ownership.
+  "EVENT_DIGEST_MISMATCH",
+  "PREVIOUS_DIGEST_MISMATCH",
+  "SEQUENCE_GAP",
+  "EVENT_ID_REUSED",
+  "CROSS_SESSION_EVENT",
+  // The head the next append would extend.
+  "SESSION_HEAD_MISMATCH",
+  "TRUSTED_HEAD_MISMATCH",
+  // Records the walk could not read at all, so the chain across them was never
+  // walked and the head above cannot be reached honestly. `EVENT_VERSION_INVALID`
+  // is deliberately absent: the digest preimage pins `version: 1` itself, so an
+  // envelope from a newer build still chains, and refusing it would be the
+  // "records this audit does not interpret" refusal `session-audit-admission.ts`
+  // already argues against.
+  "INPUT_INVALID",
+  "EVENT_INVALID",
+  "EVENT_SHAPE_INVALID",
+  "EVENT_PAYLOAD_INVALID",
+]);
+
+/** Every code that may be reported at `error`, for the test that pins the rule. */
+export const APPEND_UNSAFE_AUDIT_FINDINGS: readonly string[] = Object.freeze([...APPEND_UNSAFE_FINDINGS]);
 export type SessionAuditCategory =
   | "schema"
   | "chain"
@@ -223,6 +280,17 @@ export type SessionAuditReport = Readonly<{
     source?: string;
   }>;
   commitment: Readonly<{ sequence: number; digest: string }>;
+  /**
+   * Whether new events may be appended to this record.
+   *
+   * The one claim worth refusing a resume over, computed once, here, where the
+   * findings are — rather than re-derived by every caller. False exactly when
+   * some finding is `error`: the chain does not link, an event is not what its
+   * digest says, or the head does not match the events under it.
+   * `sessionAuditRefusesResume` is this field and nothing else, which is also
+   * what keeps the audit engine out of the baseline bundle.
+   */
+  appendable: boolean;
   checks: Readonly<{
     schema: boolean;
     chain: boolean;
@@ -384,8 +452,17 @@ async function auditSessionHistorySnapshot(
   if (!asPlainRecord(options)) return invalidAuditSnapshotReport();
   const limits = resolveLimits(options.limits);
   const findings: SessionAuditFinding[] = [];
-  const add: AddFinding = (code, category, message, context, severity = "error") =>
-    findings.push(Object.freeze({ severity, ...context, code, category, message }));
+  // Severity is decided by the code, not by whether a caller remembered to
+  // pass one: `APPEND_UNSAFE_FINDINGS` is the whole route to `error`, and a
+  // finding that says nothing is an observation rather than a locked door.
+  const add: AddFinding = (code, category, message, context, severity = "warning") =>
+    findings.push(Object.freeze({
+      severity: APPEND_UNSAFE_FINDINGS.has(code) ? "error" : severity === "info" ? "info" : "warning",
+      ...context,
+      code,
+      category,
+      message,
+    }));
 
   const rawInput = asPlainRecord(input);
   const rawSession = asPlainRecord(rawInput?.session);
@@ -843,7 +920,7 @@ function validateHead(
    */
   const recency = lastRecencyAdvancingEvent(events);
   if (recency && session.updatedAt !== recency.recordedAt) {
-    add("SESSION_UPDATED_AT_MISMATCH", "chain", "Session update timestamp does not match the final event.", undefined, "warning");
+    add("SESSION_UPDATED_AT_MISMATCH", "chain", "Session update timestamp does not match the final event.", undefined, "info");
   }
 }
 
@@ -959,7 +1036,7 @@ async function validateProtocol(
     const payload = asPlainRecord(event.payload);
     if (!KNOWN_EVENT_TYPES.has(type)) {
       counts.unknownEvents += 1;
-      addEventFinding(add, event, "EVENT_TYPE_UNKNOWN", `Event type ${type} is not interpreted by protocol-v1 audit rules.`, "completeness", "warning");
+      addEventFinding(add, event, "EVENT_TYPE_UNKNOWN", `Event type ${type} is not interpreted by protocol-v1 audit rules.`, "completeness", "info");
       continue;
     }
 
@@ -1039,6 +1116,36 @@ async function validateProtocol(
             ? undefined
             : canonicalSessionContextPolicy(policyValue) ?? effectiveContextPolicy;
         }
+      }
+      continue;
+    }
+    if (type === SESSION_RE_PINNED_EVENT_TYPE) {
+      /*
+       * A record of where the conversation was continued, held to the same
+       * bar as every other bookkeeping event: bounded, credential-free, made
+       * of fields the manifest already publishes, and outside any turn.
+       *
+       * It does not move `effectiveModel`. The model a turn is addressed to is
+       * still `session.model-changed`'s to state, and a re-pin that silently
+       * retargeted the thread would be a second answer to that question.
+       */
+      const differences = payload?.differences;
+      if (
+        eventTurnId
+        || eventOperationId
+        || !payload
+        || payload.version !== 1
+        || !boundedString(payload.providerId, 256)
+        || !boundedString(payload.model, 512)
+        || !POSTURES.has(String(payload.posture))
+        || !boundedString(payload.toolManifestDigest, 128)
+        || (payload.workspaceId !== undefined && !boundedString(payload.workspaceId, 2_048))
+        || !Array.isArray(differences)
+        || differences.length === 0
+        || differences.length > 8
+        || differences.some((code) => !boundedString(code, 64))
+      ) {
+        add("SESSION_RE_PIN_MALFORMED", "protocol", "A re-pin record must carry one bounded, credential-free route and at least one named difference, outside any turn.", { sequence: event.sequence });
       }
       continue;
     }
@@ -1822,7 +1929,7 @@ async function validateProtocol(
       }
       const unresolved = Boolean(turn.inference) || turn.tools.some((tool) => !tool.terminal);
       if (unresolved) {
-        addEventFinding(add, event, "OPERATION_OUTCOME_UNKNOWN", "Turn terminated with an operation whose durable outcome is unknown.", "completeness", "warning");
+        addEventFinding(add, event, "OPERATION_OUTCOME_UNKNOWN", "Turn terminated with an operation whose durable outcome is unknown.", "completeness", "info");
       }
       turn.terminal = type === "turn.failed" ? "failed" : "cancelled";
       if (type === "turn.failed") counts.failedTurns += 1;
@@ -1843,13 +1950,13 @@ async function validateProtocol(
   if (!sawCreation) {
     add("SESSION_CREATION_MISSING", "protocol", "Journal has no canonical session.created event.");
   } else if (projectedTitle !== session.title) {
-    add("SESSION_TITLE_SNAPSHOT_MISMATCH", "manifest", "The title projected from creation and rename events differs from the session record.", undefined, "warning");
+    add("SESSION_TITLE_SNAPSHOT_MISMATCH", "manifest", "The title projected from creation and rename events differs from the session record.", undefined, "info");
   }
   if (session.manifest.lineage && !sawForkContext) {
     add("FORK_CONTEXT_SEED_MISSING", "protocol", "A fork manifest has no verified destination context-seed event.");
   }
   if (active) {
-    add("TURN_INCOMPLETE", "completeness", `Turn ${active.id} has no durable terminal event.`, { turnId: active.id, operationId: active.inference?.operationId }, "warning");
+    add("TURN_INCOMPLETE", "completeness", `Turn ${active.id} has no durable terminal event.`, { turnId: active.id, operationId: active.inference?.operationId }, "info");
   }
   if (activeLocal) {
     add("LOCAL_COMMAND_INCOMPLETE", "completeness", `Client-only local command ${activeLocal.turnId} has no durable terminal event.`, { turnId: activeLocal.turnId, operationId: activeLocal.operationId });
@@ -2040,16 +2147,34 @@ function finishReport(args: {
     }
   }
 
+  /*
+   * Three levels, three different consequences, said once.
+   *
+   * `error` is `APPEND_UNSAFE_FINDINGS`: the chain or the head is not what it
+   * claims, so nothing may be appended to this record. `warning` is a
+   * contradiction the audit found inside a record that still chains — a
+   * manifest digest that no longer matches, a tool result with no approval.
+   * `info` is an observation.
+   *
+   * `status` and `checks` are deliberately keyed on "above `info`" rather than
+   * on `error`, which is the exact set that used to be `error` before severity
+   * stopped defaulting to it. Every admission path that reads this report —
+   * seeding a fork, copying an audited prefix, adopting a vault's latest
+   * conversation — therefore refuses exactly what it refused before. What
+   * changed is only who may take a finished conversation away from the person
+   * in it, and that is `sessionAuditRefusesResume`.
+   */
   const categoryPasses = (category: SessionAuditCategory) =>
-    !args.findings.some((finding) => finding.severity === "error" && finding.category === category);
+    !args.findings.some((finding) => finding.severity !== "info" && finding.category === category);
   const complete = !args.findings.some((finding) => finding.category === "completeness");
-  const invalid = args.findings.some((finding) => finding.severity === "error");
+  const invalid = args.findings.some((finding) => finding.severity !== "info");
   const last = args.events.at(-1);
   const report: SessionAuditReport = {
     version: 1,
     checkedAt: args.checkedAt ?? new Date().toISOString(),
     sessionId: args.sessionId,
     status: invalid ? "invalid" : complete ? "verified" : "incomplete",
+    appendable: !args.findings.some((finding) => finding.severity === "error"),
     authenticity: "not-proven",
     anchor: {
       status: anchorStatus,

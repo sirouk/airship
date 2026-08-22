@@ -5,7 +5,8 @@ import { sha256, stableStringify } from "./hash";
 import { EventJournal, type DurableEvent, type SessionRecord } from "./journal";
 import { MemoryJournalBackend } from "./memory-journal";
 import { createLocalReceipt } from "../core/conversation-receipt";
-import { auditSessionHistory } from "./session-audit";
+import { APPEND_UNSAFE_AUDIT_FINDINGS, auditSessionHistory, type SessionAuditInput } from "./session-audit";
+import { sessionAuditRefusesResume } from "./session-audit-admission";
 
 /** The provenance a real ask-first approval journals; see approvalProvenanceIssue. */
 const HUMAN_APPROVAL = { mode: "ask-first", source: "human", reason: "Allowed once by the user." } as const;
@@ -1084,9 +1085,14 @@ describe("auditSessionHistory", () => {
     expect(abandonedReport.status).toBe("invalid");
     expect(abandonedReport.checks.complete).toBe(false);
     expect(abandonedReport.counts).toMatchObject({ localCommands: 1, terminalLocalCommands: 0 });
+    // `warning`, not `error`: the record is still contradicted — `status`
+    // stays `invalid` above, so every path that copies this journal still
+    // refuses it — but an abandoned client-only command is not a broken chain,
+    // and it is no longer a reason to take the conversation away from its
+    // author. `APPEND_UNSAFE_AUDIT_FINDINGS` is the whole list that is.
     expect(abandonedReport.findings).toContainEqual(expect.objectContaining({
       code: "LOCAL_COMMAND_INCOMPLETE",
-      severity: "error",
+      severity: "warning",
       turnId: "local-abandoned",
       operationId: "local-operation-abandoned",
     }));
@@ -1124,7 +1130,12 @@ describe("auditSessionHistory", () => {
     expect(report.checks.chain).toBe(true);
     expect(report.checks.protocol).toBe(true);
     expect(report.checks.complete).toBe(false);
-    expect(report.findings).toEqual([expect.objectContaining({ code: "TURN_INCOMPLETE", severity: "warning" })]);
+    // `info`: a turn with no terminal is what a cancelled turn and a turn
+    // still in flight both look like, and this observation has never been a
+    // reason to refuse anything. Saying so in the severity keeps `status`
+    // reading `incomplete` from the finding itself rather than from a category
+    // exemption somewhere else.
+    expect(report.findings).toEqual([expect.objectContaining({ code: "TURN_INCOMPLETE", severity: "info" })]);
   });
 
   it("rejects a cryptographically intact tool result that has no approval", async () => {
@@ -1324,7 +1335,7 @@ describe("the session update timestamp", () => {
     const report = await auditSessionHistory({ session, events });
     const drift = report.findings.filter((finding) => finding.code === "SESSION_UPDATED_AT_MISMATCH");
     expect(drift).toHaveLength(1);
-    expect(drift[0]!.severity).toBe("warning");
+    expect(drift[0]!.severity).toBe("info");
     expect(drift[0]!.message).toBe("Session update timestamp does not match the final event.");
   });
 });
@@ -1352,6 +1363,70 @@ async function bookkeepingFixture() {
   }]);
   return fixture;
 }
+
+/**
+ * Severity stopped being decided by whether a caller remembered to pass one.
+ *
+ * `add` defaulted to `"error"`, so a hundred observations in this file were
+ * error-severity by omission — and one error finding makes the Sessions
+ * library's history `suspect`, which makes `decideSessionResume` answer
+ * `Resume blocked`, which leaves `Fork to continue` as the only enabled verb.
+ * A tool description that had been edited was, by omission, a locked door.
+ */
+describe("what a finding is allowed to cost a person", () => {
+  it("reaches error only for a record that cannot be appended to", async () => {
+    const fixture = await createFixture([writeTool]);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+
+    // A manifest that contradicts its own digest: real, worth reporting, and
+    // not a broken chain.
+    const drifted: SessionRecord = {
+      ...session,
+      manifest: { ...session.manifest, toolManifestDigest: `sha256:${"C".repeat(43)}` },
+    };
+    const report = await auditSessionHistory({ session: drifted, events });
+    expect(report.findings.map((finding) => finding.code)).toContain("TOOL_MANIFEST_DIGEST_MISMATCH");
+    expect(report.findings.every((finding) => finding.severity !== "error")).toBe(true);
+    // The wider claim is untouched, so every path that *copies* this journal —
+    // seeding a fork, taking an audited prefix, adopting a vault's latest
+    // conversation — still refuses it exactly as before.
+    expect(report.status).toBe("invalid");
+    expect(sessionAuditRefusesResume(report)).toBe(false);
+
+    // And the chain claim still costs what it always did.
+    const broken = [...events];
+    broken[0] = { ...broken[0]!, previousDigest: `sha256:${"D".repeat(43)}` };
+    const chain = await auditSessionHistory({ session, events: broken });
+    expect(chain.findings.some((finding) => finding.severity === "error")).toBe(true);
+    expect(sessionAuditRefusesResume(chain)).toBe(true);
+  });
+
+  it("never reports an error outside the list that says why", async () => {
+    const fixture = await createFixture([writeTool]);
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const allowed = new Set(APPEND_UNSAFE_AUDIT_FINDINGS);
+    const corruptions: readonly SessionAuditInput[] = [
+      { session, events: [] },
+      { session: { ...session, headSequence: 99 }, events },
+      { session: { ...session, manifest: { ...session.manifest, systemPrompt: "rewritten" } }, events },
+      { session: { ...session, manifest: { ...session.manifest, capabilityTier: "impossible" as never } }, events },
+      { session, events: [{ ...events[0]!, digest: `sha256:${"E".repeat(43)}` }] },
+      { session, events: [{ ...events[0]!, sessionId: "another-session" }] },
+      { session, events: [{ ...events[0]!, payload: { note: "not a creation record" } as never }] },
+      { session, events: [events[0]!, events[0]!] },
+      { session, events: [{ ...events[0]!, type: "turn.completed", turnId: "nowhere" }] },
+    ];
+    for (const input of corruptions) {
+      const report = await auditSessionHistory(input);
+      for (const finding of report.findings) {
+        if (finding.severity !== "error") continue;
+        expect(allowed, `${finding.code} reached error severity`).toContain(finding.code);
+      }
+    }
+  });
+});
 
 async function createFixture(tools: ToolDefinition[], profile?: SessionRecord["manifest"]["profile"]) {
   let tick = 0;

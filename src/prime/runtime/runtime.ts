@@ -22,6 +22,7 @@ import {
   assertValidSessionInferenceBinding,
   currentInferenceBinding,
 } from "../../core/inference-binding";
+import { journalRePinsToRoute } from "../../core/session-repin-record";
 import { sessionRuntimeKind } from "../../load-agent-runtime";
 import { conversationTitleFromPrompt } from "../../core/conversation-title";
 import { PrimeAgentSession, assertPrimeSessionInferenceWiring } from "./session";
@@ -362,16 +363,38 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
   const manifest = sessionRecord.manifest;
   const effectiveModelId = effectiveSessionModel(sessionRecord);
   assertValidSessionInferenceBinding(manifest);
+  /*
+   * A route this journal has already recorded a re-pin to is authority here.
+   *
+   * The same rule `runTurn` applies, for the same reason: `decideSessionResume`
+   * re-pins a conversation whose provider or connection generation has moved
+   * instead of leaving `Fork to continue` as its only verb, and it journals
+   * `session.re-pinned` in this chain before the transcript is read. A route
+   * the person was shown, chose, and had journaled is not a silent retarget.
+   * Every other route still meets the exact pin below.
+   *
+   * The substitution is deliberately narrow: only the connection authority is
+   * taken from the active route, and only when the journal names it. The
+   * model, the system prompt, the profile and the tool manifest still come
+   * from the manifest.
+   */
+  const routeAuthority = options.activeInferenceBinding && journalRePinsToRoute(
+    events,
+    options.activeInferenceBinding.providerId,
+    options.transport.posture,
+  )
+    ? { ...manifest, providerId: options.activeInferenceBinding.providerId, inferenceBinding: options.activeInferenceBinding }
+    : manifest;
   assertPinnedInferenceTransport(
-    manifest,
+    routeAuthority,
     options.transport.id,
     options.activeInferenceBinding,
     effectiveModelId,
   );
-  const currentBinding = currentInferenceBinding(manifest, options.activeInferenceBinding, effectiveModelId);
-  const model = primeModelFromManifest(manifest, options.activeInferenceBinding, effectiveModelId);
+  const currentBinding = currentInferenceBinding(routeAuthority, options.activeInferenceBinding, effectiveModelId);
+  const model = primeModelFromManifest(routeAuthority, options.activeInferenceBinding, effectiveModelId);
   assertPrimeSessionInferenceWiring({
-    manifest,
+    manifest: routeAuthority,
     model,
     expectedModelId: effectiveModelId,
     transport: options.transport,

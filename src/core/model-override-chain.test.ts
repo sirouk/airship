@@ -141,8 +141,12 @@ describe("a model switch lands on its own thread and mints honest digests throug
 
     // A stale model in the caller's hand is presented with its own honest
     // verdict rather than silently failing — the conversation destinations
-    // stay honest about which model a continuation would call.
-    expect(decideSessionResume(pins, acceptance, { ...runtime, model: "original/model-a" }).action).toBe("fork-required");
+    // stay honest about which model a continuation would call. It is named,
+    // and it is not a locked door: the thread re-pins to what is active and
+    // journals that, because forking would not have restored model B either.
+    const stale = decideSessionResume(pins, acceptance, { ...runtime, model: "original/model-a" });
+    expect(stale.action).toBe("resume");
+    expect(stale.reasons.map((reason) => reason.code)).toContain("MODEL_MISMATCH");
   });
 
   it("keeps an admitted turn on model A when model B is selected for the next turn", async () => {

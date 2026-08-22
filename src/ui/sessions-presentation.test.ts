@@ -411,16 +411,21 @@ describe("sessionReconnectPlan", () => {
     return { compatibility, plan: sessionReconnectPlan({ pins: sessionPins, runtime: active, compatibility, sessionId: CONVERSATION }) };
   }
 
-  it("names both routes without promising that a replacement credential can continue", () => {
+  it("names both routes without printing a refusal the Resume button contradicts", () => {
     const { compatibility, plan: reconnect } = plan();
-    // The premise: the runtime really is reporting the drift this is keyed on.
-    expect(compatibility.action).toBe("fork-required");
+    // The premise: the runtime really is reporting the drift this is keyed on,
+    // and it re-pins rather than refusing, so the card may not say otherwise.
+    expect(compatibility.action).toBe("resume");
     expect(compatibility.reasons.map((reason) => reason.code)).toContain("PROVIDER_MISMATCH");
     expect(reconnect?.header).toBe(
-      "CANNOT CONTINUE HERE — this tab is on anthropic · active-route; this conversation is pinned to Pinned provider · pinned-route. Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
+      "THIS TAB IS ON anthropic · active-route — this conversation is pinned to Pinned provider · pinned-route."
+      + " Continuing re-pins it here and journals that. Check the pinned connection to put it back.",
     );
+    expect(reconnect?.header).not.toContain("CANNOT CONTINUE HERE");
     expect(reconnect?.primaryLabel).toBe("Check exact Pinned provider · pinned-route connection");
-    expect(reconnect?.secondaryLabel).toBe("Continue with anthropic · active-route");
+    // "Continue with X" would now name the wrong verb: continuing here is the
+    // enabled Resume button, and this second control forks.
+    expect(reconnect?.secondaryLabel).toBe("Fork onto anthropic · active-route");
     // A pinned posture the demo runtime cannot offer is a real fourth
     // difference, so the shorter claim below is withheld here.
     expect(reconnect?.connectionOnly).toBe(false);
@@ -434,7 +439,7 @@ describe("sessionReconnectPlan", () => {
   it("classifies pure route drift without saying a new connection is the missing remedy", () => {
     const { plan: reconnect } = plan(pins(), runtime({ posture: "plaintext-remote" }));
     expect(reconnect?.connectionOnly).toBe(true);
-    expect(reconnect?.header).toContain("Check whether this page still holds that exact pinned connection");
+    expect(reconnect?.header).toContain("Check the pinned connection to put it back");
     expect(reconnect?.header).not.toContain("only thing missing");
     expect(reconnect?.primaryLabel).not.toContain("continue");
   });

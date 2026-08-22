@@ -8617,6 +8617,17 @@ export function App() {
     if (preservedTurnSessionId) sessionResumeDuringTurn.current = preservedTurnSessionId;
     sessionNavigationChanging.current = true;
     try {
+      /*
+       * Re-pin first, then read. `decideSessionResume` stopped refusing a
+       * conversation whose provider, model, tool set, workspace or posture had
+       * moved — continuing simply runs it on what is active — and this is the
+       * durable half of that sentence. Written before the inspection below so
+       * the head this navigation audits, publishes and displays is the head
+       * that already contains the re-pin, rather than one event behind it.
+       */
+      const owner = runtime.current!;
+      const { journalSessionRePin } = await loadDeferredCapabilities();
+      await journalSessionRePin(owner.journal, detail, owner);
       const fresh = await inspectSessionForNavigation(detail.session.id);
       /*
        * Reading a saved conversation does not require being able to continue

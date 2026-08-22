@@ -49,6 +49,7 @@ import {
   assertValidSessionInferenceBinding,
   canonicalSessionInferenceProviderId,
 } from "./inference-binding";
+import { journalRePinsToRoute } from "./session-repin-record";
 import {
   calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
@@ -174,19 +175,39 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   if (session.manifest.protocolVersion === 1) {
     throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
   }
-  assertPinnedInferenceTransport(
-    session.manifest,
-    transport.id,
-    options.activeInferenceBinding,
-    effectiveSessionModel(session),
-  );
+  /*
+   * Read the chain before judging the route, because the chain may already
+   * answer the question.
+   *
+   * A conversation whose provider or connection generation had moved could
+   * only be forked: the two refusals below fired, and a fork is a new identity
+   * with an empty transcript, which is not what "put my thread back on the
+   * model I am running" means. `decideSessionResume` now re-pins instead, says
+   * what moved, and journals `session.re-pinned` before the transcript is even
+   * read. A route the journal has recorded a re-pin to is not a silent
+   * retarget, so it is admissible here; every other route still is not.
+   */
+  const existingEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
+  const rePinned = journalRePinsToRoute(existingEvents, canonicalProviderId, transport.posture)
+    || journalRePinsToRoute(
+      existingEvents,
+      options.activeInferenceBinding?.providerId ?? transport.id,
+      transport.posture,
+    );
+  if (!rePinned) {
+    assertPinnedInferenceTransport(
+      session.manifest,
+      transport.id,
+      options.activeInferenceBinding,
+      effectiveSessionModel(session),
+    );
+  }
   const currentToolDigest = await sha256(
     stableStringify(options.tools.definitions() as unknown as JsonValue),
   );
-  if (currentToolDigest !== session.manifest.toolManifestDigest) {
+  if (currentToolDigest !== session.manifest.toolManifestDigest && !rePinned) {
     throw new Error("The tool manifest changed. Fork the session before using a different tool set.");
   }
-  const existingEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
   // Core's turn.requested is its engine claim. Refuse a Prime marker already
   // present in the exact history this admission is about; the appendAtHead
   // conflict path below covers the complementary ordering where Prime lands

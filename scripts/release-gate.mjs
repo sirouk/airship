@@ -202,16 +202,27 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 386,020 B raw / 119,769 B gzip. 377 KiB raw would have left 28 B and 117 KiB gzip would have
   // left 39 B.
   //
+  // Re-measured after resume stopped being a locked door: `session-audit.ts`
+  // no longer defaults a finding to `error`, `decideSessionResume` re-pins an
+  // environment difference instead of demanding a fork, and the re-pin's
+  // durable record and its turn-side admission both live outside this class —
+  // in the deferred capability pack and in the two lazily loaded turn engines.
+  // This chunk *shrank*: a shortened inference-connection sentence and a
+  // `HISTORY_OBSERVED` line that stopped repeating what the integrity row
+  // prints 60px above it more than paid for the counter and the one call the
+  // shell makes.
+  //
   // Class 1 — startup: the one module a browser must have before anything renders.
-  // Reviewed reading (Pages Google-Drive-configured): 386,172 B raw / 119,806 B gzip.
-  // Reviewed reading (Google-Drive-configured): 386,167 B raw / 119,812 B gzip.
-  // Reviewed reading (Pages): 385,962 B raw / 119,711 B gzip.
-  // Reviewed reading (canonical config-free): 385,941 B raw / 119,689 B gzip.
-  // Reviewed reading (Docker defaults): 385,946 B raw / 119,698 B gzip.
-  // Previous reading: 386,021 B raw / 119,760 B gzip.
-  // Ceiling: 377 KiB raw would have left -124 B — the reading is above that
-  // step — so raw takes the 378 KiB step and leaves 900 B; 117 KiB gzip would
-  // have left -4 B, so gzip takes the 118 KiB step and leaves 1,020 B.
+  // Reviewed reading (Pages Google-Drive-configured): 385,972 B raw / 119,818 B gzip.
+  // Reviewed reading (Google-Drive-configured): 385,967 B raw / 119,820 B gzip.
+  // Reviewed reading (Pages): 385,762 B raw / 119,730 B gzip.
+  // Reviewed reading (canonical config-free): 385,741 B raw / 119,724 B gzip.
+  // Reviewed reading (Docker defaults): 385,746 B raw / 119,717 B gzip.
+  // Previous reading: 386,172 B raw / 119,809 B gzip.
+  // Ceiling: 377 KiB raw would have left 76 B, far inside minifier jitter, so
+  // raw keeps the 378 KiB step and leaves 1,100 B; 117 KiB gzip would have
+  // left -12 B — the reading is above that step — so gzip keeps the 118 KiB
+  // step and leaves 1,012 B. Neither ceiling moves.
   entryJavaScript: Object.freeze({ raw: 378 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -344,17 +355,26 @@ export const RELEASE_BUDGETS = Object.freeze({
   // that reading and left 397 B; 160 KiB gzip was the smallest whole-KiB step that cleared it and
   // left 599 B.
   //
+  // Re-measured after resume stopped being a locked door. Nothing new entered
+  // this class: the re-pin record's writer is an export of the deferred
+  // capability pack, its reader sits beside the two lazily loaded turn
+  // engines, and the one sentence that summarises a re-pin is composed in the
+  // Sessions route's own presentation module. What this class carries is the
+  // counter `decideSessionResume` uses, one `session.re-pinned` string in the
+  // journal's bookkeeping set, and one call from the shell — paid for twice
+  // over by two sentences that stopped saying what the surface beside them
+  // already said.
+  //
   // Class 1 — startup: everything awaited before the first render, pre-render chunks included.
-  // Reviewed reading (Pages Google-Drive-configured): 502,586 B raw / 163,310 B gzip.
-  // Reviewed reading (Google-Drive-configured): 502,581 B raw / 163,311 B gzip.
-  // Reviewed reading (Pages): 502,376 B raw / 163,223 B gzip.
-  // Reviewed reading (canonical config-free): 502,355 B raw / 163,206 B gzip.
-  // Reviewed reading (Docker defaults): 502,360 B raw / 163,217 B gzip.
-  // Previous reading: 502,388 B raw / 163,229 B gzip.
-  // Ceiling: 491 KiB raw is the smallest whole-KiB step that clears the reading and leaves 189 B;
-  // 160 KiB gzip is the smallest whole-KiB step that clears the reading and leaves 516 B — above
-  // the 512 B a compressor change moves on its own, and above the 431 B this release moves between
-  // Node 22.22.3's compressor and zlib 1.2.12, so neither ceiling takes a further step.
+  // Reviewed reading (Pages Google-Drive-configured): 502,386 B raw / 163,328 B gzip.
+  // Reviewed reading (Google-Drive-configured): 502,381 B raw / 163,326 B gzip.
+  // Reviewed reading (Pages): 502,176 B raw / 163,234 B gzip.
+  // Reviewed reading (canonical config-free): 502,155 B raw / 163,222 B gzip.
+  // Reviewed reading (Docker defaults): 502,160 B raw / 163,216 B gzip.
+  // Previous reading: 502,586 B raw / 163,311 B gzip.
+  // Ceiling: 491 KiB raw is the smallest whole-KiB step that clears the reading and leaves 389 B;
+  // 160 KiB gzip is the smallest whole-KiB step that clears the reading and leaves 523 B — above
+  // the 512 B a compressor change moves on its own, so neither ceiling takes a further step.
   allJavaScriptAndWorkers: Object.freeze({ raw: 491 * 1024, gzip: 160 * 1024 }),
   // The deferred capability graph no longer carries the deleted Chutes proof,
   // attestation, confidential-embedding, and trust-screen implementations.
@@ -449,17 +469,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // from the arithmetic the same block states. None of this bundle is fetched
   // on first paint.
   //
+  // Re-measured after `journalSessionRePin` joined this pack: the writer of
+  // the `session.re-pinned` record, which is reached once, when somebody opens
+  // a conversation whose pins have moved. It is here rather than in the shell
+  // for the same reason `auditSessionHistory` is.
+  //
   // Class 2 — on demand: an aggregate; every byte of it is fetched after the first screen.
-  // gzip. B gzip. /
-  // Reviewed reading (Pages Google-Drive-configured): 233,464 B raw / 68,469 B gzip.
-  // Reviewed reading (Google-Drive-configured): 233,464 B raw / 68,470 B gzip.
-  // Reviewed reading (Pages): 233,392 B raw / 68,421 B gzip.
-  // Reviewed reading (canonical config-free): 233,392 B raw / 68,418 B gzip.
-  // Reviewed reading (Docker defaults): 233,392 B raw / 68,421 B gzip.
-  // Previous reading: 233,184 B raw / 68,379 B gzip.
+  // Growth: +1,697 B raw on the largest reviewed variant. It is the re-pin
+  // writer and the audit's rule for the record it writes, plus the closed list
+  // of findings that may reach `error` and the message beside it.
+  // Reviewed reading (Pages Google-Drive-configured): 235,159 B raw / 68,996 B gzip.
+  // Reviewed reading (Google-Drive-configured): 235,159 B raw / 68,997 B gzip.
+  // Reviewed reading (Pages): 235,087 B raw / 68,945 B gzip.
+  // Reviewed reading (canonical config-free): 235,087 B raw / 68,947 B gzip.
+  // Reviewed reading (Docker defaults): 235,087 B raw / 68,945 B gzip.
+  // Previous reading: 233,464 B raw / 68,470 B gzip.
   // Ceiling: 292 KiB raw is the reading plus twice its 32,768 B headroom rounded up to a whole
-  // KiB, leaving 65,988 B; 87 KiB gzip is the reading plus twice its 10,248 B headroom rounded
-  // up to a whole KiB, leaving 20,767 B.
+  // KiB, leaving 63,847 B; 87 KiB gzip is the reading plus twice its 10,248 B headroom rounded
+  // up to a whole KiB, leaving 20,094 B.
   deferredCapabilities: Object.freeze({ raw: 292 * 1024, gzip: 87 * 1024 }),
   // The complete first-party JavaScript graph shrank with the vendor-specific
   // proof and confidential-runtime deletion while retaining the generic agent,
@@ -629,17 +656,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // weighed 2,021,675 B raw / 633,305 B gzip. 2038 KiB raw was then the reading plus twice its
   // 32,768 B headroom rounded up to a whole KiB, leaving 66,192 B; 683 KiB gzip left 66,486 B.
   //
+  // Re-measured after resume stopped being a locked door: the re-pin record's
+  // writer, its reader, the audit rule that validates it and the closed list of
+  // findings that may block a person are all first-party, and all outside the
+  // baseline.
+  //
   // Class 2 — on demand: an aggregate of everything shipped that is not a vendor runtime.
-  // Reviewed reading (Pages Google-Drive-configured): 2,022,485 B raw / 633,679 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,022,480 B raw / 633,684 B gzip.
-  // Reviewed reading (Pages): 2,021,991 B raw / 633,436 B gzip.
-  // Reviewed reading (canonical config-free): 2,021,913 B raw / 633,399 B gzip.
-  // Reviewed reading (Docker defaults): 2,021,918 B raw / 633,420 B gzip.
-  // Previous reading: 2,021,675 B raw / 633,305 B gzip.
+  // Growth: +2,670 B raw on the largest reviewed variant, which is the re-pin
+  // record end to end — writer, reader, audit rule, turn admission — plus the
+  // findings list and the sentence the Sessions route composes.
+  // Reviewed reading (Pages Google-Drive-configured): 2,025,091 B raw / 634,588 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,025,086 B raw / 634,587 B gzip.
+  // Reviewed reading (Pages): 2,024,596 B raw / 634,292 B gzip.
+  // Reviewed reading (canonical config-free): 2,024,518 B raw / 634,259 B gzip.
+  // Reviewed reading (Docker defaults): 2,024,523 B raw / 634,251 B gzip.
+  // Previous reading: 2,022,485 B raw / 633,684 B gzip.
   // Ceiling: 2038 KiB raw did not move; the reading plus twice its 32,768 B headroom rounds to 2039
   // KiB, so the ceiling now sits one step under the intended value and well inside the 2007-2071
-  // KiB band, leaving 64,913 B. 683 KiB gzip is the reading plus twice its 32,768 B headroom
-  // rounded up to a whole KiB, leaving 65,955 B.
+  // KiB band, leaving 61,757 B. 683 KiB gzip is the reading plus twice its 32,768 B headroom
+  // rounded up to a whole KiB, leaving 64,828 B.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2038 * 1024, gzip: 683 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now weighed 672.33 KiB raw / 186.61 KiB gzip:
@@ -844,17 +879,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // weighed 2,722,873 B raw / 828,377 B gzip. 2723 KiB raw was then the reading plus twice its
   // 32,768 B headroom rounded up to a whole KiB, leaving 66,434 B; 873 KiB gzip left 66,486 B.
   //
+  // Re-measured after resume stopped being a locked door. No vendor runtime
+  // moved, so this aggregate grew by exactly what the first-party one did.
+  //
   // Class 2 — on demand: the aggregate of everything installed, whether or not anyone opens it.
-  // Reviewed reading (Pages Google-Drive-configured): 2,723,683 B raw / 828,745 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,723,678 B raw / 828,750 B gzip.
-  // Reviewed reading (Pages): 2,723,189 B raw / 828,503 B gzip.
-  // Reviewed reading (canonical config-free): 2,723,111 B raw / 828,465 B gzip.
-  // Reviewed reading (Docker defaults): 2,723,116 B raw / 828,489 B gzip.
-  // Previous reading: 2,722,873 B raw / 828,377 B gzip.
+  // Growth: +2,670 B raw on the largest reviewed variant, the same first-party
+  // bytes counted once more in the installed total.
+  // Reviewed reading (Pages Google-Drive-configured): 2,726,289 B raw / 829,653 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,726,284 B raw / 829,654 B gzip.
+  // Reviewed reading (Pages): 2,725,794 B raw / 829,355 B gzip.
+  // Reviewed reading (canonical config-free): 2,725,716 B raw / 829,326 B gzip.
+  // Reviewed reading (Docker defaults): 2,725,721 B raw / 829,315 B gzip.
+  // Previous reading: 2,723,683 B raw / 828,750 B gzip.
   // Ceiling: 2723 KiB raw did not move; the reading plus twice its 32,768 B headroom rounds to 2724
   // KiB, so the ceiling sits one step under the intended value and inside the 2692-2756 KiB band,
-  // leaving 65,155 B. 873 KiB gzip did not move either, one step under the 874 KiB the same
-  // arithmetic gives and inside the 842-906 KiB band, leaving 65,448 B.
+  // leaving 61,999 B. 873 KiB gzip did not move either, one step under the 874 KiB the same
+  // arithmetic gives and inside the 842-906 KiB band, leaving 64,320 B.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2723 * 1024, gzip: 873 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. It weighed 6,216 B raw / 2,337 B gzip after credential and
@@ -1449,16 +1489,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 65,650 B raw / 19,575 B gzip. 84 KiB raw was then the reading plus twice its 9,848 B headroom
   // rounded up to a whole KiB, leaving 20,366 B; 25 KiB gzip left 6,018 B.
   //
+  // Re-measured after the Sessions route took on the one sentence that
+  // summarises a re-pin and the reconnect card stopped printing "CANNOT
+  // CONTINUE HERE" above an enabled Resume button.
+  //
   // Class 2 — on demand: fetched when the conversation library opens.
-  // Reviewed reading (Pages Google-Drive-configured): 65,648 B raw / 19,578 B gzip.
-  // Reviewed reading (Google-Drive-configured): 65,648 B raw / 19,574 B gzip.
-  // Reviewed reading (Pages): 65,571 B raw / 19,510 B gzip.
-  // Reviewed reading (canonical config-free): 65,571 B raw / 19,510 B gzip.
-  // Reviewed reading (Docker defaults): 65,571 B raw / 19,512 B gzip.
-  // Previous reading: 65,564 B raw / 19,528 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 66,098 B raw / 19,727 B gzip.
+  // Reviewed reading (Google-Drive-configured): 66,098 B raw / 19,724 B gzip.
+  // Reviewed reading (Pages): 66,025 B raw / 19,664 B gzip.
+  // Reviewed reading (canonical config-free): 66,025 B raw / 19,666 B gzip.
+  // Reviewed reading (Docker defaults): 66,025 B raw / 19,660 B gzip.
+  // Previous reading: 65,562 B raw / 19,525 B gzip.
   // Ceiling: 84 KiB raw is the reading plus twice its 9,835 B headroom rounded up to a whole KiB,
-  // leaving 20,452 B; 25 KiB gzip is the reading plus twice its 2,929 B headroom rounded up to a
-  // whole KiB, leaving 6,072 B.
+  // leaving 19,869 B; 25 KiB gzip is the reading plus twice its 2,929 B headroom rounded up to a
+  // whole KiB, leaving 5,862 B.
   optionalSessionLibrary: Object.freeze({ raw: 84 * 1024, gzip: 25 * 1024 }),
   // Session pin/digest construction, receipt inspection, route recovery, and
   // cross-tab status load after the shell can paint. They remain exact,

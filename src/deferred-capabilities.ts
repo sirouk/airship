@@ -13,6 +13,7 @@
  * stock artifact does not carry it in this pack or anywhere else.
  */
 export { auditSessionHistory } from "./core/session-audit";
+export { journalSessionRePin } from "./sessions/session-repin";
 export { CanvasMemoryGraphSurface } from "./memory-graph/canvas-renderer";
 export { EncryptedObjectJournalBackend } from "./storage/encrypted-object-journal";
 export { EncryptedProfileCatalogStore } from "./profiles/persistence";

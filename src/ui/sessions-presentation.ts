@@ -439,11 +439,49 @@ export function forkRequirement(
     reason.code === "HISTORY_INCOMPLETE" && history
       ? Object.freeze({ ...reason, message: historyIncompleteMessage(history) })
       : reason;
+  const reasons = compatibility ? [...compatibility.reasons].sort((left, right) => rank(right) - rank(left)).map(scope) : [];
+  const required = Boolean(compatibility) && compatibility!.action !== "resume";
   return Object.freeze({
-    required: Boolean(compatibility) && compatibility!.action !== "resume",
+    required,
     label: compatibility?.label ?? "No active runtime supplied",
-    reasons: Object.freeze(compatibility ? [...compatibility.reasons].sort((left, right) => rank(right) - rank(left)).map(scope) : []),
+    reasons: Object.freeze(required ? reasons : rePinSummary(reasons) ?? reasons),
   });
+}
+
+/**
+ * The one plain sentence, above the list that itemises it.
+ *
+ * `decideSessionResume` reports each environment difference on its own line,
+ * which is precise and, stacked five deep, unreadable: the measured defect had
+ * five amber rows with one cause and one remedy. This says the cause and the
+ * remedy once, in the vocabulary the codes already use, and only when the
+ * verdict is that continuing really will re-pin — a conversation that arrived
+ * in a bundle keeps the older rule, so it never claims a re-pin it will not do.
+ */
+function rePinSummary(
+  reasons: readonly Readonly<{ code: string; severity: string; message: string }>[],
+): readonly Readonly<{ code: string; severity: string; message: string }>[] | undefined {
+  /*
+   * Every warning still standing at this point is one a re-pin cures — that is
+   * exactly what `required === false` means — so the nouns are read off the
+   * codes rather than out of a second list somebody has to keep in step.
+   * `INFERENCE_CONNECTION_MISMATCH` -> "inference connection",
+   * `POSTURE_AMBIGUOUS` -> "posture".
+   */
+  const moved = [...new Set(
+    reasons
+      .filter((reason) => reason.severity === "warning")
+      .map((reason) => reason.code.replace(/_(?:MISMATCH|AMBIGUOUS)$/u, "").replaceAll("_", " ").toLowerCase()),
+  )];
+  if (!moved.length) return undefined;
+  return Object.freeze([
+    Object.freeze({
+      code: "RE_PINNED_ON_CONTINUE",
+      severity: "info",
+      message: `Continuing re-pins the ${moved.join(", ")} to what is active, and journals it. Fork keeps the old pin.`,
+    }),
+    ...reasons,
+  ]);
 }
 
 /**
@@ -595,7 +633,7 @@ export function sessionReconnectPlan(input: Readonly<{
   sessionId: string;
 }>): SessionReconnectPlan | undefined {
   const { pins, runtime, compatibility, sessionId } = input;
-  if (!runtime || !compatibility || compatibility.action === "resume") return undefined;
+  if (!runtime || !compatibility) return undefined;
   // A legacy manifest has no connection id/generation to prove. It may still
   // be forked, but promising exact continuation would send the Connection
   // route an instruction its fail-closed preflight can never satisfy.
@@ -636,14 +674,30 @@ export function sessionReconnectPlan(input: Readonly<{
     returnSessionId: sessionId,
   });
 
+  /*
+   * The card outlived the refusal that created it, so it stops saying the
+   * refusal.
+   *
+   * A route difference no longer withdraws Resume — `decideSessionResume`
+   * re-pins instead — and printing "CANNOT CONTINUE HERE" above an enabled
+   * Resume button would be the wording-versus-behaviour gap this product
+   * refuses. When continuing is available, this is an offer: the pinned route
+   * is one press away for anyone who wants it back, and the second verb is
+   * named as the fork it has always been rather than as "continue", which the
+   * button beside it now genuinely does.
+   */
+  const continuesHere = compatibility.action === "resume";
   return Object.freeze({
-    header: `CANNOT CONTINUE HERE — this tab is on ${activeRoute}; this conversation is pinned to ${pinnedRoute}.`
-      + " Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
+    header: continuesHere
+      ? `THIS TAB IS ON ${activeRoute} — this conversation is pinned to ${pinnedRoute}.`
+        + " Continuing re-pins it here and journals that. Check the pinned connection to put it back."
+      : `CANNOT CONTINUE HERE — this tab is on ${activeRoute}; this conversation is pinned to ${pinnedRoute}.`
+        + " Check whether this page still holds that exact connection; a replacement cannot continue it.",
     primaryLabel: `Check exact ${pinnedRoute} connection`,
     href,
     // Say "continue" at the point of choice; the disclosure immediately below
     // explains that this is a new conversation, not an in-place rewrite.
-    secondaryLabel: `Continue with ${activeRoute}`,
+    secondaryLabel: continuesHere ? `Fork onto ${activeRoute}` : `Continue with ${activeRoute}`,
     disclosureLabel: `${codes.length} pinned value${codes.length === 1 ? "" : "s"} differ (${nouns.join(", ")})`,
     deltas: Object.freeze(deltas),
     connectionOnly,

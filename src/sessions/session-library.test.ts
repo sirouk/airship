@@ -491,10 +491,19 @@ describe("browser-native session domain", () => {
     const runtime = activeRuntime(session.manifest);
 
     expect(decideSessionResume(pins, health, runtime).action).toBe("resume");
+    /*
+     * A model that moved is still reported, and no longer takes the door away.
+     * It is an environment difference: continuing re-pins the thread to what
+     * is active and journals that, which is a fact this build can state.
+     * Forking would not have put the old model back — it would only have left
+     * the transcript behind.
+     */
     const changed = decideSessionResume(pins, health, { ...runtime, model: "different-model" });
-    expect(changed.action).toBe("fork-required");
+    expect(changed.action).toBe("resume");
     expect(changed.reasons.map((reason) => reason.code)).toContain("MODEL_MISMATCH");
 
+    // The refusal that protects a record is untouched: a chain that does not
+    // link cannot be appended to, so it still blocks.
     const suspect = assessSessionHistory(session, [{ ...events[0]!, previousDigest: "wrong" }]);
     expect(decideSessionResume(pins, suspect, runtime).action).toBe("blocked");
   });
@@ -663,7 +672,10 @@ describe("browser-native session domain", () => {
       ...current,
       inferenceBinding: { ...current.inferenceBinding, protocol: "openai-chat-completions" },
     });
-    expect(drifted.action).toBe("fork-required");
+    // Reported, named, and not a locked door: the protocol a v1 pin may be
+    // upgraded through is still checked exactly, and a route that does not
+    // match it is re-pinned rather than refused.
+    expect(drifted.action).toBe("resume");
     expect(drifted.reasons.map((reason) => reason.code)).toContain("INFERENCE_CONNECTION_MISMATCH");
   });
 
@@ -713,7 +725,21 @@ describe("browser-native session domain", () => {
     expect(decision.reasons.map((reason) => reason.code)).not.toContain("INFERENCE_CONNECTION_MISMATCH");
   });
 
-  it("never resumes a session through a replacement inference credential generation", async () => {
+  /*
+   * The exactness of the pin is the subject, and it is unchanged: every one of
+   * these replacements is still *detected* and still named
+   * `INFERENCE_CONNECTION_MISMATCH`, which is what stops a conversation being
+   * silently retargeted at a different account.
+   *
+   * What changed is the remedy. A replacement credential used to leave `Fork
+   * to continue` — a new identity with an empty transcript — as the only
+   * enabled verb, which does not put the old account back; it only loses the
+   * thread. Continuing now re-pins the conversation to the active route, says
+   * so, and journals `session.re-pinned` before the transcript is read; the
+   * turn admission in `agent.ts`/`prime/runtime.ts` then admits *that* route
+   * and no other. So "never silently" is intact, and "never" is not.
+   */
+  it("names every replacement inference credential generation, and re-pins instead of stranding the thread", async () => {
     const binding = {
       version: 1 as const,
       connectionId: "openai-primary",
@@ -737,11 +763,12 @@ describe("browser-native session domain", () => {
     const health = assessSessionHistory(session, events);
     const runtime = activeRuntime(session.manifest);
 
-    expect(decideSessionResume(pins, health, runtime).action).toBe("fork-required");
+    expect(decideSessionResume(pins, health, runtime).reasons.map((reason) => reason.code))
+      .toContain("INFERENCE_CONNECTION_MISMATCH");
     expect(decideSessionResume(pins, health, {
       ...runtime,
       inferenceBinding: { ...binding, boundAt: "2026-07-18T01:00:00.000Z" },
-    }).action).toBe("fork-required");
+    }).reasons.map((reason) => reason.code)).toContain("INFERENCE_CONNECTION_MISMATCH");
     const replacements = [
       { ...binding, connectionId: "openai-replacement" },
       { ...binding, connectionGeneration: 4 },
@@ -757,7 +784,7 @@ describe("browser-native session domain", () => {
         ...runtime,
         inferenceBinding,
       });
-      expect(replaced.action).toBe("fork-required");
+      expect(replaced.action).toBe("resume");
       expect(replaced.reasons.map((reason) => reason.code)).toContain("INFERENCE_CONNECTION_MISMATCH");
     }
   });

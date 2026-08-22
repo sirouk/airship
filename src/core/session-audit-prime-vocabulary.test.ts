@@ -42,20 +42,26 @@ describe("the audit knows the prime engine's vocabulary", () => {
 /**
  * Integrity refuses; incompleteness observes. The distinction the five resume
  * paths were missing.
+ *
+ * The line moved once more: what refuses is an `error` finding, which now
+ * means only "this record cannot be appended to". `status: "invalid"` is still
+ * the wider claim and every path that *copies* a journal still reads it, but
+ * reading a conversation is not copying it, and a manifest complaint is not a
+ * reason to take a finished thread away from the person who wrote it.
  */
 describe("what an audit is allowed to refuse a resume over", () => {
-  it("refuses only a journal that contradicts itself", () => {
-    expect(sessionAuditRefusesResume({ status: "invalid" })).toBe(true);
+  it("refuses only a journal that cannot be appended to", () => {
+    expect(sessionAuditRefusesResume({ appendable: false })).toBe(true);
   });
 
   it("admits a verified history", () => {
-    expect(sessionAuditRefusesResume({ status: "verified" })).toBe(false);
+    expect(sessionAuditRefusesResume({ appendable: true })).toBe(false);
   });
 
   it("admits an incomplete history, which is what an unfinished turn looks like", () => {
     // `TURN_INCOMPLETE` is raised for a turn with no terminal — every cancelled
     // turn and every turn still in flight. Quarantining on it locked people out
     // of the conversation they had just been talking in.
-    expect(sessionAuditRefusesResume({ status: "incomplete" })).toBe(false);
+    expect(sessionAuditRefusesResume({ appendable: true })).toBe(false);
   });
 });
