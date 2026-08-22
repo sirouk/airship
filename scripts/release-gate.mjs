@@ -213,16 +213,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // shell makes.
   //
   // Class 1 — startup: the one module a browser must have before anything renders.
-  // Reviewed reading (Pages Google-Drive-configured): 385,972 B raw / 119,818 B gzip.
-  // Reviewed reading (Google-Drive-configured): 385,967 B raw / 119,820 B gzip.
-  // Reviewed reading (Pages): 385,762 B raw / 119,730 B gzip.
-  // Reviewed reading (canonical config-free): 385,741 B raw / 119,724 B gzip.
-  // Reviewed reading (Docker defaults): 385,746 B raw / 119,717 B gzip.
-  // Previous reading: 386,172 B raw / 119,809 B gzip.
-  // Ceiling: 377 KiB raw would have left 76 B, far inside minifier jitter, so
-  // raw keeps the 378 KiB step and leaves 1,100 B; 117 KiB gzip would have
-  // left -12 B — the reading is above that step — so gzip keeps the 118 KiB
-  // step and leaves 1,012 B. Neither ceiling moves.
+  // Reviewed reading (Pages Google-Drive-configured): 385,672 B raw / 119,778 B gzip.
+  // Reviewed reading (Google-Drive-configured): 385,667 B raw / 119,773 B gzip.
+  // Reviewed reading (Pages): 385,462 B raw / 119,659 B gzip.
+  // Reviewed reading (canonical config-free): 385,453 B raw / 119,658 B gzip.
+  // Reviewed reading (Docker defaults): 385,446 B raw / 119,656 B gzip.
+  // Previous reading: 385,972 B raw / 119,820 B gzip.
+  // Ceiling: 377 KiB raw would have left 376 B, far inside minifier jitter, so
+  // raw keeps the 378 KiB step and leaves 1,400 B; 117 KiB gzip would have
+  // left 30 B, far inside compressor jitter, so gzip keeps the 118 KiB step
+  // and leaves 1,054 B. Neither ceiling moves.
   entryJavaScript: Object.freeze({ raw: 378 * 1024, gzip: 118 * 1024 }),
   // Provider-neutral simplification removed the obsolete proof, attestation,
   // confidential-provider, and vendor-specific bootstrap graph from the
@@ -366,12 +366,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // already said.
   //
   // Class 1 — startup: everything awaited before the first render, pre-render chunks included.
-  // Reviewed reading (Pages Google-Drive-configured): 502,386 B raw / 163,328 B gzip.
-  // Reviewed reading (Google-Drive-configured): 502,381 B raw / 163,326 B gzip.
-  // Reviewed reading (Pages): 502,176 B raw / 163,234 B gzip.
-  // Reviewed reading (canonical config-free): 502,155 B raw / 163,222 B gzip.
-  // Reviewed reading (Docker defaults): 502,160 B raw / 163,216 B gzip.
-  // Previous reading: 502,586 B raw / 163,311 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 502,086 B raw / 163,284 B gzip.
+  // Reviewed reading (Google-Drive-configured): 502,081 B raw / 163,268 B gzip.
+  // Reviewed reading (Pages): 501,876 B raw / 163,162 B gzip.
+  // Reviewed reading (canonical config-free): 501,867 B raw / 163,147 B gzip.
+  // Reviewed reading (Docker defaults): 501,860 B raw / 163,156 B gzip.
+  // Previous reading: 502,386 B raw / 163,328 B gzip.
   // Ceiling: 491 KiB raw is the smallest whole-KiB step that clears the reading and leaves 389 B;
   // 160 KiB gzip is the smallest whole-KiB step that clears the reading and leaves 523 B — above
   // the 512 B a compressor change moves on its own, so neither ceiling takes a further step.
@@ -479,11 +479,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // writer and the audit's rule for the record it writes, plus the closed list
   // of findings that may reach `error` and the message beside it.
   // Reviewed reading (Pages Google-Drive-configured): 235,159 B raw / 68,996 B gzip.
-  // Reviewed reading (Google-Drive-configured): 235,159 B raw / 68,997 B gzip.
-  // Reviewed reading (Pages): 235,087 B raw / 68,945 B gzip.
-  // Reviewed reading (canonical config-free): 235,087 B raw / 68,947 B gzip.
-  // Reviewed reading (Docker defaults): 235,087 B raw / 68,945 B gzip.
-  // Previous reading: 233,464 B raw / 68,470 B gzip.
+  // Reviewed reading (Google-Drive-configured): 235,159 B raw / 68,994 B gzip.
+  // Reviewed reading (Pages): 235,087 B raw / 68,946 B gzip.
+  // Reviewed reading (canonical config-free): 235,087 B raw / 68,944 B gzip.
+  // Reviewed reading (Docker defaults): 235,087 B raw / 68,946 B gzip.
+  // Previous reading: 235,159 B raw / 68,997 B gzip.
   // Ceiling: 292 KiB raw is the reading plus twice its 32,768 B headroom rounded up to a whole
   // KiB, leaving 63,847 B; 87 KiB gzip is the reading plus twice its 10,248 B headroom rounded
   // up to a whole KiB, leaving 20,094 B.
@@ -665,12 +665,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Growth: +2,670 B raw on the largest reviewed variant, which is the re-pin
   // record end to end — writer, reader, audit rule, turn admission — plus the
   // findings list and the sentence the Sessions route composes.
-  // Reviewed reading (Pages Google-Drive-configured): 2,025,091 B raw / 634,588 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,025,086 B raw / 634,587 B gzip.
-  // Reviewed reading (Pages): 2,024,596 B raw / 634,292 B gzip.
-  // Reviewed reading (canonical config-free): 2,024,518 B raw / 634,259 B gzip.
-  // Reviewed reading (Docker defaults): 2,024,523 B raw / 634,251 B gzip.
-  // Previous reading: 2,022,485 B raw / 633,684 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 2,032,174 B raw / 636,832 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,032,169 B raw / 636,788 B gzip.
+  // Reviewed reading (Pages): 2,031,679 B raw / 636,531 B gzip.
+  // Reviewed reading (canonical config-free): 2,031,633 B raw / 636,465 B gzip.
+  // Reviewed reading (Docker defaults): 2,031,606 B raw / 636,499 B gzip.
+  // Previous reading: 2,025,091 B raw / 634,588 B gzip.
   // Ceiling: 2038 KiB raw did not move; the reading plus twice its 32,768 B headroom rounds to 2039
   // KiB, so the ceiling now sits one step under the intended value and well inside the 2007-2071
   // KiB band, leaving 61,757 B. 683 KiB gzip is the reading plus twice its 32,768 B headroom
@@ -885,12 +885,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Class 2 — on demand: the aggregate of everything installed, whether or not anyone opens it.
   // Growth: +2,670 B raw on the largest reviewed variant, the same first-party
   // bytes counted once more in the installed total.
-  // Reviewed reading (Pages Google-Drive-configured): 2,726,289 B raw / 829,653 B gzip.
-  // Reviewed reading (Google-Drive-configured): 2,726,284 B raw / 829,654 B gzip.
-  // Reviewed reading (Pages): 2,725,794 B raw / 829,355 B gzip.
-  // Reviewed reading (canonical config-free): 2,725,716 B raw / 829,326 B gzip.
-  // Reviewed reading (Docker defaults): 2,725,721 B raw / 829,315 B gzip.
-  // Previous reading: 2,723,683 B raw / 828,750 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 2,733,372 B raw / 831,896 B gzip.
+  // Reviewed reading (Google-Drive-configured): 2,733,367 B raw / 831,852 B gzip.
+  // Reviewed reading (Pages): 2,732,877 B raw / 831,595 B gzip.
+  // Reviewed reading (canonical config-free): 2,732,831 B raw / 831,530 B gzip.
+  // Reviewed reading (Docker defaults): 2,732,804 B raw / 831,566 B gzip.
+  // Previous reading: 2,726,289 B raw / 829,654 B gzip.
   // Ceiling: 2723 KiB raw did not move; the reading plus twice its 32,768 B headroom rounds to 2724
   // KiB, so the ceiling sits one step under the intended value and inside the 2692-2756 KiB band,
   // leaving 61,999 B. 873 KiB gzip did not move either, one step under the 874 KiB the same
@@ -1220,11 +1220,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Nothing moves to first paint.
   //
   // Class 2 — on demand: fetched with the tool bundle, after the first screen.
-  // Reviewed reading (canonical config-free): 126,976 B raw / 40,424 B gzip.
-  // Reviewed reading (Docker defaults, Google-Drive-configured): 126,976 B raw / 40,427 B gzip.
-  // Reviewed reading (Pages): 126,993 B raw / 40,430 B gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 126,993 B raw / 40,427 B gzip.
-  // Previous reading: 127,000 B raw / 40,421 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 130,195 B raw / 41,324 B gzip.
+  // Reviewed reading (Google-Drive-configured): 130,195 B raw / 41,325 B gzip.
+  // Reviewed reading (Pages): 130,195 B raw / 41,326 B gzip.
+  // Reviewed reading (canonical config-free): 130,178 B raw / 41,323 B gzip.
+  // Reviewed reading (Docker defaults): 130,178 B raw / 41,324 B gzip.
+  // Previous reading: 126,993 B raw / 40,430 B gzip.
   // Ceiling: 162 KiB raw is the reading plus twice its 19,049 B headroom rounded up to a whole
   // KiB, leaving 38,895 B; 52 KiB gzip is the reading plus twice its 6,064 B headroom rounded
   // up to a whole KiB, leaving 12,818 B.
@@ -1494,12 +1495,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // CONTINUE HERE" above an enabled Resume button.
   //
   // Class 2 — on demand: fetched when the conversation library opens.
-  // Reviewed reading (Pages Google-Drive-configured): 66,098 B raw / 19,727 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 66,098 B raw / 19,724 B gzip.
   // Reviewed reading (Google-Drive-configured): 66,098 B raw / 19,724 B gzip.
-  // Reviewed reading (Pages): 66,025 B raw / 19,664 B gzip.
-  // Reviewed reading (canonical config-free): 66,025 B raw / 19,666 B gzip.
-  // Reviewed reading (Docker defaults): 66,025 B raw / 19,660 B gzip.
-  // Previous reading: 65,562 B raw / 19,525 B gzip.
+  // Reviewed reading (Pages): 66,025 B raw / 19,662 B gzip.
+  // Reviewed reading (canonical config-free): 66,037 B raw / 19,664 B gzip.
+  // Reviewed reading (Docker defaults): 66,025 B raw / 19,664 B gzip.
+  // Previous reading: 66,098 B raw / 19,727 B gzip.
   // Ceiling: 84 KiB raw is the reading plus twice its 9,835 B headroom rounded up to a whole KiB,
   // leaving 19,869 B; 25 KiB gzip is the reading plus twice its 2,929 B headroom rounded up to a
   // whole KiB, leaving 5,862 B.
@@ -1631,12 +1632,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole-KiB step that clears its reading, leaving 156 B.
   //
   // Class 2 — on demand: fetched when the Memory route opens.
-  // Reviewed reading (canonical config-free): 64,235 B raw / 21,350 B gzip.
-  // Reviewed reading (Docker defaults): 64,235 B raw / 21,351 B gzip.
-  // Reviewed reading (Pages): 64,235 B raw / 21,348 B gzip.
-  // Reviewed reading (Google-Drive-configured): 64,235 B raw / 21,352 B gzip.
-  // Reviewed reading (Pages Google-Drive-configured): 64,235 B raw / 21,349 B gzip.
-  // Previous reading: 64,235 B raw / 21,350 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 66,798 B raw / 22,147 B gzip.
+  // Reviewed reading (Google-Drive-configured): 66,798 B raw / 22,146 B gzip.
+  // Reviewed reading (Pages): 66,798 B raw / 22,145 B gzip.
+  // Reviewed reading (canonical config-free): 66,798 B raw / 22,146 B gzip.
+  // Reviewed reading (Docker defaults): 66,798 B raw / 22,145 B gzip.
+  // Previous reading: 64,235 B raw / 21,352 B gzip.
   // Ceiling: 82 KiB raw is the reading plus twice its 9,635 B headroom rounded up to a whole
   // KiB, leaving 19,733 B; 28 KiB gzip is the reading plus twice its 3,203 B headroom rounded
   // up to a whole KiB, leaving 7,320 B.
@@ -1657,8 +1658,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // an agent turn or the move-work panel — never at first paint.
   //
   // Class 2 — on demand: fetched with whichever memory surface opens first.
-  // Reviewed reading (canonical config-free, Docker defaults, Pages, Google-Drive-configured, Pages Google-Drive-configured): 2,604 B raw / 1,105 B gzip.
+  // Reviewed reading (Pages Google-Drive-configured): 4,227 B raw / 1,702 B gzip.
+  // Reviewed reading (Google-Drive-configured): 4,227 B raw / 1,702 B gzip.
+  // Reviewed reading (Pages): 4,227 B raw / 1,702 B gzip.
+  // Reviewed reading (canonical config-free): 4,227 B raw / 1,702 B gzip.
+  // Reviewed reading (Docker defaults): 4,227 B raw / 1,702 B gzip.
   // Previous reading: 2,604 B raw / 1,105 B gzip.
+  // Grew 1,623 B raw in one change: ambient recall's bounded verbatim conversation schema and provenance fields.
   // Ceiling: 7 KiB raw is the reading plus twice its 2,048 B headroom rounded up to a whole
   // KiB, leaving 4,564 B; 6 KiB gzip is the reading plus twice its 2,048 B headroom rounded up
   // to a whole KiB, leaving 5,039 B.
