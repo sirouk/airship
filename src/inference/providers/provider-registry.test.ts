@@ -298,6 +298,38 @@ describe("simultaneous inference connections", () => {
     })).toThrow("stale");
   });
 
+  /*
+   * LM Studio spells a model `name@quantization` the moment a person holds more
+   * than one quantization of it, and Hugging Face spells a pinned revision the
+   * same way. The opaque identifier pattern excluded `@`, so those rows were
+   * refused — and because a directory write refuses the whole batch on its
+   * first bad row, one twice-downloaded model emptied the entire list rather
+   * than costing that one model. These are the exact IDs a real LM Studio
+   * server reported while the list was empty.
+   */
+  it("keeps a model ID the provider spells with a quantization suffix", () => {
+    const providers = providersWithChutes();
+    const models = new InferenceModelCatalog(providers);
+    const reported = [
+      "qwen3.8-27b-obliterated@q4_k_m",
+      "qwen3.8-27b-obliterated@q6_k",
+      "gemma-4-12b-obliterated@q8_0",
+      "prism-ml/bonsai-27b",
+    ];
+    models.replaceConnectionModels(
+      "chutes-main",
+      1,
+      "chutes",
+      reported.map((id) => model("chutes", id, ["text-input", "text-output"])),
+    );
+    // The catalog answers in its own sorted order; every reported ID survives.
+    expect(models.forConnection("chutes-main", 1).map((item) => item.id).sort())
+      .toEqual([...reported].sort());
+    // The two quantizations of one model stay two models, not one.
+    expect(models.require("chutes-main", 1, "qwen3.8-27b-obliterated@q6_k").id)
+      .toBe("qwen3.8-27b-obliterated@q6_k");
+  });
+
   it("increments the connection generation whenever an ID is reconnected", () => {
     const registry = new InferenceConnectionRegistry(providersWithChutes(), () => NOW);
     const first = registry.connectApiKey({
